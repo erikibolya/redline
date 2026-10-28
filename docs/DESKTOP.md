@@ -140,6 +140,21 @@ services:
 
 `docker logs redline` prints the token, the human URL and the MCP config.
 
+**1b. No Docker? Run the static binary instead.** Unraid ships a shell; the server is one
+self-contained file (no libc, no dependencies):
+
+```bash
+wget -O /usr/local/bin/redline \
+  https://github.com/erikibolya/redline/releases/download/v0.2.0/redline-linux-x86_64
+chmod +x /usr/local/bin/redline
+REDLINE_TOKEN="$(head -c 32 /dev/urandom | base64 | tr -d '/+=')" \
+  /usr/local/bin/redline serve --host 0.0.0.0 --data-dir /mnt/user/appdata/redline
+```
+
+To survive reboots, add those last two lines to `/boot/config/go` (Unraid runs it at array
+start). The container is preferred only because updates are a `docker pull`; the binary needs a
+`wget` of the new release.
+
 **2. Point the Windows app at it — in the app, not in a file.**
 
 Tray → **Connect to a server…**, paste the address and token, **Save and connect**. The app probes

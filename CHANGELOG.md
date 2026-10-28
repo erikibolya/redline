@@ -2,7 +2,8 @@
 
 ## 0.1.0 — 2026-10-28
 
-Initial MVP.
+Initial MVP. Renamed from the working title `au-visual-review` to **redline**; published publicly at
+https://github.com/erikibolya/redline under the MIT license.
 
 - Stdlib Python CLI: `serve`, `open`, `list`, `get`, `wait`, `remove`.
 - File-based sessions under `sessions/<id>/` (gitignored).

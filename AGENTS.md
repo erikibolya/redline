@@ -5,8 +5,8 @@ sessions, opens them, and reads the submitted JSON. Read this file before changi
 
 ## Current state
 
-- **MVP complete** (commit `301eefd`): stdlib Python server/CLI, session store, browser editor,
-  session list, 3 unit tests. No third-party dependencies.
+- **MVP complete** (tag `v0.1.0`, commit `301eefd`): stdlib Python server/CLI, session store,
+  browser editor, session list, 3 unit tests. No third-party dependencies.
 - Separate git repository on `main`, published to **https://github.com/erikibolya/redline**
   (public, MIT). Project name: **redline** ("Redline the screenshot. The agent writes the fix.").
 - The tool is used by the Au.Net component review workflow (`COMPONENT-REVIEW.md` there), but this

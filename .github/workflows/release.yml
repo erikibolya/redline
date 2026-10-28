@@ -45,10 +45,12 @@ jobs:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: "redline ${{ github.event.inputs.tag || github.ref_name }}"
           releaseDraft: false
-          prerelease: true
+          prerelease: false
           args: --bundles nsis
           releaseBody: |
-            **Windows preview.** Download `redline_*_x64-setup.exe` below.
+            **Windows.** Download `redline_*_x64-setup.exe` below, run it, done — the tray app
+            starts on first launch. Connect it to a server (or use it standalone) from the tray:
+            *Connect to a server…*.
 
             This build is **unsigned**, so SmartScreen will warn on first run:
             *More info → Run anyway*.

@@ -12,6 +12,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use axum::Router;
 use redline_core::api::{router, AppState};
@@ -22,6 +23,11 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+
+/// Set immediately before asking the process to exit. `RunEvent::ExitRequested` is vetoed while
+/// this is false (that is what keeps the app alive with every window hidden), but a quit or a
+/// post-update restart must be allowed through — otherwise the menu item does nothing at all.
+static EXITING: AtomicBool = AtomicBool::new(false);
 
 /// The port the CLI and agent configs assume (`redline` client default).
 const PREFERRED_PORT: u16 = 8788;
@@ -95,9 +101,12 @@ fn main() {
         .build(tauri::generate_context!())
         .expect("failed to build redline")
         .run(|_app, event| {
-            // Keep the process (and therefore the MCP endpoint) alive when nothing is visible.
+            // Keep the process (and therefore the MCP endpoint) alive when nothing is visible —
+            // unless we asked for the exit ourselves.
             if let RunEvent::ExitRequested { api, .. } = event {
-                api.prevent_exit();
+                if !EXITING.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
             }
         });
 }
@@ -232,7 +241,7 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
                 .kind(MessageDialogKind::Info)
                 .show(|_| {});
         }
-        "quit" => app.exit(0),
+        "quit" => quit(app),
         _ => {}
     }
 }
@@ -375,6 +384,17 @@ fn mcp_config(data_dir: &Path, local: &Local) -> String {
 
 // ---------------------------------------------------------------- window helpers
 
+/// Exit for real. The flag is what distinguishes "the human asked" from "the last window hid".
+fn quit(app: &AppHandle) {
+    EXITING.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
+
+fn restart(app: &AppHandle) {
+    EXITING.store(true, Ordering::SeqCst);
+    app.restart();
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -437,7 +457,7 @@ fn check_for_updates(app: AppHandle, notify: bool) {
                         tauri::async_runtime::spawn(async move {
                             match update.download_and_install(|_, _| {}, || {}).await {
                                 // On Windows the installer takes over and exits this process.
-                                Ok(()) => app.restart(),
+                                Ok(()) => restart(&app),
                                 Err(err) => {
                                     eprintln!("redline: update failed: {err}");
                                     app.dialog()

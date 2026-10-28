@@ -1,0 +1,53 @@
+name: release
+
+# Tag `v*` on the desktop track (e.g. v0.2.0-desktop.1) and this publishes a GitHub pre-release
+# with the Windows installer attached, so the download link is a release page instead of a
+# CI artifact that expires.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (must already exist)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: windows installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/app
+
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: desktop/app
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: "redline ${{ github.event.inputs.tag || github.ref_name }}"
+          releaseDraft: false
+          prerelease: true
+          args: --bundles nsis
+          releaseBody: |
+            **Windows preview.** Download `redline_*_x64-setup.exe` below.
+
+            This build is **unsigned**, so SmartScreen will warn on first run:
+            *More info → Run anyway*.
+
+            After installing, redline lives in the tray. Right-click the tray icon →
+            **Copy MCP config** and paste it into your agent's MCP settings.
+
+            Redline the screenshot, the agent writes the fix.

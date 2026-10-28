@@ -17,6 +17,9 @@ use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, Wind
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 
 /// The editor, compiled in. Self-contained HTML (inline CSS/JS), so no resource paths to resolve.
+/// The port the CLI and agent configs assume (`redline` client default).
+const PREFERRED_PORT: u16 = 8788;
+
 const UI_FILES: &[(&str, &str)] = &[
     ("index.html", include_str!("../../ui/index.html")),
     ("list.html", include_str!("../../ui/list.html")),
@@ -84,9 +87,24 @@ fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::E
             let store = Store::new(redline_core::paths::sessions_dir(&data_dir));
             store.ensure().expect("sessions dir");
 
-            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-                .await
-                .expect("bind loopback");
+            // Prefer the documented port so `redline open`, agent MCP configs and bookmarks keep
+            // working across restarts. Fall back to an ephemeral port only if it is taken.
+            let preferred: u16 = std::env::var("REDLINE_PORT")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(PREFERRED_PORT);
+            let mut bound = None;
+            for candidate in [preferred, 0] {
+                match tokio::net::TcpListener::bind(("127.0.0.1", candidate)).await {
+                    Ok(listener) => {
+                        bound = Some(listener);
+                        break;
+                    }
+                    Err(err) if candidate == 0 => panic!("cannot bind a loopback port: {err}"),
+                    Err(_) => eprintln!("redline: port {candidate} is busy, trying another"),
+                }
+            }
+            let listener = bound.expect("listener");
             let address = listener.local_addr().expect("local addr");
             let base_url = format!("http://{address}");
             let state = AppState::new(store, auth.clone())

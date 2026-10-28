@@ -168,6 +168,12 @@ which keeps the current "shared folder" workflow alive for WSL/Windows splits.
   single-instance, embedded UI, server on a free loopback port. Compiles and links on
   `windows-latest` (CI). Nobody has clicked it on a physical Windows desktop yet — that is the
   next check, not a known defect.
+- **Download.** Installers are published as GitHub **pre-releases** by
+  `.github/workflows/release.yml`: push a `v*-desktop.*` tag and the workflow builds the NSIS
+  installer and attaches it to the release page (no artifact hunting). Builds are unsigned, so
+  Windows SmartScreen asks for *More info → Run anyway*.
+- **Port is pinned to 8788** (`REDLINE_PORT` overrides, ephemeral fallback if it is taken). This is
+  what makes `redline open` and agent MCP configs work without knowing a random port.
 - **P3 — partial.** NSIS per-user installer builds in CI (`redline_<version>_x64-setup.exe`,
   ~1.9 MB) and is uploaded as an artifact. Autostart and single-instance landed. Still open:
   code signing, the updater plugin, and macOS/Linux bundles.

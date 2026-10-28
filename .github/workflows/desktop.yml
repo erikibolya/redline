@@ -35,6 +35,37 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace
 
+  e2e:
+    name: browser e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      - name: Build the server
+        run: cargo build --manifest-path desktop/Cargo.toml -p redline
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install the test driver
+        run: npm install --no-save puppeteer-core@23
+      - name: Draw, move, type and submit in a real browser
+        env:
+          REDLINE_BASE: http://127.0.0.1:8788
+          REDLINE_TOKEN: e2e-token
+          CHROME_URL: http://127.0.0.1:9222
+        run: |
+          desktop/target/debug/redline serve --port 8788 --data-dir "$RUNNER_TEMP/data" --token e2e-token > /tmp/redline.log 2>&1 &
+          nohup "${{ steps.chrome.outputs.chrome-path }}" --headless=new --no-sandbox --disable-gpu \
+            --remote-debugging-port=9222 about:blank > /tmp/chrome.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8788/health && break; sleep 1; done
+          sleep 3
+          node desktop/scripts/e2e.mjs
+
   shell:
     name: tauri shell (windows)
     runs-on: windows-latest

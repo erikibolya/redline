@@ -836,6 +836,9 @@ class Editor {
       }
 
       if (this.tool === "text") {
+        // Stop the browser's default focus change: it blurs (and therefore commits) the
+        // textarea we are about to create.
+        event.preventDefault();
         this.startText(point, event);
         return;
       }
@@ -987,11 +990,19 @@ class Editor {
     editor.style.color = existing ? existing.color : this.color;
     editor.value = existing ? existing.text : "";
     this.stage.appendChild(editor);
-    editor.focus();
-    editor.select();
     this.textEditor = { editor, point };
+    // Focus after the current event finishes, so the click that created it cannot steal it back.
+    requestAnimationFrame(() => {
+      editor.focus();
+      editor.select();
+    });
 
+    // Enter commits and removes the editor, which fires blur — commit must be idempotent or
+    // every note is stored twice.
+    let closed = false;
     const commit = () => {
+      if (closed) return;
+      closed = true;
       const text = editor.value.trim();
       this.closeTextEditor();
       if (existing) {
@@ -1023,6 +1034,7 @@ class Editor {
     editor.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         e.preventDefault();
+        closed = true;
         this.closeTextEditor();
       } else if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
@@ -1033,10 +1045,12 @@ class Editor {
   }
 
   closeTextEditor() {
-    if (this.textEditor) {
-      this.textEditor.editor.remove();
-      this.textEditor = null;
-    }
+    const current = this.textEditor;
+    if (!current) return;
+    // Clear the reference first: removing a focused node fires `blur`, whose handler calls
+    // commit() again — which must find nothing to do.
+    this.textEditor = null;
+    current.editor.remove();
   }
 
   // ---------------------------------------------------------- inspector

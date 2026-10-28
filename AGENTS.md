@@ -183,3 +183,10 @@ Troubleshooting:
 No zoom/pan or per-annotation editing; text is entered via prompt; no auto-refresh of the session
 list; no screenshot capture command; single-user local queue; no auth. These are planned, not bugs
 to “fix” silently.
+
+## Host access (holly)
+
+This checkout is on the Unraid host, and the agent container has the Docker socket plus `/mnt/user`.
+That is root-equivalent: read the global rules in `~/.config/opencode/AGENTS.md` and **ask before any
+destructive action** (deleting data, touching containers other than `redline`, changing Traefik or
+other services, `/boot`, force-pushing history).

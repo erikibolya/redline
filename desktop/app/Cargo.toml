@@ -1,0 +1,29 @@
+[package]
+name = "redline-app"
+version = "0.2.0"
+edition = "2021"
+license = "MIT"
+description = "Tray-resident redline desktop app"
+rust-version = "1.82"
+
+# Separate workspace: the Tauri build needs a native webview at build time, while
+# `desktop/` (core + CLI) must keep building in headless CI and WSL.
+[workspace]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+redline-core = { path = "../crates/redline-core" }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
+serde_json = "1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true

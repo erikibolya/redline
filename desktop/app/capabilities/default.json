@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The webview only loads the loopback HTTP UI and needs no Tauri APIs; core:default is the minimum that lets the window work.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

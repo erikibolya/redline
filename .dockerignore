@@ -1,0 +1,7 @@
+.git
+desktop/target
+desktop/app/target
+desktop/app/gen
+sessions
+__pycache__
+**/*.pyc

@@ -17,6 +17,7 @@ tauri-build = { version = "2", features = [] }
 redline-core = { path = "../crates/redline-core" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
+tauri-plugin-autostart = "2"
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
 serde_json = "1"

@@ -11,9 +11,10 @@ use std::path::PathBuf;
 use axum::Router;
 use redline_core::api::{router, AppState};
 use redline_core::store::Store;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_autostart::ManagerExt as AutostartExt;
 
 /// The editor, compiled in. Self-contained HTML (inline CSS/JS), so no resource paths to resolve.
 const UI_FILES: &[(&str, &str)] = &[
@@ -31,6 +32,10 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
         }))
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let data_dir = redline_core::paths::default_data_dir();
             let server = start_server(data_dir)?;
@@ -118,6 +123,14 @@ fn mcp_config(server: &ServerHandle) -> String {
 
 fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open redline", true, None::<&str>)?;
+    let login = CheckMenuItem::with_id(
+        app,
+        "autostart",
+        "Start at login",
+        true,
+        app.autolaunch().is_enabled().unwrap_or(false),
+        None::<&str>,
+    )?;
     let copy_config = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
     let address = MenuItem::with_id(
         app,
@@ -128,7 +141,7 @@ fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
     )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit redline", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &copy_config, &address, &separator, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &login, &copy_config, &address, &separator, &quit])?;
 
     let config = mcp_config(&server);
     TrayIconBuilder::with_id("main")
@@ -145,6 +158,17 @@ fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
             "copy-mcp" => {
                 if let Err(err) = copy_to_clipboard(&config) {
                     eprintln!("redline: cannot copy MCP config: {err}");
+                }
+            }
+            "autostart" => {
+                let manager = app.autolaunch();
+                let result = if manager.is_enabled().unwrap_or(false) {
+                    manager.disable()
+                } else {
+                    manager.enable()
+                };
+                if let Err(err) = result {
+                    eprintln!("redline: cannot change autostart: {err}");
                 }
             }
             "quit" => app.exit(0),

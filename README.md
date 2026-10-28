@@ -160,10 +160,16 @@ need to be reachable from the agent in this mode.
 
 ## Personal GitHub
 
+Published at **https://github.com/erikibolya/redline** (public, MIT). The remote is already set up:
+
 ```bash
-git remote add origin git@github.com:<you>/redline.git
-git push -u origin main
+git push origin main            # publish changes
+gh repo view --web              # open the repo in a browser
 ```
+
+`gh` lives at `~/.local/bin/gh` and is authenticated over HTTPS, so `git push` needs no prompts.
+If credentials ever expire, run `gh auth login --web --git-protocol https` and enter the device
+code at https://github.com/login/device.
 
 ## Testing
 

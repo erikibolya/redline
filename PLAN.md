@@ -121,8 +121,8 @@ See `docs/ARCHITECTURE.md` for details.
 
 ## Release plan
 
-- Personal GitHub repo, MIT license.
-- Tag `v0.1.0` after M1 (current), `v0.2.0` after M2, etc.
+- Published: **https://github.com/erikibolya/redline** (public, MIT), default branch `main`.
+- Tag `v0.1.0` after M1 (current), `v0.2.0` after M2, etc. (`git tag -a vX.Y.Z -m … && git push --tags`).
 - No package publication required; `git clone` + `python redline.py serve` is the install.
 - If `pipx` packaging lands (M4), publish to PyPI only if the human wants it.
 

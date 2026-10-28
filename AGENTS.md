@@ -7,9 +7,42 @@ sessions, opens them, and reads the submitted JSON. Read this file before changi
 
 - **MVP complete** (commit `301eefd`): stdlib Python server/CLI, session store, browser editor,
   session list, 3 unit tests. No third-party dependencies.
-- Separate git repository on `main`; no remote configured yet (push to a personal GitHub account).
+- Separate git repository on `main`, published to **https://github.com/erikibolya/redline**
+  (public, MIT). Project name: **redline** ("Redline the screenshot. The agent writes the fix.").
 - The tool is used by the Au.Net component review workflow (`COMPONENT-REVIEW.md` there), but this
   repo has no dependency on Au.Net.
+
+## Publishing (personal GitHub)
+
+The remote is already configured; publishing is a normal `git push`:
+
+```bash
+git remote -v                    # origin -> https://github.com/erikibolya/redline.git
+git status -sb                   # confirm branch is main and clean-ish
+git push origin main             # or `git push` once upstream is set
+```
+
+Auth details (do not redo this setup unless it breaks):
+
+- **`gh` is not on `PATH` by default.** It lives at `~/.local/bin/gh`; use
+  `export PATH="$HOME/.local/bin:$PATH"` first, or the absolute path.
+- Logged in as **`erikibolya`** over **HTTPS**; `gh auth setup-git` already installed the credential
+  helper, so `git push` works without prompts. Verify with `gh auth status`.
+- The token is stored in plain text in `~/.config/gh/hosts.yml`. **Never copy it into the repo,
+  a commit, or chat.** Run `gh auth logout` on shared machines.
+- To re-authenticate without a browser on the host: `gh auth login --web --git-protocol https`,
+  then complete the device code at https://github.com/login/device. On a headless box the browser
+  cannot be opened automatically — read the one-time code from the output and enter it manually.
+- Useful repo commands: `gh repo view --web`, `gh run list`, `gh release create vX.Y.Z`,
+  `gh issue list`. Pushing tags (`git push --tags`) publishes releases.
+
+Repository settings already applied: description "Redline the screenshot. The agent writes the
+fix. A local, dependency-free visual review queue for human ↔ AI collaboration." and topics
+`ai-agents, human-in-the-loop, screenshot, annotation, visual-review, feedback-loop,
+developer-tools`.
+
+**Before pushing, always check** that `sessions/`, screenshots, customer data and `__pycache__/`
+are not staged (`git status`); they are gitignored — keep it that way.
 
 ## Environment
 

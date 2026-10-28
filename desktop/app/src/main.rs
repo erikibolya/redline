@@ -41,6 +41,8 @@ fn main() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_window(app);
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -70,6 +72,7 @@ fn main() {
             });
 
             build_tray(app, data_dir, local)?;
+            check_for_updates(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -199,6 +202,7 @@ fn build_tray(app: &tauri::App, data_dir: PathBuf, local: Local) -> tauri::Resul
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
+    let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_config = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
     let status = match read_remote(&data_dir) {
         Some(remote) => format!("Server: {}", remote.base_url),
@@ -209,7 +213,7 @@ fn build_tray(app: &tauri::App, data_dir: PathBuf, local: Local) -> tauri::Resul
     let quit = MenuItem::with_id(app, "quit", "Quit redline", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&open, &connect, &login, &copy_config, &address, &separator, &quit],
+        &[&open, &connect, &login, &copy_link, &copy_config, &address, &separator, &quit],
     )?;
 
     let setup_url = format!("{}/setup?t={}", local.base_url, local.token);
@@ -234,6 +238,15 @@ fn build_tray(app: &tauri::App, data_dir: PathBuf, local: Local) -> tauri::Resul
                     eprintln!("redline: cannot change autostart: {err}");
                 }
             }
+            "copy-link" => {
+                let target = match read_remote(&tray_data_dir) {
+                    Some(remote) => format!("{}/?t={}", remote.base_url, remote.token),
+                    None => format!("{}/?t={}", tray_local.base_url, tray_local.token),
+                };
+                if let Err(err) = copy_to_clipboard(&target) {
+                    eprintln!("redline: cannot copy link: {err}");
+                }
+            }
             "copy-mcp" => {
                 if let Err(err) = copy_to_clipboard(&mcp_config(&tray_data_dir, &tray_local)) {
                     eprintln!("redline: cannot copy MCP config: {err}");
@@ -255,6 +268,32 @@ fn build_tray(app: &tauri::App, data_dir: PathBuf, local: Local) -> tauri::Resul
         .build(app)?;
 
     Ok(())
+}
+
+/// Check once at launch. A background update that restarts the app mid-annotation would be
+/// hostile; at startup nothing is in flight.
+fn check_for_updates(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_updater::UpdaterExt;
+        let updater = match app.updater() {
+            Ok(updater) => updater,
+            Err(err) => {
+                eprintln!("redline: updater unavailable: {err}");
+                return;
+            }
+        };
+        match updater.check().await {
+            Ok(Some(update)) => {
+                eprintln!("redline: installing update {}", update.version);
+                match update.download_and_install(|_, _| {}, || {}).await {
+                    Ok(()) => app.restart(),
+                    Err(err) => eprintln!("redline: update failed: {err}"),
+                }
+            }
+            Ok(None) => {}
+            Err(err) => eprintln!("redline: update check failed: {err}"),
+        }
+    });
 }
 
 fn show_window(app: &AppHandle) {

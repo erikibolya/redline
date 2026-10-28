@@ -24,6 +24,12 @@ jobs:
   windows:
     name: windows installer
     runs-on: windows-latest
+    env:
+      # Optional Authenticode signing. Absent = unsigned build (still works, SmartScreen warns).
+      WINDOWS_CERT_PFX: ${{ secrets.WINDOWS_CERT_PFX }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -33,6 +39,24 @@ jobs:
 
       # The CLI talks to the running app; shipping it next to the installer means a fresh
       # install is scriptable without a Python toolchain.
+      - name: Configure Authenticode signing
+        if: env.WINDOWS_CERT_PFX != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "signing.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT_PFX))
+          @{
+            bundle = @{
+              windows = @{
+                certificateFile     = $pfx
+                certificatePassword = $env:WINDOWS_CERT_PASSWORD
+                digestAlgorithm     = "sha256"
+                timestampUrl        = "http://timestamp.digicert.com"
+              }
+            }
+          } | ConvertTo-Json -Depth 6 | Set-Content desktop/app/tauri.signing.conf.json -Encoding utf8
+          "TAURI_EXTRA_ARGS=--config tauri.signing.conf.json" | Out-File -Append $env:GITHUB_ENV
+
       - name: Build the CLI
         run: cargo build --release --manifest-path desktop/Cargo.toml -p redline
 
@@ -46,7 +70,8 @@ jobs:
           releaseName: "redline ${{ github.event.inputs.tag || github.ref_name }}"
           releaseDraft: false
           prerelease: false
-          args: --bundles nsis
+          args: --bundles nsis ${{ env.TAURI_EXTRA_ARGS }}
+          includeUpdaterJson: true
           releaseBody: |
             **Windows.** Download `redline_*_x64-setup.exe` below, run it, done — the tray app
             starts on first launch. Connect it to a server (or use it standalone) from the tray:
@@ -123,3 +148,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+      # Same server plus Chromium, for capture_review (screenshot a URL).
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: desktop/Dockerfile.browser
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:browser
+            ghcr.io/${{ github.repository }}:browser-${{ github.event.inputs.tag || github.ref_name }}

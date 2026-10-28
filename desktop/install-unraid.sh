@@ -41,6 +41,14 @@ if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
   docker rm -f "$NAME" >/dev/null
 fi
 
+# With a Traefik route the container needs no published port; that keeps exactly one front
+# door (HTTPS + token) instead of an extra plaintext one.
+PORTS=(-p "$PORT:8788")
+if [ -n "$DOMAIN" ] && [ "${REDLINE_PUBLISH_PORT:-0}" != "1" ]; then
+  PORTS=()
+  echo "==> not publishing $PORT (Traefik only); set REDLINE_PUBLISH_PORT=1 to keep it"
+fi
+
 echo "==> starting $NAME on port $PORT"
 LABELS=()
 NETWORK=()
@@ -60,7 +68,7 @@ docker run -d \
   --name "$NAME" \
   --restart unless-stopped \
   "${NETWORK[@]}" \
-  -p "$PORT:8788" \
+  "${PORTS[@]}" \
   -v "$DATA:/data" \
   -e "REDLINE_TOKEN=$REDLINE_TOKEN" \
   "${LABELS[@]}" \

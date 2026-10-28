@@ -253,13 +253,21 @@ async fn tool_errors_are_results_not_transport_failures() {
         .unwrap()
         .contains("image_base64"));
 
-    // capture_review is advertised in the docs but not built yet: it must say so, not lie.
-    let capture = call(&store, "capture_review", json!({"url": "http://x"})).await;
-    assert_eq!(capture["isError"], true);
-    assert!(capture["content"][0]["text"]
-        .as_str()
-        .unwrap()
-        .contains("not available in this build"));
+    // capture_review without a browser must explain how to enable it (this test host has none;
+    // if CI images ever ship Chromium the tool would succeed and this assertion is skipped).
+    let capture = call(
+        &store,
+        "capture_review",
+        json!({"url": "http://127.0.0.1:9"}),
+    )
+    .await;
+    if capture["isError"] == true {
+        let message = capture["content"][0]["text"].as_str().unwrap();
+        assert!(
+            message.contains("Chromium") || message.contains("browser"),
+            "{message}"
+        );
+    }
 }
 
 #[tokio::test]

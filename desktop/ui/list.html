@@ -66,7 +66,7 @@ let mcpConfig = "";
 async function loadConfig() {
   try {
     const response = await fetch("/api/config");
-    if (!response.ok) return;
+    if (!response.ok) return; // 401 when the browser has no token yet
     const config = await response.json();
     mcpConfig = JSON.stringify(config.mcp_config, null, 2);
     document.getElementById("mcp-config").textContent = mcpConfig;
@@ -94,15 +94,21 @@ async function load() {
   list.innerHTML = '<p class="meta">Loading…</p>';
   try {
     const response = await fetch("/api/sessions");
+    if (response.status === 401) {
+      list.innerHTML = '<div class="empty">This browser is not signed in.<br><br>'
+        + 'Open the redline app, then tray → <b>Copy browser link</b>, and paste that link here.</div>';
+      return;
+    }
     const data = await response.json();
-    if (!data.sessions.length) {
+    const sessions = data.sessions || [];
+    if (!sessions.length) {
       list.innerHTML = '<div class="empty">No sessions yet — nothing is waiting for review.</div>';
       connect.classList.remove("hidden");
       return;
     }
     connect.classList.add("hidden");
     list.innerHTML = "";
-    for (const session of data.sessions) {
+    for (const session of sessions) {
       const card = document.createElement("div");
       card.className = "card";
       const body = document.createElement("div");

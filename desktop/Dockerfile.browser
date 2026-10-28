@@ -1,0 +1,28 @@
+# redline with a bundled Chromium, for hosts that want `capture_review` (screenshot a URL).
+#
+#   docker pull ghcr.io/erikibolya/redline:browser
+#
+# Everything else is identical to the default image; this one is ~400 MB instead of ~5 MB.
+
+FROM rust:1-bookworm AS build
+RUN rustup target add x86_64-unknown-linux-musl
+WORKDIR /src
+COPY desktop ./desktop
+RUN cd desktop && cargo build --release --target x86_64-unknown-linux-musl -p redline
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      chromium ca-certificates fonts-dejavu-core fonts-liberation \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY --from=build /src/desktop/target/x86_64-unknown-linux-musl/release/redline /redline
+
+ENV REDLINE_CHROME=/usr/bin/chromium
+VOLUME ["/data"]
+EXPOSE 8788
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["/redline", "health"]
+
+ENTRYPOINT ["/redline", "serve", "--host", "0.0.0.0", "--data-dir", "/data"]

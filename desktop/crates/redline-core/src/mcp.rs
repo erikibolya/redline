@@ -91,6 +91,21 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "capture_review",
+            "description": "Screenshot a URL with headless Chromium, then open a review session for it. Requires the :browser image or REDLINE_CHROME on the server.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "url": { "type": "string", "description": "Page to capture." },
+                    "title": { "type": "string", "description": "What is being reviewed." },
+                    "note": { "type": "string", "description": "What the human should look at." },
+                    "viewport": { "type": "string", "description": "e.g. 1440x900 (default)." },
+                    "wait_seconds": { "type": "number", "description": "Block up to this long for a submission." }
+                },
+                "required": ["url"]
+            }
+        },
+        {
             "name": "get_feedback",
             "description": "Read the human's annotations, review.md and annotated screenshot for a session. Non-blocking.",
             "inputSchema": {
@@ -166,9 +181,7 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
         "list_reviews" => list_reviews(ctx, &args),
         "reply" => reply(ctx, &args),
         "resolve" => resolve(ctx, &args),
-        "capture_review" => Err("capture_review is not available in this build yet; pass \
-            image_base64 or image_path to review_screenshot"
-            .to_string()),
+        "capture_review" => capture_review(ctx, &args).await,
         other => Err(format!("unknown tool: {other}")),
     };
 
@@ -258,6 +271,59 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
         "review_url": review_url(ctx, &meta.id),
         "dir": ctx.store.dir(&meta.id).map(|p| p.display().to_string()).unwrap_or_default(),
         "feedback": feedback,
+    }))
+}
+
+async fn capture_review(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+    let url = string_arg(args, "url").ok_or("url is required")?;
+    let title = string_arg(args, "title").unwrap_or_else(|| url.clone());
+    let (width, height) = match string_arg(args, "viewport") {
+        Some(viewport) => crate::capture::parse_viewport(&viewport)?,
+        None => (1440, 900),
+    };
+
+    let request = crate::capture::CaptureRequest {
+        url: url.clone(),
+        width,
+        height,
+    };
+    let png = tokio::task::spawn_blocking(move || crate::capture::capture(&request))
+        .await
+        .map_err(|err| format!("capture task failed: {err}"))??;
+
+    let meta = ctx
+        .store
+        .create_from_bytes(
+            &png,
+            "screenshot.png",
+            &title,
+            &url,
+            args.get("note").and_then(Value::as_str).unwrap_or_default(),
+            None,
+            Some("mcp"),
+        )
+        .map_err(|err| err.to_string())?;
+
+    let wait = args
+        .get("wait_seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0) as u64;
+    let meta = if wait > 0 {
+        wait_for_status(ctx.store, &meta.id, wait.min(3600))
+            .await
+            .unwrap_or(meta)
+    } else {
+        meta
+    };
+
+    Ok(json!({
+        "session_id": meta.id,
+        "status": meta.status.as_str(),
+        "title": meta.title,
+        "captured": url,
+        "viewport": format!("{width}x{height}"),
+        "review_url": review_url(ctx, &meta.id),
+        "feedback": (meta.status == Status::Submitted).then(|| feedback_payload(ctx, &meta)),
     }))
 }
 

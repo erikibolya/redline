@@ -52,8 +52,11 @@ fi
 echo "==> starting $NAME on port $PORT"
 LABELS=()
 NETWORK=()
+CMD=(serve --host 0.0.0.0 --data-dir /data)
 if [ -n "$DOMAIN" ]; then
   NETWORK=(--network "$TRAEFIK_NETWORK")
+  # With no published port, loopback URLs are useless to agents and to copied links.
+  CMD=(serve --host 0.0.0.0 --data-dir /data --public-url "https://$DOMAIN")
   LABELS=(
     --label traefik.enable=true
     --label "traefik.docker.network=$TRAEFIK_NETWORK"
@@ -72,7 +75,7 @@ docker run -d \
   -v "$DATA:/data" \
   -e "REDLINE_TOKEN=$REDLINE_TOKEN" \
   "${LABELS[@]}" \
-  "$IMAGE" >/dev/null
+  "$IMAGE" "${CMD[@]}" >/dev/null
 
 # Wait for the health endpoint before declaring success.
 for _ in $(seq 1 30); do

@@ -70,9 +70,24 @@ fn main() {
 
 /// Flags that consume the next argument. Everything else is a boolean switch.
 const VALUE_FLAGS: &[&str] = &[
-    "host", "port", "data-dir", "sessions", "ui", "token", "title", "url", "note", "id", "timeout",
+    "host",
+    "port",
+    "data-dir",
+    "sessions",
+    "ui",
+    "public-url",
+    "token",
+    "title",
+    "url",
+    "note",
+    "id",
+    "timeout",
     "interval",
 ];
+
+/// Boolean switches. Anything beginning with `--` that is neither here nor in VALUE_FLAGS is an
+/// error: a typo used to be swallowed silently (which is how `--public-url` stopped working).
+const SWITCHES: &[&str] = &["json", "open-browser", "yes", "help"];
 
 #[derive(Default, Debug)]
 struct Flags {
@@ -92,8 +107,10 @@ impl Flags {
                         .next()
                         .ok_or_else(|| format!("--{name} needs a value"))?;
                     flags.values.push((name.to_string(), value.clone()));
-                } else {
+                } else if SWITCHES.contains(&name) {
                     flags.switches.push(name.to_string());
+                } else {
+                    return Err(format!("unknown option: --{name}"));
                 }
             } else {
                 flags.positional.push(arg.clone());
@@ -458,4 +475,34 @@ fn mcp_config(base_url: &str, token: &str) -> serde_json::Value {
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Flags, String> {
+        Flags::parse(&args.iter().map(|a| a.to_string()).collect::<Vec<_>>())
+    }
+
+    #[test]
+    fn public_url_is_parsed_as_a_value_flag() {
+        let flags = parse(&["--host", "0.0.0.0", "--public-url", "https://x.test"]).unwrap();
+        assert_eq!(flags.value("public-url"), Some("https://x.test"));
+        assert_eq!(flags.value("host"), Some("0.0.0.0"));
+    }
+
+    #[test]
+    fn unknown_options_fail_loudly() {
+        assert!(parse(&["--public-urll", "https://x.test"]).is_err());
+        assert!(parse(&["--bogus"]).is_err());
+        assert!(parse(&["--json", "--yes"]).is_ok());
+    }
+
+    #[test]
+    fn last_value_wins_for_repeated_flags() {
+        // The container appends its command after the image entrypoint, so flags repeat.
+        let flags = parse(&["--data-dir", "/a", "--data-dir", "/data"]).unwrap();
+        assert_eq!(flags.value("data-dir"), Some("/data"));
+    }
 }

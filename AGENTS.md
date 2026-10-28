@@ -44,6 +44,19 @@ developer-tools`.
 **Before pushing, always check** that `sessions/`, screenshots, customer data and `__pycache__/`
 are not staged (`git status`); they are gitignored — keep it that way.
 
+## Issue tracking
+
+Work is mirrored from `PLAN.md` onto GitHub so progress is visible publicly:
+
+- Milestone **`v0.2.0 — Editing ergonomics`** (M2) holds nine open issues, `#1`–`#9`, one per M2
+  checklist item. Close an issue only when its "Done when" criteria are met on Windows **and** WSL.
+- Use `gh issue list --milestone "v0.2.0 — Editing ergonomics"` to see what is left;
+  `gh issue close <n> --comment "Shipped in <commit>"` when a change lands.
+- When starting a later milestone (M3–M5), create the matching milestone and issues first so
+  `PLAN.md` and GitHub stay in sync; keep the same one-issue-per-checklist-item shape.
+- Releases are cut from tags: `gh release create vX.Y.Z --title … --notes-file … --verify-tag`,
+  and `CHANGELOG.md` gets the entry in the same commit as the version bump.
+
 ## Environment
 
 - Python 3.10+ on Windows/WSL/Linux. Use `python3` on WSL/Linux and `python` on Windows.

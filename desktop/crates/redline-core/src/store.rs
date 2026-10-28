@@ -475,6 +475,16 @@ impl Store {
         Ok(meta)
     }
 
+    /// Undo `resolve`: back to the open queue.
+    pub fn reopen(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        meta.status = Status::Open;
+        meta.resolved_at = None;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
     pub fn remove(&self, id: &str) -> Result<PathBuf> {
         let dir = self.dir(id)?;
         if !dir.exists() {

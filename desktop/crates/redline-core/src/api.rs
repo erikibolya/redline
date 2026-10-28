@@ -89,6 +89,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
+        .route("/api/sessions/{id}/reopen", post(reopen))
         .route("/api/sessions/{id}/history", get(history))
         .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
         .route("/sessions/{id}/history/{file}", get(history_file))
@@ -430,6 +431,13 @@ async fn resolve(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     Ok(Json(json!({ "meta": state.store.resolve(&id)? })))
+}
+
+async fn reopen(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(json!({ "meta": state.store.reopen(&id)? })))
 }
 
 async fn history(

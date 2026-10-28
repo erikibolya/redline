@@ -293,6 +293,43 @@ async fn delete_removes_the_session_and_404s_afterwards() {
 }
 
 #[tokio::test]
+async fn sessions_can_be_resolved_and_reopened() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "lifecycle", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{id}/resolve"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["meta"]["status"], "resolved");
+    assert!(body["meta"]["resolved_at"].is_string());
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{id}/reopen"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["meta"]["status"], "open");
+    assert_eq!(body["meta"]["resolved_at"], serde_json::Value::Null);
+}
+
+#[tokio::test]
 async fn history_diff_reports_what_changed_between_rounds() {
     let h = harness();
     let (_, _, created) = send(

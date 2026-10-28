@@ -172,6 +172,17 @@ a:hover { text-decoration: underline; }
 .session .body { min-width: 0; flex: 1; }
 .session .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session .sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session .row-actions { display: none; gap: 2px; align-items: center; }
+.session:hover .row-actions, .session:focus-within .row-actions { display: flex; }
+.session .act {
+  width: 20px; height: 20px; display: grid; place-items: center; padding: 0;
+  background: transparent; border: 1px solid transparent; border-radius: 5px;
+  color: var(--muted); font-size: 11px; line-height: 1;
+}
+.session .act:hover { color: var(--text); background: var(--panel-3); border-color: var(--border); }
+.session .act[data-act="delete"]:hover { color: #fda4af; border-color: #7f1d1d; background: #2a1115; }
+.chip.danger { border-color: #7f1d1d; color: #fda4af; }
+.chip.danger:hover { background: #2a1115; color: #fecdd3; }
 .session .badge {
   flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
   display: grid; place-items: center; font-size: 11px; font-weight: 600;

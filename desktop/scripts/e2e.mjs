@@ -249,9 +249,12 @@ const main = async () => {
   await page.waitForSelector(".text-editor");
   await page.type(".text-editor", "big note");
   await page.keyboard.press("Enter");
-  const bigNote = await page.evaluate(() =>
-    window.redline.annotations.find((a) => a.text === "big note"));
-  check("text size selector applies to new notes", bigNote?.size === 32, `${bigNote?.size}px`);
+  const bigNote = await page.evaluate(() => {
+    const texts = window.redline.annotations.filter((a) => a.type === "text");
+    return texts[texts.length - 1] ? { ...texts[texts.length - 1] } : null;
+  });
+  check("text size selector applies to new notes", bigNote?.size === 32,
+    `${bigNote?.size}px, text=${JSON.stringify(bigNote?.text)}`);
 
   // ---- group: clicking one member selects the whole group
   // Draw a fresh rectangle inside the image so the coordinates cannot go stale from the
@@ -301,6 +304,30 @@ const main = async () => {
       && Array.isArray(diff.added) && Array.isArray(diff.removed), JSON.stringify(diff.from));
     check("diff noticed the new annotations", diff.added.length > 0, `${diff.added.length} added`);
   }
+
+  // ---- rail actions: mark done, then reopen
+  const row = `.session[data-id="${id}"]`;
+  await page.hover(row);
+  await page.click(`${row} [data-act="resolve"]`);
+  let status = "";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const meta = await api(`/api/sessions/${id}`);
+    status = meta.meta.status;
+    if (status === "resolved") break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("rail 'mark done' resolves the session", status === "resolved", status);
+
+  // The row re-renders after the resolve, so click the fresh node directly.
+  await page.hover(row);
+  await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const meta = await api(`/api/sessions/${id}`);
+    status = meta.meta.status;
+    if (status !== "resolved") break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("rail 'reopen' puts it back in the queue", status !== "resolved", status);
 
   const annotated = await fetch(`${BASE}/sessions/${id}/annotated.png`, {
     headers: { Authorization: `Bearer ${TOKEN}` },

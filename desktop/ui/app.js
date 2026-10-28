@@ -111,27 +111,42 @@ const Theme = {
 
 /* ------------------------------------------------------------------ rail */
 
+// "Active" is the default so finished sessions drop out of the way; "Done" is the archive.
 const FILTERS = [
-  { id: "all", label: "All", test: () => true },
+  { id: "active", label: "Active", test: (s) => s.status !== "resolved" },
   { id: "open", label: "Open", test: (s) => s.status === "open" },
   { id: "submitted", label: "Submitted", test: (s) => s.status === "submitted" },
+  { id: "resolved", label: "Done", test: (s) => s.status === "resolved" },
   { id: "mine", label: "Mine", test: (s) => s.agent === "human" },
 ];
 
 class Rail {
-  constructor({ body, chips, search, selectedId, onSelect }) {
+  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge }) {
     this.body = body;
     this.chips = chips;
     this.search = search;
+    this.purge = purge;
     this.selectedId = selectedId || null;
     this.onSelect = onSelect;
+    this.onAction = onAction;
+    this.onPurge = onPurge;
     this.sessions = [];
-    this.filter = prefs.get("filter", "all");
+    this.filter = prefs.get("filter", "active");
+    if (this.filter === "all") this.filter = "active"; // pre-v0.6 preference
     this.query = "";
     this.wire();
   }
 
   wire() {
+    if (this.purge) {
+      this.purge.addEventListener("click", () => {
+        const ids = this.sessions.filter((session) => session.status === "resolved").map((s) => s.id);
+        if (!ids.length) return;
+        if (confirm(`Delete ${ids.length} finished session(s)? Their files go too.`)) {
+          this.onPurge?.(ids);
+        }
+      });
+    }
     if (this.search) {
       this.search.value = prefs.get("query", "");
       this.query = this.search.value;
@@ -172,6 +187,11 @@ class Rail {
     const counts = Object.fromEntries(
       FILTERS.map((filter) => [filter.id, this.sessions.filter(filter.test).length]),
     );
+    if (this.purge) {
+      const done = this.sessions.filter((session) => session.status === "resolved").length;
+      this.purge.hidden = done === 0;
+      this.purge.textContent = `Delete done (${done})`;
+    }
     this.chips.innerHTML = FILTERS.map(
       (filter) => `
         <button class="chip" type="button" data-filter="${filter.id}"
@@ -218,6 +238,7 @@ class Rail {
           : annotations
             ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
             : "";
+        const done = session.status === "resolved";
         parts.push(`
           <div class="session ${escapeHtml(session.status)}"
                role="button" tabindex="0"
@@ -230,12 +251,23 @@ class Rail {
                 session.note ? " · " + escapeHtml(session.note) : ""
               }</div>
             </div>
+            <span class="row-actions">
+              <button class="act" data-act="${done ? "reopen" : "resolve"}"
+                      title="${done ? "Reopen" : "Mark done"}">${done ? "↺" : "✓"}</button>
+              <button class="act" data-act="delete" title="Delete">✕</button>
+            </span>
             ${badge}
           </div>`);
       }
     }
     this.body.innerHTML = parts.join("");
 
+    $$(".session .act", this.body).forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        this.onAction?.(button.dataset.act, button.closest(".session").dataset.id);
+      });
+    });
     $$(".session", this.body).forEach((row) => {
       const activate = () => this.onSelect(row.dataset.id, row);
       row.addEventListener("click", activate);
@@ -283,8 +315,11 @@ class Editor {
       body: $("#rail-body"),
       chips: $("#chips"),
       search: $("#search"),
+      purge: $("#purge-done"),
       selectedId: this.sessionId,
       onSelect: (id) => this.openSession(id),
+      onAction: (action, id) => this.railAction(action, id),
+      onPurge: (ids) => this.purgeSessions(ids),
     });
     this.bindChrome();
     this.bindCanvas();
@@ -297,6 +332,43 @@ class Editor {
     this.syncWidthLabel();
     await this.rail.load();
     await this.load(this.sessionId);
+  }
+
+  /** Mark done / reopen / delete, straight from the rail. */
+  async railAction(action, id) {
+    try {
+      if (action === "resolve") {
+        await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+      } else if (action === "reopen") {
+        await api(`/api/sessions/${encodeURIComponent(id)}/reopen`, { method: "POST" });
+      } else if (action === "delete") {
+        const title = this.rail.sessions.find((s) => s.id === id)?.title || id;
+        if (!confirm(`Delete “${title}”? The screenshot and annotations are removed.`)) return;
+        await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+        if (id === this.sessionId) {
+          location.href = "/";
+          return;
+        }
+      }
+      await this.rail.load();
+    } catch (error) {
+      alert(`Could not ${action}: ${error.message}`);
+    }
+  }
+
+  async purgeSessions(ids) {
+    try {
+      for (const id of ids) {
+        await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+      }
+      if (ids.includes(this.sessionId)) {
+        location.href = "/";
+        return;
+      }
+      await this.rail.load();
+    } catch (error) {
+      alert(`Could not delete: ${error.message}`);
+    }
   }
 
   async openSession(id) {
@@ -1243,11 +1315,10 @@ class Editor {
     editor.value = existing ? existing.text : "";
     this.stage.appendChild(editor);
     this.textEditor = { editor, point };
-    // Focus after the current event finishes, so the click that created it cannot steal it back.
-    requestAnimationFrame(() => {
-      editor.focus();
-      editor.select();
-    });
+    // Focus now — pointerdown already called preventDefault, so the browser will not move focus
+    // to the body afterwards. Deferring this lost the first keystroke for fast typists.
+    editor.focus();
+    editor.select();
 
     // Enter commits and removes the editor, which fires blur — commit must be idempotent or
     // every note is stored twice.
@@ -1644,7 +1715,29 @@ async function bootList() {
     body: $("#rail-body"),
     chips: $("#chips"),
     search: $("#search"),
+    purge: $("#purge-done"),
     onSelect: (id) => { location.href = `/s/${encodeURIComponent(id)}`; },
+    onAction: async (action, id) => {
+      try {
+        if (action === "resolve") {
+          await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+        } else if (action === "reopen") {
+          await api(`/api/sessions/${encodeURIComponent(id)}/reopen`, { method: "POST" });
+        } else if (action === "delete") {
+          if (!confirm("Delete this session? The screenshot and annotations are removed.")) return;
+          await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+        }
+        await rail.load();
+      } catch (error) {
+        alert(`Could not ${action}: ${error.message}`);
+      }
+    },
+    onPurge: async (ids) => {
+      for (const id of ids) {
+        await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+      }
+      await rail.load();
+    },
   });
   await rail.load();
   NewReview.wire();

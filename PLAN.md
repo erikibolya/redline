@@ -2,150 +2,113 @@
 
 ## Vision
 
-A zero-friction visual feedback loop: the AI agent produces a screenshot, the human annotates it
-in the browser, and the agent receives a precise, machine-readable description of what to change.
-It should work offline, on Windows/WSL, without accounts or external services.
+A zero-friction visual feedback loop: the agent produces a screenshot, the human redlines it, and
+the agent receives a precise, machine-readable description of what to change. Offline, no
+accounts, runs where the agents run.
 
-## Scope
+**Shipped and in production:** `v0.6.0` on holly — `https://redline.ibolya.cz`, container
+`ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
 
-- Local single-user review queue (human + agent).
-- Screenshot + drawing + text notes → JSON/PNG/Markdown.
-- Separate from any product repository; portable to a personal GitHub account.
-- No third-party Python dependencies.
+## What exists today
 
-Out of scope for now: multi-user collaboration, cloud hosting, issue-tracker sync, real-time
-co-editing.
-
-## Current state (MVP, commit 301eefd)
-
-- `redline.py`: CLI (`serve/open/list/get/wait/remove`), file-based session store, stdlib HTTP
-  server, annotation submission.
-- Browser UI: session list + canvas editor with rectangle, arrow, pen, text, undo, clear,
-  submit/resubmit.
-- Output: `meta.json`, `annotations.json`, `annotated.png`, `review.md`.
-- Tested: 3 unit tests (create/list, submission format, ID validation).
-- Verified end-to-end: create session → open editor → canvas loads → submit → read JSON/Markdown.
-
-## Architecture in one paragraph
-
-A session is a folder under `sessions/<id>/`. The CLI writes `meta.json` and copies the screenshot;
-the HTTP server serves the folder and a static editor. The browser POSTs annotations + a composited
-PNG; the server writes the files and flips `status` to `submitted`. The agent polls the folder (or
-API) and reads JSON. No database, no background process needed for the agent.
-
-See `docs/ARCHITECTURE.md` for details.
+| Area | State |
+|---|---|
+| Agent API | MCP over HTTP (`review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`, `reply`, `resolve`) + plain JSON API + CLI |
+| Capture | Headless Chromium server-side, from MCP or the UI (`/browser` image) |
+| Editor | 3-column shell: session rail, zoom/pan canvas, inspector; rect/arrow/pen/text; move, nudge, delete, undo/redo, grouping, z-order, align/distribute, text sizes |
+| Sessions | open → submitted → resolved; search, filters, badges, "new" dots; delete / mark done / reopen / purge done |
+| History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
+| Desktop | Tauri v2 tray app: standalone or thin client, menu bar, setup wizard, auto-update, port pinned to 8788 |
+| Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`) |
+| Tests | 49 Rust tests, 32-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
-### M1 — MVP (done)
+### M1 — Python MVP (done, frozen at `v0.1.0`)
+CLI + localhost editor + file sessions. Kept in the repo for reference; no new features.
 
-- [x] CLI session creation, listing, reading, waiting, removal.
-- [x] Static editor and session list.
-- [x] Rect/arrow/pen/text annotations; undo/clear; submit.
-- [x] JSON + annotated PNG + review.md output.
-- [x] Shared `--sessions` folder.
-- [x] Unit tests.
+### M2 — Desktop shell + agent surface (done, v0.2–v0.3)
+Rust core (store/API/MCP), CLI parity, Tauri shell, auth, container deployment, Traefik.
 
-### M2 — Editing ergonomics
+### M3 — Editing depth (done, v0.3–v0.5)
+Zoom/pan stage, selection model, inline text, undo/redo, rail with filters, layers, groups,
+alignment, per-note text size, history + diff.
 
-- [ ] Zoom/pan (fit width, 100%, wheel zoom) with correct coordinate mapping.
-- [ ] Select/move/delete individual annotations; edit text notes inline instead of `prompt()`.
-- [ ] Annotation list click-to-highlight; numbered markers.
-- [ ] Color presets + line-width presets; remember last used.
-- [ ] Keyboard shortcuts help panel; `Esc` cancels the current drawing.
-- [ ] Session list auto-refresh (poll); filter by status; show annotation count.
-- [ ] Copy review URL button; “open image in new tab”.
-- [ ] Responsive toolbar on narrow windows.
+### M4 — Session hygiene (done, v0.6)
+Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, rail row actions.
 
-### M3 — Agent integration
+### M5 — v1.0 hardening (next)
+- [ ] **Code signing.** Pipeline is ready (`WINDOWS_CERT_PFX` / `WINDOWS_CERT_PASSWORD`). Needs a
+      certificate: Certum OSS (free, PFX) or SignPath (free, server-side). Identity verification is
+      the only manual step.
+- [ ] **Updater hardening**: keep the signing key backed up outside the array; verify a real
+      0.6 → 0.7 upgrade on Windows; add an "update available" tray badge.
+- [ ] **macOS + Linux desktop bundles** (CI matrix; macOS needs an Apple developer id for a clean
+      Gatekeeper pass — otherwise document the right-click-open dance).
+- [ ] **Accessibility pass**: focus rings, ARIA on the rail/menus, keyboard-only review flow.
+- [ ] **Docs**: screenshots in the README, a 60-second "capture → annotate → read" GIF.
 
-- [ ] `redline.py capture --url URL [--selector] [--viewport 1440x900] [--out shot.png]`
-      (Playwright/Chromium; optional dependency, opt-in).
-- [ ] `redline.py open --url URL` capture shortcut.
-- [ ] `redline.py wait` JSON output already works; add `--fail-on-timeout` and progress.
-- [ ] Before/after comparison session: original + follow-up screenshots side by side/diff.
-- [ ] `redline.py export <id>` to a single Markdown review (for issue trackers).
-- [ ] Optional checklist file per session (`checklist.json`) that the agent ticks off.
-
-### M4 — Reliability & distribution
-
-- [ ] Atomic writes (write temp + rename) and a per-session lock to avoid concurrent submit races.
-- [ ] Validate `Content-Type`, max annotation count/text length, and malformed JSON gracefully.
-- [ ] `pyproject.toml` + console entry point (`pipx install .`), versioning, changelog.
-- [ ] Windows launcher (`review.cmd`) and a one-command `scripts/serve.cmd`.
-- [ ] Optional token auth + `--host` warning when binding non-loopback.
-- [ ] Golden/API tests using `http.client` or `urllib` against a live test server.
-- [ ] Test on Windows Python 3.12 and WSL.
-
-### M5 — Review workflow polish
-
-- [ ] Session archive/cleanup command (`prune --older-than 14d`).
-- [ ] Export annotated PNG into docs/issues; copy Markdown controls.
-- [ ] Save/restore viewport/zoom per session.
-- [ ] Theme (light/dark) for the editor.
-- [ ] Integration recipe for Au.Net component reviews (link `COMPONENT-REVIEW.md`).
-
-### M6 — Desktop app (v1.0, in progress)
-
-Turns redline into a tray-resident application with an embedded server and an MCP endpoint, so
-agents connect directly instead of talking to a terminal. Design and phase status live in
-[`docs/DESKTOP.md`](docs/DESKTOP.md).
-
-- [x] `redline-core`: store + HTTP API + token auth + MCP, 20 tests, no GUI dependencies.
-- [x] CLI parity for `open/list/get/wait/remove` against the running app.
-- [x] Tauri v2 shell: tray, hidden main window, embedded UI, single instance.
-- [x] Windows installer (NSIS, per-user) built in CI; autostart toggle.
-- [ ] Verify the shell on a real Windows desktop; add code signing and the updater.
-- [ ] macOS/Linux packages and the GitHub Actions build matrix.
-- [ ] `capture_review` (headless screenshot) and before/after comparison.
+### M6 — Beyond 1.0 (ideas, unordered)
+- [ ] **Diff overlay in the editor**: ghost the previous round's annotations behind the current
+      ones, instead of reading the JSON diff.
+- [ ] **Session gallery** on `/` with thumbnails (currently a start screen).
+- [ ] **Text plates**: semi-transparent background behind text notes for legibility over busy UIs.
+- [ ] **Touch toolbar**: larger targets, no hover-only affordances (the rail actions currently
+      appear on hover).
+- [ ] **Bulk operations from the rail**: multi-select sessions, bulk resolve/delete.
+- [ ] Optional **TLS upstream**: let the app talk to an HTTPS server with its own client (today the
+      desktop *webview* handles TLS; the CLI/setup probe is HTTP-only).
 
 ## Decisions
 
 | # | Decision | Why |
 |---|----------|-----|
-| D1 | **Python stdlib only** | Runs on any machine with Python; no `pip`, no node build. |
-| D2 | **File-based sessions, no DB** | Shared folders work across WSL/Windows; agent can read without the server. |
-| D3 | **Separate repository** | No company coupling; push to personal GitHub. |
-| D4 | **JSON + PNG + Markdown output** | JSON for exact coordinates/text; PNG for visual; Markdown for humans/issues. |
-| D5 | **Localhost by default** | No auth/TLS; avoid accidental exposure. |
-| D6 | **Canvas pixels as coordinates** | Stable across zoom/scaling; editor maps pointer positions. |
-| D7 | **Submit over HTTP, not File System Access API** | Works in all modern browsers and across machines. |
-| D8 | **No automatic “fix my note”** | The agent turns notes into code changes; the tool only captures intent. |
-| D9 | **Tauri v2 for the desktop app** | One binary, ~10 MB installer, tray/autostart/updater plugins, reuses the existing canvas UI. Supersedes the Python-only shell. See `docs/DESKTOP.md`. |
-| D10 | **Token auth on every route** | A port agents can reach must not be open to every local process or web page. Supersedes D5's "no auth"; bind stays loopback by default. |
+| D1 | Stdlib Python for v0.1 | Zero install friction; still the frozen legacy build |
+| D2 | File-based sessions, no DB | Portable, inspectable, agent can read without the server |
+| D3 | Separate repository, MIT | No company coupling |
+| D4 | JSON + PNG + Markdown output | Exact data for agents, visual for humans, prose for issues |
+| D5 | ~~Localhost only, no auth~~ | Superseded by D10 |
+| D6 | Canvas pixels as coordinates | Stable across zoom and scaling |
+| D7 | Submit over HTTP | Works everywhere, no File System Access API |
+| D8 | No automatic "fix my note" | The tool captures intent; the agent implements |
+| D9 | **Tauri v2 for the desktop app** | ~10 MB installer, tray/autostart/updater plugins, reuses the web UI |
+| D10 | **Token auth on every route** | A port agents can reach must not be open to every local process |
+| D11 | **Server runs next to the agents** (container on holly) | Reviews can be created while the desktop is off; MCP stays on loopback |
+| D12 | **No JS build step** | The whole client is `app.js` + `app.css`, served from the binary |
+| D13 | **Browser E2E via CDP in CI** | Three real bugs (text tool, duplicate notes, dead tool buttons) were invisible to Rust tests |
+| D14 | **Archive on resubmit** | A re-review must be able to compare rounds instead of overwriting them |
 
-## Known limitations / technical debt
+## Next (ordered)
 
-- No zoom/pan; coordinates are natural pixels but editing at 100% can be awkward on large pages.
-- Only undo/clear; no per-annotation selection or edits.
-- Text notes use `window.prompt`, not an inline editor.
-- Session list does not auto-refresh.
-- No screenshot capture; the agent must supply a file.
-- No auth/TLS; localhost-only.
-- Single writer; concurrent submissions last-write-wins.
-- `annotated.png` is only written when the client sends `png` (the official UI always does).
-- API is minimal; no pagination (fine for local use).
-- Some unused imports were removed; keep the stdlib-only rule.
+1. Code signing (blocked on a certificate — the pipeline is ready).
+2. Diff overlay in the editor; it makes re-reviews much faster than reading JSON.
+3. Text plates for legibility.
+4. Session gallery on `/`.
+5. Touch toolbar + hover-free rail actions.
+6. macOS/Linux bundles.
+
+## Known limitations
+
+- No code signing: SmartScreen warns on the installer.
+- Capture needs the `:browser` image (~768 MB); the slim image returns an actionable error instead.
+- No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
+- No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
+- No server-side pagination; the rail renders everything it gets.
+- Text notes have a fixed font family, one size per note.
+- The rail's per-session actions appear on hover, so they are invisible to touch users.
 
 ## Testing plan
 
-- Keep `python3 -m unittest discover -s tests -t . -v` green.
-- Add tests for: wait timeout, malformed POST, missing session, `--sessions` separation, text-note
-  coordinates in `review.md`, static route traversal rejection, annotated route validation.
-- Add an HTTP integration test that starts `ThreadingHTTPServer` on an ephemeral port.
-- Manual checklist for the UI: load image, each tool, undo/clear, submit, resubmit, mobile width.
+- `cargo test --workspace` — 49 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+  capture error paths, history archival, diff semantics, path/config helpers, CLI end-to-end.
+- `desktop/scripts/e2e.sh` — 32 checks in real Chromium: tool clicks, coordinate mapping at 46 %
+  zoom, drag, undo, inline text (diacritics), submit, multi-select, align, grouping, z-order, text
+  size, history, diff, rail resolve/reopen.
+- CI runs both on every push; releases are cut from tags only after green.
 
-## Release plan
+## Definition of done
 
-- Published: **https://github.com/erikibolya/redline** (public, MIT), default branch `main`.
-- Tag `v0.1.0` after M1 (current), `v0.2.0` after M2, etc. (`git tag -a vX.Y.Z -m … && git push --tags`).
-- No package publication required; `git clone` + `python redline.py serve` is the install.
-- If `pipx` packaging lands (M4), publish to PyPI only if the human wants it.
-
-## Definition of done (feature)
-
-- Works on Windows and WSL with no extra dependencies.
-- Documented in README + relevant `docs/` page; AGENTS.md updated if agent workflow changes.
-- Tests cover the new behavior; old tests still pass.
-- JSON schema remains backward-compatible or a migration note is added.
-- No secrets/screenshots committed.
+- Works on Windows and WSL/Linux with no extra dependencies.
+- Rust tests and the browser E2E are green; the e2e covers the interaction you changed.
+- Documented in `AGENTS.md`/`docs/` + `CHANGELOG.md`; API changes are additive or have a note.
+- Tagged, released, and deployed to holly with the version verified in `docker exec redline /redline --version`.

@@ -3,298 +3,114 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Visual review</title>
-<style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; color: #1e293b; background: #e2e8f0; }
-  header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 14px; background: #0f172a; color: #f8fafc; position: sticky; top: 0; z-index: 10; }
-  header h1 { font-size: 15px; margin: 0 12px 0 0; font-weight: 600; }
-  a { color: inherit; }
-  button, label.button { border: 1px solid #475569; border-radius: 6px; padding: 5px 10px; background: #1e293b; color: #f8fafc; cursor: pointer; font: inherit; }
-  button:hover, label.button:hover { background: #334155; }
-  button.active { background: #0ea5e9; border-color: #0ea5e9; color: #fff; }
-  button.primary { background: #16a34a; border-color: #16a34a; font-weight: 600; }
-  button.primary:hover { background: #15803d; }
-  input[type="color"] { inline-size: 36px; block-size: 30px; padding: 2px; border: 1px solid #475569; border-radius: 6px; background: #1e293b; }
-  input[type="range"] { width: 90px; }
-  #status { margin-left: auto; opacity: .85; }
-  main { padding: 14px; }
-  .session { max-width: 1100px; margin-bottom: 10px; padding: 10px 14px; background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; }
-  .session h2 { margin: 0 0 3px; font-size: 16px; }
-  .session .meta { color: #64748b; font-size: 12px; }
-  .session .note { margin-top: 5px; }
-  #error { display: none; padding: 30px; background: #fef2f2; color: #991b1b; border: 1px solid #fecaca; border-radius: 8px; }
-  #frame { position: relative; display: inline-block; background: #fff; box-shadow: 0 2px 12px rgba(15,23,42,.18); }
-  #frame canvas { display: block; max-width: 100%; height: auto; cursor: crosshair; }
-  #notes { max-width: 1100px; margin-top: 12px; padding: 10px 14px; background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; }
-  #notes h3 { margin: 0 0 6px; font-size: 13px; }
-  #notes li { margin: 2px 0; }
-  .submitted { color: #166534; font-weight: 600; }
-</style>
+<title>redline</title>
+<link rel="stylesheet" href="/static/app.css" />
 </head>
-<body>
-<header>
-  <h1>Visual review</h1>
-  <a href="/">← sessions</a>
-  <button data-tool="rect" class="active">Rectangle</button>
-  <button data-tool="arrow">Arrow</button>
-  <button data-tool="pen">Pen</button>
-  <button data-tool="text">Text</button>
-  <input id="color" type="color" value="#e11d48" title="Annotation color" />
-  <input id="width" type="range" min="1" max="8" value="3" title="Line width" />
-  <button id="undo">Undo</button>
-  <button id="clear">Clear</button>
-  <button id="submit" class="primary">Submit review</button>
-  <span id="status">Loading…</span>
-</header>
+<body data-page="editor">
+<div class="app" id="app" data-session-id="">
 
-<main>
-  <div id="error"></div>
-  <div id="session" class="session" style="display:none">
-    <h2 id="title"></h2>
-    <div class="meta" id="meta"></div>
-    <div class="note" id="note"></div>
-  </div>
+  <header class="header">
+    <div class="brand"><span class="brand-mark"><i></i></span> redline</div>
+    <div class="title">
+      <b id="session-title">Loading…</b>
+      <span id="session-sub"></span>
+    </div>
+    <div class="header-actions">
+      <span class="pill" id="session-status">open</span>
+      <button class="btn icon" id="toggle-rail" title="Toggle sessions ( [ )" aria-label="Toggle sessions">☰</button>
+      <button class="btn icon" id="toggle-inspector" title="Toggle inspector ( ] )" aria-label="Toggle inspector">⌥</button>
+      <button class="btn primary" id="submit">Submit review</button>
+    </div>
+  </header>
 
-  <div id="frame">
+  <aside class="rail">
+    <div class="rail-head">
+      <button class="btn accent" id="new-review">+ New review</button>
+      <input class="search" id="search" placeholder="Search sessions…" spellcheck="false" />
+      <div class="chips" id="chips"></div>
+    </div>
+    <div class="rail-body" id="rail-body"></div>
+  </aside>
+
+  <main class="stage tool-select" id="stage">
     <canvas id="canvas"></canvas>
-  </div>
 
-  <div id="notes">
-    <h3>Notes</h3>
-    <ol id="note-list"></ol>
-  </div>
-</main>
+    <div class="options">
+      <button class="tool" data-tool="select" aria-pressed="true" title="Select / move (V)">
+        <svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.5-6.5L20 11z"/></svg>
+      </button>
+      <button class="tool" data-tool="rect" aria-pressed="false" title="Rectangle (R)">
+        <svg viewBox="0 0 24 24"><rect x="3.5" y="5.5" width="17" height="13" rx="1.5"/></svg>
+      </button>
+      <button class="tool" data-tool="arrow" aria-pressed="false" title="Arrow (A)">
+        <svg viewBox="0 0 24 24"><path d="M4 20L20 4M14 4h6v6"/></svg>
+      </button>
+      <button class="tool" data-tool="pen" aria-pressed="false" title="Pen (P)">
+        <svg viewBox="0 0 24 24"><path d="M3 20l4-1 12-12-3-3L4 16z"/></svg>
+      </button>
+      <button class="tool" data-tool="text" aria-pressed="false" title="Text (T)">
+        <svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v14"/></svg>
+      </button>
+      <span class="sep"></span>
+      <input type="color" id="color" title="Colour" aria-label="Colour" />
+      <input type="range" id="width" min="1" max="10" step="1" title="Line width" aria-label="Line width" />
+      <span class="zoom" id="width-value">3px</span>
+      <span class="sep"></span>
+      <button class="tool" id="zoom-out" title="Zoom out (-)">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
+      </button>
+      <span class="zoom" id="zoom-label">100%</span>
+      <button class="tool" id="zoom-in" title="Zoom in (+)">
+        <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+      </button>
+      <button class="btn ghost" id="zoom-fit" title="Fit (0)">Fit</button>
+      <button class="btn ghost" id="zoom-100" title="Actual size (1)">1:1</button>
+    </div>
+  </main>
 
-<script>
-(() => {
-  const parts = window.location.pathname.split("/").filter(Boolean);
-  const sessionId = parts[0] === "s" ? decodeURIComponent(parts[1] || "") : "";
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
-  const status = document.getElementById("status");
-  const errorBox = document.getElementById("error");
-  const sessionBox = document.getElementById("session");
-  const notes = document.getElementById("note-list");
+  <aside class="inspector">
+    <div class="inspector-head">
+      Annotations <span class="count" id="ann-count">0</span>
+    </div>
+    <div class="inspector-body" id="ann-list"></div>
 
-  let image = null;
-  let tool = "rect";
-  let drawing = null;
-  let annotations = [];
-  let color = document.getElementById("color").value;
-  let width = Number(document.getElementById("width").value);
-  let submitted = false;
+    <details class="disclosure" id="agent-block">
+      <summary>Message to agent</summary>
+      <div class="content">
+        <p id="agent-note"></p>
+        <p class="muted" id="agent-url"></p>
+        <p style="color:var(--muted)">Your annotations and the annotated screenshot are sent when you hit <b>Submit review</b>.</p>
+      </div>
+    </details>
+  </aside>
 
-  const setStatus = text => { status.textContent = text; };
+  <footer class="status">
+    <span>Zoom <b id="zoom-label-status"></b></span>
+    <span class="grow">Cursor <span id="cursor-pos">—</span></span>
+    <span id="session-id-status"></span>
+  </footer>
+</div>
 
-  if (!sessionId) {
-    errorBox.style.display = "block";
-    errorBox.textContent = "Missing session id.";
-    return;
-  }
+<div class="overlay" id="overlay" hidden>
+  <form class="modal" id="new-form">
+    <h2>New review</h2>
+    <p class="hint">Drop a screenshot — or click to choose a file. Then say what to look at.</p>
+    <div class="drop" id="drop">Drop an image, or click to browse</div>
+    <input type="file" id="file" accept="image/*" hidden />
+    <label for="f-title">Title</label>
+    <input id="f-title" type="text" placeholder="Button / default" />
+    <label for="f-url">Page URL (optional)</label>
+    <input id="f-url" type="text" placeholder="http://localhost:5016/button" />
+    <label for="f-note">What should be checked? (optional)</label>
+    <textarea id="f-note" placeholder="Spacing looks off, check hover state"></textarea>
+    <div class="error" id="new-error"></div>
+    <div class="row">
+      <button type="button" class="btn" id="new-cancel">Cancel</button>
+      <button type="submit" class="btn accent" id="new-submit">Create review</button>
+    </div>
+  </form>
+</div>
 
-  async function loadSession() {
-    const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
-    if (response.status === 401) {
-      throw new Error("This browser is not signed in — open the session list (/) and sign in there.");
-    }
-    if (!response.ok) throw new Error("Session not found");
-    const data = await response.json();
-    const meta = data.meta;
-    document.title = `Review · ${meta.title}`;
-    document.getElementById("title").textContent = meta.title;
-    const metaParts = [meta.id, `status: ${meta.status}`];
-    if (meta.submitted_at) metaParts.push(`submitted: ${meta.submitted_at}`);
-    if (meta.url) metaParts.push(meta.url);
-    document.getElementById("meta").textContent = metaParts.join(" · ");
-    document.getElementById("note").textContent = meta.note || "";
-    sessionBox.style.display = "block";
-    submitted = meta.status === "submitted";
-    annotations = (data.annotations && data.annotations.annotations) || [];
-    renderNotes();
-
-    const img = new Image();
-    img.onload = () => {
-      image = img;
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-      redraw();
-      setStatus(submitted ? "Submitted — you can add notes and resubmit" : "Open — draw notes, then submit");
-    };
-    img.onerror = () => {
-      errorBox.style.display = "block";
-      errorBox.textContent = "Could not load the screenshot.";
-    };
-    img.src = `/sessions/${encodeURIComponent(sessionId)}/image`;
-  }
-
-  document.querySelectorAll("[data-tool]").forEach(button => {
-    button.addEventListener("click", () => {
-      tool = button.dataset.tool;
-      document.querySelectorAll("[data-tool]").forEach(b => b.classList.toggle("active", b === button));
-    });
-  });
-  document.getElementById("color").addEventListener("input", e => color = e.target.value);
-  document.getElementById("width").addEventListener("input", e => width = Number(e.target.value));
-
-  function point(event) {
-    const rect = canvas.getBoundingClientRect();
-    const scale = canvas.width / rect.width;
-    // Whole pixels: sub-pixel coordinates are meaningless for a screenshot and make the
-    // JSON harder to read and diff.
-    return {
-      x: Math.round((event.clientX - rect.left) * scale),
-      y: Math.round((event.clientY - rect.top) * scale),
-    };
-  }
-
-  canvas.addEventListener("pointerdown", event => {
-    if (!image) return;
-    const p = point(event);
-    if (tool === "text") {
-      const text = window.prompt("Note for this spot:");
-      if (text) {
-        annotations.push({ type: "text", color, x: p.x, y: p.y, text });
-        redraw();
-        renderNotes();
-      }
-      return;
-    }
-    drawing = { type: tool, color, width, points: [p], start: p, end: p };
-    canvas.setPointerCapture(event.pointerId);
-    redraw();
-  });
-
-  canvas.addEventListener("pointermove", event => {
-    if (!drawing) return;
-    const p = point(event);
-    if (drawing.type === "pen") drawing.points.push(p);
-    drawing.end = p;
-    redraw();
-  });
-
-  canvas.addEventListener("pointerup", event => {
-    if (!drawing) return;
-    drawing.end = point(event);
-    if (drawing.type === "rect" && (Math.abs(drawing.end.x - drawing.start.x) > 2 || Math.abs(drawing.end.y - drawing.start.y) > 2)) {
-      annotations.push({ type: "rect", start: drawing.start, end: drawing.end, color: drawing.color, width: drawing.width });
-    } else if (drawing.type === "arrow") {
-      annotations.push({ type: "arrow", start: drawing.start, end: drawing.end, color: drawing.color, width: drawing.width });
-    } else if (drawing.type === "pen" && drawing.points.length > 1) {
-      annotations.push(drawing);
-    }
-    drawing = null;
-    redraw();
-    renderNotes();
-  });
-
-  function drawArrow(a, b, stroke, lineWidth) {
-    const angle = Math.atan2(b.y - a.y, b.x - a.x);
-    const head = 12 + lineWidth * 2;
-    ctx.strokeStyle = stroke;
-    ctx.fillStyle = stroke;
-    ctx.lineWidth = lineWidth;
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(b.x, b.y);
-    ctx.lineTo(b.x - head * Math.cos(angle - Math.PI / 6), b.y - head * Math.sin(angle - Math.PI / 6));
-    ctx.lineTo(b.x - head * Math.cos(angle + Math.PI / 6), b.y - head * Math.sin(angle + Math.PI / 6));
-    ctx.closePath();
-    ctx.fill();
-  }
-
-  function drawAnnotation(a) {
-    ctx.strokeStyle = a.color ?? color;
-    ctx.fillStyle = a.color ?? color;
-    ctx.lineWidth = a.width ?? width;
-    ctx.lineJoin = "round";
-    ctx.lineCap = "round";
-    if (a.type === "rect") {
-      ctx.strokeRect(a.start.x, a.start.y, a.end.x - a.start.x, a.end.y - a.start.y);
-    } else if (a.type === "arrow") {
-      drawArrow(a.start, a.end, a.color ?? color, a.width ?? width);
-    } else if (a.type === "pen") {
-      ctx.beginPath();
-      a.points.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-      ctx.stroke();
-    } else if (a.type === "text") {
-      ctx.font = "600 18px system-ui, sans-serif";
-      const lines = String(a.text).split("\n");
-      const lineHeight = 23;
-      const w = Math.max(...lines.map(line => ctx.measureText(line).width)) + 16;
-      ctx.fillStyle = "rgba(15,23,42,.78)";
-      ctx.fillRect(a.x, a.y - 18, w, lines.length * lineHeight + 8);
-      ctx.fillStyle = a.color ?? color;
-      lines.forEach((line, i) => ctx.fillText(line, a.x + 8, a.y + i * lineHeight));
-    }
-  }
-
-  function redraw() {
-    if (!image) return;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(image, 0, 0);
-    annotations.forEach(drawAnnotation);
-    if (drawing) drawAnnotation(drawing);
-  }
-
-  function renderNotes() {
-    notes.innerHTML = "";
-    annotations.forEach((a, i) => {
-      const li = document.createElement("li");
-      li.textContent = a.type === "text"
-        ? `${i + 1}. ${a.text}`
-        : `${i + 1}. ${a.type} at (${Math.round(a.start?.x ?? a.points[0].x)}, ${Math.round(a.start?.y ?? a.points[0].y)})`;
-      notes.appendChild(li);
-    });
-    if (!annotations.length) notes.innerHTML = "<li>No notes yet.</li>";
-  }
-
-  document.getElementById("undo").addEventListener("click", () => { annotations.pop(); redraw(); renderNotes(); });
-  document.getElementById("clear").addEventListener("click", () => { annotations = []; redraw(); renderNotes(); });
-  document.addEventListener("keydown", event => {
-    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      annotations.pop();
-      redraw();
-      renderNotes();
-    }
-  });
-
-  document.getElementById("submit").addEventListener("click", async () => {
-    if (!image) return;
-    setStatus("Submitting…");
-    const png = canvas.toDataURL("image/png");
-    try {
-      const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/annotations`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          annotations,
-          width: canvas.width,
-          height: canvas.height,
-          png
-        })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "submit failed");
-      submitted = true;
-      setStatus(`Submitted ${data.meta?.submitted_at || ""} — the agent can read it now`);
-      document.getElementById("meta").textContent = [sessionId, "status: submitted", data.meta?.submitted_at || "", data.meta?.url || ""].filter(Boolean).join(" · ");
-    } catch (error) {
-      setStatus("Submit failed: " + error.message);
-    }
-  });
-
-  loadSession().catch(error => {
-    errorBox.style.display = "block";
-    errorBox.textContent = error.message;
-    setStatus("Error");
-  });
-})();
-</script>
+<script src="/static/app.js"></script>
 </body>
 </html>

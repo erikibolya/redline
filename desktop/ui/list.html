@@ -3,275 +3,82 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Visual review sessions</title>
-<style>
-  :root { color-scheme: light; }
-  * { box-sizing: border-box; }
-  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: #1e293b; background: #e2e8f0; }
-  header { padding: 16px 20px; background: #0f172a; color: #f8fafc; display: flex; align-items: center; gap: 16px; }
-  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
-  header button#new-review { margin-left: 8px; }
-  header button.primary { background: #0ea5e9; border-color: #0ea5e9; font-weight: 600; }
-  header button.primary:hover { background: #0284c7; }
-  header button { margin-left: auto; border: 1px solid #475569; background: #1e293b; color: #f8fafc; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
-  header button:hover { background: #334155; }
-  main { max-width: 1000px; margin: 20px auto; padding: 0 16px; }
-  .card { display: flex; gap: 14px; align-items: center; background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 1px 4px rgba(15,23,42,.06); }
-  .card a.title { color: #0369a1; text-decoration: none; font-weight: 600; font-size: 15px; }
-  .card a.title:hover { text-decoration: underline; }
-  .meta { color: #64748b; font-size: 12px; }
-  .badge { margin-left: auto; padding: 3px 9px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
-  .open { background: #e0f2fe; color: #075985; }
-  .submitted { background: #dcfce7; color: #166534; }
-  .empty { padding: 40px; text-align: center; color: #64748b; background: #f8fafc; border: 1px dashed #94a3b8; border-radius: 10px; }
-  code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
-  .connect { background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 18px 20px; margin-top: 14px; }
-  .connect h2 { font-size: 15px; margin: 0 0 4px; }
-  .connect p { margin: 6px 0; color: #475569; font-size: 13px; }
-  .connect ol { margin: 8px 0 0; padding-left: 20px; color: #475569; font-size: 13px; }
-  .connect li { margin-bottom: 8px; }
-  .connect pre { margin: 8px 0; padding: 12px; background: #0f172a; color: #e2e8f0; border-radius: 8px; overflow-x: auto; font-size: 12px; line-height: 1.5; }
-  .connect button { border: 1px solid #0284c7; background: #0ea5e9; color: #fff; border-radius: 6px; padding: 5px 12px; cursor: pointer; font: inherit; }
-  .connect button:hover { background: #0284c7; }
-  .connect .ok { color: #15803d; margin-left: 8px; font-size: 12px; }
-  .hidden { display: none; }
-  .signin { display: flex; gap: 8px; justify-content: center; margin: 14px 0 4px; }
-  .signin input { width: min(340px, 60vw); padding: 8px 10px; border-radius: 8px; border: 1px solid #94a3b8; font: inherit; }
-  .signin button { border: 0; border-radius: 8px; padding: 8px 14px; background: #16a34a; color: #fff; font: inherit; cursor: pointer; }
-  .signin button:hover { background: #15803d; }
-  .overlay { position: fixed; inset: 0; background: rgba(15,23,42,.55); display: grid; place-items: center; z-index: 20; }
-  .overlay.hidden { display: none; }
-  .modal { width: min(520px, 92vw); background: #fff; border-radius: 12px; padding: 22px 24px; box-shadow: 0 20px 60px rgba(15,23,42,.35); }
-  .modal h2 { margin: 0 0 4px; font-size: 17px; }
-  .modal p.hint { margin: 0 0 16px; color: #64748b; font-size: 13px; }
-  .modal label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #64748b; margin: 12px 0 4px; }
-  .modal input[type="text"], .modal textarea { width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }
-  .modal textarea { min-height: 62px; resize: vertical; }
-  .drop { border: 2px dashed #94a3b8; border-radius: 10px; padding: 18px; text-align: center; color: #64748b; font-size: 13px; cursor: pointer; }
-  .drop.over { border-color: #0ea5e9; background: #f0f9ff; color: #0369a1; }
-  .modal .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
-  .modal button { border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
-  .modal button.ghost { background: #e2e8f0; color: #334155; }
-  .modal button.primary { background: #0ea5e9; color: #fff; font-weight: 600; }
-  .modal .error { color: #be123c; font-size: 13px; min-height: 18px; margin-top: 8px; }
-</style>
+<title>redline — sessions</title>
+<link rel="stylesheet" href="/static/app.css" />
 </head>
-<body>
-<header>
-  <h1>Visual review sessions</h1>
-  <button id="refresh">Refresh</button>
-  <button id="new-review" class="primary">New review</button>
-</header>
-<main>
-  <div id="list"></div>
-  <section id="connect" class="connect hidden">
-    <h2>Connect an agent</h2>
-    <p>redline waits for something to review. An agent (or the CLI) creates a session; you redline it here.</p>
-    <ol>
-      <li>
-        Paste this into your agent's MCP settings (<code>opencode.json</code>, Claude Desktop, …):
-        <pre id="mcp-config">{}</pre>
-        <button id="copy-config">Copy config</button><span id="copy-status" class="ok"></span>
-      </li>
-      <li>
-        Or create a session from a terminal:
-        <pre id="cli">redline open shot.png --title "Button / default"</pre>
-      </li>
-    </ol>
-    <p id="sessions-dir" class="meta"></p>
-  </section>
-</main>
-<div id="overlay" class="overlay hidden">
+<body data-page="list">
+<div class="app" id="app" style="grid-template-areas:'header header' 'rail stage' 'status status'; grid-template-columns:var(--rail) minmax(0,1fr);">
+
+  <header class="header">
+    <div class="brand"><span class="brand-mark"><i></i></span> redline</div>
+    <div class="title">
+      <b>Sessions</b>
+      <span>Pick one on the left, or start a review</span>
+    </div>
+    <div class="header-actions">
+      <button class="btn primary" id="new-review">+ New review</button>
+    </div>
+  </header>
+
+  <aside class="rail">
+    <div class="rail-head">
+      <input class="search" id="search" placeholder="Search sessions…" spellcheck="false" />
+      <div class="chips" id="chips"></div>
+    </div>
+    <div class="rail-body" id="rail-body"></div>
+  </aside>
+
+  <main class="list-main">
+    <div class="wrap">
+      <h2 style="font-size:16px;margin:0 0 6px">Start a review</h2>
+      <p style="color:var(--muted);margin:0 0 18px;font-size:13px">
+        Drop a screenshot anywhere on this page, or press <b>+ New review</b>. An agent can also
+        create one over MCP — it will appear in the list on the left.
+      </p>
+
+      <h2 style="font-size:16px;margin:26px 0 6px">Connect an agent</h2>
+      <p style="color:var(--muted);margin:0 0 10px;font-size:13px">
+        Paste this into your agent's MCP settings. The token is already in the URL you opened.
+      </p>
+      <pre class="pre" id="mcp-json">Loading…</pre>
+      <button class="btn" id="copy-mcp">Copy config</button>
+      <span id="copy-status" style="color:var(--ok);font-size:12px;margin-left:8px"></span>
+
+      <h2 style="font-size:16px;margin:26px 0 6px">Keyboard</h2>
+      <div class="pre">V select · R rectangle · A arrow · P pen · T text
+Ctrl+Z undo · Ctrl+Shift+Z redo · Delete remove selection
+Space+drag or middle-drag pan · Ctrl+wheel zoom · 0 fit · 1 actual size
+Ctrl+Enter submit · [ toggle sessions · ] toggle inspector</div>
+    </div>
+  </main>
+
+  <footer class="status">
+    <span>redline</span>
+    <span class="grow"></span>
+    <span id="sessions-count"></span>
+  </footer>
+</div>
+
+<div class="overlay" id="overlay" hidden>
   <form class="modal" id="new-form">
     <h2>New review</h2>
-    <p class="hint">Drop a screenshot here — or click to choose a file. Then say what to look at.</p>
+    <p class="hint">Drop a screenshot — or click to choose a file. Then say what to look at.</p>
     <div class="drop" id="drop">Drop an image, or click to browse</div>
     <input type="file" id="file" accept="image/*" hidden />
     <label for="f-title">Title</label>
     <input id="f-title" type="text" placeholder="Button / default" />
-    <label for="f-url">Page URL <span class="meta">(optional)</span></label>
+    <label for="f-url">Page URL (optional)</label>
     <input id="f-url" type="text" placeholder="http://localhost:5016/button" />
-    <label for="f-note">What should be checked? <span class="meta">(optional)</span></label>
+    <label for="f-note">What should be checked? (optional)</label>
     <textarea id="f-note" placeholder="Spacing looks off, check hover state"></textarea>
     <div class="error" id="new-error"></div>
     <div class="row">
-      <button type="button" class="ghost" id="new-cancel">Cancel</button>
-      <button type="submit" class="primary" id="new-submit">Create review</button>
+      <button type="button" class="btn" id="new-cancel">Cancel</button>
+      <button type="submit" class="btn accent" id="new-submit">Create review</button>
     </div>
   </form>
 </div>
-<script>
-const connect = document.getElementById("connect");
-const copyButton = document.getElementById("copy-config");
-let mcpConfig = "";
 
-async function loadConfig() {
-  try {
-    const response = await fetch("/api/config");
-    if (!response.ok) return; // 401 when the browser has no token yet
-    const config = await response.json();
-    mcpConfig = JSON.stringify(config.mcp_config, null, 2);
-    document.getElementById("mcp-config").textContent = mcpConfig;
-    document.getElementById("cli").textContent = config.cli;
-    document.getElementById("sessions-dir").textContent = "Sessions: " + config.sessions_dir;
-    connect.classList.remove("hidden");
-  } catch (error) {
-    /* older server without /api/config: keep the page usable */
-  }
-}
-
-copyButton.addEventListener("click", async () => {
-  const status = document.getElementById("copy-status");
-  try {
-    await navigator.clipboard.writeText(mcpConfig);
-    status.textContent = "copied";
-  } catch (error) {
-    status.textContent = "select the text above and copy";
-  }
-  setTimeout(() => (status.textContent = ""), 4000);
-});
-
-async function load() {
-  const list = document.getElementById("list");
-  list.innerHTML = '<p class="meta">Loading…</p>';
-  try {
-    const response = await fetch("/api/sessions");
-    if (response.status === 401) {
-      list.innerHTML = `
-        <div class="empty">
-          <p><strong>Sign in to this browser</strong></p>
-          <p class="meta">Paste the access token from the redline app
-            (tray → <b>Copy browser link</b>, or the token shown in its settings).</p>
-          <form id="signin" class="signin">
-            <input id="signin-token" placeholder="access token" spellcheck="false" autocomplete="off" />
-            <button type="submit">Sign in</button>
-          </form>
-          <p class="meta" id="signin-error"></p>
-        </div>`;
-      const form = document.getElementById("signin");
-      form.addEventListener("submit", (event) => {
-        event.preventDefault();
-        const token = document.getElementById("signin-token").value.trim();
-        if (!token) return;
-        // The server trades ?t= for an HttpOnly cookie and redirects to the clean URL.
-        location.href = "/?t=" + encodeURIComponent(token);
-      });
-      return;
-    }
-    const data = await response.json();
-    const sessions = data.sessions || [];
-    if (!sessions.length) {
-      list.innerHTML = '<div class="empty">No sessions yet — nothing is waiting for review.</div>';
-      connect.classList.remove("hidden");
-      return;
-    }
-    connect.classList.add("hidden");
-    list.innerHTML = "";
-    for (const session of sessions) {
-      const card = document.createElement("div");
-      card.className = "card";
-      const body = document.createElement("div");
-      body.innerHTML = `<a class="title" href="/s/${encodeURIComponent(session.id)}">${escapeHtml(session.title || session.id)}</a>
-        <div class="meta">${escapeHtml(session.id)} · ${escapeHtml(session.created_at || "")}${session.url ? " · " + escapeHtml(session.url) : ""}</div>
-        ${session.note ? `<div class="meta">${escapeHtml(session.note)}</div>` : ""}`;
-      const badge = document.createElement("span");
-      badge.className = "badge " + (session.status === "submitted" ? "submitted" : "open");
-      badge.textContent = session.status === "submitted" ? "submitted " + (session.submitted_at || "") : "open";
-      card.append(body, badge);
-      list.appendChild(card);
-    }
-  } catch (error) {
-    list.innerHTML = `<div class="empty">Could not load sessions: ${escapeHtml(error.message)}</div>`;
-  }
-}
-function escapeHtml(value) {
-  return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-}
-// --- new review (human-initiated) -------------------------------------------
-const overlay = document.getElementById("overlay");
-const drop = document.getElementById("drop");
-const fileInput = document.getElementById("file");
-const errorBox = document.getElementById("new-error");
-let pickedFile = null;
-
-function openNewReview() {
-  overlay.classList.remove("hidden");
-  document.getElementById("f-title").focus();
-}
-function closeNewReview() {
-  overlay.classList.add("hidden");
-  errorBox.textContent = "";
-}
-function takeFile(file) {
-  if (!file || !file.type.startsWith("image/")) {
-    errorBox.textContent = "That is not an image.";
-    return;
-  }
-  pickedFile = file;
-  drop.textContent = `${file.name} — ${Math.round(file.size / 1024)} KB`;
-  const title = document.getElementById("f-title");
-  if (!title.value) title.value = file.name.replace(/\.[^.]+$/, "");
-}
-
-document.getElementById("new-review").addEventListener("click", openNewReview);
-document.getElementById("new-cancel").addEventListener("click", closeNewReview);
-drop.addEventListener("click", () => fileInput.click());
-fileInput.addEventListener("change", () => takeFile(fileInput.files[0]));
-drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("over"); });
-drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-drop.addEventListener("drop", (event) => {
-  event.preventDefault();
-  drop.classList.remove("over");
-  takeFile(event.dataTransfer.files[0]);
-});
-// dropping anywhere on the page is the fast path
-document.addEventListener("dragover", (event) => event.preventDefault());
-document.addEventListener("drop", (event) => {
-  if (event.dataTransfer.files.length) {
-    event.preventDefault();
-    if (overlay.classList.contains("hidden")) openNewReview();
-    takeFile(event.dataTransfer.files[0]);
-  }
-});
-
-document.getElementById("new-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!pickedFile) {
-    errorBox.textContent = "Choose a screenshot first.";
-    return;
-  }
-  const submit = document.getElementById("new-submit");
-  submit.disabled = true;
-  errorBox.textContent = "Uploading…";
-  try {
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(pickedFile);
-    });
-    const response = await fetch("/api/sessions", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        title: document.getElementById("f-title").value.trim() || pickedFile.name,
-        url: document.getElementById("f-url").value.trim(),
-        note: document.getElementById("f-note").value.trim(),
-        image_base64: dataUrl,
-        agent: "human",
-      }),
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "could not create the review");
-    location.href = `/s/${encodeURIComponent(body.meta.id)}`;
-  } catch (error) {
-    errorBox.textContent = error.message;
-    submit.disabled = false;
-  }
-});
-
-document.getElementById("refresh").addEventListener("click", load);
-loadConfig().then(load);
-</script>
+<script src="/static/app.js"></script>
 </body>
 </html>

@@ -225,16 +225,36 @@ fn serve_ui(state: &AppState, name: &str) -> Response {
 
 async fn static_file(State(state): State<AppState>, request: Request) -> Response {
     let path = request.uri().path();
-    let Some(dir) = &state.ui else {
-        return StatusCode::NOT_FOUND.into_response();
-    };
     let Some(relative) = path.strip_prefix("/static/") else {
         return StatusCode::NOT_FOUND.into_response();
     };
     if relative.is_empty() || relative.contains("..") || relative.contains('\\') {
         return StatusCode::NOT_FOUND.into_response();
     }
-    serve_file(&dir.join(relative), None)
+    // Assets compiled into the binary win; the directory is only for `--ui` overrides.
+    if let Some(files) = state.inline_ui {
+        if let Some((_, body)) = files.iter().find(|(name, _)| *name == relative) {
+            return inline_asset(relative, body);
+        }
+    }
+    match &state.ui {
+        Some(dir) => serve_file(&dir.join(relative), None),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+fn inline_asset(name: &str, body: &'static str) -> Response {
+    let content_type = mime_guess::from_path(name)
+        .first_raw()
+        .unwrap_or("application/octet-stream");
+    let mut response = Response::new(Body::from(body));
+    if let Ok(value) = HeaderValue::from_str(content_type) {
+        response.headers_mut().insert(header::CONTENT_TYPE, value);
+    }
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn html_response(body: &'static str) -> Response {
@@ -301,8 +321,24 @@ async fn health() -> Json<Value> {
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    // The rail wants a badge per session; computing it here saves N round-trips from the UI.
     let sessions = state.store.list()?;
-    Ok(Json(json!({ "sessions": sessions })))
+    let items: Vec<Value> = sessions
+        .into_iter()
+        .map(|meta| {
+            let count = state
+                .store
+                .annotations(&meta.id)
+                .map(|set| set.annotations.len())
+                .unwrap_or(0);
+            let mut value = serde_json::to_value(&meta).unwrap_or(Value::Null);
+            if let Some(object) = value.as_object_mut() {
+                object.insert("annotation_count".to_string(), json!(count));
+            }
+            value
+        })
+        .collect();
+    Ok(Json(json!({ "sessions": items })))
 }
 
 async fn get_session(

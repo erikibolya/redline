@@ -293,6 +293,85 @@ async fn delete_removes_the_session_and_404s_afterwards() {
 }
 
 #[tokio::test]
+async fn session_list_carries_annotation_counts_for_the_rail() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "counted", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let request = Request::builder()
+        .uri("/api/sessions")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, body) = send(&h.app, request).await;
+    assert_eq!(body["sessions"][0]["annotation_count"], 0);
+
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [
+                {"type": "text", "x": 1, "y": 2, "text": "one"},
+                {"type": "rect", "start": {"x": 1, "y": 1}, "end": {"x": 5, "y": 5}}
+            ]}),
+        ),
+    )
+    .await;
+
+    let request = Request::builder()
+        .uri("/api/sessions")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, body) = send(&h.app, request).await;
+    assert_eq!(body["sessions"][0]["annotation_count"], 2);
+}
+
+#[tokio::test]
+async fn inline_css_and_js_are_served() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Store::new(dir.path().join("sessions"));
+    store.ensure().unwrap();
+    static FILES: &[(&str, &str)] = &[
+        ("index.html", "<h1>x</h1>"),
+        ("list.html", "<h1>y</h1>"),
+        ("app.css", "body{color:red}"),
+        ("app.js", "console.log(1)"),
+    ];
+    let app = router(
+        AppState::new(store, Auth::new(TOKEN))
+            .with_inline_ui(FILES)
+            .with_base_url("http://127.0.0.1:8788"),
+    );
+    for (path, expected_type) in [
+        ("/static/app.css", "text/css"),
+        ("/static/app.js", "javascript"),
+    ] {
+        let response = app.clone().oneshot(get(path)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            content_type.contains(expected_type),
+            "{path}: {content_type}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn config_endpoint_explains_how_to_connect_an_agent() {
     let h = harness();
 

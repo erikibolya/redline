@@ -336,18 +336,21 @@ async fn setup_refuses_an_unreachable_or_wrong_token_before_saving() {
         .contains("could not use that server"));
     assert!(!config.exists(), "a failed probe must not persist a config");
 
-    // https is refused with an actionable message rather than saved and broken.
+    // A scheme the client cannot speak at all is rejected with an actionable message.
     let (status, _, body) = send(
         &h.app,
         authed(
             "POST",
             "/api/setup",
-            json!({"remote_url": "https://holly:8788", "token": "x"}),
+            json!({"remote_url": "ftp://holly", "token": "x"}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert!(body["error"].as_str().unwrap().contains("http://"));
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("http:// or https://"));
 }
 
 #[tokio::test]
@@ -408,6 +411,30 @@ async fn setup_saves_a_server_that_answers_and_can_disconnect() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["mode"], "local");
     assert!(!config.exists());
+}
+
+#[tokio::test]
+async fn https_servers_are_accepted_without_a_plain_http_probe() {
+    let h = harness();
+    let config = h._dir.path().join("config.json");
+
+    // No TLS client here, so the address is trusted and the webview is the judge.
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/setup",
+            json!({"remote_url": "https://redline.ibolya.cz", "token": "t"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["open_url"], "https://redline.ibolya.cz/?t=t");
+    assert!(config.exists());
+
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(saved["remote_url"], "https://redline.ibolya.cz");
 }
 
 #[tokio::test]

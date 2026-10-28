@@ -456,12 +456,14 @@ async fn save_setup(
     if remote_url.is_empty() {
         return Err(Error::BadRequest("server URL is required".to_string()));
     }
-    if !remote_url.starts_with("http://") {
+    if !remote_url.starts_with("http://") && !remote_url.starts_with("https://") {
         return Err(Error::BadRequest(
-            "use an http:// URL — put https in front of it with a reverse proxy or tunnel"
-                .to_string(),
+            "use an http:// or https:// URL".to_string(),
         ));
     }
+    // A plain-HTTP probe cannot validate a TLS endpoint; for https we let the webview be the
+    // judge (a bad certificate shows up immediately) instead of refusing the address.
+    let is_https = remote_url.starts_with("https://");
     let token = body.token.trim().to_string();
     if token.is_empty() {
         return Err(Error::BadRequest("token is required".to_string()));
@@ -469,13 +471,17 @@ async fn save_setup(
 
     let probe_url = remote_url.clone();
     let probe_token = token.clone();
-    let reachable = tokio::task::spawn_blocking(move || {
-        crate::client::Client::new(&format!("{probe_url}/"), probe_token)
-            .and_then(|client| client.get("/api/config"))
-            .map(|_| ())
-    })
-    .await
-    .map_err(|err| Error::BadRequest(format!("check failed: {err}")))?;
+    let reachable = if is_https {
+        Ok(())
+    } else {
+        tokio::task::spawn_blocking(move || {
+            crate::client::Client::new(&format!("{probe_url}/"), probe_token)
+                .and_then(|client| client.get("/api/config"))
+                .map(|_| ())
+        })
+        .await
+        .map_err(|err| Error::BadRequest(format!("check failed: {err}")))?
+    };
 
     if let Err(err) = reachable {
         return Err(Error::BadRequest(format!(

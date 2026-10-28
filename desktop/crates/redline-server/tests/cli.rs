@@ -32,22 +32,43 @@ struct Server {
 impl Server {
     fn start() -> Self {
         let dir = tempfile::tempdir().unwrap();
-        let port = free_port();
-        let child = Command::new(binary())
+        let mut child = Command::new(binary())
             .args([
                 "serve",
                 "--port",
-                &port.to_string(),
+                "0", // let the OS choose: no port races between parallel tests
                 "--data-dir",
                 dir.path().to_str().unwrap(),
                 "--token",
                 "test-token",
             ])
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn server");
 
+        // The banner reports the bound port; keep draining stdout so the server never blocks
+        // or dies on a broken pipe.
+        let stdout = child.stdout.take().expect("stdout");
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if let Some(rest) = line.split("listening on http://127.0.0.1:").nth(1) {
+                    let _ = sender.send(rest.trim().parse::<u16>().ok());
+                }
+            }
+        });
+        let port = receiver
+            .recv_timeout(Duration::from_secs(15))
+            .ok()
+            .flatten()
+            .expect("server did not report a port");
+
+        // Wait until it actually accepts connections before handing it to a test.
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
@@ -55,7 +76,7 @@ impl Server {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        panic!("server did not start on port {port}");
+        panic!("server on port {port} never accepted a connection");
     }
 
     fn data_dir(&self) -> &Path {

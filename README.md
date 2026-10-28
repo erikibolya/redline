@@ -1,4 +1,6 @@
-# au-visual-review
+# redline
+
+**Redline the screenshot. The agent writes the fix.**
 
 A local, dependency-free visual review queue for human ↔ AI collaboration.
 
@@ -19,13 +21,13 @@ personal GitHub account and has no company-specific code or paths.
 ## Quick start
 
 ```bash
-python3 review.py serve --open          # http://127.0.0.1:8788
+python3 redline.py serve --open          # http://127.0.0.1:8788
 ```
 
 Create a session (normally the agent does this):
 
 ```bash
-python3 review.py open shot.png \
+python3 redline.py open shot.png \
   --title "Button / default" \
   --url "http://localhost:5016/button" \
   --note "Check hover, focus and disabled" \
@@ -39,7 +41,7 @@ annotate. Sessions live in `sessions/<id>/` and are gitignored.
 
 ```bash
 # 1. create a review session from a screenshot
-python3 review.py open review/14-button/default.png \
+python3 redline.py open review/14-button/default.png \
   --title "Button / default" \
   --url "http://localhost:5016/button" \
   --note "Variants + hover/disabled" --json
@@ -47,10 +49,10 @@ python3 review.py open review/14-button/default.png \
 # 2. open the printed review_url in the browser / Review pane
 
 # 3. wait for the human to submit (blocks until submitted or timeout)
-python3 review.py wait <id> --timeout 600 --json
+python3 redline.py wait <id> --timeout 600 --json
 
 # 4. read the result
-python3 review.py get <id> --json
+python3 redline.py get <id> --json
 ```
 
 The result is deliberately redundant:
@@ -76,17 +78,17 @@ the files and timestamp.
 ## CLI reference
 
 ```text
-python3 review.py serve [--host 127.0.0.1] [--port 8788] [--sessions DIR] [--open]
-python3 review.py open IMAGE [--title T] [--url URL] [--note TEXT] [--id ID]
+python3 redline.py serve [--host 127.0.0.1] [--port 8788] [--sessions DIR] [--open]
+python3 redline.py open IMAGE [--title T] [--url URL] [--note TEXT] [--id ID]
                              [--sessions DIR] [--host H] [--port P]
                              [--json] [--open-browser]
-python3 review.py list [--sessions DIR] [--json]
-python3 review.py get ID [--sessions DIR] [--json]
-python3 review.py wait ID [--sessions DIR] [--timeout 600] [--interval 2] [--json]
-python3 review.py remove ID [--sessions DIR] [--yes]
+python3 redline.py list [--sessions DIR] [--json]
+python3 redline.py get ID [--sessions DIR] [--json]
+python3 redline.py wait ID [--sessions DIR] [--timeout 600] [--interval 2] [--json]
+python3 redline.py remove ID [--sessions DIR] [--yes]
 ```
 
-- Default sessions directory: `./sessions` next to `review.py`.
+- Default sessions directory: `./sessions` next to `redline.py`.
 - Default server: `127.0.0.1:8788`.
 - `open` creates the folder and copies the image; `--id` must be unique.
 - `wait` exits **2** on timeout; `get` exits **1** if the session does not exist.
@@ -147,10 +149,10 @@ If the browser and agent do not share a host, point both at the same checkout or
 
 ```bash
 # agent side
-python3 review.py open ... --sessions /mnt/user/Development/repos/au-visual-review/sessions
+python3 redline.py open ... --sessions /mnt/user/Development/repos/redline/sessions
 
 # browser side (Windows)
-python review.py serve --sessions Z:\repos\au-visual-review\sessions
+python redline.py serve --sessions Z:\repos\redline\sessions
 ```
 
 The browser edits files in the shared folder; the agent reads them directly. The server does not
@@ -159,7 +161,7 @@ need to be reachable from the agent in this mode.
 ## Personal GitHub
 
 ```bash
-git remote add origin git@github.com:<you>/au-visual-review.git
+git remote add origin git@github.com:<you>/redline.git
 git push -u origin main
 ```
 
@@ -184,10 +186,10 @@ The tests cover session creation/listing, submission output and session-id valid
 ## Repository layout
 
 ```text
-review.py                 # CLI + stdlib HTTP server + session store
+redline.py                 # CLI + stdlib HTTP server + session store
 static/list.html          # session list
 static/index.html         # annotation editor
-tests/test_review.py      # unit tests
+tests/test_redline.py      # unit tests
 docs/ARCHITECTURE.md      # design and data flow
 docs/API.md               # endpoint + payload reference
 docs/WORKFLOW.md          # human/agent review protocol

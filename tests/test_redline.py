@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import review
+import redline
 
 PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2n0kAAAAASUVORK5CYII="
@@ -22,7 +22,7 @@ class ReviewTests(unittest.TestCase):
         self.temp.cleanup()
 
     def create(self):
-        return review.create_session(
+        return redline.create_session(
             self.sessions,
             self.image,
             "Button / default",
@@ -34,7 +34,7 @@ class ReviewTests(unittest.TestCase):
         meta = self.create()
         self.assertEqual("open", meta["status"])
         self.assertTrue((self.sessions / meta["id"] / "screenshot.png").is_file())
-        self.assertEqual([meta["id"]], [item["id"] for item in review.list_sessions(self.sessions)])
+        self.assertEqual([meta["id"]], [item["id"] for item in redline.list_sessions(self.sessions)])
 
     def test_submit_writes_the_agent_format(self):
         meta = self.create()
@@ -42,7 +42,7 @@ class ReviewTests(unittest.TestCase):
             {"type": "rect", "start": {"x": 1, "y": 2}, "end": {"x": 30, "y": 40}, "color": "#e11d48", "width": 3},
             {"type": "text", "x": 5, "y": 6, "text": "Move this up", "color": "#f59e0b"},
         ]
-        result = review.submit_annotations(self.sessions, meta["id"], annotations, None, 640, 360)
+        result = redline.submit_annotations(self.sessions, meta["id"], annotations, None, 640, 360)
 
         folder = self.sessions / meta["id"]
         self.assertEqual("submitted", result["meta"]["status"])
@@ -54,7 +54,7 @@ class ReviewTests(unittest.TestCase):
 
     def test_invalid_session_id_is_rejected(self):
         with self.assertRaises(ValueError):
-            review.session_dir(self.sessions, "../escape")
+            redline.session_dir(self.sessions, "../escape")
 
 
 if __name__ == "__main__":

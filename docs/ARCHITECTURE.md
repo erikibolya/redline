@@ -23,12 +23,12 @@ Those are roadmap items (`PLAN.md`), not assumptions in the current code.
         │ browser URL / API                                  │ HTTP submit
         ▼                                                    │
 ┌──────────────────────────────┐                  ┌──────────┴───────────┐
-│ review.py serve              │  static HTML/JS  │  Human browser       │
+│ redline.py serve              │  static HTML/JS  │  Human browser       │
 │ stdlib ThreadingHTTPServer   │ ───────────────▶ │  canvas editor       │
 └──────────────────────────────┘                  └──────────────────────┘
 ```
 
-- **`review.py`** is the only Python module: storage, CLI and HTTP in one file. Keeping it single-file
+- **`redline.py`** is the only Python module: storage, CLI and HTTP in one file. Keeping it single-file
   makes it copy-paste portable.
 - **`static/list.html`** fetches `/api/sessions` and renders links.
 - **`static/index.html`** is the editor. It loads meta/annotations, draws on a canvas over the
@@ -50,7 +50,7 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
 
 ## Data flow
 
-1. Agent captures a screenshot and runs `review.py open`.
+1. Agent captures a screenshot and runs `redline.py open`.
 2. Session folder is created; `meta.json` stores title/url/note/status.
 3. Agent opens `http://127.0.0.1:8788/s/<id>` (browser tool or human).
 4. Editor fetches `/api/sessions/<id>`, then loads `/sessions/<id>/image`.
@@ -116,7 +116,7 @@ include start/end/color/width; other shapes point to the JSON.
 The server only needs filesystem access to `sessions/`. Two supported modes:
 
 1. **Same host:** agent starts the server; browser opens `127.0.0.1:8788`.
-2. **Split:** agent writes sessions in a shared checkout; the human runs `review.py serve
+2. **Split:** agent writes sessions in a shared checkout; the human runs `redline.py serve
    --sessions <shared>` on Windows. The agent reads the same files directly; no network route is
    required between agent and browser.
 

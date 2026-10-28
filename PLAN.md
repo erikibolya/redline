@@ -1,4 +1,4 @@
-# PLAN — au-visual-review
+# PLAN — redline
 
 ## Vision
 
@@ -18,7 +18,7 @@ co-editing.
 
 ## Current state (MVP, commit 301eefd)
 
-- `review.py`: CLI (`serve/open/list/get/wait/remove`), file-based session store, stdlib HTTP
+- `redline.py`: CLI (`serve/open/list/get/wait/remove`), file-based session store, stdlib HTTP
   server, annotation submission.
 - Browser UI: session list + canvas editor with rectangle, arrow, pen, text, undo, clear,
   submit/resubmit.
@@ -59,12 +59,12 @@ See `docs/ARCHITECTURE.md` for details.
 
 ### M3 — Agent integration
 
-- [ ] `review.py capture --url URL [--selector] [--viewport 1440x900] [--out shot.png]`
+- [ ] `redline.py capture --url URL [--selector] [--viewport 1440x900] [--out shot.png]`
       (Playwright/Chromium; optional dependency, opt-in).
-- [ ] `review.py open --url URL` capture shortcut.
-- [ ] `review.py wait` JSON output already works; add `--fail-on-timeout` and progress.
+- [ ] `redline.py open --url URL` capture shortcut.
+- [ ] `redline.py wait` JSON output already works; add `--fail-on-timeout` and progress.
 - [ ] Before/after comparison session: original + follow-up screenshots side by side/diff.
-- [ ] `review.py export <id>` to a single Markdown review (for issue trackers).
+- [ ] `redline.py export <id>` to a single Markdown review (for issue trackers).
 - [ ] Optional checklist file per session (`checklist.json`) that the agent ticks off.
 
 ### M4 — Reliability & distribution
@@ -123,7 +123,7 @@ See `docs/ARCHITECTURE.md` for details.
 
 - Personal GitHub repo, MIT license.
 - Tag `v0.1.0` after M1 (current), `v0.2.0` after M2, etc.
-- No package publication required; `git clone` + `python review.py serve` is the install.
+- No package publication required; `git clone` + `python redline.py serve` is the install.
 - If `pipx` packaging lands (M4), publish to PyPI only if the human wants it.
 
 ## Definition of done (feature)

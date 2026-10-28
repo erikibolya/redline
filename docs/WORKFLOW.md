@@ -28,7 +28,7 @@ note:  "Desktop 1440×900; compare filled/outlined hover, disabled, icon spacing
 ## 2. Create the session
 
 ```bash
-python3 review.py open review/14-button/hover.png \
+python3 redline.py open review/14-button/hover.png \
   --title "Button / hover + disabled" \
   --url "http://localhost:5016/button" \
   --note "Desktop 1440×900; compare hover/disabled" --json
@@ -37,7 +37,7 @@ python3 review.py open review/14-button/hover.png \
 Open the printed `review_url` in the browser or the Review pane. The server must be running:
 
 ```bash
-python3 review.py serve --open
+python3 redline.py serve --open
 ```
 
 ## 3. Annotate
@@ -64,7 +64,7 @@ again; the agent reads the latest submission.
 ## 5. Agent reads the result
 
 ```bash
-python3 review.py wait <id> --timeout 600 --json
+python3 redline.py wait <id> --timeout 600 --json
 ```
 
 Files:
@@ -88,7 +88,7 @@ title: "Button / hover + disabled — confirmation"
 After sign-off, remove obsolete sessions:
 
 ```bash
-python3 review.py remove <id> --yes
+python3 redline.py remove <id> --yes
 ```
 
 ## Au.Net component reviews

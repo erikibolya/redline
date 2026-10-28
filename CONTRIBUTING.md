@@ -3,9 +3,9 @@
 ## Setup
 
 ```bash
-git clone <personal-repo-url> au-visual-review
-cd au-visual-review
-python3 review.py serve --open
+git clone <personal-repo-url> redline
+cd redline
+python3 redline.py serve --open
 ```
 
 No dependencies or build step. Python 3.10+.
@@ -14,14 +14,14 @@ No dependencies or build step. Python 3.10+.
 
 ```bash
 python3 -m unittest discover -s tests -t . -v
-python3 review.py serve --port 8790 --sessions /tmp/review-sessions
+python3 redline.py serve --port 8790 --sessions /tmp/review-sessions
 ```
 
 Use a throwaway sessions directory while developing so your local review queue stays clean.
 
 ## Code style
 
-- Python stdlib only (no `requests`, no Flask); keep `review.py` portable.
+- Python stdlib only (no `requests`, no Flask); keep `redline.py` portable.
 - Keep the HTML/CSS/JS dependency-free and readable; no bundler.
 - 4 spaces in Python; small functions; docstrings for public CLI/API behavior.
 - Keep the JSON schema additive. If a field must change, document it in `docs/API.md` and `PLAN.md`.
@@ -44,7 +44,7 @@ Use a throwaway sessions directory while developing so your local review queue s
 This repo is intentionally standalone:
 
 ```bash
-git remote add origin git@github.com:<you>/au-visual-review.git
+git remote add origin git@github.com:<you>/redline.git
 git push -u origin main
 ```
 

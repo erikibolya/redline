@@ -1,4 +1,4 @@
-# Agent instructions — au-visual-review
+# Agent instructions — redline
 
 This repository is a local visual-review queue. The human annotates screenshots; the agent creates
 sessions, opens them, and reads the submitted JSON. Read this file before changing the tool.
@@ -23,7 +23,7 @@ sessions, opens them, and reads the submitted JSON. Read this file before changi
    review pack lives (e.g. `review/14-button/default.png`).
 2. **Create a session:**
    ```bash
-   python3 review.py open review/14-button/default.png \
+   python3 redline.py open review/14-button/default.png \
      --title "Button / default" \
      --url "http://localhost:5016/button" \
      --note "Check hover, focus and disabled" --json
@@ -34,7 +34,7 @@ sessions, opens them, and reads the submitted JSON. Read this file before changi
    `review_url`; otherwise ask the human to open it. Keep the page server running.
 4. **Wait** for submission:
    ```bash
-   python3 review.py wait <id> --timeout 600 --json
+   python3 redline.py wait <id> --timeout 600 --json
    ```
    Exit code 0 = submitted; 2 = timeout; 1 = not found.
 5. **Read the result:**
@@ -44,7 +44,7 @@ sessions, opens them, and reads the submitted JSON. Read this file before changi
 6. **Implement** each text note as a checklist item. Use marked regions (`rect`/`arrow`/`pen`) to
    locate the affected UI. Never edit the user's annotations.
 7. **Confirm** with a fresh screenshot/session; then optionally
-   `python3 review.py remove <id> --yes` for obsolete sessions.
+   `python3 redline.py remove <id> --yes` for obsolete sessions.
 
 ## Screenshot conventions
 
@@ -61,10 +61,10 @@ sessions, opens them, and reads the submitted JSON. Read this file before changi
 
 | File | Responsibility |
 |------|----------------|
-| `review.py` | CLI (`serve/open/list/get/wait/remove`), session storage, annotation submission, HTTP server. |
+| `redline.py` | CLI (`serve/open/list/get/wait/remove`), session storage, annotation submission, HTTP server. |
 | `static/list.html` | Session list page; fetches `/api/sessions`. |
 | `static/index.html` | Canvas editor; loads session, drawing tools, submits JSON + PNG. |
-| `tests/test_review.py` | Unit tests for session creation/submission/ID validation. |
+| `tests/test_redline.py` | Unit tests for session creation/submission/ID validation. |
 | `docs/API.md` | HTTP + annotation schema. |
 | `docs/ARCHITECTURE.md` | Design, data flow, limitations. |
 | `docs/WORKFLOW.md` | Human/agent review protocol. |
@@ -85,12 +85,12 @@ sessions, opens them, and reads the submitted JSON. Read this file before changi
 ## Common recipes
 
 ```bash
-python3 review.py serve --open
-python3 review.py serve --port 8790
-python3 review.py list --json
-python3 review.py get <id> --json
-python3 review.py remove <id> --yes
-python3 review.py open shot.png --sessions ./shared-sessions --json
+python3 redline.py serve --open
+python3 redline.py serve --port 8790
+python3 redline.py list --json
+python3 redline.py get <id> --json
+python3 redline.py remove <id> --yes
+python3 redline.py open shot.png --sessions ./shared-sessions --json
 ```
 
 Troubleshooting:

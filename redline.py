@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-au-visual-review: tiny local screenshot annotation server.
+redline: tiny local screenshot annotation server.
 
 The AI agent creates a session with a screenshot; the human draws notes in the browser;
 the result is written back as annotations.json + annotated.png + review.md.
@@ -194,7 +194,7 @@ def submit_annotations(
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "au-visual-review/1.0"
+    server_version = "redline/1.0"
     sessions: Path = DEFAULT_SESSIONS
     server_port: int = DEFAULT_PORT
     host: str = "127.0.0.1"
@@ -332,7 +332,7 @@ def cmd_serve(args) -> int:
     Handler.server_port = args.port
     httpd = ThreadingHTTPServer((args.host, args.port), Handler)
     url = f"http://{args.host}:{args.port}/"
-    print(f"au-visual-review: {url}")
+    print(f"redline: {url}")
     print(f"sessions: {sessions}")
     if args.open:
         webbrowser.open(url)

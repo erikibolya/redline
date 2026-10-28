@@ -12,7 +12,7 @@ personal GitHub account and has no company-specific code or paths.
 
 ## Requirements
 
-- Python **3.10+** (stdlib only — no `pip install` needed)
+- Python **3.10+** (stdlib only — no `pip install` needed); use `python3` on WSL/Linux and `python` on Windows
 - A modern browser
 - Optional: a shared checkout if the browser and agent run on different machines
 

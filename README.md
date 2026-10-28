@@ -17,6 +17,9 @@ personal GitHub account and has no company-specific code or paths.
 > this server plus an MCP endpoint, so agents connect directly and no terminal stays open. It runs
 > standalone on your desktop or as a thin client of a server next to your agents (Unraid/Docker).
 > See [`docs/DESKTOP.md`](docs/DESKTOP.md).
+>
+> Server image (Unraid/NAS/Docker): `docker pull ghcr.io/erikibolya/redline:latest` — bind
+> `/data`, publish `8788`, set `REDLINE_TOKEN`. The Windows app then connects to it from the tray.
 > Everything below describes v0.1, which still works.
 
 ## Requirements

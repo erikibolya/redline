@@ -202,6 +202,41 @@ The app's Connect form accepts `https://` too. For an https server the credentia
 over plain HTTP (the client has no TLS stack); the webview loads the URL and reports a bad
 certificate instead.
 
+### Capture, updates and signing
+
+**`capture_review`** (MCP) screenshots a URL with headless Chromium and opens a review session for
+it, so an agent no longer needs a screenshot file on disk:
+
+```json
+{"name": "capture_review", "arguments": {"url": "http://localhost:5016/button", "viewport": "1440x900"}}
+```
+
+It needs a browser on the server: use the `:browser` image
+(`ghcr.io/erikibolya/redline:browser`, ~400 MB with Chromium) or set `REDLINE_CHROME`. Without one
+the tool returns an actionable error instead of failing silently.
+
+**Auto-update** — the app checks `releases/latest/download/latest.json` once at launch, and only
+restarts when an update actually downloaded and installed. Artifacts are signed with the updater
+key (`TAURI_SIGNING_PRIVATE_KEY` secret); the public half lives in `tauri.conf.json`. The private
+key is at `/mnt/user/appdata/redline-secrets/updater.key` — **losing it means existing installs
+can never update again**.
+
+**Windows code signing** — the release workflow signs automatically when these repository secrets
+exist; without them the build is unsigned (SmartScreen warns):
+
+| Secret | Contents |
+|--------|----------|
+| `WINDOWS_CERT_PFX` | base64 of the `.pfx` (OV/EV code-signing certificate) |
+| `WINDOWS_CERT_PASSWORD` | its password |
+
+A certificate must be bought from a CA (OV ≈ €200–400/yr; Azure Trusted Signing ≈ $10/month;
+SignPath offers free signing for qualifying OSS). Nothing else is needed — the workflow writes the
+Tauri signing config and signs `redline-app.exe` plus the installer.
+
+**One front door** — when `REDLINE_DOMAIN` is set the installer no longer publishes port 8788, and
+passes `--public-url https://$DOMAIN` so review links and `Copy MCP config` use the HTTPS address.
+`REDLINE_PUBLISH_PORT=1` keeps the LAN port if you want both.
+
 ## Data locations
 
 | OS | Sessions | Config |

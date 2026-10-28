@@ -61,6 +61,14 @@ try {
       </button>
       <span class="sep"></span>
       <input type="color" id="color" title="Colour" aria-label="Colour" />
+      <select id="text-size" title="Text size" aria-label="Text size"
+              style="background:var(--panel-2);border:1px solid var(--border);border-radius:7px;padding:4px 6px">
+        <option value="14">14</option>
+        <option value="18" selected>18</option>
+        <option value="24">24</option>
+        <option value="32">32</option>
+        <option value="48">48</option>
+      </select>
       <input type="range" id="width" min="1" max="10" step="1" title="Line width" aria-label="Line width" />
       <span class="zoom" id="width-value">3px</span>
       <span class="sep"></span>
@@ -80,16 +88,23 @@ try {
     <div class="inspector-head">
       Annotations <span class="count" id="ann-count">0</span>
     </div>
-    <div class="inspector-tools align-group hidden" id="align-tools">
-      <button class="tool" data-align="left" title="Align left">⇤</button>
-      <button class="tool" data-align="hcenter" title="Align centres">↔</button>
-      <button class="tool" data-align="right" title="Align right">⇥</button>
-      <button class="tool" data-align="top" title="Align top">⇧</button>
-      <button class="tool" data-align="vcenter" title="Align middles">↕</button>
-      <button class="tool" data-align="bottom" title="Align bottom">⇩</button>
+    <div class="inspector-tools hidden" id="selection-tools">
+      <button class="tool align-only hidden" data-align="left" title="Align left">⇤</button>
+      <button class="tool align-only hidden" data-align="hcenter" title="Align centres">↔</button>
+      <button class="tool align-only hidden" data-align="right" title="Align right">⇥</button>
+      <button class="tool align-only hidden" data-align="top" title="Align top">⇧</button>
+      <button class="tool align-only hidden" data-align="vcenter" title="Align middles">↕</button>
+      <button class="tool align-only hidden" data-align="bottom" title="Align bottom">⇩</button>
+      <button class="tool align-only hidden" data-distribute="h" title="Distribute horizontally (3+)">⇹</button>
+      <button class="tool align-only hidden" data-distribute="v" title="Distribute vertically (3+)">⇕</button>
+      <span class="sep align-only hidden"></span>
+      <button class="tool" data-layer="front" title="Bring to front">⤒</button>
+      <button class="tool" data-layer="forward" title="Bring forward">↑</button>
+      <button class="tool" data-layer="backward" title="Send backward">↓</button>
+      <button class="tool" data-layer="back" title="Send to back">⤓</button>
       <span class="sep"></span>
-      <button class="tool" data-distribute="h" title="Distribute horizontally (3+)">⇹</button>
-      <button class="tool" data-distribute="v" title="Distribute vertically (3+)">⇕</button>
+      <button class="tool" data-group="group" title="Group (G)">⧉</button>
+      <button class="tool" data-group="ungroup" title="Ungroup (Shift+G)">⧈</button>
     </div>
     <div class="inspector-body" id="ann-list"></div>
 

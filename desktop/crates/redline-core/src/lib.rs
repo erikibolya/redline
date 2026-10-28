@@ -14,6 +14,7 @@ pub mod api;
 pub mod auth;
 pub mod capture;
 pub mod client;
+pub mod diff;
 pub mod error;
 pub mod mcp;
 pub mod model;

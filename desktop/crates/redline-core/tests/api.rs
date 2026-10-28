@@ -293,6 +293,76 @@ async fn delete_removes_the_session_and_404s_afterwards() {
 }
 
 #[tokio::test]
+async fn history_diff_reports_what_changed_between_rounds() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "diff", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [
+                {"type": "text", "id": "t1", "x": 1, "y": 1, "text": "before"},
+                {"type": "rect", "id": "r1", "start": {"x": 0, "y": 0}, "end": {"x": 4, "y": 4}}
+            ]}),
+        ),
+    )
+    .await;
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [
+                {"type": "text", "id": "t1", "x": 1, "y": 1, "text": "after"},
+                {"type": "arrow", "id": "a1", "start": {"x": 9, "y": 9}, "end": {"x": 12, "y": 12}}
+            ]}),
+        ),
+    )
+    .await;
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/history"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, body) = send(&h.app, request).await;
+    let stamp = body["submissions"][0]["stamp"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/history/{stamp}/diff"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["added"][0]["kind"], "arrow");
+    assert_eq!(body["removed"][0]["kind"], "rect");
+    assert_eq!(body["changed"][0]["kind"], "text");
+    assert!(body["changed"][0]["after"]
+        .as_str()
+        .unwrap()
+        .contains("after"));
+    assert!(body["changed"][0]["before"]
+        .as_str()
+        .unwrap()
+        .contains("before"));
+}
+
+#[tokio::test]
 async fn resubmitting_archives_the_previous_round() {
     let h = harness();
     let (_, _, created) = send(

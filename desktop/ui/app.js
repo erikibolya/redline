@@ -11,6 +11,10 @@ const escapeHtml = (value) =>
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 
+/** Stable identity per annotation: lets history diffing tell "moved" from "deleted + added". */
+const uid = () =>
+  (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
 function relativeTime(iso) {
@@ -265,6 +269,7 @@ class Editor {
     this.marquee = null;
     this.tool = "select";
     this.color = prefs.get("color", "#e11d48");
+    this.textSize = prefs.get("textSize", 18);
     this.lineWidth = prefs.get("width", 3);
     this.view = { scale: 1, x: 0, y: 0, fitted: false };
     this.pointers = new Map();
@@ -286,6 +291,8 @@ class Editor {
     this.bindKeyboard();
     this.syncToolButtons();
     $("#color").value = this.color;
+    const sizeSelect = $("#text-size");
+    if (sizeSelect) sizeSelect.value = String(this.textSize);
     $("#width").value = this.lineWidth;
     this.syncWidthLabel();
     await this.rail.load();
@@ -409,6 +416,26 @@ class Editor {
     $$(".tool").forEach((button) =>
       button.addEventListener("click", () => this.setTool(button.dataset.tool)),
     );
+    const sizeSelect = $("#text-size");
+    if (sizeSelect) {
+      sizeSelect.addEventListener("change", (event) => {
+        this.textSize = Number(event.target.value);
+        prefs.set("textSize", this.textSize);
+        const indices = [...this.selected].filter((i) => this.annotations[i].type === "text");
+        if (indices.length) {
+          this.mutate(() => {
+            for (const index of indices) this.annotations[index].size = this.textSize;
+          });
+        }
+      });
+    }
+
+    $$("[data-layer]").forEach((button) =>
+      button.addEventListener("click", () => this.reorderSelected(button.dataset.layer)));
+    $$("[data-group]").forEach((button) =>
+      button.addEventListener("click", () =>
+        button.dataset.group === "group" ? this.groupSelected() : this.ungroupSelected()));
+
     $("#color").addEventListener("input", (event) => {
       this.color = event.target.value;
       prefs.set("color", this.color);
@@ -517,6 +544,9 @@ class Editor {
           });
           break;
         }
+        case "g":
+          event.shiftKey ? this.ungroupSelected() : this.groupSelected();
+          break;
         case "+": case "=": this.zoomAt(1.25); break;
         case "-": this.zoomAt(0.8); break;
         case "0": this.fit(); break;
@@ -827,6 +857,78 @@ class Editor {
     });
   }
 
+  /** Clicking one member of a group selects the whole group. */
+  expandGroup(index) {
+    const group = this.annotations[index]?.group;
+    if (!group) return [index];
+    return this.annotations
+      .map((annotation, i) => (annotation.group === group ? i : -1))
+      .filter((i) => i >= 0);
+  }
+
+  selectAt(index, additive) {
+    const group = this.expandGroup(index);
+    if (additive) {
+      const allSelected = group.every((i) => this.selected.has(i));
+      for (const i of group) {
+        if (allSelected) this.selected.delete(i);
+        else this.selected.add(i);
+      }
+      this.renderInspector();
+      this.render();
+      return;
+    }
+    this.selected = new Set(group);
+    this.renderInspector();
+    this.render();
+  }
+
+  /** Z-order: the array order is the paint order. */
+  reorderSelected(mode) {
+    if (!this.selected.size) return;
+    const objects = [...this.selected].map((i) => this.annotations[i]);
+    const isSelected = (annotation) => objects.includes(annotation);
+    this.mutate(() => {
+      let list = this.annotations.slice();
+      if (mode === "front") {
+        list = [...list.filter((a) => !isSelected(a)), ...list.filter(isSelected)];
+      } else if (mode === "back") {
+        list = [...list.filter(isSelected), ...list.filter((a) => !isSelected(a))];
+      } else if (mode === "forward") {
+        for (let i = list.length - 2; i >= 0; i -= 1) {
+          if (isSelected(list[i]) && !isSelected(list[i + 1])) {
+            [list[i], list[i + 1]] = [list[i + 1], list[i]];
+          }
+        }
+      } else if (mode === "backward") {
+        for (let i = 1; i < list.length; i += 1) {
+          if (isSelected(list[i]) && !isSelected(list[i - 1])) {
+            [list[i], list[i - 1]] = [list[i - 1], list[i]];
+          }
+        }
+      }
+      this.annotations = list;
+      this.selected = new Set(
+        list.map((annotation, index) => (isSelected(annotation) ? index : -1)).filter((i) => i >= 0),
+      );
+    });
+  }
+
+  groupSelected() {
+    if (this.selected.size < 2) return;
+    const id = uid();
+    this.mutate(() => {
+      for (const index of this.selected) this.annotations[index].group = id;
+    });
+  }
+
+  ungroupSelected() {
+    if (![...this.selected].some((i) => this.annotations[i].group)) return;
+    this.mutate(() => {
+      for (const index of this.selected) delete this.annotations[index].group;
+    });
+  }
+
   /** Align the selection's bounding boxes; needs two or more annotations. */
   alignSelected(kind) {
     const indices = [...this.selected];
@@ -928,8 +1030,8 @@ class Editor {
         const hit = this.hitTest(point);
         const additive = event.shiftKey || event.ctrlKey || event.metaKey;
         if (hit >= 0) {
-          if (additive) this.select(hit, true);
-          else if (!this.selected.has(hit)) this.select(hit);
+          if (additive) this.selectAt(hit, true);
+          else if (!this.selected.has(hit)) this.selectAt(hit, false);
           if (this.selected.has(hit) && event.button === 0) {
             this.drag = {
               origin: point,
@@ -1059,6 +1161,7 @@ class Editor {
         if (drawing.type === "pen" && drawing.points.length > 1) {
           this.mutate(() => {
             this.annotations.push({
+              id: uid(),
               type: "pen",
               color: drawing.color,
               width: drawing.width,
@@ -1068,6 +1171,7 @@ class Editor {
         } else if (drawing.type === "rect" && (width > 2 || height > 2)) {
           this.mutate(() => {
             this.annotations.push({
+              id: uid(),
               type: "rect",
               color: drawing.color,
               width: drawing.width,
@@ -1078,6 +1182,7 @@ class Editor {
         } else if (drawing.type === "arrow" && Math.hypot(width, height) > 4) {
           this.mutate(() => {
             this.annotations.push({
+              id: uid(),
               type: "arrow",
               color: drawing.color,
               width: drawing.width,
@@ -1164,11 +1269,12 @@ class Editor {
       if (text) {
         this.mutate(() => {
           this.annotations.push({
+            id: uid(),
             type: "text",
             color: this.color,
             x: Math.round(point.x),
             y: Math.round(point.y),
-            size: 18,
+            size: this.textSize,
             text,
           });
         });
@@ -1205,15 +1311,22 @@ class Editor {
       ? `${this.selected.size}/${count}`
       : String(count);
     const multi = this.selected.size >= 2;
-    $$(".align-group").forEach((element) => element.classList.toggle("hidden", !multi));
+    const tools = $("#selection-tools");
+    if (tools) tools.classList.toggle("hidden", this.selected.size === 0);
+    $$(".align-only").forEach((element) => element.classList.toggle("hidden", !multi));
     $$("[data-distribute]").forEach((element) =>
       element.classList.toggle("disabled", this.selected.size < 3));
+    $$('[data-group="group"]').forEach((element) =>
+      element.classList.toggle("disabled", !multi));
+    $$('[data-group="ungroup"]').forEach((element) =>
+      element.classList.toggle("disabled", ![...this.selected].some((i) => this.annotations[i].group)));
     if (!this.annotations.length) {
       body.innerHTML = `<div class="inspector-empty">Nothing drawn yet.<br>Pick a tool above the canvas.</div>`;
       return;
     }
     body.innerHTML = this.annotations.map((annotation, index) => {
-      const glyph = { rect: "▭", arrow: "↗", pen: "✎", text: "T" }[annotation.type] || "?";
+      const base = { rect: "▭", arrow: "↗", pen: "✎", text: "T" }[annotation.type] || "?";
+      const glyph = annotation.group ? `${base}⧉` : base;
       const label = annotation.type === "text"
         ? escapeHtml(annotation.text || "")
         : annotation.type === "rect"
@@ -1232,7 +1345,7 @@ class Editor {
         if (event.target.dataset.delete !== undefined) return;
         const index = Number(row.dataset.index);
         const additive = event.shiftKey || event.ctrlKey || event.metaKey;
-        this.select(index, additive);
+        this.selectAt(index, additive);
         if (!additive) this.revealSelection();
       });
     });
@@ -1280,12 +1393,43 @@ class Editor {
             <b>${escapeHtml(round.stamp.replace("T", " ").replace(/-([0-9]{2})-([0-9]{2})$/, ":$1:$2"))}</b>
             <span>${plural(round.annotations, "annotation")}${round.png ? " · image" : ""}</span>
           </span>
+          <button class="del" style="opacity:1" data-diff="${escapeHtml(round.stamp)}"
+                  title="What changed since this round">Δ</button>
           ${round.png ? `<a class="del" style="opacity:1;text-decoration:none" target="_blank"
               href="/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(round.stamp)}.png"
               title="Open that round's screenshot">↗</a>` : ""}
-        </div>`).join("");
+        </div>
+        <pre class="pre hidden" id="diff-${escapeHtml(round.stamp)}"></pre>`).join("");
+
+      $$("[data-diff]", list).forEach((button) =>
+        button.addEventListener("click", () => this.loadDiff(button.dataset.diff)));
     } catch (error) {
       list.textContent = `Could not load history: ${error.message}`;
+    }
+  }
+
+  async loadDiff(stamp) {
+    const block = document.getElementById(`diff-${stamp}`);
+    if (!block) return;
+    if (!block.classList.contains("hidden")) {
+      block.classList.add("hidden");
+      return;
+    }
+    block.classList.remove("hidden");
+    block.textContent = "Comparing…";
+    try {
+      const data = await api(
+        `/api/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(stamp)}/diff`,
+      );
+      const lines = [];
+      for (const change of data.added) lines.push(`+ ${change.summary}`);
+      for (const change of data.removed) lines.push(`- ${change.summary}`);
+      for (const change of data.changed) lines.push(`~ ${change.summary} (edited)`);
+      block.textContent = lines.length
+        ? `${data.from.annotations} → ${data.to.annotations} annotations\n\n${lines.join("\n")}`
+        : "No changes since this round.";
+    } catch (error) {
+      block.textContent = `Could not compare: ${error.message}`;
     }
   }
 

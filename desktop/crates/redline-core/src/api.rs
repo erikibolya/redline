@@ -90,6 +90,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/api/sessions/{id}/history", get(history))
+        .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
         .route("/sessions/{id}/history/{file}", get(history_file))
         .route("/api/capture", post(capture_session))
         .route("/sessions/{id}/image", get(image))
@@ -437,6 +438,28 @@ async fn history(
 ) -> Result<Json<Value>, Error> {
     state.store.require(&id)?;
     Ok(Json(json!({ "submissions": state.store.history(&id)? })))
+}
+
+/// What changed between an archived round and what is submitted now.
+async fn history_diff(
+    State(state): State<AppState>,
+    RoutePath((id, stamp)): RoutePath<(String, String)>,
+) -> Result<Json<Value>, Error> {
+    state.store.require(&id)?;
+    let path = state.store.history_file(&id, &format!("{stamp}.json"))?;
+    let text = std::fs::read_to_string(&path)
+        .map_err(|_| Error::NotFound(format!("{id}/history/{stamp}.json")))?;
+    let previous: crate::model::AnnotationSet = serde_json::from_str(&text)
+        .map_err(|err| Error::BadRequest(format!("archived round is unreadable: {err}")))?;
+    let current = state.store.annotations(&id)?;
+    let result = crate::diff::diff(&previous.annotations, &current.annotations);
+    Ok(Json(json!({
+        "from": { "stamp": stamp, "annotations": previous.annotations.len() },
+        "to": { "stamp": "current", "annotations": current.annotations.len() },
+        "added": result.added,
+        "removed": result.removed,
+        "changed": result.changed,
+    })))
 }
 
 async fn history_file(

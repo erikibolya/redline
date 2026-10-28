@@ -226,6 +226,67 @@ const main = async () => {
   check("a second submission archives the first round", history.submissions.length >= 1,
     `${history.submissions.length} archived`);
 
+  // ---- text size applies to new text
+  await page.select("#text-size", "32");
+  await page.keyboard.press("t");
+  const bigSpot = at(420, 620);
+  await page.mouse.click(bigSpot.x, bigSpot.y);
+  await page.waitForSelector(".text-editor");
+  await page.type(".text-editor", "big note");
+  await page.keyboard.press("Enter");
+  const bigNote = await page.evaluate(() =>
+    window.redline.annotations.find((a) => a.text === "big note"));
+  check("text size selector applies to new notes", bigNote?.size === 32, `${bigNote?.size}px`);
+
+  // ---- group: clicking one member selects the whole group
+  // Draw a fresh rectangle inside the image so the coordinates cannot go stale from the
+  // alignment above (which moved the earlier one).
+  await page.keyboard.press("r");
+  await drag(page, at(500, 300), at(600, 400));
+  await page.keyboard.press("v");
+  const rectA = at(310, 230);
+  const rectB = at(550, 350);
+  await page.mouse.click(rectA.x, rectA.y);
+  await page.keyboard.down("Shift");
+  await page.mouse.click(rectB.x, rectB.y);
+  await page.keyboard.up("Shift");
+  const beforeGroup = await page.evaluate(() => window.redline.selected.size);
+  check("selected both rectangles before grouping", beforeGroup === 2, `${beforeGroup} selected`);
+  await page.keyboard.press("g");
+  const grouped = await page.evaluate(() =>
+    window.redline.annotations.filter((a) => a.group).length);
+  check("grouping tags the selected annotations", grouped === 2, `${grouped} grouped`);
+
+  await page.mouse.click(rectA.x, rectA.y);
+  const groupSelection = await page.evaluate(() => window.redline.selected.size);
+  check("clicking one member selects the group", groupSelection === 2, `${groupSelection} selected`);
+
+  await page.keyboard.down("Shift");
+  await page.keyboard.press("g");
+  await page.keyboard.up("Shift");
+  const ungrouped = await page.evaluate(() =>
+    window.redline.annotations.filter((a) => a.group).length);
+  check("shift+g ungroups", ungrouped === 0, `${ungrouped} still grouped`);
+
+  // ---- z-order
+  await page.mouse.click(rectA.x, rectA.y);
+  await page.click('[data-layer="front"]');
+  const last = await page.evaluate(() => {
+    const list = window.redline.annotations;
+    return { type: list[list.length - 1].type, x: list[list.length - 1].start?.x };
+  });
+  check("bring to front moves the selection last in paint order", last.type === "rect", JSON.stringify(last));
+
+  // ---- diff between the archived round and now
+  const rounds = await api(`/api/sessions/${id}/history`);
+  const stamp = rounds.submissions[0]?.stamp;
+  if (stamp) {
+    const diff = await api(`/api/sessions/${id}/history/${stamp}/diff`);
+    check("diff endpoint compares rounds", typeof diff.from.annotations === "number"
+      && Array.isArray(diff.added) && Array.isArray(diff.removed), JSON.stringify(diff.from));
+    check("diff noticed the new annotations", diff.added.length > 0, `${diff.added.length} added`);
+  }
+
   const annotated = await fetch(`${BASE}/sessions/${id}/annotated.png`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });

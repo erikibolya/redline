@@ -122,11 +122,38 @@ plus `.png` (last 20 kept). `GET /api/sessions/<id>/history` lists them, and the
 **History** section links to the old screenshots — so a re-review can compare what changed instead
 of overwriting the evidence.
 
+## Layers, groups, text size (v0.5)
+
+- Paint order is array order. With a selection the inspector offers **bring to front / forward /
+  backward / send to back**.
+- **G** groups the selection (assigns a shared `group` id), **Shift+G** ungroups. Clicking one
+  member selects the whole group, so moving or deleting a group is one gesture. The annotation
+  list marks grouped rows with `⧉`.
+- A text-size selector (14/18/24/32/48) in the options bar applies to new notes and to any
+  selected text; the value is remembered.
+- New annotations carry a stable `id`, which is what makes history diffing able to say "moved"
+  instead of "deleted and added" for older rounds.
+
+## History diffing (v0.5)
+
+`GET /api/sessions/<id>/history/<stamp>/diff` compares an archived round with the current
+annotations: `added`, `removed`, `changed` (with before/after JSON). Matching is by annotation
+`id`, falling back to canonical JSON for pre-v0.5 annotations. In the inspector's **History**
+section, `Δ` shows the summary inline:
+
+```
+2 → 4 annotations
+
++ arrow at 9,9
+- rect at 0,0
+~ text “tighten this” (edited)
+```
+
 ## Verification
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:
 coordinate mapping under a fitted zoom, dragging, undo, inline text (including diacritics), and
-submission, multi-select with align, and history archival — 17 checks. It runs in CI on every push (`browser e2e` job) and locally via
+submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 25 checks. It runs in CI on every push (`browser e2e` job) and locally via
 `desktop/scripts/e2e.sh`.
 
 It has already earned its keep twice: it caught the text tool being broken by mousedown's focus

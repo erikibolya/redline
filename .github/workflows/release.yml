@@ -72,6 +72,8 @@ jobs:
 
   linux:
     name: linux server binary
+    # The release is created by the windows job; attaching before it exists fails.
+    needs: windows
     runs-on: ubuntu-latest
     permissions:
       contents: write

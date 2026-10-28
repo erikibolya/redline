@@ -14,6 +14,7 @@ pub mod auth;
 pub mod error;
 pub mod mcp;
 pub mod model;
+pub mod paths;
 pub mod store;
 
 pub use error::{Error, Result};

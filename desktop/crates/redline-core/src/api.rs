@@ -23,16 +23,29 @@ use crate::MAX_BODY_BYTES;
 pub struct AppState {
     pub store: Store,
     pub auth: Auth,
-    /// Directory holding `index.html` / `list.html` / `app.js`. `None` in tests and in
-    /// headless mode, where only the JSON/MCP surface is exposed.
+    /// Directory holding `index.html` / `list.html`. `None` in tests and in headless mode.
     pub ui: Option<PathBuf>,
+    /// UI compiled into the binary (`include_str!`). The desktop app uses this so it never has
+    /// to resolve a resource path at runtime; the files are small and self-contained.
+    pub inline_ui: Option<&'static [(&'static str, &'static str)]>,
     /// Advertised base URL, e.g. `http://127.0.0.1:8788`.
     pub base_url: String,
 }
 
 impl AppState {
     pub fn new(store: Store, auth: Auth) -> Self {
-        Self { store, auth, ui: None, base_url: "http://127.0.0.1:8788".to_string() }
+        Self {
+            store,
+            auth,
+            ui: None,
+            inline_ui: None,
+            base_url: "http://127.0.0.1:8788".to_string(),
+        }
+    }
+
+    pub fn with_inline_ui(mut self, files: &'static [(&'static str, &'static str)]) -> Self {
+        self.inline_ui = Some(files);
+        self
     }
 
     pub fn with_ui(mut self, ui: impl Into<PathBuf>) -> Self {
@@ -150,6 +163,11 @@ async fn editor_page(
 }
 
 fn serve_ui(state: &AppState, name: &str) -> Response {
+    if let Some(files) = state.inline_ui {
+        if let Some((_, body)) = files.iter().find(|(file, _)| *file == name) {
+            return html_response(body);
+        }
+    }
     match &state.ui {
         Some(dir) => serve_file(&dir.join(name), None),
         None => (
@@ -172,6 +190,18 @@ async fn static_file(State(state): State<AppState>, request: Request) -> Respons
         return StatusCode::NOT_FOUND.into_response();
     }
     serve_file(&dir.join(relative), None)
+}
+
+fn html_response(body: &'static str) -> Response {
+    let mut response = Response::new(Body::from(body));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/html; charset=utf-8"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 fn serve_file(path: &std::path::Path, content_type: Option<&str>) -> Response {

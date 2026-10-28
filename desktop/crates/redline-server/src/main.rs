@@ -12,6 +12,7 @@ use axum::Router;
 use redline::http::{Client, ClientError};
 use redline_core::api::{router, AppState};
 use redline_core::auth::Auth;
+use redline_core::paths::{default_data_dir, load_or_create_token, sessions_dir};
 use redline_core::store::Store;
 
 const USAGE: &str = "\
@@ -183,7 +184,7 @@ fn serve(flags: &Flags, data_dir: &Path, base_url: &str, auth: Auth) -> Result<i
     let sessions_root = flags
         .value("sessions")
         .map(PathBuf::from)
-        .unwrap_or_else(|| data_dir.join("sessions"));
+        .unwrap_or_else(|| sessions_dir(data_dir));
 
     let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
     runtime.block_on(async move {
@@ -427,64 +428,6 @@ fn open_in_browser(url: &str) {
 }
 
 // ---------------------------------------------------------------- config
-
-fn default_data_dir() -> PathBuf {
-    if let Ok(explicit) = std::env::var("REDLINE_DATA_DIR") {
-        return PathBuf::from(explicit);
-    }
-    if cfg!(target_os = "windows") {
-        if let Ok(base) = std::env::var("LOCALAPPDATA") {
-            return PathBuf::from(base).join("redline");
-        }
-    } else if cfg!(target_os = "macos") {
-        if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join("Library/Application Support/redline");
-        }
-    } else if let Ok(base) = std::env::var("XDG_DATA_HOME") {
-        return PathBuf::from(base).join("redline");
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".local/share/redline");
-    }
-    PathBuf::from("./redline-data")
-}
-
-fn load_or_create_token(
-    data_dir: &Path,
-    override_token: Option<String>,
-    persist: bool,
-) -> std::io::Result<Auth> {
-    if let Some(token) = override_token {
-        let auth = Auth::new(token);
-        if persist {
-            std::fs::create_dir_all(data_dir)?;
-            std::fs::write(data_dir.join("token"), format!("{}\n", auth.token()))?;
-            restrict_permissions(&data_dir.join("token"));
-        }
-        return Ok(auth);
-    }
-    let path = data_dir.join("token");
-    if let Ok(existing) = std::fs::read_to_string(&path) {
-        let trimmed = existing.trim();
-        if !trimmed.is_empty() {
-            return Ok(Auth::new(trimmed));
-        }
-    }
-    std::fs::create_dir_all(data_dir)?;
-    let auth = Auth::generate();
-    std::fs::write(&path, format!("{}\n", auth.token()))?;
-    restrict_permissions(&path);
-    Ok(auth)
-}
-
-#[cfg(unix)]
-fn restrict_permissions(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
-}
-
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) {}
 
 fn mcp_config(base_url: &str, token: &str) -> serde_json::Value {
     serde_json::json!({

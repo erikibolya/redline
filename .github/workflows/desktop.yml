@@ -1,0 +1,54 @@
+name: desktop
+
+on:
+  push:
+    branches: [main, desktop]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  pull_request:
+    paths:
+      - "desktop/**"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: core + cli (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop
+      # The GUI crate is a separate workspace on purpose: core + CLI need no webview.
+      - name: cargo test
+        working-directory: desktop
+        run: cargo test --workspace
+
+  shell:
+    name: tauri shell (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/app
+      - name: Build the app (compile check for the shell)
+        run: cargo build --release --manifest-path desktop/app/Cargo.toml
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: redline-windows-unsigned
+          path: desktop/app/target/release/redline-app.exe
+          if-no-files-found: warn

@@ -1,80 +1,201 @@
 # au-visual-review
 
-A tiny, dependency-free visual review queue for human ↔ AI collaboration.
+A local, dependency-free visual review queue for human ↔ AI collaboration.
 
-The agent drops a screenshot into a session; you open the local page, draw rectangles, arrows,
-freehand marks and text notes, and click **Submit review**. The agent reads `annotations.json`,
-`annotated.png` and `review.md` and turns the notes into changes.
+The AI agent creates a **session** with a screenshot and context. You open it in a browser, draw
+rectangles, arrows, freehand marks and text notes, then click **Submit review**. The agent reads
+`annotations.json`, `annotated.png` and `review.md`, turns every note into a code change, and asks
+for confirmation with a follow-up session.
+
+This repository is intentionally separate from the product repository. It can be pushed to a
+personal GitHub account and has no company-specific code or paths.
+
+## Requirements
+
+- Python **3.10+** (stdlib only — no `pip install` needed)
+- A modern browser
+- Optional: a shared checkout if the browser and agent run on different machines
 
 ## Quick start
 
 ```bash
 python3 review.py serve --open          # http://127.0.0.1:8788
-python3 review.py open shot.png --title "Button / default" --url "http://localhost:5016/button" --note "Check hover and disabled"
 ```
 
-`open` prints the session id and URL. Open the URL (the list page also shows every session) and
-annotate. Sessions live in `sessions/<id>/` and are gitignored.
+Create a session (normally the agent does this):
 
-No third-party packages. Tested with Python 3.10+ (Windows, WSL/Linux).
+```bash
+python3 review.py open shot.png \
+  --title "Button / default" \
+  --url "http://localhost:5016/button" \
+  --note "Check hover, focus and disabled" \
+  --json
+```
+
+The command prints the session id and review URL. Open the URL (the session list is at `/`) and
+annotate. Sessions live in `sessions/<id>/` and are gitignored.
 
 ## Agent workflow
 
 ```bash
+# 1. create a review session from a screenshot
 python3 review.py open review/14-button/default.png \
   --title "Button / default" \
   --url "http://localhost:5016/button" \
   --note "Variants + hover/disabled" --json
-# -> {"id": "...", "review_url": "http://127.0.0.1:8788/s/...", "dir": "..."}
 
+# 2. open the printed review_url in the browser / Review pane
+
+# 3. wait for the human to submit (blocks until submitted or timeout)
 python3 review.py wait <id> --timeout 600 --json
+
+# 4. read the result
 python3 review.py get <id> --json
 ```
 
-Then read:
+The result is deliberately redundant:
 
-- `sessions/<id>/annotations.json` — normalized coordinates (`canvas` pixels), colors, text notes.
-- `sessions/<id>/annotated.png` — visual reference.
-- `sessions/<id>/review.md` — human-readable summary.
+| File | Purpose |
+|------|---------|
+| `annotations.json` | Machine-readable source of truth: annotation types, coordinates, colors, text notes. |
+| `annotated.png` | The screenshot with the drawn annotations burned in — visual reference. |
+| `review.md` | Human/agent-readable summary with page URL, request note and text notes. |
 
-The agent should keep the docs app running and use the same screenshot dimensions as the page.
+A session becomes `submitted` only when the human clicks **Submit review**. Re-submitting updates
+the files and timestamp.
+
+## Human workflow
+
+1. Open the review URL.
+2. Use **Rectangle**, **Arrow**, **Pen** or **Text**.
+   - Text: click a spot and type the note in the prompt.
+   - `Ctrl/Cmd+Z` removes the last annotation.
+3. Click **Submit review**. The page confirms the submission; the agent can now read it.
+4. You can add more notes and submit again; the agent sees the latest submission.
+
+## CLI reference
+
+```text
+python3 review.py serve [--host 127.0.0.1] [--port 8788] [--sessions DIR] [--open]
+python3 review.py open IMAGE [--title T] [--url URL] [--note TEXT] [--id ID]
+                             [--sessions DIR] [--host H] [--port P]
+                             [--json] [--open-browser]
+python3 review.py list [--sessions DIR] [--json]
+python3 review.py get ID [--sessions DIR] [--json]
+python3 review.py wait ID [--sessions DIR] [--timeout 600] [--interval 2] [--json]
+python3 review.py remove ID [--sessions DIR] [--yes]
+```
+
+- Default sessions directory: `./sessions` next to `review.py`.
+- Default server: `127.0.0.1:8788`.
+- `open` creates the folder and copies the image; `--id` must be unique.
+- `wait` exits **2** on timeout; `get` exits **1** if the session does not exist.
+- `--json` makes CLI output machine-readable.
+
+## HTTP API
+
+The server is intentionally small. All responses are JSON except the static pages/images.
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/` | Session list page. |
+| `GET` | `/s/<id>` | Annotation editor for a session. |
+| `GET` | `/api/sessions` | `{ "sessions": [meta, …] }`, newest first. |
+| `GET` | `/api/sessions/<id>` | `{ "meta": …, "annotations": … }`. |
+| `GET` | `/sessions/<id>/image` | Original screenshot bytes. |
+| `GET` | `/sessions/<id>/annotated.png` | Last submitted annotated PNG. |
+| `POST` | `/api/sessions/<id>/annotations` | Submit annotations (JSON body, see below). |
+| `GET` | `/health` | `{ "ok": true }`. |
+
+Submit body:
+
+```json
+{
+  "annotations": [ … ],
+  "width": 1440,
+  "height": 900,
+  "png": "data:image/png;base64,…"
+}
+```
+
+`png` is optional; when present the server writes `annotated.png`. `width`/`height` are the canvas
+dimensions and are stored in `meta.json`/`annotations.json`.
 
 ## Session format
 
-```
+```text
 sessions/<id>/
-  meta.json          # title, url, note, status, timestamps, image file
-  screenshot.png     # original screenshot
-  annotations.json   # { image: {width,height}, annotations: [...] }
+  meta.json          # id, title, url, note, status, created_at, submitted_at, image, dimensions
+  screenshot.png     # original screenshot (extension preserved)
+  annotations.json   # { session, image: {file,width,height}, annotations: […] }
   annotated.png      # rendered annotations over the screenshot
   review.md          # markdown summary for the agent
 ```
 
-Annotation kinds:
+Annotation objects (canvas pixels, origin top-left):
 
 ```json
 { "type": "rect",  "start": {"x":10,"y":20}, "end": {"x":100,"y":60}, "color": "#e11d48", "width": 3 }
 { "type": "arrow", "start": {"x":10,"y":20}, "end": {"x":100,"y":60}, "color": "#e11d48", "width": 3 }
 { "type": "pen",   "points": [{"x":10,"y":20}], "color": "#e11d48", "width": 3 }
-{ "type": "text",  "x":10, "y":20, "text": "Move this up", "color": "#f59e0b" }
+{ "type": "text",  "x":10, "y":20, "text": "Move this up", "color": "#e11d48" }
 ```
 
-## Separate repository
+## Cross-machine setup (Windows browser + WSL/agent)
 
-This directory is its own git repository and can be pushed to a personal GitHub account:
+If the browser and agent do not share a host, point both at the same checkout or shared folder:
+
+```bash
+# agent side
+python3 review.py open ... --sessions /mnt/user/Development/repos/au-visual-review/sessions
+
+# browser side (Windows)
+python review.py serve --sessions Z:\repos\au-visual-review\sessions
+```
+
+The browser edits files in the shared folder; the agent reads them directly. The server does not
+need to be reachable from the agent in this mode.
+
+## Personal GitHub
 
 ```bash
 git remote add origin git@github.com:<you>/au-visual-review.git
 git push -u origin main
 ```
 
-No company-specific code or paths are required. The optional `--sessions` flag points at any
-shared folder if the agent and browser run on different machines (e.g. a Windows browser reading
-the same checkout from WSL).
+## Testing
 
-## Notes
+```bash
+python3 -m unittest discover -s tests -t . -v
+```
 
-- The server binds `127.0.0.1` by default; do not expose it publicly without adding auth.
-- Screenshots and annotations stay local; `sessions/` is ignored by git.
-- The browser needs the File System Access API only for the old standalone tool; this version
-  submits through HTTP, so any modern browser works.
+The tests cover session creation/listing, submission output and session-id validation.
+
+## Security & limitations
+
+- Binds `127.0.0.1` by default; no authentication. Do not expose publicly.
+- Single-user, file-based queue; concurrent submissions are last-write-wins.
+- Screenshots are copied into `sessions/`; keep them out of git (already ignored).
+- No zoom/pan, annotation selection, or inline text editing yet (see `PLAN.md`).
+- No screenshot capture yet: the agent must supply an image; a Playwright capture command is planned.
+- Annotated coordinates are canvas pixels; if the screenshot is scaled on screen, the editor maps
+  pointer coordinates back to the original canvas.
+
+## Repository layout
+
+```text
+review.py                 # CLI + stdlib HTTP server + session store
+static/list.html          # session list
+static/index.html         # annotation editor
+tests/test_review.py      # unit tests
+docs/ARCHITECTURE.md      # design and data flow
+docs/API.md               # endpoint + payload reference
+docs/WORKFLOW.md          # human/agent review protocol
+AGENTS.md                 # instructions for the next agent session
+PLAN.md                   # roadmap, decisions, known work
+sessions/                 # local sessions (gitignored)
+```
+
+## License
+
+MIT — see `LICENSE`.

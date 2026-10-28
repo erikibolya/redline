@@ -50,7 +50,7 @@ class ReviewTests(unittest.TestCase):
         payload = json.loads((folder / "annotations.json").read_text())
         self.assertEqual(2, len(payload["annotations"]))
         self.assertEqual(640, payload["image"]["width"])
-        self.assertIn("Move this up", (folder / "review.md").read_text())
+        self.assertIn("(5, 6): Move this up", (folder / "review.md").read_text())
 
     def test_invalid_session_id_is_rejected(self):
         with self.assertRaises(ValueError):

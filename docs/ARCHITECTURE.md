@@ -1,0 +1,137 @@
+# Architecture
+
+## Goals
+
+- One screenshot → one annotated review, with no external services.
+- The agent can create a session and read the result without the server running.
+- The human edits in a normal browser; no build step, no dependencies.
+- Cross-platform (Windows browser + WSL agent via a shared folder).
+
+## Non-goals
+
+Cloud hosting, accounts, real-time collaboration, issue-tracker sync, automatic visual diffing.
+Those are roadmap items (`PLAN.md`), not assumptions in the current code.
+
+## Components
+
+```
+┌─────────────┐      CLI: open/list/get/wait      ┌──────────────────────┐
+│  AI agent   │ ─────────────────────────────────▶ │  sessions/<id>/      │
+│  (any host) │ ◀───────────────────────────────── │  meta.json + images  │
+└─────────────┘      reads JSON/PNG/MD             └──────────────────────┘
+        │                                                    ▲
+        │ browser URL / API                                  │ HTTP submit
+        ▼                                                    │
+┌──────────────────────────────┐                  ┌──────────┴───────────┐
+│ review.py serve              │  static HTML/JS  │  Human browser       │
+│ stdlib ThreadingHTTPServer   │ ───────────────▶ │  canvas editor       │
+└──────────────────────────────┘                  └──────────────────────┘
+```
+
+- **`review.py`** is the only Python module: storage, CLI and HTTP in one file. Keeping it single-file
+  makes it copy-paste portable.
+- **`static/list.html`** fetches `/api/sessions` and renders links.
+- **`static/index.html`** is the editor. It loads meta/annotations, draws on a canvas over the
+  screenshot, and POSTs the result.
+- **`sessions/`** is the database. The agent can read it directly; the server is optional for reads.
+
+## Session lifecycle
+
+```
+open ──▶ status=open ──(human submit)──▶ status=submitted ──(resubmit)──▶ status=submitted
+                                                        │
+                                                        └─ files updated, submitted_at refreshed
+```
+
+- `open` (CLI) copies the screenshot and writes `meta.json` + an empty `annotations.json`.
+- The browser loads the session; annotations are kept only in the page until **Submit review**.
+- Submit writes `annotations.json`, `annotated.png`, `review.md` and flips `meta.status`.
+- `wait` polls `meta.status`; no push/websocket.
+
+## Data flow
+
+1. Agent captures a screenshot and runs `review.py open`.
+2. Session folder is created; `meta.json` stores title/url/note/status.
+3. Agent opens `http://127.0.0.1:8788/s/<id>` (browser tool or human).
+4. Editor fetches `/api/sessions/<id>`, then loads `/sessions/<id>/image`.
+5. Human draws; canvas keeps an in-memory annotation array.
+6. Submit sends `{annotations, width, height, png}` to the server.
+7. Server validates the session id, writes the three output files, returns the updated meta.
+8. Agent polls/reads the folder; turns text notes into changes.
+
+## Coordinate model
+
+- Screenshot is drawn into a canvas at its **natural pixel dimensions**.
+- CSS may scale the canvas down (`max-width:100%`); pointer coordinates are multiplied by
+  `canvas.width / getBoundingClientRect().width`.
+- Therefore annotation coordinates are always relative to the original image, origin top-left.
+- If the screenshot is a full-page capture, coordinates are absolute in that image; if it is a
+  viewport capture, they are relative to the viewport. The session title/note should say which.
+
+## Storage schema
+
+`meta.json`:
+
+```json
+{
+  "id": "20261028-111113-button-default-1a2b",
+  "title": "Button / default",
+  "url": "http://localhost:5016/button",
+  "note": "Check hover and disabled",
+  "status": "open | submitted",
+  "created_at": "2026-10-28T11:11:13+00:00",
+  "submitted_at": null,
+  "image": "screenshot.png",
+  "image_width": 1440,
+  "image_height": 900
+}
+```
+
+`annotations.json` (written on submission):
+
+```json
+{
+  "session": "…",
+  "title": "…",
+  "url": "…",
+  "image": { "file": "screenshot.png", "width": 1440, "height": 900 },
+  "annotations": [],
+  "submitted_at": "…"
+}
+```
+
+`review.md` is generated from meta + annotations. Text notes include their coordinates; rectangles
+include start/end/color/width; other shapes point to the JSON.
+
+## HTTP server
+
+- `ThreadingHTTPServer` with a single handler class; class-level `sessions` path.
+- Static files are served from `static/` with a path-traversal check.
+- Session image route resolves the image name from `meta.json` (extension preserved).
+- JSON bodies are capped at 60 MB (`MAX_BODY`), enough for a large annotated screenshot.
+- No authentication; loopback by default. Binding non-loopback is an explicit human choice.
+
+## Cross-machine
+
+The server only needs filesystem access to `sessions/`. Two supported modes:
+
+1. **Same host:** agent starts the server; browser opens `127.0.0.1:8788`.
+2. **Split:** agent writes sessions in a shared checkout; the human runs `review.py serve
+   --sessions <shared>` on Windows. The agent reads the same files directly; no network route is
+   required between agent and browser.
+
+## Tradeoffs
+
+- **File-based over DB:** trivial portability and offline reads; no transactions/ordering guarantees.
+- **Canvas-only annotations:** simple and fast; annotation objects are not editable after drawing
+  (undo/clear only) until M2.
+- **No screenshot capture:** keeps dependencies zero; Playwright capture is an opt-in M3 feature.
+- **Prompt-based text:** minimal UI code; inline editor is M2.
+
+## Extension points
+
+- Add CLI commands in `build_parser()` + `cmd_*` functions.
+- Add routes in `Handler.do_GET`/`do_POST`; keep JSON additive.
+- Add annotation kinds in `static/index.html` (`drawAnnotation`, pointer handlers) and document in
+  `docs/API.md`; `review.md` should summarize each kind.
+- Add tests under `tests/`; run with `python3 -m unittest discover -s tests -t .`.

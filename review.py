@@ -20,7 +20,6 @@ import time
 import uuid
 import webbrowser
 from datetime import datetime, timezone
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -132,7 +131,7 @@ def review_markdown(meta: dict, annotations: list[dict]) -> str:
     text_notes = [a for a in annotations if a.get("type") == "text" and a.get("text")]
     if text_notes:
         lines += ["### Text notes", ""]
-        lines += [f"- {a['text']}" for a in text_notes]
+        lines += [f"- ({a.get('x')}, {a.get('y')}): {a['text']}" for a in text_notes]
         lines += [""]
 
     shapes = [a for a in annotations if a.get("type") != "text"]
@@ -263,6 +262,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/sessions/") and path.endswith("/annotated.png"):
             sid = path[len("/sessions/"):-len("/annotated.png")].strip("/")
+            if not ID_RE.match(sid):
+                self.send_error(404)
+                return
             self.send_file(session_dir(self.sessions, sid) / "annotated.png", "image/png")
             return
         if path.startswith("/static/"):

@@ -1,25 +1,108 @@
-# Agent instructions
+# Agent instructions — au-visual-review
 
-This repository is a local visual-review queue. The human annotates screenshots; you create
-sessions and read the submitted JSON.
+This repository is a local visual-review queue. The human annotates screenshots; the agent creates
+sessions, opens them, and reads the submitted JSON. Read this file before changing the tool.
 
-## Workflow
+## Current state
 
-1. Ensure a session exists:
-   `python3 review.py open <screenshot> --title "<component / state>" --url "<page>" --note "<what to check>" --json`
-   (or `--sessions <dir>` if using a shared folder).
-2. Open the printed `review_url` in a browser tab, or ask the human to open it.
-3. Wait for the human:
-   `python3 review.py wait <id> --timeout 600 --json`
-4. Read `sessions/<id>/annotations.json` (coordinates + text), `annotated.png` (visual), and
-   `review.md` (summary). Implement each note as a checklist item.
-5. Re-screenshot and create a follow-up session for confirmation; remove obsolete sessions with
-   `python3 review.py remove <id> --yes`.
+- **MVP complete** (commit `301eefd`): stdlib Python server/CLI, session store, browser editor,
+  session list, 3 unit tests. No third-party dependencies.
+- Separate git repository on `main`; no remote configured yet (push to a personal GitHub account).
+- The tool is used by the Au.Net component review workflow (`COMPONENT-REVIEW.md` there), but this
+  repo has no dependency on Au.Net.
+
+## Environment
+
+- Python 3.10+ on Windows/WSL/Linux. Use `python3` on WSL/Linux and `python` on Windows.
+- Browser: Chrome/Edge/Firefox; HTTP submit works everywhere.
+- Default server: `127.0.0.1:8788`; default sessions: `./sessions`.
+
+## Standard workflow
+
+1. **Prepare a screenshot.** Capture the page/state at a stable viewport. Save it wherever the
+   review pack lives (e.g. `review/14-button/default.png`).
+2. **Create a session:**
+   ```bash
+   python3 review.py open review/14-button/default.png \
+     --title "Button / default" \
+     --url "http://localhost:5016/button" \
+     --note "Check hover, focus and disabled" --json
+   ```
+   The JSON contains `id`, `review_url` and `dir`. Use `--sessions DIR` if the browser runs on a
+   different machine.
+3. **Open the URL** in the browser/Review pane. If browser tools are available, open the printed
+   `review_url`; otherwise ask the human to open it. Keep the page server running.
+4. **Wait** for submission:
+   ```bash
+   python3 review.py wait <id> --timeout 600 --json
+   ```
+   Exit code 0 = submitted; 2 = timeout; 1 = not found.
+5. **Read the result:**
+   - `sessions/<id>/annotations.json` — source of truth (types, coordinates, text).
+   - `sessions/<id>/annotated.png` — visual confirmation.
+   - `sessions/<id>/review.md` — summary; text notes include coordinates.
+6. **Implement** each text note as a checklist item. Use marked regions (`rect`/`arrow`/`pen`) to
+   locate the affected UI. Never edit the user's annotations.
+7. **Confirm** with a fresh screenshot/session; then optionally
+   `python3 review.py remove <id> --yes` for obsolete sessions.
+
+## Screenshot conventions
+
+- Use the full page or a focused component region; include the surrounding layout when spacing is
+  being reviewed.
+- Keep one state per session (default, hover, disabled, etc.) unless the note explicitly covers a
+  matrix.
+- For Au.Net docs pages, capture at a fixed viewport (e.g. 1440×900) and mention the URL and state
+  in `--title`/`--note`.
+- Canvas coordinates are in the screenshot's natural pixels. If the browser scales the image on
+  screen, the editor already maps pointer coordinates back to natural pixels.
+
+## Code map
+
+| File | Responsibility |
+|------|----------------|
+| `review.py` | CLI (`serve/open/list/get/wait/remove`), session storage, annotation submission, HTTP server. |
+| `static/list.html` | Session list page; fetches `/api/sessions`. |
+| `static/index.html` | Canvas editor; loads session, drawing tools, submits JSON + PNG. |
+| `tests/test_review.py` | Unit tests for session creation/submission/ID validation. |
+| `docs/API.md` | HTTP + annotation schema. |
+| `docs/ARCHITECTURE.md` | Design, data flow, limitations. |
+| `docs/WORKFLOW.md` | Human/agent review protocol. |
+| `PLAN.md` | Roadmap, decisions, known issues. |
 
 ## Rules
 
-- Keep `sessions/` out of git; it is gitignored.
-- Do not edit `annotations.json` by hand — the human's submission is the source of truth.
-- Use the same screenshot dimensions as the live page; coordinates are canvas pixels.
-- The server binds `127.0.0.1` by default; never expose it publicly without auth.
-- Run `python3 -m unittest discover -s tests -t .` after changing server/CLI code.
+- **Do not hand-edit** `annotations.json`, `meta.json`, `annotated.png` or `review.md`; the human's
+  submission is authoritative.
+- Keep `sessions/` out of git (already ignored). Never commit screenshots or customer data.
+- Do not expose the server publicly; add auth/TLS before any remote use.
+- Keep the tool dependency-free (stdlib only) unless the human explicitly approves a dependency.
+- Keep the JSON/API stable; additive fields are fine, breaking changes need a migration note.
+- Update `README.md`, `docs/API.md` and `PLAN.md` when behavior or the schema changes.
+- Run `python3 -m unittest discover -s tests -t . -v` after code changes; add tests for new
+  endpoints/CLI behavior.
+
+## Common recipes
+
+```bash
+python3 review.py serve --open
+python3 review.py serve --port 8790
+python3 review.py list --json
+python3 review.py get <id> --json
+python3 review.py remove <id> --yes
+python3 review.py open shot.png --sessions ./shared-sessions --json
+```
+
+Troubleshooting:
+
+- **Address already in use** — another server is running; stop it or use `--port`.
+- **Session not found** — check `--sessions` points at the same folder as the server.
+- **Screenshot does not load** — confirm the file copied into `sessions/<id>/` and the server is
+  running; the editor shows an error banner on failure.
+- **Old standalone tool** — the previous static file was removed from Au.Net; this repo replaces it.
+
+## Known limitations (see PLAN.md)
+
+No zoom/pan or per-annotation editing; text is entered via prompt; no auto-refresh of the session
+list; no screenshot capture command; single-user local queue; no auth. These are planned, not bugs
+to “fix” silently.

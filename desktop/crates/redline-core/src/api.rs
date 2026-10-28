@@ -452,7 +452,7 @@ async fn save_setup(
         Error::BadRequest("setup is only available in the desktop app".to_string())
     })?;
 
-    let mut remote_url = body.remote_url.trim().trim_end_matches('/').to_string();
+    let remote_url = body.remote_url.trim().trim_end_matches('/').to_string();
     if remote_url.is_empty() {
         return Err(Error::BadRequest("server URL is required".to_string()));
     }

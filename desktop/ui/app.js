@@ -85,6 +85,26 @@ async function api(path, options = {}) {
 
 const unfiltered = (query) => !query;
 
+/* ------------------------------------------------------------------ theme */
+
+const Theme = {
+  current() {
+    return prefs.get("theme", null)
+      || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  },
+  apply(theme) {
+    document.documentElement.dataset.theme = theme;
+    prefs.set("theme", theme);
+    $$("[data-theme-toggle]").forEach((button) => {
+      button.textContent = theme === "light" ? "☾" : "☀";
+      button.title = theme === "light" ? "Dark theme" : "Light theme";
+    });
+  },
+  toggle() {
+    this.apply(this.current() === "light" ? "dark" : "light");
+  },
+};
+
 /* ------------------------------------------------------------------ rail */
 
 const FILTERS = [
@@ -435,6 +455,19 @@ class Editor {
           this.select(-1);
           this.render();
           break;
+        case "Enter": {
+          const selected = this.annotations[this.selection];
+          if (selected && selected.type === "text") {
+            event.preventDefault();
+            this.startText({ x: selected.x, y: selected.y }, event, this.selection);
+          }
+          break;
+        }
+        case "?": {
+          event.preventDefault();
+          Help.toggle();
+          break;
+        }
         case "Delete":
         case "Backspace":
           if (this.selection >= 0) {
@@ -484,6 +517,10 @@ class Editor {
     this.canvas.width = Math.max(1, Math.round(rect.width * dpr));
     this.canvas.height = Math.max(1, Math.round(rect.height * dpr));
     this.dpr = dpr;
+    if (this.view.fitted && this.image) {
+      this.fit();
+      return;
+    }
     this.render();
   }
 
@@ -748,7 +785,7 @@ class Editor {
       if (!this.image) return;
       const point = this.toImage(event);
 
-      if (event.button === 1 || event.button === 2 || (this.tool === "select" && event.spaceKey)) {
+      if (event.button === 1 || event.button === 2 || this.spacePan) {
         this.pan = { x: event.clientX, y: event.clientY, vx: this.view.x, vy: this.view.y };
         stage.classList.add("panning");
         stage.setPointerCapture(event.pointerId);
@@ -864,6 +901,15 @@ class Editor {
     };
     stage.addEventListener("pointerup", finish);
     stage.addEventListener("pointercancel", finish);
+
+    stage.addEventListener("dblclick", (event) => {
+      if (this.tool !== "select") return;
+      const hit = this.hitTest(this.toImage(event));
+      if (hit >= 0 && this.annotations[hit].type === "text") {
+        this.select(hit);
+        this.startText({ x: this.annotations[hit].x, y: this.annotations[hit].y }, event, hit);
+      }
+    });
     stage.addEventListener("contextmenu", (event) => event.preventDefault());
 
     // space to pan
@@ -878,21 +924,44 @@ class Editor {
     });
   }
 
-  startText(point, event) {
+  startText(point, event, existingIndex = -1) {
     this.closeTextEditor();
     const rect = this.stage.getBoundingClientRect();
+    const existing = existingIndex >= 0 ? this.annotations[existingIndex] : null;
+    const anchor = existing ? { x: existing.x, y: existing.y } : point;
+
+    // Place the editor over the text, in screen space, whatever the zoom.
+    const screenX = anchor.x * this.view.scale + this.view.x;
+    const screenY = anchor.y * this.view.scale + this.view.y;
+
     const editor = document.createElement("textarea");
     editor.className = "text-editor";
     editor.rows = 1;
-    editor.style.left = `${event.clientX - rect.left}px`;
-    editor.style.top = `${event.clientY - rect.top}px`;
+    editor.style.left = `${Math.max(6, screenX)}px`;
+    editor.style.top = `${Math.max(6, screenY)}px`;
+    editor.style.color = existing ? existing.color : this.color;
+    editor.value = existing ? existing.text : "";
     this.stage.appendChild(editor);
     editor.focus();
+    editor.select();
     this.textEditor = { editor, point };
 
     const commit = () => {
       const text = editor.value.trim();
       this.closeTextEditor();
+      if (existing) {
+        if (!text) {
+          // Clearing the note removes the annotation — that is what people expect.
+          const index = this.annotations.indexOf(existing);
+          this.mutate(() => {
+            this.annotations.splice(index, 1);
+            this.selection = -1;
+          });
+        } else if (text !== existing.text) {
+          this.mutate(() => { existing.text = text; });
+        }
+        return;
+      }
       if (text) {
         this.mutate(() => {
           this.annotations.push({
@@ -1019,6 +1088,27 @@ class Editor {
     }
   }
 }
+
+/* ------------------------------------------------------------------ help */
+
+const Help = {
+  toggle(force) {
+    const overlay = $("#help");
+    if (!overlay) return;
+    overlay.hidden = force === undefined ? !overlay.hidden : !force;
+  },
+  wire() {
+    const overlay = $("#help");
+    if (!overlay) return;
+    $$("[data-help-close]", overlay).forEach((button) =>
+      button.addEventListener("click", () => Help.toggle(false)));
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) Help.toggle(false);
+    });
+    $$("[data-help-open]").forEach((button) =>
+      button.addEventListener("click", () => Help.toggle(true)));
+  },
+};
 
 /* ------------------------------------------------------------------ helpers */
 
@@ -1149,6 +1239,19 @@ async function bootList() {
 /* ------------------------------------------------------------------ boot */
 
 document.addEventListener("DOMContentLoaded", () => {
+  Theme.apply(Theme.current());
+  $$("[data-theme-toggle]").forEach((button) =>
+    button.addEventListener("click", () => Theme.toggle()));
+  Help.wire();
+  addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      const help = $("#help");
+      if (help && !help.hidden) { help.hidden = true; return; }
+      const overlay = $("#overlay");
+      if (overlay && !overlay.hidden) overlay.hidden = true;
+    }
+  });
+
   const page = document.body.dataset.page;
   if (page === "editor") {
     const id = decodeURIComponent(location.pathname.split("/").filter(Boolean).pop() || "");

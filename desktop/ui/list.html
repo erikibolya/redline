@@ -4,6 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>redline — sessions</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
 <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body data-page="list">
@@ -16,6 +22,8 @@
       <span>Pick one on the left, or start a review</span>
     </div>
     <div class="header-actions">
+      <button class="btn icon" data-help-open title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+      <button class="btn icon" data-theme-toggle title="Toggle theme">☀</button>
       <button class="btn primary" id="new-review">+ New review</button>
     </div>
   </header>
@@ -80,5 +88,32 @@ Ctrl+Enter submit · [ toggle sessions · ] toggle inspector</div>
 </div>
 
 <script src="/static/app.js"></script>
+<div class="overlay" id="help" hidden>
+  <div class="modal" role="dialog" aria-label="Keyboard shortcuts">
+    <h2>Keyboard</h2>
+    <p class="hint">Everything here also has a button — these are the fast paths.</p>
+    <div class="help-grid">
+      <kbd>V</kbd><span>Select, drag to move, double-click text to edit</span>
+      <kbd>R</kbd><span>Rectangle</span>
+      <kbd>A</kbd><span>Arrow</span>
+      <kbd>P</kbd><span>Pen</span>
+      <kbd>T</kbd><span>Text — click, type, Enter</span>
+      <kbd>Delete</kbd><span>Remove the selected annotation</span>
+      <kbd>↑ ↓ ← →</kbd><span>Nudge 1px (Shift: 10px)</span>
+      <kbd>Ctrl Z</kbd><span>Undo</span>
+      <kbd>Ctrl ⇧ Z</kbd><span>Redo</span>
+      <kbd>Space + drag</kbd><span>Pan the image</span>
+      <kbd>Ctrl + wheel</kbd><span>Zoom at the pointer</span>
+      <kbd>0 / 1</kbd><span>Fit / actual size</span>
+      <kbd>[ / ]</kbd><span>Toggle sessions / inspector</span>
+      <kbd>Ctrl Enter</kbd><span>Submit the review</span>
+      <kbd>Esc</kbd><span>Cancel drawing or close a dialog</span>
+    </div>
+    <div class="row" style="display:flex;justify-content:flex-end;margin-top:18px">
+      <button type="button" class="btn" data-help-close>Close</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

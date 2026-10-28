@@ -22,6 +22,35 @@
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 }
 
+/* Light theme: only the tokens change, plus the stage/checkerboard and a few overlays. */
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #eef2f7;
+  --panel: #ffffff;
+  --panel-2: #f6f8fb;
+  --panel-3: #e9eef5;
+  --border: #d5dde8;
+  --border-soft: #e4eaf2;
+  --text: #1e293b;
+  --muted: #64748b;
+  --accent: #0369a1;
+  --accent-soft: #bae6fd;
+}
+[data-theme="light"] .stage {
+  background-color: #e7ecf3;
+  background-image:
+    linear-gradient(45deg, #dde4ee 25%, transparent 25%, transparent 75%, #dde4ee 75%),
+    linear-gradient(45deg, #dde4ee 25%, transparent 25%, transparent 75%, #dde4ee 75%);
+}
+[data-theme="light"] .options { background: rgba(255, 255, 255, .95); box-shadow: 0 8px 24px rgba(30, 41, 59, .12); }
+[data-theme="light"] .brand-mark { background: #fff; }
+[data-theme="light"] .brand-mark i { box-shadow: 0 5px 0 var(--text); }
+[data-theme="light"] .pill.open { background: #e0f2fe; color: #075985; border-color: #bae6fd; }
+[data-theme="light"] .pill.submitted { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
+[data-theme="light"] .session[aria-current="true"] { background: var(--panel-3); }
+[data-theme="light"] .pre { color: #334155; }
+[data-theme="light"] .text-editor { background: #fff; color: var(--text); }
+
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
@@ -280,6 +309,15 @@ a:hover { text-decoration: underline; }
 .modal .drop.over { border-color: var(--accent); color: var(--text); background: #12233a; }
 .modal .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .modal .error { color: #fda4af; font-size: 12px; min-height: 18px; margin-top: 8px; }
+
+/* ---------------------------------------------------------------- help */
+.help-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin-top: 10px; font-size: 12.5px; }
+.help-grid kbd {
+  background: var(--panel-2); border: 1px solid var(--border); border-bottom-width: 2px;
+  border-radius: 5px; padding: 1px 6px; font: 11px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text); white-space: nowrap;
+}
+.help-grid span { color: var(--muted); }
 
 /* ---------------------------------------------------------------- list page */
 .list-main { grid-area: stage; overflow-y: auto; padding: 28px; }

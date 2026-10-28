@@ -23,6 +23,7 @@ fn harness() -> Harness {
     store.ensure().unwrap();
     let state =
         AppState::new(store.clone(), Auth::new(TOKEN)).with_base_url("http://127.0.0.1:8788");
+    let state = state.with_config_path(dir.path().join("config.json"));
     Harness {
         app: router(state),
         store,
@@ -311,6 +312,122 @@ async fn config_endpoint_explains_how_to_connect_an_agent() {
         format!("Bearer {TOKEN}")
     );
     assert!(body["cli"].as_str().unwrap().starts_with("redline open"));
+}
+
+#[tokio::test]
+async fn setup_refuses_an_unreachable_or_wrong_token_before_saving() {
+    let h = harness();
+    let config = h._dir.path().join("config.json");
+
+    // Wrong token: the probe must fail and nothing may be written.
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/setup",
+            json!({"remote_url": "http://127.0.0.1:9", "token": "nope"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("could not use that server"));
+    assert!(!config.exists(), "a failed probe must not persist a config");
+
+    // https is refused with an actionable message rather than saved and broken.
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/setup",
+            json!({"remote_url": "https://holly:8788", "token": "x"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("http://"));
+}
+
+#[tokio::test]
+async fn setup_saves_a_server_that_answers_and_can_disconnect() {
+    // A second redline standing in for "the server on holly".
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Store::new(dir.path().join("sessions"));
+    store.ensure().unwrap();
+    let remote_state =
+        AppState::new(store, Auth::new("remote-token")).with_base_url("http://127.0.0.1:0");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let remote_url = format!("http://{}", listener.local_addr().unwrap());
+    let remote_app = router(remote_state);
+    tokio::spawn(async move {
+        axum::serve(listener, remote_app).await.unwrap();
+    });
+
+    let h = harness();
+    let config = h._dir.path().join("config.json");
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/setup",
+            json!({"remote_url": remote_url, "token": "remote-token"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["ok"], true);
+    assert!(body["open_url"]
+        .as_str()
+        .unwrap()
+        .contains("/?t=remote-token"));
+
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(saved["remote_url"], remote_url.as_str());
+    assert_eq!(saved["token"], "remote-token");
+
+    let request = Request::builder()
+        .uri("/api/setup")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, body) = send(&h.app, request).await;
+    assert_eq!(body["mode"], "remote");
+    assert_eq!(body["remote_url"], remote_url.as_str());
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/setup/disconnect")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["mode"], "local");
+    assert!(!config.exists());
+}
+
+#[tokio::test]
+async fn setup_is_unavailable_without_a_config_path() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Store::new(dir.path().join("sessions"));
+    store.ensure().unwrap();
+    let state = AppState::new(store, Auth::new(TOKEN)); // headless: no config file
+    let app = router(state);
+    let (status, _, body) = send(
+        &app,
+        authed(
+            "POST",
+            "/api/setup",
+            json!({"remote_url": "http://x", "token": "y"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body["error"].as_str().unwrap().contains("desktop app"));
 }
 
 #[tokio::test]

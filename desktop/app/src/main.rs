@@ -1,34 +1,39 @@
-//! redline desktop shell: a tray icon, a hidden main window, and the same HTTP/MCP server the
-//! CLI talks to.
+//! redline desktop shell: a tray icon, a window, and the same HTTP/MCP server the CLI talks to.
 //!
-//! The shell is deliberately thin — every behaviour lives in `redline-core`, so this file only
-//! starts the server, creates the window, and wires the tray menu.
+//! Two modes, decided by `config.json` in the data directory:
+//! - **standalone** — this computer is the server (default, first run);
+//! - **remote** — a server on another machine holds the sessions, this window is a thin client.
+//!
+//! The setup wizard (`/setup`) is served by the local server in both modes, so connecting to a
+//! server is a form, never a hand-edited file.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use axum::Router;
 use redline_core::api::{router, AppState};
 use redline_core::store::Store;
+use serde_json::json;
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 
-/// The editor, compiled in. Self-contained HTML (inline CSS/JS), so no resource paths to resolve.
 /// The port the CLI and agent configs assume (`redline` client default).
 const PREFERRED_PORT: u16 = 8788;
 
+/// The editor and the wizard, compiled in: no resource paths to resolve at runtime.
 const UI_FILES: &[(&str, &str)] = &[
     ("index.html", include_str!("../../ui/index.html")),
     ("list.html", include_str!("../../ui/list.html")),
+    ("setup.html", include_str!("../../ui/setup.html")),
 ];
 
-struct ServerHandle {
+#[derive(Clone)]
+struct Local {
     base_url: String,
     token: String,
-    remote: bool,
 }
 
 fn main() {
@@ -42,15 +47,13 @@ fn main() {
         ))
         .setup(|app| {
             let data_dir = redline_core::paths::default_data_dir();
-            // Two modes: host the server here (standalone), or act as a thin client of a server
-            // running next to the agents (Unraid/NAS/WSL). `config.json` or env decides.
-            let server = match remote_config(&data_dir) {
-                Some(remote) => remote,
-                None => start_server(data_dir)?,
-            };
-            let url = format!("{}/?t={}", server.base_url, server.token);
 
-            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
+            // The local server always runs: it serves the wizard, and it is the app in standalone
+            // mode. When a remote server is configured the window points there instead.
+            let local = start_local_server(data_dir.clone())?;
+            let start_url = launch_url(&data_dir, &local);
+
+            let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(start_url.parse()?))
                 .title("redline")
                 .inner_size(1280.0, 860.0)
                 .min_inner_size(720.0, 480.0)
@@ -66,7 +69,7 @@ fn main() {
                 }
             });
 
-            build_tray(app, server)?;
+            build_tray(app, data_dir, local)?;
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -79,8 +82,44 @@ fn main() {
         });
 }
 
+/// Standalone → the local UI; remote → the server's UI, or the wizard if it is not answering.
+fn launch_url(data_dir: &Path, local: &Local) -> String {
+    let setup = format!("{}/setup?t={}", local.base_url, local.token);
+    match read_remote(data_dir) {
+        Some(remote) => {
+            if reachable(&remote.base_url, &remote.token) {
+                format!("{}/?t={}", remote.base_url, remote.token)
+            } else {
+                format!("{setup}&unreachable=1")
+            }
+        }
+        None => format!("{}/?t={}", local.base_url, local.token),
+    }
+}
+
+fn reachable(base_url: &str, token: &str) -> bool {
+    redline_core::client::Client::new(&format!("{}/", base_url.trim_end_matches('/')), token)
+        .and_then(|client| client.get("/api/config"))
+        .is_ok()
+}
+
+fn read_remote(data_dir: &Path) -> Option<Local> {
+    let text = std::fs::read_to_string(data_dir.join("config.json")).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let base_url = value.get("remote_url")?.as_str()?.trim().trim_end_matches('/').to_string();
+    if base_url.is_empty() {
+        return None;
+    }
+    let token = value
+        .get("token")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    Some(Local { base_url, token })
+}
+
 /// Start the embedded server on a free loopback port and return where it landed.
-fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::Error>> {
+fn start_local_server(data_dir: PathBuf) -> Result<Local, Box<dyn std::error::Error>> {
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -88,12 +127,12 @@ fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::E
             .build()
             .expect("tokio runtime");
         runtime.block_on(async move {
-            let auth =
-                redline_core::paths::load_or_create_token(&data_dir, None, true).expect("token");
+            let auth = redline_core::paths::load_or_create_token(&data_dir, None, true)
+                .expect("token");
             let store = Store::new(redline_core::paths::sessions_dir(&data_dir));
             store.ensure().expect("sessions dir");
 
-            // Prefer the documented port so `redline open`, agent MCP configs and bookmarks keep
+            // Prefer the documented port so `redline open`, MCP configs and bookmarks keep
             // working across restarts. Fall back to an ephemeral port only if it is taken.
             let preferred: u16 = std::env::var("REDLINE_PORT")
                 .ok()
@@ -115,12 +154,9 @@ fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::E
             let base_url = format!("http://{address}");
             let state = AppState::new(store, auth.clone())
                 .with_base_url(base_url.clone())
-                .with_inline_ui(UI_FILES);
-            let _ = sender.send(ServerHandle {
-                base_url,
-                token: auth.token().to_string(),
-                remote: false,
-            });
+                .with_inline_ui(UI_FILES)
+                .with_config_path(data_dir.join("config.json"));
+            let _ = sender.send(Local { base_url, token: auth.token().to_string() });
 
             axum::serve(listener, Router::from(router(state)))
                 .await
@@ -133,50 +169,28 @@ fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::E
         .map_err(|err| format!("server did not start: {err}").into())
 }
 
-/// Read the remote-server setting: env wins over `config.json` in the data directory.
-fn remote_config(data_dir: &std::path::Path) -> Option<ServerHandle> {
-    let non_empty = |value: Option<String>| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
-
-    let mut url = non_empty(std::env::var("REDLINE_REMOTE_URL").ok());
-    let mut token = non_empty(std::env::var("REDLINE_TOKEN").ok());
-
-    if url.is_none() {
-        if let Ok(text) = std::fs::read_to_string(data_dir.join("config.json")) {
-            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
-                url = non_empty(
-                    value.get("remote_url").and_then(|v| v.as_str()).map(str::to_string),
-                );
-                token = non_empty(value.get("token").and_then(|v| v.as_str()).map(str::to_string));
-            }
-        }
-    }
-
-    let base_url = url?;
-    if token.is_none() {
-        eprintln!("redline: remote_url is set but no token; requests will be rejected (401)");
-    }
-    Some(ServerHandle {
-        base_url: base_url.trim_end_matches('/').to_string(),
-        token: token.unwrap_or_default(),
-        remote: true,
-    })
-}
-
-fn mcp_config(server: &ServerHandle) -> String {
-    serde_json::to_string_pretty(&serde_json::json!({
+/// Copy-paste config for agents. Reads the current mode at click time, so switching servers in
+/// the wizard does not require a restart.
+fn mcp_config(data_dir: &Path, local: &Local) -> String {
+    let (base, token) = match read_remote(data_dir) {
+        Some(remote) => (remote.base_url, remote.token),
+        None => (local.base_url.clone(), local.token.clone()),
+    };
+    let config = json!({
         "mcpServers": {
             "redline": {
                 "type": "http",
-                "url": format!("{}/mcp", server.base_url),
-                "headers": { "Authorization": format!("Bearer {}", server.token) }
+                "url": format!("{base}/mcp"),
+                "headers": { "Authorization": format!("Bearer {token}") }
             }
         }
-    }))
-    .unwrap_or_default()
+    });
+    serde_json::to_string_pretty(&config).unwrap_or_default()
 }
 
-fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
+fn build_tray(app: &tauri::App, data_dir: PathBuf, local: Local) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open redline", true, None::<&str>)?;
+    let connect = MenuItem::with_id(app, "connect", "Connect to a server…", true, None::<&str>)?;
     let login = CheckMenuItem::with_id(
         app,
         "autostart",
@@ -186,34 +200,29 @@ fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
         None::<&str>,
     )?;
     let copy_config = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
-    let address = MenuItem::with_id(
-        app,
-        "address",
-        &format!("Listening on {}", server.base_url),
-        false,
-        None::<&str>,
-    )?;
+    let status = match read_remote(&data_dir) {
+        Some(remote) => format!("Server: {}", remote.base_url),
+        None => format!("Standalone: {}", local.base_url),
+    };
+    let address = MenuItem::with_id(app, "address", &status, false, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit redline", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &login, &copy_config, &address, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&open, &connect, &login, &copy_config, &address, &separator, &quit],
+    )?;
 
-    let config = mcp_config(&server);
+    let setup_url = format!("{}/setup?t={}", local.base_url, local.token);
+    let tray_data_dir = data_dir.clone();
+    let tray_local = local.clone();
     TrayIconBuilder::with_id("main")
         .tooltip("redline — redline the screenshot, the agent writes the fix")
-        .icon(
-            app.default_window_icon()
-                .cloned()
-                .ok_or(tauri::Error::UnknownPath)?,
-        )
+        .icon(app.default_window_icon().cloned().ok_or(tauri::Error::UnknownPath)?)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "open" => show_window(app),
-            "copy-mcp" => {
-                if let Err(err) = copy_to_clipboard(&config) {
-                    eprintln!("redline: cannot copy MCP config: {err}");
-                }
-            }
+            "connect" => navigate(app, &setup_url),
             "autostart" => {
                 let manager = app.autolaunch();
                 let result = if manager.is_enabled().unwrap_or(false) {
@@ -223,6 +232,11 @@ fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
                 };
                 if let Err(err) = result {
                     eprintln!("redline: cannot change autostart: {err}");
+                }
+            }
+            "copy-mcp" => {
+                if let Err(err) = copy_to_clipboard(&mcp_config(&tray_data_dir, &tray_local)) {
+                    eprintln!("redline: cannot copy MCP config: {err}");
                 }
             }
             "quit" => app.exit(0),
@@ -248,6 +262,15 @@ fn show_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
+    }
+}
+
+fn navigate(app: &AppHandle, url: &str) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+        let escaped = serde_json::to_string(url).unwrap_or_else(|_| "\"/\"".to_string());
+        let _ = window.eval(&format!("window.location.replace({escaped});"));
     }
 }
 

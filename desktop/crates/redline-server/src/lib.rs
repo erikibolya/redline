@@ -1,3 +1,3 @@
-//! Library half of the `redline` binary: the loopback HTTP client, shared with integration tests.
+//! Library half of the `redline` binary: re-exports the shared HTTP client.
 
-pub mod http;
+pub use redline_core::client as http;

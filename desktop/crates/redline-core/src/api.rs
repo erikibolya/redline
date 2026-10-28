@@ -30,6 +30,9 @@ pub struct AppState {
     pub inline_ui: Option<&'static [(&'static str, &'static str)]>,
     /// Advertised base URL, e.g. `http://127.0.0.1:8788`.
     pub base_url: String,
+    /// Where the desktop app stores its `config.json`. `None` in headless mode, which disables
+    /// the setup endpoints (a server does not configure itself).
+    pub config_path: Option<PathBuf>,
 }
 
 impl AppState {
@@ -40,7 +43,13 @@ impl AppState {
             ui: None,
             inline_ui: None,
             base_url: "http://127.0.0.1:8788".to_string(),
+            config_path: None,
         }
+    }
+
+    pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_path = Some(path.into());
+        self
     }
 
     pub fn with_inline_ui(mut self, files: &'static [(&'static str, &'static str)]) -> Self {
@@ -71,6 +80,8 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/config", get(config))
+        .route("/api/setup", get(setup_status).post(save_setup))
+        .route("/api/setup/disconnect", post(disconnect_setup))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route(
             "/api/sessions/{id}",
@@ -87,6 +98,7 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/", get(list_page))
         .route("/s/{id}", get(editor_page))
+        .route("/setup", get(setup_page))
         .merge(protected)
         .fallback(static_file)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -184,6 +196,15 @@ async fn editor_page(
         return response;
     }
     serve_ui(&state, "index.html")
+}
+
+async fn setup_page(State(state): State<AppState>, request: Request) -> Response {
+    if let Some(response) =
+        trade_token_for_cookie(request.headers(), request.uri().query(), "/setup", &state)
+    {
+        return response;
+    }
+    serve_ui(&state, "setup.html")
 }
 
 fn serve_ui(state: &AppState, name: &str) -> Response {
@@ -397,6 +418,105 @@ async fn annotated(
         return Err(Error::NotFound(format!("{id}/annotated.png")));
     }
     Ok(serve_file(&path, Some("image/png")))
+}
+
+/// What the wizard shows: am I standalone or pointed at a server?
+async fn setup_status(State(state): State<AppState>) -> Json<Value> {
+    let config = read_config(&state);
+    let remote = config
+        .as_ref()
+        .and_then(|value| value.get("remote_url"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    Json(json!({
+        "mode": if remote.is_some() { "remote" } else { "local" },
+        "remote_url": remote,
+        "local_url": state.base_url,
+        "sessions_dir": state.store.root().display().to_string(),
+    }))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct SetupRequest {
+    remote_url: String,
+    token: String,
+}
+
+/// Persist "use that server instead", but only after proving the credentials work — a saved
+/// config that 401s on next launch is the worst possible first-run experience.
+async fn save_setup(
+    State(state): State<AppState>,
+    Json(body): Json<SetupRequest>,
+) -> Result<Json<Value>, Error> {
+    let path = state.config_path.clone().ok_or_else(|| {
+        Error::BadRequest("setup is only available in the desktop app".to_string())
+    })?;
+
+    let mut remote_url = body.remote_url.trim().trim_end_matches('/').to_string();
+    if remote_url.is_empty() {
+        return Err(Error::BadRequest("server URL is required".to_string()));
+    }
+    if !remote_url.starts_with("http://") {
+        return Err(Error::BadRequest(
+            "use an http:// URL — put https in front of it with a reverse proxy or tunnel"
+                .to_string(),
+        ));
+    }
+    let token = body.token.trim().to_string();
+    if token.is_empty() {
+        return Err(Error::BadRequest("token is required".to_string()));
+    }
+
+    let probe_url = remote_url.clone();
+    let probe_token = token.clone();
+    let reachable = tokio::task::spawn_blocking(move || {
+        crate::client::Client::new(&format!("{probe_url}/"), probe_token)
+            .and_then(|client| client.get("/api/config"))
+            .map(|_| ())
+    })
+    .await
+    .map_err(|err| Error::BadRequest(format!("check failed: {err}")))?;
+
+    if let Err(err) = reachable {
+        return Err(Error::BadRequest(format!(
+            "could not use that server: {err}"
+        )));
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let config = json!({ "remote_url": remote_url, "token": token });
+    let mut text = serde_json::to_string_pretty(&config)?;
+    text.push('\n');
+    std::fs::write(&path, text)?;
+
+    Ok(Json(json!({
+        "ok": true,
+        "remote_url": remote_url,
+        "open_url": format!("{remote_url}/?t={token}"),
+    })))
+}
+
+async fn disconnect_setup(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    let path = state.config_path.clone().ok_or_else(|| {
+        Error::BadRequest("setup is only available in the desktop app".to_string())
+    })?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(Json(
+            json!({ "ok": true, "mode": "local", "local_url": state.base_url }),
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Json(
+            json!({ "ok": true, "mode": "local", "local_url": state.base_url }),
+        )),
+        Err(err) => Err(Error::Io(err)),
+    }
+}
+
+fn read_config(state: &AppState) -> Option<Value> {
+    let path = state.config_path.as_ref()?;
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 async fn mcp_post(State(state): State<AppState>, Json(request): Json<Value>) -> Response {

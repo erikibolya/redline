@@ -13,9 +13,10 @@ This repository is intentionally separate from the product repository. It can be
 personal GitHub account and has no company-specific code or paths.
 
 > **Desktop app (preview).** Installers live on the
-> [releases page](https://github.com/erikibolya/redline/releases) (`v*-desktop.*` tags): a tray
-> application that embeds this server plus an MCP endpoint, so agents connect directly and no
-> terminal stays open. See [`docs/DESKTOP.md`](docs/DESKTOP.md) for design and status.
+> [releases page](https://github.com/erikibolya/redline/releases): a tray application that embeds
+> this server plus an MCP endpoint, so agents connect directly and no terminal stays open. It runs
+> standalone on your desktop or as a thin client of a server next to your agents (Unraid/Docker).
+> See [`docs/DESKTOP.md`](docs/DESKTOP.md).
 > Everything below describes v0.1, which still works.
 
 ## Requirements

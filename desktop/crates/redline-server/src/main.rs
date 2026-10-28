@@ -20,6 +20,7 @@ use redline_core::store::Store;
 const UI_FILES: &[(&str, &str)] = &[
     ("index.html", include_str!("../../../ui/index.html")),
     ("list.html", include_str!("../../../ui/list.html")),
+    ("setup.html", include_str!("../../../ui/setup.html")),
 ];
 
 const USAGE: &str = "\
@@ -146,10 +147,11 @@ fn run(args: Vec<String>) -> Result<i32, String> {
     // authenticates; client commands must not rewrite it.
     let auth = load_or_create_token(
         &data_dir,
-        flags
-            .value("token")
-            .map(str::to_string)
-            .or_else(|| std::env::var("REDLINE_TOKEN").ok().filter(|v| !v.trim().is_empty())),
+        flags.value("token").map(str::to_string).or_else(|| {
+            std::env::var("REDLINE_TOKEN")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        }),
         command == "serve",
     )
     .map_err(|err| format!("cannot read or create the token: {err}"))?;

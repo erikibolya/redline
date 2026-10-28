@@ -1,4 +1,4 @@
-//! Minimal HTTP/1.1 client for the loopback API.
+//! Minimal HTTP/1.1 client for redline's own API (CLI + setup wizard).
 //!
 //! Deliberately hand-rolled: redline only ever talks plain HTTP to `127.0.0.1`, so a TLS stack
 //! and an async client would be a lot of dependency for four request shapes.

@@ -140,14 +140,17 @@ services:
 
 `docker logs redline` prints the token, the human URL and the MCP config.
 
-**2. Point the Windows app at it.** Create `%LOCALAPPDATA%\redline\config.json`:
+**2. Point the Windows app at it — in the app, not in a file.**
 
-```json
-{ "remote_url": "http://holly:8788", "token": "<token from the container logs>" }
-```
+Tray → **Connect to a server…**, paste the address and token, **Save and connect**. The app probes
+the server with those credentials before saving anything, so a wrong token is an error message
+instead of a broken next launch. The tray then reads *Server: http://holly:8788*; **Use this
+computer instead** switches back to standalone.
 
-`REDLINE_REMOTE_URL` / `REDLINE_TOKEN` override the file. With `remote_url` set the app starts no
-local server; it shows the tray entry *Server: http://holly:8788* and renders the editor from holly.
+The wizard writes the same `%LOCALAPPDATA%\redline\config.json` (`remote_url`, `token`) for
+scripted setups; `REDLINE_REMOTE_URL` / `REDLINE_TOKEN` still override it. The local server keeps
+running in both modes — that is what serves the wizard — but in remote mode the window (and every
+review) comes from holly.
 
 **3. Agents on holly** use `http://127.0.0.1:8788/mcp` — loopback inside the container network,
 never exposed to the LAN:

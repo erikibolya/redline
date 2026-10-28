@@ -8,9 +8,11 @@
 //! - [`api`] — the HTTP surface used by the editor, the CLI and scripts.
 //! - [`mcp`] — JSON-RPC 2.0 tool surface for AI agents, mounted at `POST /mcp`.
 //! - [`auth`] — the bearer token that keeps a local port from being a public one.
+//! - [`client`] — the loopback HTTP client used by the CLI and by the setup wizard.
 
 pub mod api;
 pub mod auth;
+pub mod client;
 pub mod error;
 pub mod mcp;
 pub mod model;

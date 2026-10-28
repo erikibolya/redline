@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>redline — connect</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #e2e8f0;
+         font: 14px/1.5 system-ui, sans-serif; padding: 24px; }
+  .card { width: min(560px, 100%); background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 28px 30px; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
+  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .dot { width: 26px; height: 26px; border-radius: 7px; background: #0f172a; border: 1px solid #334155; display: grid; place-items: center; }
+  .dot span { display: block; width: 16px; height: 3px; border-radius: 2px; background: #e11d48; box-shadow: 0 6px 0 #f8fafc; }
+  h1 { font-size: 19px; margin: 0; }
+  .lead { color: #94a3b8; margin: 8px 0 22px; }
+  label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #94a3b8; margin-bottom: 6px; }
+  input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font: inherit; }
+  input:focus { outline: 2px solid #0ea5e9; outline-offset: 1px; }
+  .field { margin-bottom: 16px; }
+  .hint { font-size: 12px; color: #64748b; margin-top: 6px; }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 22px; }
+  button { border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; cursor: pointer; }
+  button[type="submit"] { background: #0ea5e9; color: #fff; font-weight: 600; }
+  button[type="submit"]:hover { background: #0284c7; }
+  button.link { background: none; color: #94a3b8; padding: 0; text-decoration: underline; }
+  button.link:hover { color: #e2e8f0; }
+  button:disabled { opacity: .6; cursor: default; }
+  .status { margin-top: 16px; font-size: 13px; min-height: 20px; }
+  .status.error { color: #fb7185; }
+  .status.ok { color: #4ade80; }
+  .banner { background: #422006; border: 1px solid #a16207; color: #fde68a; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 18px; }
+  .divider { border-top: 1px solid #334155; margin: 22px 0 16px; }
+  .muted { color: #64748b; font-size: 12px; }
+  code { background: #0f172a; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<form class="card" id="form" autocomplete="off">
+  <div class="brand"><div class="dot"><span></span></div><h1>Connect redline</h1></div>
+  <p class="lead">redline can run on this computer, or use the server where your agents and repositories live
+    (Unraid, NAS, WSL). Reviews created there stay available when this machine is off.</p>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="field">
+    <label for="url">Server address</label>
+    <input id="url" name="url" placeholder="http://holly:8788" spellcheck="false" />
+    <div class="hint">The address printed by the container: <code>http://&lt;host&gt;:8788</code></div>
+  </div>
+
+  <div class="field">
+    <label for="token">Access token</label>
+    <input id="token" name="token" placeholder="token from the server logs" spellcheck="false" />
+    <div class="hint">Run <code>docker logs redline | grep -i token</code> on the server to see it.</div>
+  </div>
+
+  <div class="actions">
+    <button type="submit" id="save">Save and connect</button>
+    <button type="button" class="link" id="local">Use this computer instead</button>
+  </div>
+  <div id="status" class="status"></div>
+
+  <div class="divider"></div>
+  <p class="muted" id="current"></p>
+</form>
+<script>
+const params = new URLSearchParams(location.search);
+const localToken = params.get("t") || "";
+const statusBox = document.getElementById("status");
+const banner = document.getElementById("banner");
+const saveButton = document.getElementById("save");
+
+if (params.get("unreachable")) {
+  banner.hidden = false;
+  banner.textContent = "The server you were connected to did not answer. Check that it is running, then try again.";
+}
+
+async function loadStatus() {
+  try {
+    const response = await fetch(`/api/setup?t=${encodeURIComponent(localToken)}`);
+    if (!response.ok) return;
+    const state = await response.json();
+    document.getElementById("current").textContent = state.mode === "remote"
+      ? `Currently connected to ${state.remote_url}. Sessions: ${state.sessions_dir}`
+      : `Currently standalone — this computer is the server. Sessions: ${state.sessions_dir}`;
+    if (state.mode === "remote" && state.remote_url) {
+      document.getElementById("url").value = state.remote_url;
+    }
+  } catch (error) {
+    /* old server without setup endpoints */
+  }
+}
+
+function setStatus(text, kind) {
+  statusBox.textContent = text;
+  statusBox.className = "status" + (kind ? " " + kind : "");
+}
+
+document.getElementById("form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const url = document.getElementById("url").value.trim();
+  const token = document.getElementById("token").value.trim();
+  if (!url || !token) {
+    setStatus("Both fields are needed.", "error");
+    return;
+  }
+  saveButton.disabled = true;
+  setStatus("Checking the server…");
+  try {
+    const response = await fetch(`/api/setup?t=${encodeURIComponent(localToken)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ remote_url: url, token }),
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      setStatus(data.error || "Could not connect.", "error");
+      saveButton.disabled = false;
+      return;
+    }
+    setStatus("Connected — opening your reviews…", "ok");
+    location.replace(data.open_url);
+  } catch (error) {
+    setStatus("Could not reach redline: " + error.message, "error");
+    saveButton.disabled = false;
+  }
+});
+
+document.getElementById("local").addEventListener("click", async () => {
+  try {
+    const response = await fetch(`/api/setup/disconnect?t=${encodeURIComponent(localToken)}`, { method: "POST" });
+    const data = await response.json();
+    location.replace(`${data.local_url}/?t=${encodeURIComponent(localToken)}`);
+  } catch (error) {
+    setStatus("Could not switch to standalone mode: " + error.message, "error");
+  }
+});
+
+loadStatus();
+</script>
+</body>
+</html>

@@ -229,9 +229,36 @@ exist; without them the build is unsigned (SmartScreen warns):
 | `WINDOWS_CERT_PFX` | base64 of the `.pfx` (OV/EV code-signing certificate) |
 | `WINDOWS_CERT_PASSWORD` | its password |
 
-A certificate must be bought from a CA (OV ≈ €200–400/yr; Azure Trusted Signing ≈ $10/month;
-SignPath offers free signing for qualifying OSS). Nothing else is needed — the workflow writes the
-Tauri signing config and signs `redline-app.exe` plus the installer.
+#### Free signing — what actually exists
+
+There is no free, instantly-trusted certificate: Windows trusts a publisher only after a CA has
+verified an identity. The two realistic zero-cost routes:
+
+1. **Certum Open Source Code Signing** — free for public OSS, valid 1 year, personal identity
+   check (passport/ID + video call), certificate exported as `.pfx`. Fits the pipeline as-is:
+
+   ```bash
+   desktop/scripts/add-signing-cert.sh /path/to/cert.pfx 'password'
+   ```
+
+2. **SignPath Foundation** — free EV-grade signing for qualifying OSS, but signing happens on
+   their servers; nothing lands on this machine. Requires an approved project and four values
+   (`SIGNPATH_API_TOKEN`, organisation id, project slug, signing policy). The workflow needs one
+   extra job that signs the installer before upload — ask and it will be wired.
+
+**Self-signed certificates are pointless here**: the file is signed, Windows still warns, and
+SmartScreen reputation never accrues. They are only useful for internal distribution with a
+GPO-deployed root.
+
+What is *already* signed regardless: the update packages, with our own minisign key
+(`TAURI_SIGNING_PRIVATE_KEY`). That protects the updater from tampered downloads; it has nothing
+to do with the SmartScreen prompt.
+
+A certificate must be bought or granted to a person, not to a repository — that identity step is
+the one part that cannot be automated here. Everything after it is: secrets in, signed build out.
+
+Nothing else is needed — the workflow writes the Tauri signing config and signs `redline-app.exe`
+plus the installer.
 
 **One front door** — when `REDLINE_DOMAIN` is set the installer no longer publishes port 8788, and
 passes `--public-url https://$DOMAIN` so review links and `Copy MCP config` use the HTTPS address.

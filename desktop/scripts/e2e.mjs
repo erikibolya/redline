@@ -318,7 +318,13 @@ const main = async () => {
   }
   check("rail 'mark done' resolves the session", status === "resolved", status);
 
-  // The row re-renders after the resolve, so click the fresh node directly.
+  // Resolved sessions leave the default 'Active' view, so reopen them from the 'Done' filter.
+  await page.evaluate(() => {
+    const chip = Array.from(document.querySelectorAll(".chip"))
+      .find((element) => element.textContent.trim().startsWith("Done"));
+    chip?.click();
+  });
+  await page.waitForSelector(row, { timeout: 5000 });
   await page.hover(row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   for (let attempt = 0; attempt < 20; attempt += 1) {

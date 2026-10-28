@@ -119,6 +119,7 @@ fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::E
             let _ = sender.send(ServerHandle {
                 base_url,
                 token: auth.token().to_string(),
+                remote: false,
             });
 
             axum::serve(listener, Router::from(router(state)))

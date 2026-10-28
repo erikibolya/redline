@@ -1,0 +1,70 @@
+#!/bin/bash
+# Install/upgrade redline as a Docker container on Unraid (or any Linux host with docker).
+#
+#   bash install-unraid.sh                 # generate a token and print it
+#   REDLINE_TOKEN=xxx bash install-unraid.sh
+#
+# Re-running it upgrades in place: the data volume is kept.
+set -euo pipefail
+
+IMAGE="${REDLINE_IMAGE:-ghcr.io/erikibolya/redline:latest}"
+NAME="${REDLINE_NAME:-redline}"
+DATA="${REDLINE_DATA:-/mnt/user/appdata/redline}"
+PORT="${REDLINE_PORT:-8788}"
+
+command -v docker >/dev/null || { echo "docker is not available on this host" >&2; exit 1; }
+
+# Reuse the token from a previous install, so upgrades never break connected apps.
+if [ -z "${REDLINE_TOKEN:-}" ] && [ -f "$DATA/token" ]; then
+  REDLINE_TOKEN="$(tr -d '\n' < "$DATA/token")"
+fi
+if [ -z "${REDLINE_TOKEN:-}" ]; then
+  REDLINE_TOKEN="$(head -c 32 /dev/urandom | base64 | tr -d '/+=' | head -c 43)"
+fi
+
+mkdir -p "$DATA"
+
+echo "==> pulling $IMAGE"
+docker pull "$IMAGE"
+
+if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
+  echo "==> replacing existing container $NAME (data in $DATA is kept)"
+  docker rm -f "$NAME" >/dev/null
+fi
+
+echo "==> starting $NAME on port $PORT"
+docker run -d \
+  --name "$NAME" \
+  --restart unless-stopped \
+  -p "$PORT:8788" \
+  -v "$DATA:/data" \
+  -e "REDLINE_TOKEN=$REDLINE_TOKEN" \
+  "$IMAGE" >/dev/null
+
+# Wait for the health endpoint before declaring success.
+for _ in $(seq 1 30); do
+  if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+
+IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+echo
+echo "redline is running."
+echo "  session list : http://${IP:-<this-host>}:$PORT/?t=$REDLINE_TOKEN"
+echo "  token        : $REDLINE_TOKEN"
+echo "  sessions     : $DATA/sessions"
+echo
+echo "Agent config (on this host):"
+cat <<JSON
+{
+  "mcpServers": {
+    "redline": {
+      "type": "http",
+      "url": "http://127.0.0.1:$PORT/mcp",
+      "headers": { "Authorization": "Bearer $REDLINE_TOKEN" }
+    }
+  }
+}
+JSON
+echo
+echo "Windows app: tray -> Connect to a server… -> http://<this-host>:$PORT"

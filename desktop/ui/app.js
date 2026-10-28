@@ -1003,6 +1003,10 @@ class Editor {
 
     stage.addEventListener("pointerdown", (event) => {
       if (!this.image) return;
+      // The options bar and the inline text editor live inside the stage. Capturing the pointer
+      // for marquee/pan on those would swallow their click events.
+      if (event.target.closest(".options, .text-editor")) return;
+
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 2) {
         const [a, b] = Array.from(this.pointers.values());

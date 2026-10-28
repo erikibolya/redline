@@ -117,6 +117,17 @@ const main = async () => {
   });
   const at = (dx, dy) => ({ x: canvas.x + dx, y: canvas.y + dy });
 
+  // ---- tools must respond to clicks (they sit inside the stage, which captures pointers)
+  for (const tool of ["rect", "arrow", "pen", "text", "select"]) {
+    await page.click(`.tool[data-tool="${tool}"]`);
+    const state = await page.evaluate(() => ({
+      tool: window.redline.tool,
+      marquee: Boolean(window.redline.marquee),
+    }));
+    check(`clicking the ${tool} tool selects it`, state.tool === tool && !state.marquee,
+      `${state.tool}${state.marquee ? " + marquee started" : ""}`);
+  }
+
   // ---- draw a rectangle
   await page.keyboard.press("r");
   await drag(page, at(200, 160), at(420, 300));
@@ -221,8 +232,12 @@ const main = async () => {
   await page.keyboard.down("Control");
   await page.keyboard.press("Enter");
   await page.keyboard.up("Control");
-  await new Promise((resolve) => setTimeout(resolve, 1200));
-  const history = await api(`/api/sessions/${id}/history`);
+  let history = { submissions: [] };
+  for (let attempt = 0; attempt < 24; attempt += 1) {
+    history = await api(`/api/sessions/${id}/history`);
+    if (history.submissions.length) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   check("a second submission archives the first round", history.submissions.length >= 1,
     `${history.submissions.length} archived`);
 

@@ -32,6 +32,10 @@
   .connect button:hover { background: #0284c7; }
   .connect .ok { color: #15803d; margin-left: 8px; font-size: 12px; }
   .hidden { display: none; }
+  .signin { display: flex; gap: 8px; justify-content: center; margin: 14px 0 4px; }
+  .signin input { width: min(340px, 60vw); padding: 8px 10px; border-radius: 8px; border: 1px solid #94a3b8; font: inherit; }
+  .signin button { border: 0; border-radius: 8px; padding: 8px 14px; background: #0ea5e9; color: #fff; font: inherit; cursor: pointer; }
+  .signin button:hover { background: #0284c7; }
 </style>
 </head>
 <body>
@@ -95,8 +99,25 @@ async function load() {
   try {
     const response = await fetch("/api/sessions");
     if (response.status === 401) {
-      list.innerHTML = '<div class="empty">This browser is not signed in.<br><br>'
-        + 'Open the redline app, then tray → <b>Copy browser link</b>, and paste that link here.</div>';
+      list.innerHTML = `
+        <div class="empty">
+          <p><strong>Sign in to this browser</strong></p>
+          <p class="meta">Paste the access token from the redline app
+            (tray → <b>Copy browser link</b>, or the token shown in its settings).</p>
+          <form id="signin" class="signin">
+            <input id="signin-token" placeholder="access token" spellcheck="false" autocomplete="off" />
+            <button type="submit">Sign in</button>
+          </form>
+          <p class="meta" id="signin-error"></p>
+        </div>`;
+      const form = document.getElementById("signin");
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const token = document.getElementById("signin-token").value.trim();
+        if (!token) return;
+        // The server trades ?t= for an HttpOnly cookie and redirects to the clean URL.
+        location.href = "/?t=" + encodeURIComponent(token);
+      });
       return;
     }
     const data = await response.json();

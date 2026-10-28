@@ -97,7 +97,7 @@
   async function loadSession() {
     const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
     if (response.status === 401) {
-      throw new Error("This browser is not signed in — open the link from the redline app (tray → Copy browser link).");
+      throw new Error("This browser is not signed in — open the session list (/) and sign in there.");
     }
     if (!response.ok) throw new Error("Session not found");
     const data = await response.json();

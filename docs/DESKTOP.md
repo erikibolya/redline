@@ -111,6 +111,63 @@ image-capable agent can look at the redlines instead of only reading coordinates
 Tray → **Copy MCP config** emits the exact JSON snippet (URL + token) for Claude Desktop and
 OpenCode. That menu item is the whole onboarding story; no docs needed to connect an agent.
 
+## Server on another machine (Unraid / NAS / WSL + Windows desktop)
+
+The common real setup: repositories and the agent run on a server (`holly`), the human draws on a
+Windows desktop. The app then runs in **thin-client mode** — the server lives where the agents are,
+so reviews can be created while the desktop is off.
+
+```
+holly (always on)                         Windows desktop
+redline container :8788  ←── HTTP ──────  redline-app (tray)
+  ├─ /mcp   ← agents on holly (127.0.0.1)
+  ├─ /data  ← sessions next to the repos
+  └─ /      → editor, rendered in the app's webview
+```
+
+**1. Start the server on holly** (Unraid: Docker → Add Container, or compose):
+
+```yaml
+services:
+  redline:
+    image: ghcr.io/erikibolya/redline:latest
+    ports: ["8788:8788"]
+    volumes: ["/mnt/user/appdata/redline:/data"]
+    environment:
+      REDLINE_TOKEN: "paste-a-long-random-string"   # optional but recommended
+    restart: unless-stopped
+```
+
+`docker logs redline` prints the token, the human URL and the MCP config.
+
+**2. Point the Windows app at it.** Create `%LOCALAPPDATA%\redline\config.json`:
+
+```json
+{ "remote_url": "http://holly:8788", "token": "<token from the container logs>" }
+```
+
+`REDLINE_REMOTE_URL` / `REDLINE_TOKEN` override the file. With `remote_url` set the app starts no
+local server; it shows the tray entry *Server: http://holly:8788* and renders the editor from holly.
+
+**3. Agents on holly** use `http://127.0.0.1:8788/mcp` — loopback inside the container network,
+never exposed to the LAN:
+
+```json
+{ "mcpServers": { "redline": {
+    "type": "http",
+    "url": "http://127.0.0.1:8788/mcp",
+    "headers": { "Authorization": "Bearer <token>" } } } }
+```
+
+Notes:
+
+- Only the **human-facing** port is reachable from the LAN; agents talk to loopback.
+- No TLS: the token protects the port. If the LAN is not trusted, put the container behind your
+  existing reverse proxy (Unraid SWAG/NPM) and use `https://…`, or tunnel with WireGuard/Tailscale.
+- The Windows app is optional: `http://holly:8788/?t=<token>` works in any browser.
+- Sessions live in `/data/sessions` on holly, so the agent can read `annotations.json` directly
+  from disk if it prefers files to MCP.
+
 ## Data locations
 
 | OS | Sessions | Config |

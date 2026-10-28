@@ -28,6 +28,7 @@ const UI_FILES: &[(&str, &str)] = &[
 struct ServerHandle {
     base_url: String,
     token: String,
+    remote: bool,
 }
 
 fn main() {
@@ -41,7 +42,12 @@ fn main() {
         ))
         .setup(|app| {
             let data_dir = redline_core::paths::default_data_dir();
-            let server = start_server(data_dir)?;
+            // Two modes: host the server here (standalone), or act as a thin client of a server
+            // running next to the agents (Unraid/NAS/WSL). `config.json` or env decides.
+            let server = match remote_config(&data_dir) {
+                Some(remote) => remote,
+                None => start_server(data_dir)?,
+            };
             let url = format!("{}/?t={}", server.base_url, server.token);
 
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
@@ -124,6 +130,35 @@ fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::E
     receiver
         .recv_timeout(std::time::Duration::from_secs(10))
         .map_err(|err| format!("server did not start: {err}").into())
+}
+
+/// Read the remote-server setting: env wins over `config.json` in the data directory.
+fn remote_config(data_dir: &std::path::Path) -> Option<ServerHandle> {
+    let non_empty = |value: Option<String>| value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+
+    let mut url = non_empty(std::env::var("REDLINE_REMOTE_URL").ok());
+    let mut token = non_empty(std::env::var("REDLINE_TOKEN").ok());
+
+    if url.is_none() {
+        if let Ok(text) = std::fs::read_to_string(data_dir.join("config.json")) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                url = non_empty(
+                    value.get("remote_url").and_then(|v| v.as_str()).map(str::to_string),
+                );
+                token = non_empty(value.get("token").and_then(|v| v.as_str()).map(str::to_string));
+            }
+        }
+    }
+
+    let base_url = url?;
+    if token.is_none() {
+        eprintln!("redline: remote_url is set but no token; requests will be rejected (401)");
+    }
+    Some(ServerHandle {
+        base_url: base_url.trim_end_matches('/').to_string(),
+        token: token.unwrap_or_default(),
+        remote: true,
+    })
 }
 
 fn mcp_config(server: &ServerHandle) -> String {

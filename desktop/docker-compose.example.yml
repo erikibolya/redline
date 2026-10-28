@@ -1,0 +1,21 @@
+# redline on Unraid / a NAS, next to your agents and repositories.
+#
+#   docker compose up -d
+#   docker compose logs redline | grep token     # or: docker compose exec redline redline token
+#
+# Then point the Windows app at this server (see docs/DESKTOP.md#server-on-another-machine).
+
+services:
+  redline:
+    image: ghcr.io/erikibolya/redline:latest
+    container_name: redline
+    restart: unless-stopped
+    ports:
+      - "8788:8788"
+    volumes:
+      # Sessions, token and the SQLite-free store live here. Back this up; it is the review history.
+      - /mnt/user/appdata/redline:/data
+    environment:
+      # Optional: a fixed token so container restarts do not break agent configs.
+      # REDLINE_TOKEN: "paste-a-long-random-string"
+      TZ: Europe/Berlin

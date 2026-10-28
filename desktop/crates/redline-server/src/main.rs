@@ -15,6 +15,13 @@ use redline_core::auth::Auth;
 use redline_core::paths::{default_data_dir, load_or_create_token, sessions_dir};
 use redline_core::store::Store;
 
+/// Editor assets compiled in: the headless server must run from a bare container with no
+/// checkout next to it.
+const UI_FILES: &[(&str, &str)] = &[
+    ("index.html", include_str!("../../../ui/index.html")),
+    ("list.html", include_str!("../../../ui/list.html")),
+];
+
 const USAGE: &str = "\
 redline — local visual review queue for humans and AI agents
 
@@ -33,8 +40,9 @@ SERVER OPTIONS
   --port PORT       port (default 8788)
   --data-dir DIR    where sessions and the token live
   --sessions DIR    override the sessions directory only
-  --ui DIR          directory with index.html/list.html
-  --token TOKEN     override the stored token
+  --ui DIR          directory with index.html/list.html (default: built in)
+  --public-url URL  URL humans open, when bound to 0.0.0.0 in a container
+  --token TOKEN     override the stored token (env: REDLINE_TOKEN)
 
 CLIENT OPTIONS
   --host ADDR       server address (default 127.0.0.1)
@@ -138,13 +146,16 @@ fn run(args: Vec<String>) -> Result<i32, String> {
     // authenticates; client commands must not rewrite it.
     let auth = load_or_create_token(
         &data_dir,
-        flags.value("token").map(str::to_string),
+        flags
+            .value("token")
+            .map(str::to_string)
+            .or_else(|| std::env::var("REDLINE_TOKEN").ok().filter(|v| !v.trim().is_empty())),
         command == "serve",
     )
     .map_err(|err| format!("cannot read or create the token: {err}"))?;
 
     match command.as_str() {
-        "serve" => serve(&flags, &data_dir, &base_url, auth),
+        "serve" => serve(&flags, &data_dir, auth),
         "open" => open(&flags, &base_url, &auth),
         "list" => list(&flags, &base_url, &auth),
         "get" => get(&flags, &base_url, &auth),
@@ -168,7 +179,7 @@ fn run(args: Vec<String>) -> Result<i32, String> {
 
 // ---------------------------------------------------------------- server
 
-fn serve(flags: &Flags, data_dir: &Path, base_url: &str, auth: Auth) -> Result<i32, String> {
+fn serve(flags: &Flags, data_dir: &Path, auth: Auth) -> Result<i32, String> {
     let host = flags.value("host").unwrap_or("127.0.0.1").to_string();
     let port = flags.number("port")?.unwrap_or(8788) as u16;
     let sessions_root = flags
@@ -181,13 +192,16 @@ fn serve(flags: &Flags, data_dir: &Path, base_url: &str, auth: Auth) -> Result<i
         let store = Store::new(&sessions_root);
         store.ensure().map_err(|err| err.to_string())?;
 
-        let mut state = AppState::new(store, auth.clone()).with_base_url(base_url);
-        let ui = flags.value("ui").map(PathBuf::from).or_else(|| {
-            let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ui");
-            bundled.is_dir().then_some(bundled)
-        });
-        if let Some(ui) = ui {
-            state = state.with_ui(ui);
+        // `--public-url` is what humans click; agents always talk to the server directly, so the
+        // default stays loopback even when the socket is bound to 0.0.0.0 in a container.
+        let advertised = flags
+            .value("public-url")
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("http://127.0.0.1:{port}"));
+        let mut state = AppState::new(store, auth.clone()).with_base_url(advertised);
+        match flags.value("ui").map(PathBuf::from) {
+            Some(ui) => state = state.with_ui(ui),
+            None => state = state.with_inline_ui(UI_FILES),
         }
 
         if !matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1") {
@@ -206,12 +220,13 @@ fn serve(flags: &Flags, data_dir: &Path, base_url: &str, auth: Auth) -> Result<i
 
         println!("redline {} listening on http://{bound}", redline_core::VERSION);
         println!("sessions: {}", sessions_root.display());
-        println!("open:     http://{bound}/?t={}", auth.token());
-        println!("mcp:      http://{bound}/mcp  (Authorization: Bearer <token>)");
+        println!("open (human):   http://{bound}/?t={}", auth.token());
+        println!("agents (local): http://127.0.0.1:{port}/mcp");
+        println!("token:          {}", auth.token());
         println!();
         println!(
             "{}",
-            serde_json::to_string_pretty(&mcp_config(&format!("http://{bound}"), auth.token()))
+            serde_json::to_string_pretty(&mcp_config(&format!("http://127.0.0.1:{port}"), auth.token()))
                 .map_err(|err| err.to_string())?
         );
 

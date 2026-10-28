@@ -92,9 +92,10 @@ agents connect directly instead of talking to a terminal. Design and phase statu
 [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
 - [x] `redline-core`: store + HTTP API + token auth + MCP, 20 tests, no GUI dependencies.
-- [ ] CLI parity for `open/list/get/wait/remove` against the running app.
-- [ ] Tauri v2 shell: tray, hidden main window, embedded UI, single instance.
-- [ ] Windows installer (NSIS/MSI, WebView2 bootstrap), autostart, updater.
+- [x] CLI parity for `open/list/get/wait/remove` against the running app.
+- [x] Tauri v2 shell: tray, hidden main window, embedded UI, single instance.
+- [x] Windows installer (NSIS, per-user) built in CI; autostart toggle.
+- [ ] Verify the shell on a real Windows desktop; add code signing and the updater.
 - [ ] macOS/Linux packages and the GitHub Actions build matrix.
 - [ ] `capture_review` (headless screenshot) and before/after comparison.
 

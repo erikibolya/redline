@@ -147,7 +147,7 @@ which keeps the current "shared folder" workflow alive for WSL/Windows splits.
 |-------|-------------|----------------|
 | P0 | `redline-core` store + API + auth + MCP, `cargo test` green in WSL | Unit + HTTP tests pass without a GUI |
 | P1 | `redline-cli` port of `serve/open/list/get/wait/remove` | v0.1 recipe works against the new server |
-| P2 | Tauri shell: tray, hidden window, embedded UI, single instance | App runs on Windows, agent connects over MCP |
+| P2 | Tauri shell: tray, hidden window, embedded UI, single instance | App runs on Windows, agent connects over MCP (compiles in CI; desktop run pending) |
 | P3 | Installers (NSIS/MSI), autostart, updater, Actions matrix | Signed-per-user installer, upgrade in place |
 | P4 | `capture_review` via headless Chrome, before/after compare | Screenshot → annotation → follow-up in one loop |
 
@@ -163,7 +163,14 @@ which keeps the current "shared folder" workflow alive for WSL/Windows splits.
   timeout, `get`/`remove` exit 1 for a missing session, `--json` stays machine-readable.
   `--sessions` moved server-side (the client no longer touches files); `DELETE /api/sessions/{id}`
   was added for `remove`. Covered by `tests/cli.rs`, which spawns the real binary.
-- P2+ — not started; needs a Windows toolchain and WebView2 (this WSL box cannot link a GUI).
+- **P2 — done, unverified on a real desktop.** `desktop/app` is a Tauri v2 shell: tray icon with
+  *Open · Start at login · Copy MCP config · listening address · Quit*, window closes to the tray,
+  single-instance, embedded UI, server on a free loopback port. Compiles and links on
+  `windows-latest` (CI). Nobody has clicked it on a physical Windows desktop yet — that is the
+  next check, not a known defect.
+- **P3 — partial.** NSIS per-user installer builds in CI (`redline_<version>_x64-setup.exe`,
+  ~1.9 MB) and is uploaded as an artifact. Autostart and single-instance landed. Still open:
+  code signing, the updater plugin, and macOS/Linux bundles.
 
 ### Building in WSL without a C toolchain
 

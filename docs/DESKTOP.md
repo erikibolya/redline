@@ -186,6 +186,22 @@ Notes:
 - Sessions live in `/data/sessions` on holly, so the agent can read `annotations.json` directly
   from disk if it prefers files to MCP.
 
+### Traefik / HTTPS on Unraid
+
+The installer can wire the labels for you, so a re-run cannot drop the route:
+
+```bash
+REDLINE_DOMAIN=redline.ibolya.cz bash desktop/install-unraid.sh
+```
+
+It adds `--network traefik_network` plus the same labels the other Unraid stacks use
+(`websecure` entrypoint, `Host(\`…\`)`, `tls.certresolver=cloudflare`, service port 8788).
+Override with `REDLINE_TRAEFIK_NETWORK` / `REDLINE_CERTRESOLVER` if yours differ.
+
+The app's Connect form accepts `https://` too. For an https server the credentials are not probed
+over plain HTTP (the client has no TLS stack); the webview loads the URL and reports a bad
+certificate instead.
+
 ## Data locations
 
 | OS | Sessions | Config |

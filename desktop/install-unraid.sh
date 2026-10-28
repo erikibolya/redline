@@ -11,6 +11,11 @@ IMAGE="${REDLINE_IMAGE:-ghcr.io/erikibolya/redline:latest}"
 NAME="${REDLINE_NAME:-redline}"
 DATA="${REDLINE_DATA:-/mnt/user/appdata/redline}"
 PORT="${REDLINE_PORT:-8788}"
+# Optional: expose through Traefik on a subdomain. Without this, re-running the script would
+# silently recreate the container without the labels and break the HTTPS route.
+DOMAIN="${REDLINE_DOMAIN:-}"
+TRAEFIK_NETWORK="${REDLINE_TRAEFIK_NETWORK:-traefik_network}"
+CERTRESOLVER="${REDLINE_CERTRESOLVER:-cloudflare}"
 
 command -v docker >/dev/null || { echo "docker is not available on this host" >&2; exit 1; }
 
@@ -37,12 +42,28 @@ if docker ps -a --format '{{.Names}}' | grep -qx "$NAME"; then
 fi
 
 echo "==> starting $NAME on port $PORT"
+LABELS=()
+NETWORK=()
+if [ -n "$DOMAIN" ]; then
+  NETWORK=(--network "$TRAEFIK_NETWORK")
+  LABELS=(
+    --label traefik.enable=true
+    --label "traefik.docker.network=$TRAEFIK_NETWORK"
+    --label "traefik.http.routers.$NAME.entrypoints=websecure"
+    --label "traefik.http.routers.$NAME.rule=Host(\`$DOMAIN\`)"
+    --label "traefik.http.routers.$NAME.tls=true"
+    --label "traefik.http.routers.$NAME.tls.certresolver=$CERTRESOLVER"
+    --label "traefik.http.services.$NAME.loadbalancer.server.port=8788"
+  )
+fi
 docker run -d \
   --name "$NAME" \
   --restart unless-stopped \
+  "${NETWORK[@]}" \
   -p "$PORT:8788" \
   -v "$DATA:/data" \
   -e "REDLINE_TOKEN=$REDLINE_TOKEN" \
+  "${LABELS[@]}" \
   "$IMAGE" >/dev/null
 
 # Wait for the health endpoint before declaring success.
@@ -56,6 +77,7 @@ IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
 echo
 echo "redline is running."
 echo "  session list : http://${IP:-<this-host>}:$PORT/?t=$REDLINE_TOKEN"
+[ -n "$DOMAIN" ] && echo "  via traefik  : https://$DOMAIN/?t=$REDLINE_TOKEN"
 echo "  token        : $REDLINE_TOKEN"
 echo "  sessions     : $DATA/sessions"
 echo

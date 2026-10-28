@@ -23,6 +23,10 @@ if [ -z "${REDLINE_TOKEN:-}" ]; then
 fi
 
 mkdir -p "$DATA"
+# Persist before the container starts, so a re-run (upgrade) reuses it even if the container
+# never got to write its own copy.
+printf '%s\n' "$REDLINE_TOKEN" > "$DATA/token"
+chmod 600 "$DATA/token"
 
 echo "==> pulling $IMAGE"
 docker pull "$IMAGE"

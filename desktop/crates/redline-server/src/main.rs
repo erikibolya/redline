@@ -1,12 +1,15 @@
-//! `redline` — headless server.
+//! `redline` — headless server plus the CLI the agent workflow uses.
 //!
-//! This is the process the desktop app runs internally, and the thing CI and WSL can exercise
-//! without a window. The Tauri shell adds a tray icon and a webview; it does not add behaviour.
+//! The desktop app runs this same code in-process; the CLI verbs talk HTTP to a running instance
+//! so that "the app is open in the tray" and "an agent creates a review" use one code path.
 
+use std::io::Write;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use axum::Router;
+use redline::http::{Client, ClientError};
 use redline_core::api::{router, AppState};
 use redline_core::auth::Auth;
 use redline_core::store::Store;
@@ -15,56 +18,416 @@ const USAGE: &str = "\
 redline — local visual review queue for humans and AI agents
 
 USAGE
-  redline serve [options]        run the HTTP + MCP server
-  redline mcp-config [options]   print the MCP client config (JSON)
-  redline token                  print the stored token
-  redline --version
+  redline serve [options]                  run the HTTP + MCP server (foreground)
+  redline open IMAGE [options]             create a review session from a screenshot
+  redline list                             list sessions
+  redline get ID                           print a session and its annotations
+  redline wait ID [--timeout 600]          block until the human submits
+  redline remove ID [--yes]                delete a session
+  redline token                            print the API token
+  redline mcp-config                       print the MCP client config (JSON)
 
-OPTIONS
-  --host ADDR       bind address (default 127.0.0.1; anything else needs care)
+SERVER OPTIONS
+  --host ADDR       bind address (default 127.0.0.1)
   --port PORT       port (default 8788)
-  --data-dir DIR    where sessions/token live (default: OS app-data dir)
-  --ui DIR          directory with index.html/list.html (default: bundled ui/ if present)
-  --token TOKEN     override the stored token (useful in tests)
+  --data-dir DIR    where sessions and the token live
+  --sessions DIR    override the sessions directory only
+  --ui DIR          directory with index.html/list.html
+  --token TOKEN     override the stored token
+
+CLIENT OPTIONS
+  --host ADDR       server address (default 127.0.0.1)
+  --port PORT       server port (default 8788)
+  --data-dir DIR    where the token is stored (must match the server)
+  --token TOKEN     pass the token explicitly
+
+OPEN OPTIONS
+  --title T  --url URL  --note TEXT  --id ID  --json  --open-browser
 ";
 
-#[derive(Debug, Default)]
-struct Options {
-    host: Option<String>,
-    port: Option<u16>,
-    data_dir: Option<PathBuf>,
-    ui: Option<PathBuf>,
-    token: Option<String>,
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let code = match run(args) {
+        Ok(code) => code,
+        Err(message) => {
+            eprintln!("{message}");
+            1
+        }
+    };
+    std::process::exit(code);
 }
 
-fn parse_options(args: &[String]) -> Result<Options, String> {
-    let mut options = Options::default();
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
-        let mut value = |name: &str| {
-            iter.next()
-                .cloned()
-                .ok_or_else(|| format!("{name} needs a value"))
-        };
-        match arg.as_str() {
-            "--host" => options.host = Some(value("--host")?),
-            "--port" => {
-                options.port = Some(
-                    value("--port")?
-                        .parse()
-                        .map_err(|_| "--port must be a number".to_string())?,
-                )
+/// Flags that consume the next argument. Everything else is a boolean switch.
+const VALUE_FLAGS: &[&str] = &[
+    "host",
+    "port",
+    "data-dir",
+    "sessions",
+    "ui",
+    "token",
+    "title",
+    "url",
+    "note",
+    "id",
+    "timeout",
+    "interval",
+];
+
+#[derive(Default, Debug)]
+struct Flags {
+    values: Vec<(String, String)>,
+    switches: Vec<String>,
+    positional: Vec<String>,
+}
+
+impl Flags {
+    fn parse(args: &[String]) -> Result<Self, String> {
+        let mut flags = Flags::default();
+        let mut iter = args.iter();
+        while let Some(arg) = iter.next() {
+            if let Some(name) = arg.strip_prefix("--") {
+                if VALUE_FLAGS.contains(&name) {
+                    let value = iter
+                        .next()
+                        .ok_or_else(|| format!("--{name} needs a value"))?;
+                    flags.values.push((name.to_string(), value.clone()));
+                } else {
+                    flags.switches.push(name.to_string());
+                }
+            } else {
+                flags.positional.push(arg.clone());
             }
-            "--data-dir" => options.data_dir = Some(PathBuf::from(value("--data-dir")?)),
-            "--ui" => options.ui = Some(PathBuf::from(value("--ui")?)),
-            "--token" => options.token = Some(value("--token")?),
-            other => return Err(format!("unknown option: {other}")),
+        }
+        Ok(flags)
+    }
+
+    fn value(&self, name: &str) -> Option<&str> {
+        self.values
+            .iter()
+            .rev()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn switch(&self, name: &str) -> bool {
+        self.switches.iter().any(|switch| switch == name)
+    }
+
+    fn number(&self, name: &str) -> Result<Option<u64>, String> {
+        match self.value(name) {
+            Some(value) => value
+                .parse()
+                .map(Some)
+                .map_err(|_| format!("--{name} must be a number")),
+            None => Ok(None),
         }
     }
-    Ok(options)
 }
 
-/// OS-appropriate data directory. Kept here rather than in core so core stays I/O-policy free.
+fn run(args: Vec<String>) -> Result<i32, String> {
+    if args.is_empty() || args[0] == "--help" || args[0] == "-h" || args[0] == "help" {
+        print!("{USAGE}");
+        return Ok(0);
+    }
+    if args[0] == "--version" || args[0] == "version" {
+        println!("redline {}", redline_core::VERSION);
+        return Ok(0);
+    }
+
+    let command = args[0].clone();
+    let flags = Flags::parse(&args[1..])?;
+    let data_dir = flags
+        .value("data-dir")
+        .map(PathBuf::from)
+        .unwrap_or_else(default_data_dir);
+    let host = flags.value("host").unwrap_or("127.0.0.1").to_string();
+    let port = flags.number("port")?.unwrap_or(8788) as u16;
+    let base_url = format!("http://{host}:{port}");
+    // The server persists an explicit token so the CLI (which reads the same file) still
+    // authenticates; client commands must not rewrite it.
+    let auth = load_or_create_token(
+        &data_dir,
+        flags.value("token").map(str::to_string),
+        command == "serve",
+    )
+    .map_err(|err| format!("cannot read or create the token: {err}"))?;
+
+    match command.as_str() {
+        "serve" => serve(&flags, &data_dir, &base_url, auth),
+        "open" => open(&flags, &base_url, &auth),
+        "list" => list(&flags, &base_url, &auth),
+        "get" => get(&flags, &base_url, &auth),
+        "wait" => wait(&flags, &base_url, &auth),
+        "remove" => remove(&flags, &base_url, &auth),
+        "token" => {
+            println!("{}", auth.token());
+            Ok(0)
+        }
+        "mcp-config" => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&mcp_config(&base_url, auth.token()))
+                    .map_err(|err| err.to_string())?
+            );
+            Ok(0)
+        }
+        other => Err(format!("unknown command: {other}\n\n{USAGE}")),
+    }
+}
+
+// ---------------------------------------------------------------- server
+
+fn serve(flags: &Flags, data_dir: &Path, base_url: &str, auth: Auth) -> Result<i32, String> {
+    let host = flags.value("host").unwrap_or("127.0.0.1").to_string();
+    let port = flags.number("port")?.unwrap_or(8788) as u16;
+    let sessions_root = flags
+        .value("sessions")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| data_dir.join("sessions"));
+
+    let runtime = tokio::runtime::Runtime::new().map_err(|err| err.to_string())?;
+    runtime.block_on(async move {
+        let store = Store::new(&sessions_root);
+        store.ensure().map_err(|err| err.to_string())?;
+
+        let mut state = AppState::new(store, auth.clone()).with_base_url(base_url);
+        let ui = flags.value("ui").map(PathBuf::from).or_else(|| {
+            let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ui");
+            bundled.is_dir().then_some(bundled)
+        });
+        if let Some(ui) = ui {
+            state = state.with_ui(ui);
+        }
+
+        if !matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1") {
+            eprintln!(
+                "warning: binding {host} exposes reviews beyond this machine; the token is the only guard"
+            );
+        }
+
+        let address: SocketAddr = format!("{host}:{port}")
+            .parse()
+            .map_err(|_| format!("invalid address: {host}:{port}"))?;
+        let listener = tokio::net::TcpListener::bind(address)
+            .await
+            .map_err(|err| format!("cannot bind {address}: {err} (is redline already running?)"))?;
+        let bound = listener.local_addr().map_err(|err| err.to_string())?;
+
+        println!("redline {} listening on http://{bound}", redline_core::VERSION);
+        println!("sessions: {}", sessions_root.display());
+        println!("open:     http://{bound}/?t={}", auth.token());
+        println!("mcp:      http://{bound}/mcp  (Authorization: Bearer <token>)");
+        println!();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&mcp_config(&format!("http://{bound}"), auth.token()))
+                .map_err(|err| err.to_string())?
+        );
+
+        axum::serve(listener, Router::from(router(state)))
+            .with_graceful_shutdown(async {
+                let _ = tokio::signal::ctrl_c().await;
+                eprintln!("\nstopping");
+            })
+            .await
+            .map_err(|err| err.to_string())?;
+        Ok(0)
+    })
+}
+
+// ---------------------------------------------------------------- client verbs
+
+fn client(base_url: &str, auth: &Auth) -> Result<Client, String> {
+    Client::new(base_url, auth.token()).map_err(|err| err.to_string())
+}
+
+fn open(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
+    let image = flags
+        .positional
+        .first()
+        .ok_or("usage: redline open IMAGE [--title T] [--note TEXT]")?;
+    let path = PathBuf::from(image);
+    if !path.is_file() {
+        return Err(format!("no such file: {}", path.display()));
+    }
+    let absolute = std::fs::canonicalize(&path).map_err(|err| err.to_string())?;
+    let title = flags
+        .value("title")
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .unwrap_or("review")
+                .to_string()
+        });
+
+    let mut body = serde_json::json!({
+        "title": title,
+        "url": flags.value("url").unwrap_or_default(),
+        "note": flags.value("note").unwrap_or_default(),
+        "agent": "cli",
+        "image_path": absolute.display().to_string(),
+    });
+    if let Some(id) = flags.value("id") {
+        body["id"] = serde_json::Value::String(id.to_string());
+    }
+
+    let client = client(base_url, auth)?;
+    let created = match client.post("/api/sessions", &body) {
+        Ok((_, value)) => value,
+        Err(ClientError::Http(_, _)) => {
+            // The server may live on another machine (or another filesystem namespace):
+            // fall back to uploading the bytes.
+            use base64::Engine as _;
+            let bytes = std::fs::read(&absolute).map_err(|err| err.to_string())?;
+            body["image_path"] = serde_json::Value::Null;
+            body["image_base64"] = serde_json::Value::String(
+                base64::engine::general_purpose::STANDARD.encode(bytes),
+            );
+            client
+                .post("/api/sessions", &body)
+                .map(|(_, value)| value)
+                .map_err(|err| err.to_string())?
+        }
+        Err(err) => return Err(err.to_string()),
+    };
+
+    let meta = &created["meta"];
+    let url = created["review_url"].as_str().unwrap_or_default();
+    if flags.switch("json") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&created).map_err(|err| err.to_string())?
+        );
+    } else {
+        println!("session: {}", meta["id"].as_str().unwrap_or("-"));
+        println!("dir:     {}", created["dir"].as_str().unwrap_or("-"));
+        println!("url:     {url}");
+    }
+    if flags.switch("open-browser") {
+        open_in_browser(url);
+    }
+    Ok(0)
+}
+
+fn list(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
+    let (_, value) = client(base_url, auth)?
+        .get("/api/sessions")
+        .map_err(|err| err.to_string())?;
+    if flags.switch("json") {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&value["sessions"]).map_err(|err| err.to_string())?
+        );
+        return Ok(0);
+    }
+    for session in value["sessions"].as_array().cloned().unwrap_or_default() {
+        println!(
+            "{:45} {:10} {}",
+            session["id"].as_str().unwrap_or("-"),
+            session["status"].as_str().unwrap_or("-"),
+            session["title"].as_str().unwrap_or("")
+        );
+    }
+    Ok(0)
+}
+
+fn get(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
+    let id = flags.positional.first().ok_or("usage: redline get ID")?;
+    match client(base_url, auth)?.get(&format!("/api/sessions/{id}")) {
+        Ok((_, value)) => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&value).map_err(|err| err.to_string())?
+            );
+            Ok(0)
+        }
+        Err(ClientError::Http(404, _)) => {
+            eprintln!("session not found");
+            Ok(1)
+        }
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn wait(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
+    let id = flags.positional.first().ok_or("usage: redline wait ID")?.to_string();
+    let timeout = flags.number("timeout")?.unwrap_or(600);
+    let interval = Duration::from_secs(flags.number("interval")?.unwrap_or(2).max(1));
+    let client = client(base_url, auth)?;
+    let deadline = Instant::now() + Duration::from_secs(timeout);
+
+    loop {
+        match client.get(&format!("/api/sessions/{id}")) {
+            Ok((_, value)) => {
+                let status = value["meta"]["status"].as_str().unwrap_or("open");
+                if status != "open" {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&value).map_err(|err| err.to_string())?
+                    );
+                    return Ok(0);
+                }
+            }
+            Err(ClientError::Http(404, _)) => {
+                eprintln!("session not found");
+                return Ok(1);
+            }
+            Err(err) => {
+                eprintln!("{err}");
+                return Ok(1);
+            }
+        }
+        if Instant::now() >= deadline {
+            eprintln!("timeout waiting for {id}");
+            return Ok(2);
+        }
+        std::thread::sleep(interval);
+    }
+}
+
+fn remove(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
+    let id = flags.positional.first().ok_or("usage: redline remove ID")?;
+    let client = client(base_url, auth)?;
+    if !flags.switch("yes") {
+        print!("remove session {id}? [y/N] ");
+        std::io::stdout().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer).ok();
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            return Ok(1);
+        }
+    }
+    match client.delete(&format!("/api/sessions/{id}")) {
+        Ok((_, value)) => {
+            println!("removed {}", value["removed"].as_str().unwrap_or(id));
+            Ok(0)
+        }
+        Err(ClientError::Http(404, _)) => {
+            eprintln!("session not found");
+            Ok(1)
+        }
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+fn open_in_browser(url: &str) {
+    let command = if cfg!(target_os = "windows") {
+        ("cmd", vec!["/C", "start", "", url])
+    } else if cfg!(target_os = "macos") {
+        ("open", vec![url])
+    } else {
+        ("xdg-open", vec![url])
+    };
+    let _ = std::process::Command::new(command.0)
+        .args(command.1)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+// ---------------------------------------------------------------- config
+
 fn default_data_dir() -> PathBuf {
     if let Ok(explicit) = std::env::var("REDLINE_DATA_DIR") {
         return PathBuf::from(explicit);
@@ -86,10 +449,19 @@ fn default_data_dir() -> PathBuf {
     PathBuf::from("./redline-data")
 }
 
-/// Token persisted next to the sessions so a restart does not break the agent's config.
-fn load_or_create_token(data_dir: &PathBuf, override_token: Option<String>) -> std::io::Result<Auth> {
+fn load_or_create_token(
+    data_dir: &Path,
+    override_token: Option<String>,
+    persist: bool,
+) -> std::io::Result<Auth> {
     if let Some(token) = override_token {
-        return Ok(Auth::new(token));
+        let auth = Auth::new(token);
+        if persist {
+            std::fs::create_dir_all(data_dir)?;
+            std::fs::write(data_dir.join("token"), format!("{}\n", auth.token()))?;
+            restrict_permissions(&data_dir.join("token"));
+        }
+        return Ok(auth);
     }
     let path = data_dir.join("token");
     if let Ok(existing) = std::fs::read_to_string(&path) {
@@ -106,13 +478,13 @@ fn load_or_create_token(data_dir: &PathBuf, override_token: Option<String>) -> s
 }
 
 #[cfg(unix)]
-fn restrict_permissions(path: &std::path::Path) {
+fn restrict_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
 }
 
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &std::path::Path) {}
+fn restrict_permissions(_path: &Path) {}
 
 fn mcp_config(base_url: &str, token: &str) -> serde_json::Value {
     serde_json::json!({
@@ -124,73 +496,4 @@ fn mcp_config(base_url: &str, token: &str) -> serde_json::Value {
             }
         }
     })
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.is_empty() || args.iter().any(|a| a == "--help" || a == "-h") {
-        print!("{USAGE}");
-        return Ok(());
-    }
-    if args[0] == "--version" {
-        println!("redline {}", redline_core::VERSION);
-        return Ok(());
-    }
-
-    let command = args[0].clone();
-    let options = parse_options(&args[1..])?;
-    let data_dir = options.data_dir.clone().unwrap_or_else(default_data_dir);
-    let host = options.host.clone().unwrap_or_else(|| "127.0.0.1".to_string());
-    let port = options.port.unwrap_or(8788);
-    let base_url = format!("http://{host}:{port}");
-    let auth = load_or_create_token(&data_dir, options.token.clone())?;
-
-    match command.as_str() {
-        "serve" => {
-            let store = Store::new(data_dir.join("sessions"));
-            store.ensure()?;
-
-            let mut state = AppState::new(store, auth.clone()).with_base_url(base_url.clone());
-            let ui = options.ui.clone().or_else(|| {
-                let bundled = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../ui");
-                bundled.is_dir().then_some(bundled)
-            });
-            if let Some(ui) = ui {
-                state = state.with_ui(ui);
-            }
-
-            if host != "127.0.0.1" && host != "localhost" && host != "::1" {
-                eprintln!("warning: binding {host} exposes reviews beyond this machine; the token is the only guard");
-            }
-
-            let address: SocketAddr = format!("{host}:{port}").parse()?;
-            let listener = tokio::net::TcpListener::bind(address).await?;
-            println!("redline {} listening on {base_url}", redline_core::VERSION);
-            println!("sessions: {}", data_dir.join("sessions").display());
-            println!("open:     {base_url}/?t={}", auth.token());
-            println!("mcp:      {base_url}/mcp  (Authorization: Bearer <token>)");
-            println!();
-            println!("{}", serde_json::to_string_pretty(&mcp_config(&base_url, auth.token()))?);
-
-            axum::serve(listener, Router::from(router(state)))
-                .with_graceful_shutdown(shutdown_signal())
-                .await?;
-            Ok(())
-        }
-        "mcp-config" => {
-            println!("{}", serde_json::to_string_pretty(&mcp_config(&base_url, auth.token()))?);
-            Ok(())
-        }
-        "token" => {
-            println!("{}", auth.token());
-            Ok(())
-        }
-        other => Err(format!("unknown command: {other}\n\n{USAGE}").into()),
-    }
-}
-
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
-    eprintln!("\nstopping");
 }

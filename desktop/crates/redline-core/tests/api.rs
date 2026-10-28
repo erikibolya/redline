@@ -225,6 +225,36 @@ async fn cross_site_and_bad_payloads_are_rejected() {
 }
 
 #[tokio::test]
+async fn delete_removes_the_session_and_404s_afterwards() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed("POST", "/api/sessions", json!({"title": "gone", "image_base64": PNG_B64})),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    assert!(h.store.dir(&id).unwrap().is_dir());
+
+    let request = Request::builder()
+        .method("DELETE")
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!h.store.dir(&id).unwrap().exists());
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn mcp_endpoint_requires_the_token_and_answers_notifications_with_202() {
     let h = harness();
 

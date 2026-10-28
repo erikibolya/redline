@@ -158,8 +158,11 @@ which keeps the current "shared folder" workflow alive for WSL/Windows splits.
   annotations + `review.md` (byte-identical format to v0.1) + `annotated.png` resource.
 - `redline serve` (headless) exists and is the process the Tauri shell will host; `redline token`
   and `redline mcp-config` print the credentials and the client config the tray menu copies.
-- **P1 — partial.** `serve`, `token`, `mcp-config` work. `open/list/get/wait/remove` still shell out
-  to the v0.1 Python CLI until the client verbs land.
+- **P1 — done.** `serve`, `open`, `list`, `get`, `wait`, `remove`, `token`, `mcp-config` all work.
+  The client verbs talk HTTP to a running instance and keep the v0.1 contract: `wait` exits 2 on
+  timeout, `get`/`remove` exit 1 for a missing session, `--json` stays machine-readable.
+  `--sessions` moved server-side (the client no longer touches files); `DELETE /api/sessions/{id}`
+  was added for `remove`. Covered by `tests/cli.rs`, which spawns the real binary.
 - P2+ — not started; needs a Windows toolchain and WebView2 (this WSL box cannot link a GUI).
 
 ### Building in WSL without a C toolchain

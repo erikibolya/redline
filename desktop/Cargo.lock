@@ -500,8 +500,10 @@ name = "redline"
 version = "0.2.0-dev"
 dependencies = [
  "axum",
+ "base64",
  "redline-core",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]

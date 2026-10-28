@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Path as RoutePath, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
@@ -53,7 +53,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/sessions", get(list_sessions).post(create_session))
-        .route("/api/sessions/{id}", get(get_session))
+        .route("/api/sessions/{id}", get(get_session).delete(delete_session))
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/sessions/{id}/image", get(image))
@@ -82,8 +82,15 @@ async fn require_token(State(state): State<AppState>, request: Request, next: Ne
                 .into_response();
         }
     }
-    if !matches!(*request.method(), Method::GET | Method::HEAD) && !request.headers().contains_key(header::CONTENT_TYPE)
-    {
+    // A request that carries a body must declare its type; bodyless DELETEs need no header.
+    let has_body = request
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+        .is_some_and(|length| length > 0)
+        || request.headers().contains_key(header::TRANSFER_ENCODING);
+    if has_body && !request.headers().contains_key(header::CONTENT_TYPE) {
         return (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({"error": "content-type required"})))
             .into_response();
     }
@@ -276,6 +283,14 @@ async fn resolve(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     Ok(Json(json!({ "meta": state.store.resolve(&id)? })))
+}
+
+async fn delete_session(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    let dir = state.store.remove(&id)?;
+    Ok(Json(json!({ "ok": true, "removed": dir.display().to_string() })))
 }
 
 async fn image(

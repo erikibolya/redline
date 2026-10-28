@@ -293,6 +293,58 @@ async fn delete_removes_the_session_and_404s_afterwards() {
 }
 
 #[tokio::test]
+async fn review_markdown_is_readable_over_http() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "md", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    // Nothing to read before a submission.
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/review.md"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [{"type": "text", "x": 4, "y": 5, "text": "tighten this"}]}),
+        ),
+    )
+    .await;
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/review.md"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(content_type.contains("markdown"), "{content_type}");
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("- (4, 5): tighten this"));
+}
+
+#[tokio::test]
 async fn session_list_carries_annotation_counts_for_the_rail() {
     let h = harness();
     let (_, _, created) = send(

@@ -91,6 +91,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/sessions/{id}/image", get(image))
         .route("/sessions/{id}/annotated.png", get(annotated))
+        .route("/sessions/{id}/review.md", get(review_markdown_route))
         .route("/mcp", post(mcp_post))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
 
@@ -559,6 +560,20 @@ fn read_config(state: &AppState) -> Option<Value> {
     let path = state.config_path.as_ref()?;
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// Exactly what the agent reads, for the human to check before/after submitting.
+async fn review_markdown_route(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Response, Error> {
+    let path = state.store.file_path(&id, "review.md")?;
+    if !path.is_file() {
+        return Err(Error::NotFound(format!(
+            "{id}/review.md (not submitted yet)"
+        )));
+    }
+    Ok(serve_file(&path, Some("text/markdown; charset=utf-8")))
 }
 
 async fn mcp_post(State(state): State<AppState>, Json(request): Json<Value>) -> Response {

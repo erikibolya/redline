@@ -383,6 +383,19 @@ class Editor {
       prefs.set("inspectorHidden", app.classList.contains("inspector-hidden"));
       this.resize();
     });
+    const agentBlock = $("#agent-block");
+    if (agentBlock) {
+      agentBlock.addEventListener("toggle", () => {
+        if (agentBlock.open) this.loadAgentView();
+      });
+      const viewBlock = $("#agent-view-block");
+      if (viewBlock) {
+        viewBlock.addEventListener("toggle", () => {
+          if (viewBlock.open) this.loadAgentView();
+        });
+      }
+    }
+
     if (prefs.get("railHidden", false)) $("#app").classList.add("rail-hidden");
     if (prefs.get("inspectorHidden", false)) $("#app").classList.add("inspector-hidden");
 
@@ -781,8 +794,24 @@ class Editor {
       }
     }, { passive: false });
 
+    const pinch = { start: null, scale: 1 };
+
     stage.addEventListener("pointerdown", (event) => {
       if (!this.image) return;
+      this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      if (this.pointers.size === 2) {
+        const [a, b] = Array.from(this.pointers.values());
+        pinch.start = {
+          distance: Math.hypot(a.x - b.x, a.y - b.y),
+          scale: this.view.scale,
+          cx: (a.x + b.x) / 2,
+          cy: (a.y + b.y) / 2,
+        };
+        this.draw = null;
+        this.drag = null;
+        this.pan = null;
+        return;
+      }
       const point = this.toImage(event);
 
       if (event.button === 1 || event.button === 2 || this.spacePan) {
@@ -824,6 +853,20 @@ class Editor {
     });
 
     stage.addEventListener("pointermove", (event) => {
+      if (this.pointers.has(event.pointerId)) {
+        this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      }
+      if (pinch.start && this.pointers.size === 2) {
+        const [a, b] = Array.from(this.pointers.values());
+        const distance = Math.hypot(a.x - b.x, a.y - b.y);
+        const rect = stage.getBoundingClientRect();
+        this.setZoom(
+          pinch.start.scale * (distance / Math.max(1, pinch.start.distance)),
+          pinch.start.cx - rect.left,
+          pinch.start.cy - rect.top,
+        );
+        return;
+      }
       const point = this.toImage(event);
       $("#cursor-pos").textContent = `${Math.round(point.x)}, ${Math.round(point.y)}`;
 
@@ -850,6 +893,8 @@ class Editor {
     });
 
     const finish = (event) => {
+      this.pointers.delete(event.pointerId);
+      if (this.pointers.size < 2) pinch.start = null;
       if (this.pan) {
         this.pan = null;
         stage.classList.remove("panning");
@@ -1012,7 +1057,7 @@ class Editor {
           : `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)}`;
       return `
         <div class="ann-row" data-index="${index}" aria-current="${index === this.selection}">
-          <span class="glyph">${glyph}</span>
+          <span class="glyph" style="color:${escapeHtml(annotation.color || "#e11d48")}">${glyph}</span>
           <span class="label"><b>${index + 1}. ${label}</b><span>${annotation.type}</span></span>
           <button class="del" data-delete="${index}" title="Delete">✕</button>
         </div>`;
@@ -1047,6 +1092,25 @@ class Editor {
     this.render();
   }
 
+  // ---------------------------------------------------------- agent view
+
+  async loadAgentView() {
+    const block = $("#agent-view");
+    if (!block) return;
+    block.textContent = "Loading…";
+    try {
+      const response = await fetch(`/sessions/${encodeURIComponent(this.sessionId)}/review.md`);
+      if (response.status === 404) {
+        block.textContent = "Not submitted yet — the agent has nothing to read.";
+        return;
+      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      block.textContent = await response.text();
+    } catch (error) {
+      block.textContent = `Could not load: ${error.message}`;
+    }
+  }
+
   // ---------------------------------------------------------- submit
 
   async submit() {
@@ -1078,6 +1142,7 @@ class Editor {
       this.meta.submitted_at = new Date().toISOString();
       this.renderHeader();
       this.renderInspector();
+      if ($("#agent-block")?.open) this.loadAgentView();
       await this.rail.load();
       button.textContent = "Submitted ✓";
       setTimeout(() => { button.textContent = "Submit again"; button.disabled = false; }, 1400);
@@ -1244,6 +1309,13 @@ document.addEventListener("DOMContentLoaded", () => {
     button.addEventListener("click", () => Theme.toggle()));
   Help.wire();
   addEventListener("keydown", (event) => {
+    if (event.key === "?" && document.body.dataset.page !== "editor") {
+      const tag = event.target.tagName;
+      if (tag !== "INPUT" && tag !== "TEXTAREA") {
+        event.preventDefault();
+        Help.toggle(true);
+      }
+    }
     if (event.key === "Escape") {
       const help = $("#help");
       if (help && !help.hidden) { help.hidden = true; return; }

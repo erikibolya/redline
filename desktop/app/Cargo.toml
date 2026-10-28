@@ -1,6 +1,6 @@
 [package]
 name = "redline-app"
-version = "0.2.4"
+version = "0.2.5"
 edition = "2021"
 license = "MIT"
 description = "Tray-resident redline desktop app"
@@ -21,6 +21,7 @@ tauri-plugin-autostart = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 tauri-plugin-dialog = "2"
+arboard = "3"
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros"] }
 serde_json = "1"

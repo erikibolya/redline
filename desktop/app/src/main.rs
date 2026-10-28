@@ -21,7 +21,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
-use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 /// The port the CLI and agent configs assume (`redline` client default).
 const PREFERRED_PORT: u16 = 8788;
@@ -269,6 +269,12 @@ fn launch_url(data_dir: &Path, local: &Local) -> String {
 }
 
 fn reachable(base_url: &str, token: &str) -> bool {
+    // The dependency-free client speaks plain HTTP only. For an https server we cannot probe,
+    // so trust it: the webview shows the TLS/connection error if it is actually down. Probing
+    // (and failing) here is what sent people back to the Connect form on every launch.
+    if base_url.starts_with("https://") {
+        return true;
+    }
     redline_core::client::Client::new(&format!("{}/", base_url.trim_end_matches('/')), token)
         .and_then(|client| client.get("/api/config"))
         .is_ok()
@@ -410,26 +416,39 @@ fn check_for_updates(app: AppHandle, notify: bool) {
         match updater.check().await {
             Ok(Some(update)) => {
                 let version = update.version.clone();
-                match update.download_and_install(|_, _| {}, || {}).await {
-                    Ok(()) => {
-                        app.dialog()
-                            .message(format!("redline {version} installed — restarting."))
-                            .title("redline")
-                            .kind(MessageDialogKind::Info)
-                            .show(|_| {});
-                        app.restart();
-                    }
-                    Err(err) => {
-                        eprintln!("redline: update failed: {err}");
-                        if notify {
-                            app.dialog()
-                                .message(format!("Update {version} failed: {err}"))
-                                .title("redline")
-                                .kind(MessageDialogKind::Error)
-                                .show(|_| {});
+                let interactive = app.clone();
+                // Never restart the app behind the human's back: ask, with the version named.
+                app.dialog()
+                    .message(format!(
+                        "redline {version} is available.\n\nUpdate now? The app restarts when \
+                         the installer finishes."
+                    ))
+                    .title("Update available")
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Update now".to_string(),
+                        "Later".to_string(),
+                    ))
+                    .show(move |confirmed| {
+                        if !confirmed {
+                            return;
                         }
-                    }
-                }
+                        let app = interactive.clone();
+                        let update = update.clone();
+                        tauri::async_runtime::spawn(async move {
+                            match update.download_and_install(|_, _| {}, || {}).await {
+                                // On Windows the installer takes over and exits this process.
+                                Ok(()) => app.restart(),
+                                Err(err) => {
+                                    eprintln!("redline: update failed: {err}");
+                                    app.dialog()
+                                        .message(format!("Update to {version} failed: {err}"))
+                                        .title("redline")
+                                        .kind(MessageDialogKind::Error)
+                                        .show(|_| {});
+                                }
+                            }
+                        });
+                    });
             }
             Ok(None) => {
                 if notify {
@@ -472,27 +491,10 @@ fn open_url(url: &str) {
         .spawn();
 }
 
-/// Clipboard without a plugin: one platform command per OS, no capabilities to configure.
-fn copy_to_clipboard(text: &str) -> std::io::Result<()> {
-    use std::io::Write;
-    let mut child = if cfg!(target_os = "windows") {
-        std::process::Command::new("cmd")
-            .args(["/C", "clip"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()?
-    } else if cfg!(target_os = "macos") {
-        std::process::Command::new("pbcopy")
-            .stdin(std::process::Stdio::piped())
-            .spawn()?
-    } else {
-        std::process::Command::new("xclip")
-            .args(["-selection", "clipboard"])
-            .stdin(std::process::Stdio::piped())
-            .spawn()?
-    };
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(text.as_bytes())?;
-    }
-    let _ = child.wait();
-    Ok(())
+/// Clipboard through the OS API. Shelling out to `cmd /C clip` used to flash a console window
+/// and then wait forever on stdin — the "freeze" when copying a token.
+fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
+        .map_err(|err| err.to_string())
 }

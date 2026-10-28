@@ -51,7 +51,8 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 
-IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+[ -n "$IP" ] || IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 echo
 echo "redline is running."
 echo "  session list : http://${IP:-<this-host>}:$PORT/?t=$REDLINE_TOKEN"

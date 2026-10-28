@@ -15,6 +15,9 @@ FROM scratch
 COPY --from=build /src/desktop/target/x86_64-unknown-linux-musl/release/redline /redline
 VOLUME ["/data"]
 EXPOSE 8788
+# Unraid and friends show this as the container status.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD ["/redline", "health"]
 # Bound to all interfaces because the human's desktop connects from another machine; the bearer
 # token is the guard. Sessions live in the mounted volume.
 ENTRYPOINT ["/redline", "serve", "--host", "0.0.0.0", "--data-dir", "/data"]

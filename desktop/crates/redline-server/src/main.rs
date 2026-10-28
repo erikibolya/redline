@@ -33,6 +33,7 @@ USAGE
   redline get ID                           print a session and its annotations
   redline wait ID [--timeout 600]          block until the human submits
   redline remove ID [--yes]                delete a session
+  redline health                           exit 0 if the server answers /health
   redline token                            print the API token
   redline mcp-config                       print the MCP client config (JSON)
 
@@ -163,6 +164,17 @@ fn run(args: Vec<String>) -> Result<i32, String> {
         "get" => get(&flags, &base_url, &auth),
         "wait" => wait(&flags, &base_url, &auth),
         "remove" => remove(&flags, &base_url, &auth),
+        "health" => {
+            let client = Client::new(&format!("http://127.0.0.1:{port}/"), "")
+                .map_err(|err| err.to_string())?;
+            match client.get("/health") {
+                Ok(_) => Ok(0),
+                Err(err) => {
+                    eprintln!("unhealthy: {err}");
+                    Ok(1)
+                }
+            }
+        }
         "token" => {
             println!("{}", auth.token());
             Ok(0)

@@ -292,6 +292,50 @@ async fn delete_removes_the_session_and_404s_afterwards() {
 }
 
 #[tokio::test]
+async fn config_endpoint_explains_how_to_connect_an_agent() {
+    let h = harness();
+
+    let (status, _, _) = send(&h.app, get("/api/config")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let request = Request::builder()
+        .uri("/api/config")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["mcp"]["url"], "http://127.0.0.1:8788/mcp");
+    assert_eq!(
+        body["mcp_config"]["mcpServers"]["redline"]["headers"]["Authorization"],
+        format!("Bearer {TOKEN}")
+    );
+    assert!(body["cli"].as_str().unwrap().starts_with("redline open"));
+}
+
+#[tokio::test]
+async fn inline_ui_is_served_without_touching_the_filesystem() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let store = Store::new(dir.path().join("sessions"));
+    store.ensure().unwrap();
+    static FILES: &[(&str, &str)] = &[
+        ("index.html", "<h1>editor</h1>"),
+        ("list.html", "<h1>sessions</h1>"),
+    ];
+    let state = AppState::new(store, Auth::new(TOKEN))
+        .with_inline_ui(FILES)
+        .with_base_url("http://127.0.0.1:8788");
+    let app = router(state);
+
+    for (path, expected) in [("/", "sessions"), ("/s/anything", "editor")] {
+        let response = app.clone().oneshot(get(path)).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        assert!(String::from_utf8_lossy(&bytes).contains(expected), "{path}");
+    }
+}
+
+#[tokio::test]
 async fn mcp_endpoint_requires_the_token_and_answers_notifications_with_202() {
     let h = harness();
 

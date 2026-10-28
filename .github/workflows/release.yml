@@ -30,6 +30,11 @@ jobs:
         with:
           workspaces: desktop/app
 
+      # The CLI talks to the running app; shipping it next to the installer means a fresh
+      # install is scriptable without a Python toolchain.
+      - name: Build the CLI
+        run: cargo build --release --manifest-path desktop/Cargo.toml -p redline
+
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
@@ -50,4 +55,14 @@ jobs:
             After installing, redline lives in the tray. Right-click the tray icon →
             **Copy MCP config** and paste it into your agent's MCP settings.
 
+            `redline.exe` (below) is the command-line client for the same app:
+            `redline open shot.png --title "Button / default"`.
+
             Redline the screenshot, the agent writes the fix.
+
+      - name: Attach the CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release upload "${{ github.event.inputs.tag || github.ref_name }}"
+          desktop/target/release/redline.exe --clobber

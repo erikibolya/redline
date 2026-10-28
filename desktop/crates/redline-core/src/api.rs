@@ -70,6 +70,7 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
+        .route("/api/config", get(config))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route(
             "/api/sessions/{id}",
@@ -248,6 +249,31 @@ fn serve_file(path: &std::path::Path, content_type: Option<&str>) -> Response {
 }
 
 // ---------------------------------------------------------------- JSON API
+
+/// What a human needs to connect an agent: the MCP endpoint, a ready-to-paste config, and the
+/// CLI equivalent. The desktop app renders this on its empty state so first run is self-explanatory.
+async fn config(State(state): State<AppState>) -> Json<Value> {
+    let base = state.base_url.trim_end_matches('/');
+    let authorization = format!("Bearer {}", state.auth.token());
+    Json(json!({
+        "base_url": base,
+        "mcp": {
+            "url": format!("{base}/mcp"),
+            "authorization": authorization,
+        },
+        "mcp_config": {
+            "mcpServers": {
+                "redline": {
+                    "type": "http",
+                    "url": format!("{base}/mcp"),
+                    "headers": { "Authorization": authorization },
+                }
+            }
+        },
+        "cli": "redline open shot.png --title \"Button / default\"",
+        "sessions_dir": state.store.root().display().to_string(),
+    }))
+}
 
 async fn health() -> Json<Value> {
     Json(json!({ "ok": true, "version": crate::VERSION, "mcp": "/mcp" }))

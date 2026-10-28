@@ -100,11 +100,33 @@ it makes the canvas feel instrumented.
 4. **Polish** — done in v0.3.1–0.3.2: light theme, shortcut sheet, agent-view preview, colour cues.
    Remaining: focus rings, empty states in the rail, multi-select.
 
+## Multi-selection and alignment (v0.4)
+
+- Shift/Ctrl-click adds or removes an annotation from the selection; dragging empty canvas draws a
+  rubber band (pan is space/middle/right drag, as in Figma).
+- Dragging any selected annotation moves the whole selection; arrows nudge it; Delete removes it.
+- With 2+ selected, the inspector grows an alignment row: left / centre / right, top / middle /
+  bottom. With 3+, distribute horizontally or vertically (equal gaps, not equal centres).
+- The annotation count reads `2/3` when a subset is selected, so the selection is never ambiguous.
+
+## Capture from the UI (v0.4)
+
+*New review* takes a URL as well as a file: the server screenshots it (`POST /api/capture`, the
+same engine as the `capture_review` MCP tool) and opens the session. Requires the `:browser` image
+or `REDLINE_CHROME`; otherwise the dialog shows the actionable error.
+
+## Submission history (v0.4)
+
+Each *Submit again* archives the round it replaces into `sessions/<id>/history/<timestamp>.json`
+plus `.png` (last 20 kept). `GET /api/sessions/<id>/history` lists them, and the inspector's
+**History** section links to the old screenshots — so a re-review can compare what changed instead
+of overwriting the evidence.
+
 ## Verification
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:
 coordinate mapping under a fitted zoom, dragging, undo, inline text (including diacritics), and
-submission — 13 checks. It runs in CI on every push (`browser e2e` job) and locally via
+submission, multi-select with align, and history archival — 17 checks. It runs in CI on every push (`browser e2e` job) and locally via
 `desktop/scripts/e2e.sh`.
 
 It has already earned its keep twice: it caught the text tool being broken by mousedown's focus

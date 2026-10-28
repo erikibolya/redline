@@ -178,6 +178,73 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
     lines.join("\n")
 }
 
+/// One archived submission: the JSON and (optionally) the PNG from an earlier round.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct HistoryEntry {
+    pub stamp: String,
+    pub annotations: usize,
+    pub png: bool,
+}
+
+fn safe_stamp(stamp: &str) -> String {
+    stamp
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => c,
+            _ => '-',
+        })
+        .collect()
+}
+
+/// Keep the submission we are about to overwrite. Without this, "Submit again" destroys the
+/// previous round and a re-review has nothing to diff against.
+fn archive_previous(dir: &std::path::Path, stamp: &str) -> Result<()> {
+    let annotations = dir.join("annotations.json");
+    let Ok(text) = fs::read_to_string(&annotations) else {
+        return Ok(());
+    };
+    let Ok(set) = serde_json::from_str::<AnnotationSet>(&text) else {
+        return Ok(());
+    };
+    if set.annotations.is_empty() {
+        return Ok(());
+    }
+    let history = dir.join("history");
+    fs::create_dir_all(&history)?;
+    let safe = safe_stamp(stamp);
+    write_atomic(&history.join(format!("{safe}.json")), text.as_bytes())?;
+    let png = dir.join("annotated.png");
+    if png.is_file() {
+        let bytes = fs::read(&png)?;
+        write_atomic(&history.join(format!("{safe}.png")), &bytes)?;
+    }
+    prune_history(&history, 20)?;
+    Ok(())
+}
+
+fn prune_history(history: &std::path::Path, keep: usize) -> Result<()> {
+    let mut stamps: Vec<String> = fs::read_dir(history)?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension().and_then(|e| e.to_str()) == Some("json"))
+                .then(|| {
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(str::to_string)
+                })
+                .flatten()
+        })
+        .collect();
+    stamps.sort();
+    while stamps.len() > keep {
+        let oldest = stamps.remove(0);
+        let _ = fs::remove_file(history.join(format!("{oldest}.json")));
+        let _ = fs::remove_file(history.join(format!("{oldest}.png")));
+    }
+    Ok(())
+}
+
 /// A session folder root. Cheap to clone; holds no open handles.
 #[derive(Debug, Clone)]
 pub struct Store {
@@ -353,6 +420,9 @@ impl Store {
     pub fn submit(&self, id: &str, submission: &Submission) -> Result<(Meta, AnnotationSet)> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
+        // Archive the round we are about to replace (no-op on the first submission).
+        archive_previous(&dir, meta.submitted_at.as_deref().unwrap_or(&now()))?;
+        let mut meta = self.require(id)?;
         let submitted_at = now();
         meta.status = Status::Submitted;
         meta.submitted_at = Some(submitted_at.clone());
@@ -412,6 +482,49 @@ impl Store {
         }
         fs::remove_dir_all(&dir)?;
         Ok(dir)
+    }
+
+    pub fn history(&self, id: &str) -> Result<Vec<HistoryEntry>> {
+        let history = self.dir(id)?.join("history");
+        if !history.exists() {
+            return Ok(Vec::new());
+        }
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(&history)? {
+            let path = entry?.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(stamp) = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            let annotations = fs::read_to_string(&path)
+                .ok()
+                .and_then(|text| serde_json::from_str::<AnnotationSet>(&text).ok())
+                .map(|set| set.annotations.len())
+                .unwrap_or(0);
+            entries.push(HistoryEntry {
+                png: history.join(format!("{stamp}.png")).is_file(),
+                stamp,
+                annotations,
+            });
+        }
+        entries.sort_by(|a, b| b.stamp.cmp(&a.stamp));
+        Ok(entries)
+    }
+
+    pub fn history_file(&self, id: &str, name: &str) -> Result<PathBuf> {
+        if name.contains('/') || name.contains('\\') || name.contains("..") {
+            return Err(Error::BadRequest("invalid history file".to_string()));
+        }
+        if !name.ends_with(".png") && !name.ends_with(".json") {
+            return Err(Error::BadRequest("invalid history file".to_string()));
+        }
+        Ok(self.dir(id)?.join("history").join(name))
     }
 
     pub fn image_path(&self, meta: &Meta) -> Result<PathBuf> {

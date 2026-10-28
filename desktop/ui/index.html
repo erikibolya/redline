@@ -80,6 +80,17 @@ try {
     <div class="inspector-head">
       Annotations <span class="count" id="ann-count">0</span>
     </div>
+    <div class="inspector-tools align-group hidden" id="align-tools">
+      <button class="tool" data-align="left" title="Align left">⇤</button>
+      <button class="tool" data-align="hcenter" title="Align centres">↔</button>
+      <button class="tool" data-align="right" title="Align right">⇥</button>
+      <button class="tool" data-align="top" title="Align top">⇧</button>
+      <button class="tool" data-align="vcenter" title="Align middles">↕</button>
+      <button class="tool" data-align="bottom" title="Align bottom">⇩</button>
+      <span class="sep"></span>
+      <button class="tool" data-distribute="h" title="Distribute horizontally (3+)">⇹</button>
+      <button class="tool" data-distribute="v" title="Distribute vertically (3+)">⇕</button>
+    </div>
     <div class="inspector-body" id="ann-list"></div>
 
     <details class="disclosure" id="agent-block">
@@ -89,6 +100,11 @@ try {
         <p class="muted" id="agent-url"></p>
         <p style="color:var(--muted)">Your annotations and the annotated screenshot are sent when you hit <b>Submit review</b>.</p>
       </div>
+    </details>
+
+    <details class="disclosure" id="history-block">
+      <summary>History <span class="count" id="history-count">0</span></summary>
+      <div class="content"><div id="history-list" class="inspector-empty">No earlier submissions.</div></div>
     </details>
 
     <details class="disclosure" id="agent-view-block">
@@ -116,6 +132,8 @@ try {
     <input id="f-title" type="text" placeholder="Button / default" />
     <label for="f-url">Page URL (optional)</label>
     <input id="f-url" type="text" placeholder="http://localhost:5016/button" />
+    <label for="f-capture">Or screenshot a URL (optional)</label>
+    <input id="f-capture" type="text" placeholder="http://localhost:5016/button" spellcheck="false" />
     <label for="f-note">What should be checked? (optional)</label>
     <textarea id="f-note" placeholder="Spacing looks off, check hover state"></textarea>
     <div class="error" id="new-error"></div>

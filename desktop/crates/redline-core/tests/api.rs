@@ -293,6 +293,90 @@ async fn delete_removes_the_session_and_404s_afterwards() {
 }
 
 #[tokio::test]
+async fn resubmitting_archives_the_previous_round() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "rounds", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let submit = |annotations: serde_json::Value| {
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": annotations, "png": format!("data:image/png;base64,{PNG_B64}")}),
+        )
+    };
+
+    send(
+        &h.app,
+        submit(json!([{"type": "text", "x": 1, "y": 1, "text": "first"}])),
+    )
+    .await;
+    send(
+        &h.app,
+        submit(json!([
+            {"type": "text", "x": 1, "y": 1, "text": "first"},
+            {"type": "rect", "start": {"x": 0, "y": 0}, "end": {"x": 4, "y": 4}}
+        ])),
+    )
+    .await;
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/history"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rounds = body["submissions"].as_array().unwrap();
+    assert_eq!(rounds.len(), 1, "one previous round archived: {body}");
+    assert_eq!(rounds[0]["annotations"], 1);
+    assert_eq!(rounds[0]["png"], true);
+
+    let stamp = rounds[0]["stamp"].as_str().unwrap().to_string();
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/history/{stamp}.json"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    assert!(String::from_utf8_lossy(&body).contains("first"));
+}
+
+#[tokio::test]
+async fn capture_without_a_browser_is_an_actionable_error() {
+    let h = harness();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/capture",
+            json!({"url": "https://example.com"}),
+        ),
+    )
+    .await;
+    // On a host with Chromium this would create a session; without one it must explain itself.
+    if status == StatusCode::BAD_REQUEST {
+        let message = body["error"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("Chromium") || message.contains("browser"),
+            "{message}"
+        );
+    } else {
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+}
+
+#[tokio::test]
 async fn review_markdown_is_readable_over_http() {
     let h = harness();
     let (_, _, created) = send(

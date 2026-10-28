@@ -89,6 +89,9 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
+        .route("/api/sessions/{id}/history", get(history))
+        .route("/sessions/{id}/history/{file}", get(history_file))
+        .route("/api/capture", post(capture_session))
         .route("/sessions/{id}/image", get(image))
         .route("/sessions/{id}/annotated.png", get(annotated))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
@@ -426,6 +429,87 @@ async fn resolve(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     Ok(Json(json!({ "meta": state.store.resolve(&id)? })))
+}
+
+async fn history(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    state.store.require(&id)?;
+    Ok(Json(json!({ "submissions": state.store.history(&id)? })))
+}
+
+async fn history_file(
+    State(state): State<AppState>,
+    RoutePath((id, file)): RoutePath<(String, String)>,
+) -> Result<Response, Error> {
+    let path = state.store.history_file(&id, &file)?;
+    if !path.is_file() {
+        return Err(Error::NotFound(format!("{id}/history/{file}")));
+    }
+    let content_type = if file.ends_with(".json") {
+        "application/json"
+    } else {
+        "image/png"
+    };
+    Ok(serve_file(&path, Some(content_type)))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CaptureRequest {
+    url: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    note: String,
+    #[serde(default)]
+    viewport: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
+}
+
+/// Screenshot a URL server-side and open a review for it. Same engine as the MCP tool, so the
+/// browser image (or REDLINE_CHROME) decides whether this works.
+async fn capture_session(
+    State(state): State<AppState>,
+    Json(body): Json<CaptureRequest>,
+) -> Result<Json<Value>, Error> {
+    let url = body.url.trim().to_string();
+    if url.is_empty() {
+        return Err(Error::BadRequest("url is required".to_string()));
+    }
+    let (width, height) = match body.viewport.as_deref() {
+        Some(viewport) if !viewport.trim().is_empty() => {
+            crate::capture::parse_viewport(viewport).map_err(Error::BadRequest)?
+        }
+        _ => (1440, 900),
+    };
+    let request = crate::capture::CaptureRequest {
+        url: url.clone(),
+        width,
+        height,
+    };
+    let png = tokio::task::spawn_blocking(move || crate::capture::capture(&request))
+        .await
+        .map_err(|err| Error::BadRequest(format!("capture task failed: {err}")))?
+        .map_err(Error::BadRequest)?;
+
+    let title = if body.title.trim().is_empty() {
+        url.clone()
+    } else {
+        body.title.trim().to_string()
+    };
+    let meta = state.store.create_from_bytes(
+        &png,
+        "screenshot.png",
+        &title,
+        &url,
+        &body.note,
+        None,
+        Some(body.agent.as_deref().unwrap_or("human")),
+    )?;
+    let review_url = state.review_url(&meta.id);
+    Ok(Json(json!({ "meta": meta, "review_url": review_url })))
 }
 
 async fn delete_session(

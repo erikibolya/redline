@@ -192,6 +192,40 @@ const main = async () => {
   check("text survived with its diacritics", stored.some((a) => a.text?.includes("zelené")));
   check("screenshot was composited", saved.meta.status === "submitted");
 
+  // ---- multi-select with shift-click, then align left
+  await page.keyboard.press("r");
+  await drag(page, at(620, 430), at(780, 540));
+  await page.keyboard.press("v");
+  const firstRect = at(310, 230); // centre of the first rectangle
+  await page.mouse.click(firstRect.x, firstRect.y);
+  await page.keyboard.down("Shift");
+  const second = at(700, 485);
+  await page.mouse.click(second.x, second.y);
+  await page.keyboard.up("Shift");
+  const selected = await page.evaluate(() => window.redline.selected.size);
+  check("shift-click builds a multi-selection", selected === 2, `${selected} selected`);
+
+  const alignVisible = await page.$eval('[data-align="left"]', (el) => !el.classList.contains("hidden"));
+  check("align controls appear for a multi-selection", alignVisible);
+  await page.click('[data-align="left"]');
+
+  const rects = await page.evaluate(() =>
+    window.redline.annotations.map((a) => (a.type === "rect" ? a.start.x : null)).filter((x) => x !== null));
+  check(
+    "align left makes both rectangles share an edge",
+    rects.length === 2 && Math.abs(rects[0] - rects[1]) <= 1,
+    JSON.stringify(rects),
+  );
+
+  // ---- resubmit creates history
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Control");
+  await new Promise((resolve) => setTimeout(resolve, 1200));
+  const history = await api(`/api/sessions/${id}/history`);
+  check("a second submission archives the first round", history.submissions.length >= 1,
+    `${history.submissions.length} archived`);
+
   const annotated = await fetch(`${BASE}/sessions/${id}/annotated.png`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });

@@ -261,7 +261,8 @@ class Editor {
     this.annotations = [];
     this.history = [];
     this.future = [];
-    this.selection = -1;
+    this.selected = new Set();
+    this.marquee = null;
     this.tool = "select";
     this.color = prefs.get("color", "#e11d48");
     this.lineWidth = prefs.get("width", 3);
@@ -308,7 +309,7 @@ class Editor {
       this.annotations = (data.annotations && data.annotations.annotations) || [];
       this.history = [];
       this.future = [];
-      this.selection = -1;
+      this.selected.clear();
       this.renderInspector();
       this.renderHeader();
       await this.loadImage(this.meta.image);
@@ -388,6 +389,12 @@ class Editor {
       agentBlock.addEventListener("toggle", () => {
         if (agentBlock.open) this.loadAgentView();
       });
+      const historyBlock = $("#history-block");
+      if (historyBlock) {
+        historyBlock.addEventListener("toggle", () => {
+          if (historyBlock.open) this.loadHistory();
+        });
+      }
       const viewBlock = $("#agent-view-block");
       if (viewBlock) {
         viewBlock.addEventListener("toggle", () => {
@@ -405,18 +412,27 @@ class Editor {
     $("#color").addEventListener("input", (event) => {
       this.color = event.target.value;
       prefs.set("color", this.color);
-      if (this.selection >= 0) {
-        this.mutate(() => { this.annotations[this.selection].color = this.color; });
+      if (this.selected.size) {
+        this.mutate(() => {
+          for (const index of this.selected) this.annotations[index].color = this.color;
+        });
       }
     });
     $("#width").addEventListener("input", (event) => {
       this.lineWidth = Number(event.target.value);
       prefs.set("width", this.lineWidth);
       this.syncWidthLabel();
-      if (this.selection >= 0) {
-        this.mutate(() => { this.annotations[this.selection].width = this.lineWidth; });
+      if (this.selected.size) {
+        this.mutate(() => {
+          for (const index of this.selected) this.annotations[index].width = this.lineWidth;
+        });
       }
     });
+
+    $$("[data-align]").forEach((button) =>
+      button.addEventListener("click", () => this.alignSelected(button.dataset.align)));
+    $$("[data-distribute]").forEach((button) =>
+      button.addEventListener("click", () => this.distributeSelected(button.dataset.distribute)));
 
     $("#zoom-in").addEventListener("click", () => this.zoomAt(1.25));
     $("#zoom-out").addEventListener("click", () => this.zoomAt(0.8));
@@ -469,10 +485,11 @@ class Editor {
           this.render();
           break;
         case "Enter": {
-          const selected = this.annotations[this.selection];
-          if (selected && selected.type === "text") {
+          const index = this.primary();
+          const target = this.annotations[index];
+          if (target && target.type === "text") {
             event.preventDefault();
-            this.startText({ x: selected.x, y: selected.y }, event, this.selection);
+            this.startText({ x: target.x, y: target.y }, event, index);
           }
           break;
         }
@@ -483,18 +500,21 @@ class Editor {
         }
         case "Delete":
         case "Backspace":
-          if (this.selection >= 0) {
+          if (this.selected.size) {
             event.preventDefault();
             this.deleteSelected();
           }
           break;
         case "ArrowUp": case "ArrowDown": case "ArrowLeft": case "ArrowRight": {
-          if (this.selection < 0) break;
+          if (!this.selected.size) break;
           event.preventDefault();
           const step = event.shiftKey ? 10 : 1;
           const dx = event.key === "ArrowLeft" ? -step : event.key === "ArrowRight" ? step : 0;
           const dy = event.key === "ArrowUp" ? -step : event.key === "ArrowDown" ? step : 0;
-          this.mutate(() => this.translateAnnotation(this.annotations[this.selection], dx, dy));
+          const indices = [...this.selected];
+          this.mutate(() => {
+            for (const index of indices) this.translateAnnotation(this.annotations[index], dx, dy);
+          });
           break;
         }
         case "+": case "=": this.zoomAt(1.25); break;
@@ -599,10 +619,26 @@ class Editor {
     ctx.drawImage(this.image, 0, 0);
 
     this.annotations.forEach((annotation, index) => {
-      this.paint(ctx, annotation, index === this.selection);
+      this.paint(ctx, annotation, this.selected.has(index));
     });
     if (this.draw) this.paint(ctx, this.draw, false);
     ctx.restore();
+
+    if (this.marquee) {
+      const toScreen = (point) => ({
+        x: point.x * this.view.scale + this.view.x,
+        y: point.y * this.view.scale + this.view.y,
+      });
+      const a = toScreen(this.marquee.start);
+      const b = toScreen(this.marquee.end);
+      ctx.save();
+      ctx.fillStyle = "rgba(47,129,247,.12)";
+      ctx.strokeStyle = "#2f81f7";
+      ctx.lineWidth = 1;
+      ctx.fillRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ctx.strokeRect(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.abs(b.x - a.x), Math.abs(b.y - a.y));
+      ctx.restore();
+    }
   }
 
   paint(ctx, annotation, selected) {
@@ -719,8 +755,25 @@ class Editor {
     return -1;
   }
 
-  select(index) {
-    this.selection = index;
+  select(index, additive = false) {
+    if (index < 0) {
+      this.selected.clear();
+    } else if (additive) {
+      if (this.selected.has(index)) this.selected.delete(index);
+      else this.selected.add(index);
+    } else {
+      this.selected = new Set([index]);
+    }
+    this.renderInspector();
+    this.render();
+  }
+
+  primary() {
+    return this.selected.size ? Math.min(...this.selected) : -1;
+  }
+
+  clearSelection() {
+    this.selected.clear();
     this.renderInspector();
     this.render();
   }
@@ -744,7 +797,7 @@ class Editor {
     if (!this.history.length) return;
     this.future.push(JSON.stringify(this.annotations));
     this.annotations = JSON.parse(this.history.pop());
-    this.selection = -1;
+    this.selected.clear();
     this.renderInspector();
     this.render();
   }
@@ -753,7 +806,7 @@ class Editor {
     if (!this.future.length) return;
     this.history.push(JSON.stringify(this.annotations));
     this.annotations = JSON.parse(this.future.pop());
-    this.selection = -1;
+    this.selected.clear();
     this.renderInspector();
     this.render();
   }
@@ -766,10 +819,60 @@ class Editor {
   }
 
   deleteSelected() {
-    if (this.selection < 0) return;
+    if (!this.selected.size) return;
+    const indices = [...this.selected].sort((a, b) => b - a);
     this.mutate(() => {
-      this.annotations.splice(this.selection, 1);
-      this.selection = -1;
+      for (const index of indices) this.annotations.splice(index, 1);
+      this.selected.clear();
+    });
+  }
+
+  /** Align the selection's bounding boxes; needs two or more annotations. */
+  alignSelected(kind) {
+    const indices = [...this.selected];
+    if (indices.length < 2) return;
+    const boxes = indices.map((index) => ({ index, box: this.bounds(this.annotations[index]) }));
+    const left = Math.min(...boxes.map((b) => b.box.x));
+    const right = Math.max(...boxes.map((b) => b.box.x + b.box.w));
+    const top = Math.min(...boxes.map((b) => b.box.y));
+    const bottom = Math.max(...boxes.map((b) => b.box.y + b.box.h));
+    this.mutate(() => {
+      for (const { index, box } of boxes) {
+        let dx = 0;
+        let dy = 0;
+        if (kind === "left") dx = left - box.x;
+        if (kind === "right") dx = right - (box.x + box.w);
+        if (kind === "hcenter") dx = (left + right) / 2 - (box.x + box.w / 2);
+        if (kind === "top") dy = top - box.y;
+        if (kind === "bottom") dy = bottom - (box.y + box.h);
+        if (kind === "vcenter") dy = (top + bottom) / 2 - (box.y + box.h / 2);
+        if (dx || dy) this.translateAnnotation(this.annotations[index], Math.round(dx), Math.round(dy));
+      }
+    });
+  }
+
+  /** Even gaps between three or more annotations, on one axis. */
+  distributeSelected(axis) {
+    const indices = [...this.selected];
+    if (indices.length < 3) return;
+    const items = indices
+      .map((index) => ({ index, box: this.bounds(this.annotations[index]) }))
+      .sort((a, b) => (axis === "h" ? a.box.x - b.box.x : a.box.y - b.box.y));
+    const first = items[0].box;
+    const last = items[items.length - 1].box;
+    const span = axis === "h" ? last.x + last.w - first.x : last.y + last.h - first.y;
+    const occupied = items.reduce((sum, item) => sum + (axis === "h" ? item.box.w : item.box.h), 0);
+    const gap = (span - occupied) / (items.length - 1);
+    this.mutate(() => {
+      let cursor = axis === "h" ? first.x : first.y;
+      for (const { index, box } of items) {
+        const current = axis === "h" ? box.x : box.y;
+        const delta = Math.round(cursor - current);
+        if (delta) {
+          this.translateAnnotation(this.annotations[index], axis === "h" ? delta : 0, axis === "h" ? 0 : delta);
+        }
+        cursor += (axis === "h" ? box.w : box.h) + gap;
+      }
     });
   }
 
@@ -823,15 +926,27 @@ class Editor {
 
       if (this.tool === "select") {
         const hit = this.hitTest(point);
-        this.select(hit);
-        if (hit >= 0 && event.button === 0) {
-          this.drag = { index: hit, origin: point, snapshot: JSON.stringify(this.annotations) };
+        const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+        if (hit >= 0) {
+          if (additive) this.select(hit, true);
+          else if (!this.selected.has(hit)) this.select(hit);
+          if (this.selected.has(hit) && event.button === 0) {
+            this.drag = {
+              origin: point,
+              snapshot: JSON.stringify(this.annotations),
+              indices: [...this.selected],
+            };
+            stage.setPointerCapture(event.pointerId);
+          }
+        } else if (!additive && event.button === 0) {
+          // Empty space: rubber-band select (pan lives on space/middle/right drag).
+          this.selected.clear();
+          this.marquee = { start: point, end: point };
           stage.setPointerCapture(event.pointerId);
-        } else if (hit < 0 && event.button === 0) {
-          this.pan = { x: event.clientX, y: event.clientY, vx: this.view.x, vy: this.view.y };
-          stage.classList.add("panning");
-          stage.setPointerCapture(event.pointerId);
+        } else {
+          this.select(-1);
         }
+        this.renderInspector();
         return;
       }
 
@@ -879,12 +994,20 @@ class Editor {
         this.render();
         return;
       }
+      if (this.marquee) {
+        this.marquee.end = point;
+        this.render();
+        return;
+      }
       if (this.drag) {
         const dx = point.x - this.drag.origin.x;
         const dy = point.y - this.drag.origin.y;
-        const annotation = JSON.parse(this.drag.snapshot)[this.drag.index];
-        this.translateAnnotation(annotation, dx, dy);
-        this.annotations[this.drag.index] = annotation;
+        const original = JSON.parse(this.drag.snapshot);
+        for (const index of this.drag.indices) {
+          const annotation = original[index];
+          this.translateAnnotation(annotation, dx, dy);
+          this.annotations[index] = annotation;
+        }
         this.render();
         return;
       }
@@ -901,6 +1024,26 @@ class Editor {
       if (this.pan) {
         this.pan = null;
         stage.classList.remove("panning");
+      }
+      if (this.marquee) {
+        const start = this.marquee.start;
+        const end = this.marquee.end;
+        const box = {
+          x: Math.min(start.x, end.x),
+          y: Math.min(start.y, end.y),
+          w: Math.abs(end.x - start.x),
+          h: Math.abs(end.y - start.y),
+        };
+        this.selected.clear();
+        this.annotations.forEach((annotation, index) => {
+          const b = this.bounds(annotation);
+          if (b.x <= box.x + box.w && b.x + b.w >= box.x && b.y <= box.y + box.h && b.y + b.h >= box.y) {
+            this.selected.add(index);
+          }
+        });
+        this.marquee = null;
+        this.renderInspector();
+        this.render();
       }
       if (this.drag) {
         this.history.push(this.drag.snapshot);
@@ -1057,7 +1200,14 @@ class Editor {
 
   renderInspector() {
     const body = $("#ann-list");
-    $("#ann-count").textContent = String(this.annotations.length);
+    const count = this.annotations.length;
+    $("#ann-count").textContent = this.selected.size > 1
+      ? `${this.selected.size}/${count}`
+      : String(count);
+    const multi = this.selected.size >= 2;
+    $$(".align-group").forEach((element) => element.classList.toggle("hidden", !multi));
+    $$("[data-distribute]").forEach((element) =>
+      element.classList.toggle("disabled", this.selected.size < 3));
     if (!this.annotations.length) {
       body.innerHTML = `<div class="inspector-empty">Nothing drawn yet.<br>Pick a tool above the canvas.</div>`;
       return;
@@ -1070,7 +1220,7 @@ class Editor {
           ? `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)} → ${Math.round(annotation.end.x)}, ${Math.round(annotation.end.y)}`
           : `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)}`;
       return `
-        <div class="ann-row" data-index="${index}" aria-current="${index === this.selection}">
+        <div class="ann-row" data-index="${index}" aria-current="${this.selected.has(index)}">
           <span class="glyph" style="color:${escapeHtml(annotation.color || "#e11d48")}">${glyph}</span>
           <span class="label"><b>${index + 1}. ${label}</b><span>${annotation.type}</span></span>
           <button class="del" data-delete="${index}" title="Delete">✕</button>
@@ -1081,8 +1231,9 @@ class Editor {
       row.addEventListener("click", (event) => {
         if (event.target.dataset.delete !== undefined) return;
         const index = Number(row.dataset.index);
-        this.select(index);
-        this.revealSelection();
+        const additive = event.shiftKey || event.ctrlKey || event.metaKey;
+        this.select(index, additive);
+        if (!additive) this.revealSelection();
       });
     });
     $$(".del", body).forEach((button) => {
@@ -1091,19 +1242,51 @@ class Editor {
         const index = Number(button.dataset.delete);
         this.mutate(() => {
           this.annotations.splice(index, 1);
-          this.selection = -1;
+          this.selected.clear();
         });
       });
     });
   }
 
   revealSelection() {
-    if (this.selection < 0 || !this.image) return;
-    const box = this.bounds(this.annotations[this.selection]);
+    const index = this.primary();
+    if (index < 0 || !this.image) return;
+    const box = this.bounds(this.annotations[index]);
     const rect = this.stage.getBoundingClientRect();
     this.view.x = rect.width / 2 - (box.x + box.w / 2) * this.view.scale;
     this.view.y = rect.height / 2 - (box.y + box.h / 2) * this.view.scale;
     this.render();
+  }
+
+  // ---------------------------------------------------------- history
+
+  async loadHistory() {
+    const list = $("#history-list");
+    if (!list) return;
+    list.textContent = "Loading…";
+    try {
+      const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/history`);
+      const rounds = data.submissions || [];
+      const counter = $("#history-count");
+      if (counter) counter.textContent = String(rounds.length);
+      if (!rounds.length) {
+        list.innerHTML = `<div class="inspector-empty">No earlier submissions.</div>`;
+        return;
+      }
+      list.innerHTML = rounds.map((round) => `
+        <div class="ann-row" style="cursor:default">
+          <span class="glyph">↺</span>
+          <span class="label">
+            <b>${escapeHtml(round.stamp.replace("T", " ").replace(/-([0-9]{2})-([0-9]{2})$/, ":$1:$2"))}</b>
+            <span>${plural(round.annotations, "annotation")}${round.png ? " · image" : ""}</span>
+          </span>
+          ${round.png ? `<a class="del" style="opacity:1;text-decoration:none" target="_blank"
+              href="/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(round.stamp)}.png"
+              title="Open that round's screenshot">↗</a>` : ""}
+        </div>`).join("");
+    } catch (error) {
+      list.textContent = `Could not load history: ${error.message}`;
+    }
   }
 
   // ---------------------------------------------------------- agent view
@@ -1157,6 +1340,7 @@ class Editor {
       this.renderHeader();
       this.renderInspector();
       if ($("#agent-block")?.open) this.loadAgentView();
+      if ($("#history-block")?.open) this.loadHistory();
       await this.rail.load();
       button.textContent = "Submitted ✓";
       setTimeout(() => { button.textContent = "Submit again"; button.disabled = false; }, 1400);
@@ -1248,9 +1432,34 @@ const NewReview = {
     $("#new-cancel").addEventListener("click", () => NewReview.close());
     $("#new-form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      if (!picked) { $("#new-error").textContent = "Choose a screenshot first."; return; }
+      const captureUrl = ($("#f-capture")?.value || "").trim();
+      if (!picked && !captureUrl) {
+        $("#new-error").textContent = "Choose a screenshot, or give a URL to capture.";
+        return;
+      }
       const submit = $("#new-submit");
       submit.disabled = true;
+      if (captureUrl) {
+        $("#new-error").textContent = "Capturing… (a few seconds)";
+        try {
+          const body = await api("/api/capture", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              url: captureUrl,
+              title: $("#f-title").value.trim() || captureUrl,
+              note: $("#f-note").value.trim(),
+              viewport: "1440x900",
+              agent: "human",
+            }),
+          });
+          location.href = `/s/${encodeURIComponent(body.meta.id)}`;
+        } catch (error) {
+          $("#new-error").textContent = error.message;
+          submit.disabled = false;
+        }
+        return;
+      }
       $("#new-error").textContent = "Uploading…";
       try {
         const dataUrl = await new Promise((resolve, reject) => {

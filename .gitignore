@@ -2,3 +2,8 @@ __pycache__/
 *.pyc
 sessions/
 .pytest_cache/
+
+# Rust / Tauri build output
+desktop/target/
+desktop/app/target/
+desktop/app/gen/

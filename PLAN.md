@@ -85,6 +85,19 @@ See `docs/ARCHITECTURE.md` for details.
 - [ ] Theme (light/dark) for the editor.
 - [ ] Integration recipe for Au.Net component reviews (link `COMPONENT-REVIEW.md`).
 
+### M6 — Desktop app (v1.0, in progress)
+
+Turns redline into a tray-resident application with an embedded server and an MCP endpoint, so
+agents connect directly instead of talking to a terminal. Design and phase status live in
+[`docs/DESKTOP.md`](docs/DESKTOP.md).
+
+- [x] `redline-core`: store + HTTP API + token auth + MCP, 20 tests, no GUI dependencies.
+- [ ] CLI parity for `open/list/get/wait/remove` against the running app.
+- [ ] Tauri v2 shell: tray, hidden main window, embedded UI, single instance.
+- [ ] Windows installer (NSIS/MSI, WebView2 bootstrap), autostart, updater.
+- [ ] macOS/Linux packages and the GitHub Actions build matrix.
+- [ ] `capture_review` (headless screenshot) and before/after comparison.
+
 ## Decisions
 
 | # | Decision | Why |
@@ -97,6 +110,8 @@ See `docs/ARCHITECTURE.md` for details.
 | D6 | **Canvas pixels as coordinates** | Stable across zoom/scaling; editor maps pointer positions. |
 | D7 | **Submit over HTTP, not File System Access API** | Works in all modern browsers and across machines. |
 | D8 | **No automatic “fix my note”** | The agent turns notes into code changes; the tool only captures intent. |
+| D9 | **Tauri v2 for the desktop app** | One binary, ~10 MB installer, tray/autostart/updater plugins, reuses the existing canvas UI. Supersedes the Python-only shell. See `docs/DESKTOP.md`. |
+| D10 | **Token auth on every route** | A port agents can reach must not be open to every local process or web page. Supersedes D5's "no auth"; bind stays loopback by default. |
 
 ## Known limitations / technical debt
 

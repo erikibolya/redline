@@ -1,0 +1,416 @@
+//! The session folder format (`sessions/<id>/`) and everything that reads or writes it.
+//!
+//! Every write goes through [`write_atomic`] (temp file + rename) so a crash mid-submit cannot
+//! leave a half-written `annotations.json` that the agent then parses successfully but wrongly.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use chrono::{SecondsFormat, Utc};
+use serde_json::{json, Value};
+
+use crate::error::{Error, Result};
+use crate::model::{Annotation, AnnotationSet, ImageRef, Meta, Status, Submission};
+
+/// Same rule as v0.1: one leading alphanumeric, then alphanumerics/`.`/`_`/`-`, max 121 chars.
+/// This is what stops `../` and friends from escaping the sessions directory.
+pub fn valid_id(id: &str) -> bool {
+    let mut chars = id.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphanumeric() => {}
+        _ => return false,
+    }
+    id.len() <= 121
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+fn slugify(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.trim().to_lowercase().chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+            last_dash = false;
+        } else if !last_dash && !out.is_empty() {
+            out.push('-');
+            last_dash = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    let limited: String = trimmed.chars().take(60).collect();
+    if limited.is_empty() {
+        "review".to_string()
+    } else {
+        limited.trim_end_matches('-').to_string()
+    }
+}
+
+/// RFC 3339 with second precision and a `+00:00` offset — byte-compatible with v0.1's
+/// `datetime.now(timezone.utc).isoformat(timespec="seconds")`.
+pub fn now() -> String {
+    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false)
+}
+
+/// Image extensions we are willing to write into a session folder. Anything else is stored as
+/// `.png` rather than trusted: the value ends up in a filename.
+fn image_extension(name: &str) -> &'static str {
+    match Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => ".png",
+        "jpg" | "jpeg" => ".jpg",
+        "webp" => ".webp",
+        "gif" => ".gif",
+        "svg" => ".svg",
+        _ => ".png",
+    }
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::BadRequest(format!("invalid path: {}", path.display())))?;
+    let temp = path.with_file_name(format!(".{file_name}.tmp"));
+    fs::write(&temp, bytes)?;
+    fs::rename(&temp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp);
+    })?;
+    Ok(())
+}
+
+fn write_json(path: &Path, value: &Value) -> Result<()> {
+    let mut text = serde_json::to_string_pretty(value)?;
+    text.push('\n');
+    write_atomic(path, text.as_bytes())
+}
+
+fn read_json(path: &Path) -> Option<Value> {
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Numbers render the way Python's `f"{x}"` did: `12` not `12.0`, `12.5` kept.
+fn num(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e15 {
+        format!("{}", value as i64)
+    } else {
+        format!("{value}")
+    }
+}
+
+pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
+    let mut lines = vec![format!("# Visual review: {}", meta.title), String::new()];
+    if !meta.url.is_empty() {
+        lines.push(format!("- Page: {}", meta.url));
+    }
+    if !meta.note.is_empty() {
+        lines.push(format!("- Request: {}", meta.note));
+    }
+    lines.push(format!("- Status: {}", meta.status.as_str()));
+    lines.push(format!(
+        "- Submitted: {}",
+        meta.submitted_at.as_deref().unwrap_or("-")
+    ));
+    lines.push(String::new());
+    lines.push("## Annotations".to_string());
+    lines.push(String::new());
+
+    let text_notes: Vec<&Annotation> = annotations
+        .iter()
+        .filter(|a| a.is_text() && a.text_of().is_some_and(|t| !t.is_empty()))
+        .collect();
+    if !text_notes.is_empty() {
+        lines.push("### Text notes".to_string());
+        lines.push(String::new());
+        for note in &text_notes {
+            lines.push(format!(
+                "- ({}, {}): {}",
+                num(note.number("x").unwrap_or_default()),
+                num(note.number("y").unwrap_or_default()),
+                note.text_of().unwrap_or_default()
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    let shapes: Vec<&Annotation> = annotations.iter().filter(|a| !a.is_text()).collect();
+    if !shapes.is_empty() {
+        lines.push("### Marked regions".to_string());
+        lines.push(String::new());
+        for (index, item) in shapes.iter().enumerate() {
+            if item.kind == "rect" {
+                let (sx, sy) = item.point("start").unwrap_or_default();
+                let (ex, ey) = item.point("end").unwrap_or_default();
+                lines.push(format!(
+                    "- {}. rectangle ({}, {}) → ({}, {}), color {}, width {}",
+                    index + 1,
+                    num(sx),
+                    num(sy),
+                    num(ex),
+                    num(ey),
+                    item.color().unwrap_or("-"),
+                    item.number("width").map(num).unwrap_or_else(|| "-".to_string()),
+                ));
+            } else {
+                lines.push(format!("- {}. {} (see annotations.json)", index + 1, item.kind));
+            }
+        }
+        lines.push(String::new());
+    }
+
+    lines.push("## For the agent".to_string());
+    lines.push(String::new());
+    lines.push(
+        "Use `annotations.json` for coordinates and text; `annotated.png` is the visual reference."
+            .to_string(),
+    );
+    lines.push(String::new());
+    lines.join("\n")
+}
+
+/// A session folder root. Cheap to clone; holds no open handles.
+#[derive(Debug, Clone)]
+pub struct Store {
+    root: PathBuf,
+}
+
+impl Store {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn ensure(&self) -> Result<()> {
+        fs::create_dir_all(&self.root)?;
+        Ok(())
+    }
+
+    pub fn dir(&self, id: &str) -> Result<PathBuf> {
+        if !valid_id(id) {
+            return Err(Error::InvalidId);
+        }
+        Ok(self.root.join(id))
+    }
+
+    pub fn get(&self, id: &str) -> Result<Option<Meta>> {
+        let dir = self.dir(id)?;
+        Ok(read_json(&dir.join("meta.json")).and_then(|value| serde_json::from_value(value).ok()))
+    }
+
+    pub fn require(&self, id: &str) -> Result<Meta> {
+        self.get(id)?.ok_or_else(|| Error::NotFound(id.to_string()))
+    }
+
+    pub fn list(&self) -> Result<Vec<Meta>> {
+        if !self.root.exists() {
+            return Ok(Vec::new());
+        }
+        let mut metas = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            if let Some(meta) = read_json(&entry.path().join("meta.json"))
+                .and_then(|value| serde_json::from_value::<Meta>(value).ok())
+            {
+                metas.push(meta);
+            }
+        }
+        metas.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(metas)
+    }
+
+    pub fn annotations(&self, id: &str) -> Result<AnnotationSet> {
+        let dir = self.dir(id)?;
+        Ok(read_json(&dir.join("annotations.json"))
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_else(|| AnnotationSet {
+                session: id.to_string(),
+                title: None,
+                url: None,
+                image: None,
+                annotations: Vec::new(),
+                submitted_at: None,
+            }))
+    }
+
+    /// Create a session from bytes already in memory (MCP uploads, HTTP `image_base64`).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_from_bytes(
+        &self,
+        image: &[u8],
+        image_name: &str,
+        title: &str,
+        url: &str,
+        note: &str,
+        id: Option<&str>,
+        agent: Option<&str>,
+    ) -> Result<Meta> {
+        if image.is_empty() {
+            return Err(Error::BadRequest("empty image".to_string()));
+        }
+        self.ensure()?;
+        let sid = self.new_id(title, id)?;
+        let dir = self.root.join(&sid);
+        fs::create_dir(&dir).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::Exists(sid.clone())
+            } else {
+                Error::Io(err)
+            }
+        })?;
+
+        let extension = image_extension(image_name);
+        write_atomic(&dir.join(format!("screenshot{extension}")), image)?;
+
+        let meta = Meta {
+            id: sid.clone(),
+            title: if title.is_empty() { sid.clone() } else { title.to_string() },
+            url: url.to_string(),
+            note: note.to_string(),
+            status: Status::Open,
+            created_at: now(),
+            submitted_at: None,
+            image: format!("screenshot{extension}"),
+            image_width: None,
+            image_height: None,
+            agent: agent.map(str::to_string),
+            resolved_at: None,
+        };
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        write_json(
+            &dir.join("annotations.json"),
+            &json!({ "session": sid, "annotations": [] }),
+        )?;
+        Ok(meta)
+    }
+
+    /// Create a session from a file on this machine (the CLI path).
+    pub fn create_from_path(
+        &self,
+        image: &Path,
+        title: &str,
+        url: &str,
+        note: &str,
+        id: Option<&str>,
+    ) -> Result<Meta> {
+        let bytes = fs::read(image)?;
+        let name = image
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("screenshot.png");
+        let title = if title.is_empty() {
+            image.file_stem().and_then(|s| s.to_str()).unwrap_or("")
+        } else {
+            title
+        };
+        self.create_from_bytes(&bytes, name, title, url, note, id, None)
+    }
+
+    fn new_id(&self, title: &str, id: Option<&str>) -> Result<String> {
+        if let Some(id) = id {
+            if !valid_id(id) {
+                return Err(Error::InvalidId);
+            }
+            if self.root.join(id).exists() {
+                return Err(Error::Exists(id.to_string()));
+            }
+            return Ok(id.to_string());
+        }
+        let stamp = Utc::now().format("%Y%m%d-%H%M%S").to_string();
+        let slug = slugify(title);
+        for _ in 0..8 {
+            let suffix = uuid::Uuid::new_v4().simple().to_string();
+            let candidate = format!("{stamp}-{slug}-{}", &suffix[..4]);
+            if !self.root.join(&candidate).exists() {
+                return Ok(candidate);
+            }
+        }
+        Err(Error::BadRequest("could not allocate a session id".to_string()))
+    }
+
+    /// Write a submission: `annotations.json`, `meta.json`, `review.md`, and `annotated.png`.
+    pub fn submit(&self, id: &str, submission: &Submission) -> Result<(Meta, AnnotationSet)> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let submitted_at = now();
+        meta.status = Status::Submitted;
+        meta.submitted_at = Some(submitted_at.clone());
+        if let Some(width) = submission.width {
+            meta.image_width = Some(width);
+        }
+        if let Some(height) = submission.height {
+            meta.image_height = Some(height);
+        }
+
+        let set = AnnotationSet {
+            session: id.to_string(),
+            title: Some(meta.title.clone()),
+            url: Some(meta.url.clone()),
+            image: Some(ImageRef {
+                file: Some(meta.image.clone()),
+                width: submission.width,
+                height: submission.height,
+            }),
+            annotations: submission.annotations.clone(),
+            submitted_at: Some(submitted_at),
+        };
+
+        write_json(&dir.join("annotations.json"), &serde_json::to_value(&set)?)?;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        write_atomic(
+            &dir.join("review.md"),
+            review_markdown(&meta, &set.annotations).as_bytes(),
+        )?;
+
+        if let Some(png) = &submission.png {
+            let raw = png.split_once(',').map(|(_, data)| data).unwrap_or(png);
+            use base64::Engine as _;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(raw.trim())
+                .map_err(|err| Error::BadRequest(format!("invalid png payload: {err}")))?;
+            write_atomic(&dir.join("annotated.png"), &bytes)?;
+        }
+
+        Ok((meta, set))
+    }
+
+    /// Mark a session resolved (the agent is done with it). Additive status, not destructive.
+    pub fn resolve(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        meta.status = Status::Resolved;
+        meta.resolved_at = Some(now());
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    pub fn remove(&self, id: &str) -> Result<PathBuf> {
+        let dir = self.dir(id)?;
+        if !dir.exists() {
+            return Err(Error::NotFound(id.to_string()));
+        }
+        fs::remove_dir_all(&dir)?;
+        Ok(dir)
+    }
+
+    pub fn image_path(&self, meta: &Meta) -> Result<PathBuf> {
+        Ok(self.dir(&meta.id)?.join(&meta.image))
+    }
+
+    pub fn file_path(&self, id: &str, name: &str) -> Result<PathBuf> {
+        if name.contains('/') || name.contains('\\') || name.contains("..") {
+            return Err(Error::BadRequest("invalid file name".to_string()));
+        }
+        Ok(self.dir(id)?.join(name))
+    }
+}

@@ -1,0 +1,18 @@
+[package]
+name = "redline"
+description = "Headless redline server (the Tauri app embeds the same core)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "redline"
+path = "src/main.rs"
+
+[dependencies]
+redline-core = { path = "../redline-core" }
+axum.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+serde_json.workspace = true
+tracing.workspace = true

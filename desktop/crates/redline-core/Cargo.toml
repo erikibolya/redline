@@ -1,0 +1,26 @@
+[package]
+name = "redline-core"
+description = "Session store, HTTP API and MCP server for redline — no GUI dependencies"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+rand.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower-http.workspace = true
+mime_guess.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tempfile = "3"

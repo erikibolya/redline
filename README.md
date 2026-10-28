@@ -12,6 +12,11 @@ for confirmation with a follow-up session.
 This repository is intentionally separate from the product repository. It can be pushed to a
 personal GitHub account and has no company-specific code or paths.
 
+> **Desktop app (v1.0, in progress).** The next release is a tray application that embeds this
+> server plus an MCP endpoint, so agents connect directly and no terminal stays open. The Rust
+> core is built and tested; see [`docs/DESKTOP.md`](docs/DESKTOP.md) for the design and status.
+> Everything below describes v0.1, which still works.
+
 ## Requirements
 
 - Python **3.10+** (stdlib only — no `pip install` needed); use `python3` on WSL/Linux and `python` on Windows

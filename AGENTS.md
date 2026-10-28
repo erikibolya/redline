@@ -63,6 +63,37 @@ Work is mirrored from `PLAN.md` onto GitHub so progress is visible publicly:
 - Browser: Chrome/Edge/Firefox; HTTP submit works everywhere.
 - Default server: `127.0.0.1:8788`; default sessions: `./sessions`.
 
+## Desktop app work (branch `desktop`, v1.0)
+
+`docs/DESKTOP.md` is the design record. The Rust backend lives in `desktop/`:
+
+| Path | Responsibility |
+|------|----------------|
+| `desktop/crates/redline-core/` | Store, HTTP API, token auth, MCP. No GUI dependencies. |
+| `desktop/crates/redline-server/` | Headless `redline serve` / `token` / `mcp-config` binary. |
+| `desktop/ui/` | Editor assets copied from `static/` (single source until v1.0). |
+| `desktop/app/` | Tauri v2 shell (Windows build; not yet scaffolded). |
+
+Build and test (this box has no `cc`; see DESKTOP.md for the one-time Zig/musl setup):
+
+```bash
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+cd desktop && cargo test --target x86_64-unknown-linux-musl
+cargo run --target x86_64-unknown-linux-musl -p redline -- serve --port 8899 --ui ui
+```
+
+Smoke test the MCP path without a GUI:
+
+```bash
+TOKEN=$(./target/x86_64-unknown-linux-musl/debug/redline token)
+curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' localhost:8899/mcp
+```
+
+Rules that keep the migration honest: **Python is frozen** (no new features on `redline.py`),
+the session folder format is unchanged, and no v1.0 release happens before CLI + UI parity.
+
+
 ## Standard workflow
 
 1. **Prepare a screenshot.** Capture the page/state at a stable viewport. Save it wherever the

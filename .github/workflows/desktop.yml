@@ -69,6 +69,9 @@ jobs:
   shell:
     name: tauri shell (windows)
     runs-on: windows-latest
+    env:
+      # createUpdaterArtifacts is on, so every bundle build needs the signing key.
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

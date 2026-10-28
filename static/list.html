@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Visual review sessions</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: #1e293b; background: #e2e8f0; }
+  header { padding: 16px 20px; background: #0f172a; color: #f8fafc; display: flex; align-items: center; gap: 16px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header button { margin-left: auto; border: 1px solid #475569; background: #1e293b; color: #f8fafc; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  main { max-width: 1000px; margin: 20px auto; padding: 0 16px; }
+  .card { display: flex; gap: 14px; align-items: center; background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px; box-shadow: 0 1px 4px rgba(15,23,42,.06); }
+  .card a.title { color: #0369a1; text-decoration: none; font-weight: 600; font-size: 15px; }
+  .card a.title:hover { text-decoration: underline; }
+  .meta { color: #64748b; font-size: 12px; }
+  .badge { margin-left: auto; padding: 3px 9px; border-radius: 999px; font-size: 12px; white-space: nowrap; }
+  .open { background: #e0f2fe; color: #075985; }
+  .submitted { background: #dcfce7; color: #166534; }
+  .empty { padding: 40px; text-align: center; color: #64748b; background: #f8fafc; border: 1px dashed #94a3b8; border-radius: 10px; }
+  code { background: #f1f5f9; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Visual review sessions</h1>
+  <button id="refresh">Refresh</button>
+</header>
+<main>
+  <p class="meta">Create a session with <code>python review.py open shot.png --title "Button / default"</code>.</p>
+  <div id="list"></div>
+</main>
+<script>
+async function load() {
+  const list = document.getElementById("list");
+  list.innerHTML = '<p class="meta">Loading…</p>';
+  try {
+    const response = await fetch("/api/sessions");
+    const data = await response.json();
+    if (!data.sessions.length) {
+      list.innerHTML = '<div class="empty">No sessions yet.</div>';
+      return;
+    }
+    list.innerHTML = "";
+    for (const session of data.sessions) {
+      const card = document.createElement("div");
+      card.className = "card";
+      const body = document.createElement("div");
+      body.innerHTML = `<a class="title" href="/s/${encodeURIComponent(session.id)}">${escapeHtml(session.title || session.id)}</a>
+        <div class="meta">${escapeHtml(session.id)} · ${escapeHtml(session.created_at || "")}${session.url ? " · " + escapeHtml(session.url) : ""}</div>
+        ${session.note ? `<div class="meta">${escapeHtml(session.note)}</div>` : ""}`;
+      const badge = document.createElement("span");
+      badge.className = "badge " + (session.status === "submitted" ? "submitted" : "open");
+      badge.textContent = session.status === "submitted" ? "submitted " + (session.submitted_at || "") : "open";
+      card.append(body, badge);
+      list.appendChild(card);
+    }
+  } catch (error) {
+    list.innerHTML = `<div class="empty">Could not load sessions: ${escapeHtml(error.message)}</div>`;
+  }
+}
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+document.getElementById("refresh").addEventListener("click", load);
+load();
+</script>
+</body>
+</html>

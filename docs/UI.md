@@ -93,11 +93,22 @@ it makes the canvas feel instrumented.
 
 ## Staging
 
-1. **Shell** — 3 columns, zoom/pan, tools with a proper stage, status bar, right panel.
-2. **Sessions rail** — filters, search, badges, switching sessions without reload; rebuilt list
-   page using the same CSS/components.
-3. **Editing depth** — undo/redo history, inline text editor, nudge, delete, drag-to-move.
-4. **Polish** — light theme toggle, empty states, keyboard help overlay, focus rings.
+1. **Shell** — done in v0.3.0: 3 columns, zoom/pan, tools on a proper stage, status bar, inspector.
+2. **Sessions rail** — done in v0.3.0: filters, search, badges, session switching without reload.
+3. **Editing depth** — done in v0.3.1–0.3.3: undo/redo, inline text (create, edit, delete by
+   clearing), nudge, delete, drag-to-move, pinch zoom.
+4. **Polish** — done in v0.3.1–0.3.2: light theme, shortcut sheet, agent-view preview, colour cues.
+   Remaining: focus rings, empty states in the rail, multi-select.
+
+## Verification
+
+`desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:
+coordinate mapping under a fitted zoom, dragging, undo, inline text (including diacritics), and
+submission — 13 checks. It runs in CI on every push (`browser e2e` job) and locally via
+`desktop/scripts/e2e.sh`.
+
+It has already earned its keep twice: it caught the text tool being broken by mousedown's focus
+change, and duplicate text annotations from a double `blur` commit.
 
 Each stage is a tagged release; the old page keeps working until the new one covers it.
 

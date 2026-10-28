@@ -18,7 +18,9 @@ pub struct Auth {
 
 impl Auth {
     pub fn new(token: impl Into<String>) -> Self {
-        Self { token: token.into() }
+        Self {
+            token: token.into(),
+        }
     }
 
     /// 32 random bytes, base64url without padding — same shape as a GitHub token, easy to paste.
@@ -72,7 +74,11 @@ pub fn credential_from(headers: &axum::http::HeaderMap, query: Option<&str>) -> 
             }
         }
     }
-    for (key, value) in query.unwrap_or_default().split('&').filter_map(|pair| pair.split_once('=')) {
+    for (key, value) in query
+        .unwrap_or_default()
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+    {
         if key == QUERY_PARAM && !value.is_empty() {
             return Some(value.to_string());
         }
@@ -94,7 +100,10 @@ mod tests {
         let b = Auth::generate();
         assert_ne!(a.token(), b.token());
         assert_eq!(a.token().len(), 43);
-        assert!(a.token().chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(a
+            .token()
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]

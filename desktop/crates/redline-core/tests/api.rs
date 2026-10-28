@@ -21,11 +21,19 @@ fn harness() -> Harness {
     let dir = TempDir::new().unwrap();
     let store = Store::new(dir.path().join("sessions"));
     store.ensure().unwrap();
-    let state = AppState::new(store.clone(), Auth::new(TOKEN)).with_base_url("http://127.0.0.1:8788");
-    Harness { app: router(state), store, _dir: dir }
+    let state =
+        AppState::new(store.clone(), Auth::new(TOKEN)).with_base_url("http://127.0.0.1:8788");
+    Harness {
+        app: router(state),
+        store,
+        _dir: dir,
+    }
 }
 
-async fn send(app: &axum::Router, request: Request<Body>) -> (StatusCode, axum::http::HeaderMap, Value) {
+async fn send(
+    app: &axum::Router,
+    request: Request<Body>,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let headers = response.headers().clone();
@@ -91,7 +99,10 @@ async fn create_submit_and_read_back_round_trip() {
     assert_eq!(status, StatusCode::OK, "{created}");
     let id = created["meta"]["id"].as_str().expect("id").to_string();
     let review_url = created["review_url"].as_str().unwrap();
-    assert!(review_url.contains(&format!("/s/{id}?t={TOKEN}")), "{review_url}");
+    assert!(
+        review_url.contains(&format!("/s/{id}?t={TOKEN}")),
+        "{review_url}"
+    );
 
     // Anonymous access to the image is refused; the token opens it.
     let (status, _, _) = send(&h.app, get(&format!("/sessions/{id}/image"))).await;
@@ -139,7 +150,10 @@ async fn create_submit_and_read_back_round_trip() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(session["meta"]["status"], "submitted");
-    assert_eq!(session["annotations"]["annotations"][0]["text"], "Move this up");
+    assert_eq!(
+        session["annotations"]["annotations"][0]["text"],
+        "Move this up"
+    );
     assert_eq!(session["annotations"]["image"]["width"], 1440);
 
     let folder = h.store.dir(&id).unwrap();
@@ -167,17 +181,28 @@ async fn editor_url_trades_the_token_for_a_cookie() {
     let h = harness();
     let (_, _, created) = send(
         &h.app,
-        authed("POST", "/api/sessions", json!({"title": "t", "image_base64": PNG_B64})),
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "t", "image_base64": PNG_B64}),
+        ),
     )
     .await;
     let id = created["meta"]["id"].as_str().unwrap().to_string();
 
     let (status, headers, _) = send(&h.app, get(&format!("/s/{id}?t={TOKEN}"))).await;
     assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
-    assert_eq!(headers["location"], format!("/s/{id}"), "token stripped from the URL");
+    assert_eq!(
+        headers["location"],
+        format!("/s/{id}"),
+        "token stripped from the URL"
+    );
     let cookie = headers["set-cookie"].to_str().unwrap();
     assert!(cookie.contains(&format!("redline_token={TOKEN}")));
-    assert!(cookie.contains("HttpOnly"), "cookie must not be readable by JS: {cookie}");
+    assert!(
+        cookie.contains("HttpOnly"),
+        "cookie must not be readable by JS: {cookie}"
+    );
 }
 
 #[tokio::test]
@@ -185,7 +210,11 @@ async fn cross_site_and_bad_payloads_are_rejected() {
     let h = harness();
     let (_, _, created) = send(
         &h.app,
-        authed("POST", "/api/sessions", json!({"title": "t", "image_base64": PNG_B64})),
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "t", "image_base64": PNG_B64}),
+        ),
     )
     .await;
     let id = created["meta"]["id"].as_str().unwrap().to_string();
@@ -213,7 +242,11 @@ async fn cross_site_and_bad_payloads_are_rejected() {
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
 
     // Unknown and traversal-shaped ids are 404, never a filesystem read.
-    for path in ["/api/sessions/nope", "/api/sessions/..%2F..%2Fetc", "/sessions/nope/image"] {
+    for path in [
+        "/api/sessions/nope",
+        "/api/sessions/..%2F..%2Fetc",
+        "/sessions/nope/image",
+    ] {
         let request = Request::builder()
             .uri(path)
             .header("authorization", format!("Bearer {TOKEN}"))
@@ -229,7 +262,11 @@ async fn delete_removes_the_session_and_404s_afterwards() {
     let h = harness();
     let (_, _, created) = send(
         &h.app,
-        authed("POST", "/api/sessions", json!({"title": "gone", "image_base64": PNG_B64})),
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "gone", "image_base64": PNG_B64}),
+        ),
     )
     .await;
     let id = created["meta"]["id"].as_str().unwrap().to_string();
@@ -264,7 +301,9 @@ async fn mcp_endpoint_requires_the_token_and_answers_notifications_with_202() {
             .method("POST")
             .uri("/mcp")
             .header("content-type", "application/json")
-            .body(Body::from(json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string()))
+            .body(Body::from(
+                json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}).to_string(),
+            ))
             .unwrap(),
     )
     .await;
@@ -273,7 +312,11 @@ async fn mcp_endpoint_requires_the_token_and_answers_notifications_with_202() {
     // A notification has no id and must not produce a JSON-RPC response.
     let (status, _, _) = send(
         &h.app,
-        authed("POST", "/mcp", json!({"jsonrpc": "2.0", "method": "notifications/initialized"})),
+        authed(
+            "POST",
+            "/mcp",
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        ),
     )
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);

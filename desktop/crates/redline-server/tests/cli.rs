@@ -85,7 +85,9 @@ impl Server {
             "height": 360,
             "png": format!("data:image/png;base64,{PNG_B64}")
         });
-        let client = redline::http::Client::new(&format!("http://127.0.0.1:{}", self.port), "test-token").unwrap();
+        let client =
+            redline::http::Client::new(&format!("http://127.0.0.1:{}", self.port), "test-token")
+                .unwrap();
         client
             .post(&format!("/api/sessions/{id}/annotations"), &body)
             .expect("submit");
@@ -99,13 +101,16 @@ impl Drop for Server {
     }
 }
 
-
 fn write_png(dir: &Path) -> PathBuf {
     use base64::Engine as _;
     let path = dir.join("shot.png");
     let mut file = std::fs::File::create(&path).unwrap();
-    file.write_all(&base64::engine::general_purpose::STANDARD.decode(PNG_B64).unwrap())
-        .unwrap();
+    file.write_all(
+        &base64::engine::general_purpose::STANDARD
+            .decode(PNG_B64)
+            .unwrap(),
+    )
+    .unwrap();
     path
 }
 
@@ -115,7 +120,14 @@ fn the_v01_recipe_still_works() {
     let image = write_png(server.data_dir());
 
     // 1. open — creates a session and prints the review URL.
-    let (code, stdout, stderr) = server.run(&["open", image.to_str().unwrap(), "--title", "Button / default", "--note", "Check hover"]);
+    let (code, stdout, stderr) = server.run(&[
+        "open",
+        image.to_str().unwrap(),
+        "--title",
+        "Button / default",
+        "--note",
+        "Check hover",
+    ]);
     assert_eq!(code, 0, "open failed: {stderr}");
     assert!(stdout.contains("session: "), "{stdout}");
     let id = stdout
@@ -124,7 +136,10 @@ fn the_v01_recipe_still_works() {
         .expect("session id")
         .trim()
         .to_string();
-    assert!(stdout.contains(&format!("/s/{id}?t=test-token")), "{stdout}");
+    assert!(
+        stdout.contains(&format!("/s/{id}?t=test-token")),
+        "{stdout}"
+    );
 
     // 2. list — shows it as open.
     let (code, stdout, _) = server.run(&["list"]);
@@ -170,13 +185,8 @@ fn json_output_is_machine_readable() {
     let server = Server::start();
     let image = write_png(server.data_dir());
 
-    let (code, stdout, _) = server.run(&[
-        "open",
-        image.to_str().unwrap(),
-        "--title",
-        "JSON",
-        "--json",
-    ]);
+    let (code, stdout, _) =
+        server.run(&["open", image.to_str().unwrap(), "--title", "JSON", "--json"]);
     assert_eq!(code, 0);
     let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     assert_eq!(parsed["meta"]["title"], "JSON");
@@ -208,7 +218,10 @@ fn client_fails_cleanly_when_nothing_is_listening() {
     assert_eq!(output.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("cannot reach redline"), "{stderr}");
-    assert!(stderr.contains("redline serve"), "the error should say what to do: {stderr}");
+    assert!(
+        stderr.contains("redline serve"),
+        "the error should say what to do: {stderr}"
+    );
 }
 
 #[test]

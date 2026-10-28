@@ -44,9 +44,9 @@ pub struct Client {
 
 impl Client {
     pub fn new(base_url: &str, token: impl Into<String>) -> Result<Self, ClientError> {
-        let rest = base_url
-            .strip_prefix("http://")
-            .ok_or_else(|| ClientError::Protocol(format!("only http:// is supported: {base_url}")))?;
+        let rest = base_url.strip_prefix("http://").ok_or_else(|| {
+            ClientError::Protocol(format!("only http:// is supported: {base_url}"))
+        })?;
         let rest = rest.strip_suffix('/').unwrap_or(rest);
         let (host, port) = match rest.rsplit_once(':') {
             Some((host, port)) => (
@@ -56,10 +56,19 @@ impl Client {
             ),
             None => (rest.to_string(), 80),
         };
-        Ok(Self { host, port, token: token.into() })
+        Ok(Self {
+            host,
+            port,
+            token: token.into(),
+        })
     }
 
-    fn send(&self, method: &str, path: &str, body: Option<&[u8]>) -> Result<(u16, Vec<u8>), ClientError> {
+    fn send(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&[u8]>,
+    ) -> Result<(u16, Vec<u8>), ClientError> {
         let address = (self.host.as_str(), self.port)
             .to_socket_addrs()
             .map_err(|err| ClientError::Transport(format!("cannot resolve {}: {err}", self.host)))?
@@ -106,7 +115,8 @@ impl Client {
     }
 
     pub fn post(&self, path: &str, body: &Value) -> Result<(u16, Value), ClientError> {
-        let payload = serde_json::to_vec(body).map_err(|err| ClientError::Protocol(err.to_string()))?;
+        let payload =
+            serde_json::to_vec(body).map_err(|err| ClientError::Protocol(err.to_string()))?;
         self.json(self.send("POST", path, Some(&payload))?)
     }
 
@@ -135,7 +145,9 @@ fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>), ClientError> {
     let split = raw
         .windows(4)
         .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| ClientError::Protocol("malformed response (no header terminator)".to_string()))?;
+        .ok_or_else(|| {
+            ClientError::Protocol("malformed response (no header terminator)".to_string())
+        })?;
     let headers = String::from_utf8_lossy(&raw[..split]).to_string();
     let body = &raw[split + 4..];
 
@@ -146,9 +158,10 @@ fn parse_response(raw: &[u8]) -> Result<(u16, Vec<u8>), ClientError> {
         .and_then(|code| code.parse::<u16>().ok())
         .ok_or_else(|| ClientError::Protocol("malformed status line".to_string()))?;
 
-    let chunked = headers
-        .lines()
-        .any(|line| line.to_ascii_lowercase().starts_with("transfer-encoding:") && line.to_ascii_lowercase().contains("chunked"));
+    let chunked = headers.lines().any(|line| {
+        line.to_ascii_lowercase().starts_with("transfer-encoding:")
+            && line.to_ascii_lowercase().contains("chunked")
+    });
 
     if !chunked {
         return Ok((status, body.to_vec()));

@@ -60,17 +60,7 @@ fn main() {
 
 /// Flags that consume the next argument. Everything else is a boolean switch.
 const VALUE_FLAGS: &[&str] = &[
-    "host",
-    "port",
-    "data-dir",
-    "sessions",
-    "ui",
-    "token",
-    "title",
-    "url",
-    "note",
-    "id",
-    "timeout",
+    "host", "port", "data-dir", "sessions", "ui", "token", "title", "url", "note", "id", "timeout",
     "interval",
 ];
 
@@ -252,15 +242,12 @@ fn open(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
         return Err(format!("no such file: {}", path.display()));
     }
     let absolute = std::fs::canonicalize(&path).map_err(|err| err.to_string())?;
-    let title = flags
-        .value("title")
-        .map(str::to_string)
-        .unwrap_or_else(|| {
-            path.file_stem()
-                .and_then(|stem| stem.to_str())
-                .unwrap_or("review")
-                .to_string()
-        });
+    let title = flags.value("title").map(str::to_string).unwrap_or_else(|| {
+        path.file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("review")
+            .to_string()
+    });
 
     let mut body = serde_json::json!({
         "title": title,
@@ -282,9 +269,8 @@ fn open(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
             use base64::Engine as _;
             let bytes = std::fs::read(&absolute).map_err(|err| err.to_string())?;
             body["image_path"] = serde_json::Value::Null;
-            body["image_base64"] = serde_json::Value::String(
-                base64::engine::general_purpose::STANDARD.encode(bytes),
-            );
+            body["image_base64"] =
+                serde_json::Value::String(base64::engine::general_purpose::STANDARD.encode(bytes));
             client
                 .post("/api/sessions", &body)
                 .map(|(_, value)| value)
@@ -352,7 +338,11 @@ fn get(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
 }
 
 fn wait(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
-    let id = flags.positional.first().ok_or("usage: redline wait ID")?.to_string();
+    let id = flags
+        .positional
+        .first()
+        .ok_or("usage: redline wait ID")?
+        .to_string();
     let timeout = flags.number("timeout")?.unwrap_or(600);
     let interval = Duration::from_secs(flags.number("interval")?.unwrap_or(2).max(1));
     let client = client(base_url, auth)?;

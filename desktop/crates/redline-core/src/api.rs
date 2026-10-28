@@ -59,14 +59,22 @@ impl AppState {
     }
 
     fn review_url(&self, id: &str) -> String {
-        format!("{}/s/{}?t={}", self.base_url.trim_end_matches('/'), id, self.auth.token())
+        format!(
+            "{}/s/{}?t={}",
+            self.base_url.trim_end_matches('/'),
+            id,
+            self.auth.token()
+        )
     }
 }
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
         .route("/api/sessions", get(list_sessions).post(create_session))
-        .route("/api/sessions/{id}", get(get_session).delete(delete_session))
+        .route(
+            "/api/sessions/{id}",
+            get(get_session).delete(delete_session),
+        )
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/sessions/{id}/image", get(image))
@@ -91,7 +99,10 @@ async fn require_token(State(state): State<AppState>, request: Request, next: Ne
     // header; non-browser agents do not, so absence is not treated as failure.
     if let Some(site) = request.headers().get("sec-fetch-site") {
         if site.as_bytes() == b"cross-site" {
-            return (StatusCode::FORBIDDEN, Json(json!({"error": "cross-site request"})))
+            return (
+                StatusCode::FORBIDDEN,
+                Json(json!({"error": "cross-site request"})),
+            )
                 .into_response();
         }
     }
@@ -104,7 +115,10 @@ async fn require_token(State(state): State<AppState>, request: Request, next: Ne
         .is_some_and(|length| length > 0)
         || request.headers().contains_key(header::TRANSFER_ENCODING);
     if has_body && !request.headers().contains_key(header::CONTENT_TYPE) {
-        return (StatusCode::UNSUPPORTED_MEDIA_TYPE, Json(json!({"error": "content-type required"})))
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Json(json!({"error": "content-type required"})),
+        )
             .into_response();
     }
 
@@ -121,7 +135,12 @@ async fn require_token(State(state): State<AppState>, request: Request, next: Ne
 
 /// The human-facing entry point: `GET /s/<id>?t=<token>` trades the token for a cookie so the
 /// address bar, history and shared screenshots stay free of secrets.
-fn trade_token_for_cookie(headers: &HeaderMap, query: Option<&str>, path: &str, state: &AppState) -> Option<Response> {
+fn trade_token_for_cookie(
+    headers: &HeaderMap,
+    query: Option<&str>,
+    path: &str,
+    state: &AppState,
+) -> Option<Response> {
     let _ = headers;
     let token = query?
         .split('&')
@@ -141,7 +160,9 @@ fn trade_token_for_cookie(headers: &HeaderMap, query: Option<&str>, path: &str, 
 // ---------------------------------------------------------------- pages
 
 async fn list_page(State(state): State<AppState>, request: Request) -> Response {
-    if let Some(response) = trade_token_for_cookie(request.headers(), request.uri().query(), "/", &state) {
+    if let Some(response) =
+        trade_token_for_cookie(request.headers(), request.uri().query(), "/", &state)
+    {
         return response;
     }
     serve_ui(&state, "list.html")
@@ -156,7 +177,9 @@ async fn editor_page(
         return StatusCode::NOT_FOUND.into_response();
     }
     let clean = format!("/s/{id}");
-    if let Some(response) = trade_token_for_cookie(request.headers(), request.uri().query(), &clean, &state) {
+    if let Some(response) =
+        trade_token_for_cookie(request.headers(), request.uri().query(), &clean, &state)
+    {
         return response;
     }
     serve_ui(&state, "index.html")
@@ -215,7 +238,8 @@ fn serve_file(path: &std::path::Path, content_type: Option<&str>) -> Response {
     let mut response = Response::new(Body::from(bytes));
     response.headers_mut().insert(
         header::CONTENT_TYPE,
-        HeaderValue::from_str(&guessed).unwrap_or(HeaderValue::from_static("application/octet-stream")),
+        HeaderValue::from_str(&guessed)
+            .unwrap_or(HeaderValue::from_static("application/octet-stream")),
     );
     response
         .headers_mut()
@@ -265,7 +289,10 @@ pub fn create_from_request(
 
     let (bytes, name) = match (body.image_base64.as_deref(), body.image_path.as_deref()) {
         (Some(encoded), _) => {
-            let raw = encoded.split_once(',').map(|(_, data)| data).unwrap_or(encoded);
+            let raw = encoded
+                .split_once(',')
+                .map(|(_, data)| data)
+                .unwrap_or(encoded);
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(raw.trim())
                 .map_err(|err| Error::BadRequest(format!("invalid image_base64: {err}")))?;
@@ -305,7 +332,9 @@ async fn submit(
     Json(body): Json<Submission>,
 ) -> Result<Json<Value>, Error> {
     let (meta, annotations) = state.store.submit(&id, &body)?;
-    Ok(Json(json!({ "ok": true, "meta": meta, "annotations": annotations })))
+    Ok(Json(
+        json!({ "ok": true, "meta": meta, "annotations": annotations }),
+    ))
 }
 
 async fn resolve(
@@ -320,7 +349,9 @@ async fn delete_session(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     let dir = state.store.remove(&id)?;
-    Ok(Json(json!({ "ok": true, "removed": dir.display().to_string() })))
+    Ok(Json(
+        json!({ "ok": true, "removed": dir.display().to_string() }),
+    ))
 }
 
 async fn image(

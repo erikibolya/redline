@@ -21,7 +21,11 @@ fn payload(result: &Value) -> Value {
 }
 
 async fn call(store: &Store, name: &str, arguments: Value) -> Value {
-    let context = McpContext { store, base_url: "http://127.0.0.1:8788", token: TOKEN };
+    let context = McpContext {
+        store,
+        base_url: "http://127.0.0.1:8788",
+        token: TOKEN,
+    };
     let request = json!({
         "jsonrpc": "2.0", "id": 7, "method": "tools/call",
         "params": { "name": name, "arguments": arguments }
@@ -35,18 +39,34 @@ async fn call(store: &Store, name: &str, arguments: Value) -> Value {
 #[tokio::test]
 async fn initialize_and_tool_list_are_well_formed() {
     let (_dir, store) = setup();
-    let context = McpContext { store: &store, base_url: "http://127.0.0.1:8788", token: TOKEN };
+    let context = McpContext {
+        store: &store,
+        base_url: "http://127.0.0.1:8788",
+        token: TOKEN,
+    };
 
-    let init = handle(&context, &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}))
-        .await
-        .unwrap();
-    assert_eq!(init["result"]["protocolVersion"], redline_core::MCP_PROTOCOL_VERSION);
+    let init = handle(
+        &context,
+        &json!({"jsonrpc": "2.0", "id": 1, "method": "initialize"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        init["result"]["protocolVersion"],
+        redline_core::MCP_PROTOCOL_VERSION
+    );
     assert_eq!(init["result"]["serverInfo"]["name"], "redline");
-    assert_eq!(init["result"]["capabilities"]["tools"]["listChanged"], false);
+    assert_eq!(
+        init["result"]["capabilities"]["tools"]["listChanged"],
+        false
+    );
 
-    let tools = handle(&context, &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}))
-        .await
-        .unwrap();
+    let tools = handle(
+        &context,
+        &json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}),
+    )
+    .await
+    .unwrap();
     let names: Vec<&str> = tools["result"]["tools"]
         .as_array()
         .unwrap()
@@ -94,17 +114,23 @@ async fn review_screenshot_creates_a_session_the_human_can_open() {
     let meta = store.require(&id).unwrap();
     assert_eq!(meta.title, "Button / default");
     assert_eq!(meta.agent.as_deref(), Some("mcp"));
-    assert!(store.image_path(&meta).unwrap().is_file(), "screenshot written");
+    assert!(
+        store.image_path(&meta).unwrap().is_file(),
+        "screenshot written"
+    );
 }
 
 #[tokio::test]
 async fn feedback_includes_annotations_markdown_and_the_png_uri() {
     let (_dir, store) = setup();
-    let created = payload(&call(
-        &store,
-        "review_screenshot",
-        json!({"title": "Form", "image_base64": PNG_B64}),
-    ).await);
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({"title": "Form", "image_base64": PNG_B64}),
+        )
+        .await,
+    );
     let id = created["session_id"].as_str().unwrap().to_string();
 
     store
@@ -113,8 +139,10 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
             &Submission {
                 annotations: vec![redline_core::model::Annotation {
                     kind: "text".into(),
-                    fields: serde_json::from_value(json!({"x": 2, "y": 3, "text": "Tighten this", "color": "#e11d48"}))
-                        .unwrap(),
+                    fields: serde_json::from_value(
+                        json!({"x": 2, "y": 3, "text": "Tighten this", "color": "#e11d48"}),
+                    )
+                    .unwrap(),
                 }],
                 png: Some(format!("data:image/png;base64,{PNG_B64}")),
                 width: Some(800),
@@ -126,17 +154,27 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
     let feedback = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
     assert_eq!(feedback["status"], "submitted");
     assert_eq!(feedback["annotations"][0]["text"], "Tighten this");
-    assert!(feedback["markdown"].as_str().unwrap().contains("- (2, 3): Tighten this"));
+    assert!(feedback["markdown"]
+        .as_str()
+        .unwrap()
+        .contains("- (2, 3): Tighten this"));
     assert_eq!(
         feedback["annotated_png"],
         format!("redline://session/{id}/annotated.png")
     );
 
     // Resources let an image-capable agent look at the redlines.
-    let context = McpContext { store: &store, base_url: "http://127.0.0.1:8788", token: TOKEN };
-    let listed = handle(&context, &json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"}))
-        .await
-        .unwrap();
+    let context = McpContext {
+        store: &store,
+        base_url: "http://127.0.0.1:8788",
+        token: TOKEN,
+    };
+    let listed = handle(
+        &context,
+        &json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"}),
+    )
+    .await
+    .unwrap();
     let uris: Vec<String> = listed["result"]["resources"]
         .as_array()
         .unwrap()
@@ -163,21 +201,30 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
 #[tokio::test]
 async fn waiting_times_out_without_losing_the_session() {
     let (_dir, store) = setup();
-    let created = payload(&call(
-        &store,
-        "review_screenshot",
-        json!({"title": "Wait", "image_base64": PNG_B64}),
-    ).await);
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({"title": "Wait", "image_base64": PNG_B64}),
+        )
+        .await,
+    );
     let id = created["session_id"].as_str().unwrap().to_string();
 
-    let waited = payload(&call(
-        &store,
-        "wait_for_feedback",
-        json!({"session_id": id, "timeout_seconds": 1}),
-    ).await);
+    let waited = payload(
+        &call(
+            &store,
+            "wait_for_feedback",
+            json!({"session_id": id, "timeout_seconds": 1}),
+        )
+        .await,
+    );
     assert_eq!(waited["status"], "open");
     assert_eq!(waited["timed_out"], true);
-    assert!(store.require(&id).is_ok(), "session still there after a timeout");
+    assert!(
+        store.require(&id).is_ok(),
+        "session still there after a timeout"
+    );
 }
 
 #[tokio::test]
@@ -186,9 +233,17 @@ async fn tool_errors_are_results_not_transport_failures() {
 
     let unknown = call(&store, "nope", json!({})).await;
     assert_eq!(unknown["isError"], true);
-    assert!(unknown["content"][0]["text"].as_str().unwrap().contains("unknown tool"));
+    assert!(unknown["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("unknown tool"));
 
-    let missing = call(&store, "get_feedback", json!({"session_id": "does-not-exist"})).await;
+    let missing = call(
+        &store,
+        "get_feedback",
+        json!({"session_id": "does-not-exist"}),
+    )
+    .await;
     assert_eq!(missing["isError"], true);
 
     let no_image = call(&store, "review_screenshot", json!({"title": "x"})).await;
@@ -210,11 +265,14 @@ async fn tool_errors_are_results_not_transport_failures() {
 #[tokio::test]
 async fn resolve_and_list_reflect_status_changes() {
     let (_dir, store) = setup();
-    let created = payload(&call(
-        &store,
-        "review_screenshot",
-        json!({"title": "Resolvable", "image_base64": PNG_B64}),
-    ).await);
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({"title": "Resolvable", "image_base64": PNG_B64}),
+        )
+        .await,
+    );
     let id = created["session_id"].as_str().unwrap().to_string();
 
     let resolved = payload(&call(&store, "resolve", json!({"session_id": id})).await);
@@ -229,13 +287,24 @@ async fn resolve_and_list_reflect_status_changes() {
 
     // Agent messages land beside the human's data, never inside annotations.json.
     let (_dir, store) = setup();
-    let created = payload(&call(
-        &store,
-        "review_screenshot",
-        json!({"title": "Thread", "image_base64": PNG_B64}),
-    ).await);
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({"title": "Thread", "image_base64": PNG_B64}),
+        )
+        .await,
+    );
     let id = created["session_id"].as_str().unwrap().to_string();
-    payload(&call(&store, "reply", json!({"session_id": id, "message": "which button?"})).await);
-    let thread = std::fs::read_to_string(store.dir(&id).unwrap().join("agent-thread.jsonl")).unwrap();
+    payload(
+        &call(
+            &store,
+            "reply",
+            json!({"session_id": id, "message": "which button?"}),
+        )
+        .await,
+    );
+    let thread =
+        std::fs::read_to_string(store.dir(&id).unwrap().join("agent-thread.jsonl")).unwrap();
     assert!(thread.contains("which button?"));
 }

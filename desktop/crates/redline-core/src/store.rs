@@ -20,8 +20,7 @@ pub fn valid_id(id: &str) -> bool {
         Some(first) if first.is_ascii_alphanumeric() => {}
         _ => return false,
     }
-    id.len() <= 121
-        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    id.len() <= 121 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 fn slugify(value: &str) -> String {
@@ -154,10 +153,16 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
                     num(ex),
                     num(ey),
                     item.color().unwrap_or("-"),
-                    item.number("width").map(num).unwrap_or_else(|| "-".to_string()),
+                    item.number("width")
+                        .map(num)
+                        .unwrap_or_else(|| "-".to_string()),
                 ));
             } else {
-                lines.push(format!("- {}. {} (see annotations.json)", index + 1, item.kind));
+                lines.push(format!(
+                    "- {}. {} (see annotations.json)",
+                    index + 1,
+                    item.kind
+                ));
             }
         }
         lines.push(String::new());
@@ -274,7 +279,11 @@ impl Store {
 
         let meta = Meta {
             id: sid.clone(),
-            title: if title.is_empty() { sid.clone() } else { title.to_string() },
+            title: if title.is_empty() {
+                sid.clone()
+            } else {
+                title.to_string()
+            },
             url: url.to_string(),
             note: note.to_string(),
             status: Status::Open,
@@ -335,7 +344,9 @@ impl Store {
                 return Ok(candidate);
             }
         }
-        Err(Error::BadRequest("could not allocate a session id".to_string()))
+        Err(Error::BadRequest(
+            "could not allocate a session id".to_string(),
+        ))
     }
 
     /// Write a submission: `annotations.json`, `meta.json`, `review.md`, and `annotated.png`.

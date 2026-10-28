@@ -61,7 +61,10 @@ pub struct Annotation {
 
 impl Annotation {
     pub fn new(kind: &str) -> Self {
-        Self { kind: kind.to_string(), fields: Map::new() }
+        Self {
+            kind: kind.to_string(),
+            fields: Map::new(),
+        }
     }
 
     pub fn text_of(&self) -> Option<&str> {

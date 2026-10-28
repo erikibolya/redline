@@ -74,8 +74,8 @@ fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::E
             .build()
             .expect("tokio runtime");
         runtime.block_on(async move {
-            let auth = redline_core::paths::load_or_create_token(&data_dir, None, true)
-                .expect("token");
+            let auth =
+                redline_core::paths::load_or_create_token(&data_dir, None, true).expect("token");
             let store = Store::new(redline_core::paths::sessions_dir(&data_dir));
             store.ensure().expect("sessions dir");
 
@@ -87,7 +87,10 @@ fn start_server(data_dir: PathBuf) -> Result<ServerHandle, Box<dyn std::error::E
             let state = AppState::new(store, auth.clone())
                 .with_base_url(base_url.clone())
                 .with_inline_ui(UI_FILES);
-            let _ = sender.send(ServerHandle { base_url, token: auth.token().to_string() });
+            let _ = sender.send(ServerHandle {
+                base_url,
+                token: auth.token().to_string(),
+            });
 
             axum::serve(listener, Router::from(router(state)))
                 .await
@@ -116,7 +119,13 @@ fn mcp_config(server: &ServerHandle) -> String {
 fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "open", "Open redline", true, None::<&str>)?;
     let copy_config = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
-    let address = MenuItem::with_id(app, "address", &format!("Listening on {}", server.base_url), false, None::<&str>)?;
+    let address = MenuItem::with_id(
+        app,
+        "address",
+        &format!("Listening on {}", server.base_url),
+        false,
+        None::<&str>,
+    )?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit redline", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &copy_config, &address, &separator, &quit])?;
@@ -124,7 +133,11 @@ fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
     let config = mcp_config(&server);
     TrayIconBuilder::with_id("main")
         .tooltip("redline — redline the screenshot, the agent writes the fix")
-        .icon(app.default_window_icon().cloned().ok_or(tauri::Error::UnknownPath)?)
+        .icon(
+            app.default_window_icon()
+                .cloned()
+                .ok_or(tauri::Error::UnknownPath)?,
+        )
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| match event.id.as_ref() {
@@ -138,7 +151,12 @@ fn build_tray(app: &tauri::App, server: ServerHandle) -> tauri::Result<()> {
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
                 show_window(tray.app_handle());
             }
         })

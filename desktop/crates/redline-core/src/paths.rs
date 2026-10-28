@@ -98,7 +98,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let auth = load_or_create_token(dir.path(), Some("given".into()), false).unwrap();
         assert_eq!(auth.token(), "given");
-        assert!(!token_path(dir.path()).exists(), "a client must not rewrite the token file");
+        assert!(
+            !token_path(dir.path()).exists(),
+            "a client must not rewrite the token file"
+        );
 
         load_or_create_token(dir.path(), Some("served".into()), true).unwrap();
         let stored = std::fs::read_to_string(token_path(dir.path())).unwrap();
@@ -107,6 +110,9 @@ mod tests {
 
     #[test]
     fn sessions_live_under_the_data_dir() {
-        assert_eq!(sessions_dir(Path::new("/tmp/x")), Path::new("/tmp/x/sessions"));
+        assert_eq!(
+            sessions_dir(Path::new("/tmp/x")),
+            Path::new("/tmp/x/sessions")
+        );
     }
 }

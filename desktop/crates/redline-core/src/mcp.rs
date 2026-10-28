@@ -34,7 +34,7 @@ pub async fn handle(ctx: &McpContext<'_>, request: &Value) -> Option<Value> {
             },
             "serverInfo": { "name": "redline", "version": crate::VERSION },
             "instructions": "Create a review session from a screenshot, wait for the human to redline it, \
-then read the annotations. Prefer `review_screenshot` + `wait_for_feedback`.",
+        then read the annotations. Prefer `review_screenshot` + `wait_for_feedback`.",
         })),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
@@ -150,8 +150,14 @@ pub fn tool_definitions() -> Value {
 }
 
 async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value> {
-    let name = params.get("name").and_then(Value::as_str).unwrap_or_default();
-    let args = params.get("arguments").cloned().unwrap_or_else(|| json!({}));
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let args = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
 
     let outcome = match name {
         "review_screenshot" => review_screenshot(ctx, &args).await,
@@ -161,7 +167,8 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
         "reply" => reply(ctx, &args),
         "resolve" => resolve(ctx, &args),
         "capture_review" => Err("capture_review is not available in this build yet; pass \
-            image_base64 or image_path to review_screenshot".to_string()),
+            image_base64 or image_path to review_screenshot"
+            .to_string()),
         other => Err(format!("unknown tool: {other}")),
     };
 
@@ -183,9 +190,15 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
     use base64::Engine as _;
 
     let title = string_arg(args, "title").unwrap_or_else(|| "Screenshot review".to_string());
-    let (bytes, name) = match (string_arg(args, "image_base64"), string_arg(args, "image_path")) {
+    let (bytes, name) = match (
+        string_arg(args, "image_base64"),
+        string_arg(args, "image_path"),
+    ) {
         (Some(encoded), _) => {
-            let raw = encoded.split_once(',').map(|(_, data)| data).unwrap_or(&encoded);
+            let raw = encoded
+                .split_once(',')
+                .map(|(_, data)| data)
+                .unwrap_or(&encoded);
             let bytes = base64::engine::general_purpose::STANDARD
                 .decode(raw.trim())
                 .map_err(|err| format!("image_base64 is not valid base64: {err}"))?;
@@ -220,7 +233,10 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
         )
         .map_err(|err| err.to_string())?;
 
-    let wait = args.get("wait_seconds").and_then(Value::as_f64).unwrap_or(0.0) as u64;
+    let wait = args
+        .get("wait_seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0) as u64;
     let meta = if wait > 0 {
         wait_for_status(ctx.store, &meta.id, wait.min(3600))
             .await
@@ -246,7 +262,12 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
 }
 
 fn review_url(ctx: &McpContext<'_>, id: &str) -> String {
-    format!("{}/s/{}?t={}", ctx.base_url.trim_end_matches('/'), id, ctx.token)
+    format!(
+        "{}/s/{}?t={}",
+        ctx.base_url.trim_end_matches('/'),
+        id,
+        ctx.token
+    )
 }
 
 fn get_feedback(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
@@ -289,7 +310,11 @@ async fn wait_for_status(store: &Store, id: &str, timeout_seconds: u64) -> Resul
 
 fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let wanted = string_arg(args, "status");
-    let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(50).min(500) as usize;
+    let limit = args
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(50)
+        .min(500) as usize;
     let sessions = ctx.store.list().map_err(|err| err.to_string())?;
     let items: Vec<Value> = sessions
         .into_iter()
@@ -317,7 +342,11 @@ fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     ctx.store.require(&id).map_err(|err| err.to_string())?;
     // Agent messages live beside the human's data but never inside it: annotations.json stays
     // the human's, agent-thread.jsonl is ours.
-    let path = ctx.store.dir(&id).map_err(|err| err.to_string())?.join("agent-thread.jsonl");
+    let path = ctx
+        .store
+        .dir(&id)
+        .map_err(|err| err.to_string())?
+        .join("agent-thread.jsonl");
     let line = json!({ "at": crate::store::now(), "message": message });
     use std::io::Write as _;
     let mut file = std::fs::OpenOptions::new()
@@ -332,7 +361,9 @@ fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
 fn resolve(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
     let meta = ctx.store.resolve(&id).map_err(|err| err.to_string())?;
-    Ok(json!({ "session_id": meta.id, "status": meta.status.as_str(), "resolved_at": meta.resolved_at }))
+    Ok(
+        json!({ "session_id": meta.id, "status": meta.status.as_str(), "resolved_at": meta.resolved_at }),
+    )
 }
 
 fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
@@ -348,7 +379,9 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
     let markdown = dir
         .as_ref()
         .and_then(|dir| std::fs::read_to_string(dir.join("review.md")).ok());
-    let has_png = dir.as_ref().is_some_and(|dir| dir.join("annotated.png").is_file());
+    let has_png = dir
+        .as_ref()
+        .is_some_and(|dir| dir.join("annotated.png").is_file());
 
     json!({
         "session_id": meta.id,
@@ -404,7 +437,8 @@ fn resources_read(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value> 
         .store
         .file_path(id, file)
         .map_err(|err| rpc_error(-32602, err.to_string()))?;
-    let bytes = std::fs::read(&path).map_err(|err| rpc_error(-32603, format!("cannot read {uri}: {err}")))?;
+    let bytes = std::fs::read(&path)
+        .map_err(|err| rpc_error(-32603, format!("cannot read {uri}: {err}")))?;
 
     let content = if file.ends_with(".png") {
         use base64::Engine as _;

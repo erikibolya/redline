@@ -141,7 +141,12 @@
   function point(event) {
     const rect = canvas.getBoundingClientRect();
     const scale = canvas.width / rect.width;
-    return { x: (event.clientX - rect.left) * scale, y: (event.clientY - rect.top) * scale };
+    // Whole pixels: sub-pixel coordinates are meaningless for a screenshot and make the
+    // JSON harder to read and diff.
+    return {
+      x: Math.round((event.clientX - rect.left) * scale),
+      y: Math.round((event.clientY - rect.top) * scale),
+    };
   }
 
   canvas.addEventListener("pointerdown", event => {
@@ -173,9 +178,9 @@
     if (!drawing) return;
     drawing.end = point(event);
     if (drawing.type === "rect" && (Math.abs(drawing.end.x - drawing.start.x) > 2 || Math.abs(drawing.end.y - drawing.start.y) > 2)) {
-      annotations.push(drawing);
+      annotations.push({ type: "rect", start: drawing.start, end: drawing.end, color: drawing.color, width: drawing.width });
     } else if (drawing.type === "arrow") {
-      annotations.push(drawing);
+      annotations.push({ type: "arrow", start: drawing.start, end: drawing.end, color: drawing.color, width: drawing.width });
     } else if (drawing.type === "pen" && drawing.points.length > 1) {
       annotations.push(drawing);
     }

@@ -10,6 +10,9 @@
   body { margin: 0; font: 14px/1.45 system-ui, sans-serif; color: #1e293b; background: #e2e8f0; }
   header { padding: 16px 20px; background: #0f172a; color: #f8fafc; display: flex; align-items: center; gap: 16px; }
   header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header button#new-review { margin-left: 8px; }
+  header button.primary { background: #0ea5e9; border-color: #0ea5e9; font-weight: 600; }
+  header button.primary:hover { background: #0284c7; }
   header button { margin-left: auto; border: 1px solid #475569; background: #1e293b; color: #f8fafc; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
   header button:hover { background: #334155; }
   main { max-width: 1000px; margin: 20px auto; padding: 0 16px; }
@@ -36,12 +39,28 @@
   .signin input { width: min(340px, 60vw); padding: 8px 10px; border-radius: 8px; border: 1px solid #94a3b8; font: inherit; }
   .signin button { border: 0; border-radius: 8px; padding: 8px 14px; background: #0ea5e9; color: #fff; font: inherit; cursor: pointer; }
   .signin button:hover { background: #0284c7; }
+  .overlay { position: fixed; inset: 0; background: rgba(15,23,42,.55); display: grid; place-items: center; z-index: 20; }
+  .overlay.hidden { display: none; }
+  .modal { width: min(520px, 92vw); background: #fff; border-radius: 12px; padding: 22px 24px; box-shadow: 0 20px 60px rgba(15,23,42,.35); }
+  .modal h2 { margin: 0 0 4px; font-size: 17px; }
+  .modal p.hint { margin: 0 0 16px; color: #64748b; font-size: 13px; }
+  .modal label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #64748b; margin: 12px 0 4px; }
+  .modal input[type="text"], .modal textarea { width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 8px; font: inherit; }
+  .modal textarea { min-height: 62px; resize: vertical; }
+  .drop { border: 2px dashed #94a3b8; border-radius: 10px; padding: 18px; text-align: center; color: #64748b; font-size: 13px; cursor: pointer; }
+  .drop.over { border-color: #0ea5e9; background: #f0f9ff; color: #0369a1; }
+  .modal .row { display: flex; gap: 10px; justify-content: flex-end; margin-top: 18px; }
+  .modal button { border: 0; border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  .modal button.ghost { background: #e2e8f0; color: #334155; }
+  .modal button.primary { background: #0ea5e9; color: #fff; font-weight: 600; }
+  .modal .error { color: #be123c; font-size: 13px; min-height: 18px; margin-top: 8px; }
 </style>
 </head>
 <body>
 <header>
   <h1>Visual review sessions</h1>
   <button id="refresh">Refresh</button>
+  <button id="new-review" class="primary">New review</button>
 </header>
 <main>
   <div id="list"></div>
@@ -62,6 +81,25 @@
     <p id="sessions-dir" class="meta"></p>
   </section>
 </main>
+<div id="overlay" class="overlay hidden">
+  <form class="modal" id="new-form">
+    <h2>New review</h2>
+    <p class="hint">Drop a screenshot here — or click to choose a file. Then say what to look at.</p>
+    <div class="drop" id="drop">Drop an image, or click to browse</div>
+    <input type="file" id="file" accept="image/*" hidden />
+    <label for="f-title">Title</label>
+    <input id="f-title" type="text" placeholder="Button / default" />
+    <label for="f-url">Page URL <span class="meta">(optional)</span></label>
+    <input id="f-url" type="text" placeholder="http://localhost:5016/button" />
+    <label for="f-note">What should be checked? <span class="meta">(optional)</span></label>
+    <textarea id="f-note" placeholder="Spacing looks off, check hover state"></textarea>
+    <div class="error" id="new-error"></div>
+    <div class="row">
+      <button type="button" class="ghost" id="new-cancel">Cancel</button>
+      <button type="submit" class="primary" id="new-submit">Create review</button>
+    </div>
+  </form>
+</div>
 <script>
 const connect = document.getElementById("connect");
 const copyButton = document.getElementById("copy-config");
@@ -149,6 +187,89 @@ async function load() {
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
+// --- new review (human-initiated) -------------------------------------------
+const overlay = document.getElementById("overlay");
+const drop = document.getElementById("drop");
+const fileInput = document.getElementById("file");
+const errorBox = document.getElementById("new-error");
+let pickedFile = null;
+
+function openNewReview() {
+  overlay.classList.remove("hidden");
+  document.getElementById("f-title").focus();
+}
+function closeNewReview() {
+  overlay.classList.add("hidden");
+  errorBox.textContent = "";
+}
+function takeFile(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    errorBox.textContent = "That is not an image.";
+    return;
+  }
+  pickedFile = file;
+  drop.textContent = `${file.name} — ${Math.round(file.size / 1024)} KB`;
+  const title = document.getElementById("f-title");
+  if (!title.value) title.value = file.name.replace(/\.[^.]+$/, "");
+}
+
+document.getElementById("new-review").addEventListener("click", openNewReview);
+document.getElementById("new-cancel").addEventListener("click", closeNewReview);
+drop.addEventListener("click", () => fileInput.click());
+fileInput.addEventListener("change", () => takeFile(fileInput.files[0]));
+drop.addEventListener("dragover", (event) => { event.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (event) => {
+  event.preventDefault();
+  drop.classList.remove("over");
+  takeFile(event.dataTransfer.files[0]);
+});
+// dropping anywhere on the page is the fast path
+document.addEventListener("dragover", (event) => event.preventDefault());
+document.addEventListener("drop", (event) => {
+  if (event.dataTransfer.files.length) {
+    event.preventDefault();
+    if (overlay.classList.contains("hidden")) openNewReview();
+    takeFile(event.dataTransfer.files[0]);
+  }
+});
+
+document.getElementById("new-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!pickedFile) {
+    errorBox.textContent = "Choose a screenshot first.";
+    return;
+  }
+  const submit = document.getElementById("new-submit");
+  submit.disabled = true;
+  errorBox.textContent = "Uploading…";
+  try {
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(pickedFile);
+    });
+    const response = await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: document.getElementById("f-title").value.trim() || pickedFile.name,
+        url: document.getElementById("f-url").value.trim(),
+        note: document.getElementById("f-note").value.trim(),
+        image_base64: dataUrl,
+        agent: "human",
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "could not create the review");
+    location.href = `/s/${encodeURIComponent(body.meta.id)}`;
+  } catch (error) {
+    errorBox.textContent = error.message;
+    submit.disabled = false;
+  }
+});
+
 document.getElementById("refresh").addEventListener("click", load);
 loadConfig().then(load);
 </script>

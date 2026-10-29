@@ -6,7 +6,7 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.18.0` on holly — `https://redline.ibolya.cz`, container
+**Shipped and in production:** `v0.19.0` on holly — `https://redline.ibolya.cz`, container
 `ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
 
 ## What exists today

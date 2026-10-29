@@ -390,7 +390,7 @@ services:
     build:
       context: /path/to/redline
       dockerfile: desktop/crates/redline-agent/Dockerfile
-    image: redline-agent:0.15.0
+    image: redline-agent:0.19.0
     container_name: redline-agent
     restart: unless-stopped
     networks: [traefik_network]

@@ -1696,7 +1696,7 @@ class Editor {
         const label = String(
           annotation.note || annotation.text || `${annotation.type}`,
         );
-        return `<div class="ann-row" style="cursor:default">
+        return `<div class="ann-row readonly">
           <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
           <span class="label"><b>${escapeHtml(label)}</b><span>${escapeHtml(annotation.type)}</span></span>
         </div>`;

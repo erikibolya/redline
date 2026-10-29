@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The annotation list is a list, not a stack of broken frames.** In a submitted (read-only) round
+  the separator between rows was a `border-top` on a rounded row, so it painted only the middle
+  segment between the two rounded corners and every row looked like an open frame. The separator is
+  now a full-width hairline and read-only rows are a plain `.ann-row.readonly` (no pointer cursor,
+  no hover highlight, no delete button). The browser e2e measures the separator and the class.
+
 - **A new review starts in the project you were just working in.** Opening a review (or picking a
   project in the dialog) records it in the browser, and the next **Ctrl+V** or **New review** opens
   with that project already selected instead of the placeholder — on the editor and on the start

@@ -679,6 +679,13 @@ const main = async () => {
     `${beforeSwitch} → ${afterSwitch}`);
 
   // ---- submitting locks the canvas; STOP takes the submission back
+  // A second annotation, so the read-only list below has a row *pair* to measure a separator on.
+  await page.evaluate(() => window.redline.mutate(() => {
+    window.redline.annotations.push({
+      id: "e2e-second", type: "rect", color: "#e11d48", width: 3,
+      start: { x: 120, y: 160 }, end: { x: 260, y: 240 }, note: "second",
+    });
+  }));
   const beforeStop = await page.evaluate(() => window.redline.annotations.length);
   await page.keyboard.down("Control");
   await page.keyboard.press("Enter");
@@ -726,6 +733,32 @@ const main = async () => {
       && stillLocked.tool === guarded.tool,
     JSON.stringify({ toolsHidden: guarded.toolsHidden, toolsDisabled: guarded.toolsDisabled,
       changed: stillLocked.after !== guarded.before, tool: stillLocked.tool }));
+  // The read-only list is a list, not a stack of broken frames: the separator between two rows
+  // has to be a straight hairline across the whole row. As a `border-top` on a rounded box it
+  // painted only the middle segment, so each row looked like an open frame with missing ends.
+  const list = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#ann-list .ann-row")];
+    if (rows.length < 2) return { rows: rows.length };
+    const style = getComputedStyle(rows[1]);
+    const first = rows[0].getBoundingClientRect();
+    const second = rows[1].getBoundingClientRect();
+    return {
+      rows: rows.length,
+      readonly: rows.every((row) => row.classList.contains("readonly")
+        && getComputedStyle(row).cursor === "default"),
+      radius: style.borderTopLeftRadius,
+      separator: style.borderTopColor,
+      firstSeparator: getComputedStyle(rows[0]).borderTopColor,
+      sameWidth: Math.abs(first.width - second.width) < 0.5
+        && Math.abs(first.left - second.left) < 0.5,
+    };
+  });
+  check("a locked review lists its annotations as flat read-only rows with a full separator",
+    list.rows < 2 || (list.readonly && list.radius === "0px" && list.sameWidth
+      && list.separator !== list.firstSeparator
+      && list.separator !== "rgba(0, 0, 0, 0)"),
+    JSON.stringify(list));
+
   await page.evaluate(() => window.redline.select(-1));
 
   await page.waitForFunction(() => {

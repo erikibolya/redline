@@ -363,8 +363,17 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   display: flex; gap: 8px; align-items: center; padding: 7px 8px;
   border-radius: var(--radius); border: 1px solid transparent; cursor: pointer;
 }
-.ann-row + .ann-row { margin-top: 2px; border-top-color: var(--border-soft); }
+/* The separator has to be a full-width hairline. As a plain `border-top` on a rounded row it
+   painted only the middle segment between the two rounded corners, so every row looked like a
+   frame whose ends were missing. */
+.ann-row + .ann-row {
+  margin-top: 2px; border-top-color: var(--border-soft);
+  border-top-left-radius: 0; border-top-right-radius: 0;
+}
 .ann-row:hover { background: var(--panel-2); }
+/* A read-only row is not a target: it must not pretend to be clickable. */
+.ann-row.readonly { cursor: default; }
+.ann-row.readonly:hover { background: transparent; }
 .ann-row[aria-current="true"] { background: var(--panel-3); border-color: var(--accent); }
 .ann-row .glyph {
   width: 22px; height: 22px; flex: none; display: grid; place-items: center;

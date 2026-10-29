@@ -19,6 +19,10 @@
   --inspector: 304px;
   --header: 52px;
   --status: 30px;
+  /* The canvas toolbar floats at the top of the stage; the agent-status toast is placed
+     under it so the two can never cover each other. */
+  --stage-toolbar-top: 12px;
+  --stage-toolbar-height: 44px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 }
 
@@ -137,7 +141,11 @@ a:hover { text-decoration: underline; }
 .btn.primary:hover { background: #15803d; }
 .btn.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.ghost { background: transparent; }
-.btn.icon { padding: 6px; }
+/* Icon buttons are a fixed square whatever the glyph inside ("?" is narrower than "☀"). */
+.btn.icon {
+  width: 32px; height: 32px; padding: 0; flex: none;
+  justify-content: center; line-height: 1;
+}
 .btn:disabled { opacity: .5; cursor: default; transform: none; }
 .btn kbd { font: inherit; opacity: .6; }
 
@@ -226,7 +234,10 @@ a:hover { text-decoration: underline; }
 
 /* ---------------------------------------------------------------- stage */
 .stage-status {
-  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 6;
+  position: absolute; z-index: 6;
+  /* Below the toolbar, never on it: the toolbar is where the tools are. */
+  top: calc(var(--stage-toolbar-top) + var(--stage-toolbar-height) + 8px);
+  left: 50%; transform: translateX(-50%);
   padding: 4px 12px; border-radius: 999px; pointer-events: none;
   background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 11px;
 }
@@ -247,7 +258,7 @@ a:hover { text-decoration: underline; }
 .stage.panning canvas { cursor: grabbing !important; }
 
 .options {
-  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  position: absolute; top: var(--stage-toolbar-top); left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 4px; padding: 5px;
   background: rgba(21, 26, 33, .94); border: 1px solid var(--border);
   border-radius: 10px; backdrop-filter: blur(8px); box-shadow: 0 8px 24px rgba(0,0,0,.4);

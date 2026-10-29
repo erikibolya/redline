@@ -36,6 +36,9 @@ Columns collapse: `[` toggles the left rail, `]` the right panel. Both states pe
 `localStorage`. The canvas always fills what is left — no fixed page width, no centred 1000 px
 column.
 
+Header icon buttons (`?`, theme, rail, inspector) are a fixed **32 × 32 px square**: the glyph
+inside changes width (`?` is narrower than `☀`), the button must not.
+
 ## Left rail — sessions as folders
 
 - **+ New review** at the top (drop a screenshot anywhere in the window also works).
@@ -136,6 +139,8 @@ new one.
 - After Submit, the conversation says what is happening: **Waiting for an agent** (nobody has read
   it yet, with the age of the submission and the two MCP calls that would read it), **Agent
   received this** (with the time), the live activity line while `working`, and the reply itself.
+- The canvas pill repeats that line while `submitted`. It sits **under** the tool bar — the tools
+  are at the top of the stage and the pill must never cover them — and ignores the pointer.
 - `REDLINE_WEBHOOK_URL=http://host:port/path` makes the server POST a small JSON body
   (`event`, `session_id`, `title`, `project`, `prompt`, `annotations`, `review_url`) when the human
   submits. It is a plain HTTP POST with a 5 s timeout, fire-and-forget: a dead endpoint never

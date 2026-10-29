@@ -250,6 +250,36 @@ const main = async () => {
   check("submission says it is waiting for an agent", waiting.includes("Waiting for an agent"),
     waiting.slice(0, 60));
 
+  // ---- the status toast must not sit on the toolbar (the tools live there)
+  const toastBox = await page.evaluate(() => {
+    const toast = document.querySelector("#stage-status");
+    const bar = document.querySelector(".options");
+    if (!toast || toast.hidden || !bar) return null;
+    const a = toast.getBoundingClientRect();
+    const b = bar.getBoundingClientRect();
+    return {
+      overlap: a.top < b.bottom && a.bottom > b.top && a.left < b.right && a.right > b.left,
+      toastTop: Math.round(a.top),
+      barBottom: Math.round(b.bottom),
+    };
+  });
+  check("status toast sits below the toolbar", toastBox && !toastBox.overlap,
+    toastBox ? `toast top ${toastBox.toastTop} · toolbar bottom ${toastBox.barBottom}` : "no toast");
+
+  // ---- a fresh load of a submitted session must not die before the event poll lands
+  await page.reload({ waitUntil: "networkidle0" });
+  let reloaded = { stage: "", status: "" };
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    reloaded = await page.evaluate(() => ({
+      stage: document.querySelector("#stage-empty")?.textContent || "",
+      status: document.querySelector("#stage-status")?.textContent || "",
+    }));
+    if (reloaded.stage || reloaded.status) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  check("a submitted session survives a page reload", !reloaded.stage.includes("Could not load")
+    && reloaded.status.length > 0, (reloaded.stage || reloaded.status).slice(0, 70));
+
   // ---- the conversation clock is the viewer's wall clock, not the server's UTC
   await page.emulateTimezone("Europe/Prague");
   await page.evaluate(() => window.redline.renderConversation());
@@ -432,13 +462,18 @@ const main = async () => {
   );
   const round = await page.evaluate(() => ({
     image: window.redline.meta.image,
+    src: window.redline.image?.src || "",
     text: document.querySelector("#conv-log")?.textContent || "",
     picture: Boolean(document.querySelector("#conv-log .conv-img")),
+    history: document.querySelector("#history-count")?.textContent || "0",
   }));
   check("agent round replaces the canvas image in place", round.image.startsWith("screenshot-"),
     round.image);
+  check("canvas reloads the new round (cache-busted)", round.src.includes(round.image),
+    round.src);
   check("agent round shows in the conversation with its picture",
     round.text.includes("e2e next round") && round.picture, JSON.stringify(round).slice(0, 120));
+  check("round fills the history", Number(round.history) >= 1, round.history);
 
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });

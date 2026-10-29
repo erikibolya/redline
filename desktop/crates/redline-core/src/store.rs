@@ -630,6 +630,7 @@ impl Store {
 
         meta.status = Status::Open;
         meta.submitted_at = None;
+        meta.resolved_at = None;
         meta.agent_state = Some("replied".to_string());
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
 

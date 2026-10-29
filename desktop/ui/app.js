@@ -372,6 +372,10 @@ class Editor {
     this.future = [];
     this.ghosts = null;
     this.ghostStamp = null;
+    // The conversation poll fills these; until it lands, `renderHeader` must not trip over
+    // an undefined list (a fresh load of a submitted session renders the header first).
+    this.events = [];
+    this.thread = [];
     this.selected = new Set();
     this.marquee = null;
     this.tool = "select";
@@ -470,6 +474,7 @@ class Editor {
       this.selected.clear();
       this.renderInspector();
       this.renderHeader();
+      this.loadHistory();
       this.startConversationPolling();
       await this.loadImage(this.meta.image);
       this.fit();
@@ -496,7 +501,9 @@ class Editor {
         this.showStageMessage("Screenshot missing", `Could not load ${name}.`);
         resolve();
       };
-      image.src = `/sessions/${encodeURIComponent(this.sessionId)}/image`;
+      // The URL is stable while the file behind it changes with every round, so the browser
+      // would happily show the previous screenshot forever without a cache-buster.
+      image.src = `/sessions/${encodeURIComponent(this.sessionId)}/image?v=${encodeURIComponent(name)}`;
     });
   }
 
@@ -1777,6 +1784,7 @@ class Editor {
         this.fit();
         this.render();
         this.renderInspector();
+        this.loadHistory();
       }
     } catch (error) {
       if (!quiet) {

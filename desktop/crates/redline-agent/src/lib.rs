@@ -8,7 +8,7 @@
 //! It is deliberately small and dependency-light so the desktop app can embed it and a headless
 //! host can run the `redline-agent` binary.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -235,33 +235,17 @@ fn handle(config: &AgentConfig, session: &Value) {
         }
     };
 
-    // The agent should have replied and resolved itself. Keep the transcript in the server log;
-    // the human only ever sees a short note, never a wall of stdout.
-    let mut replied = false;
-    if let Ok(value) = api_get(config, &format!("/api/sessions/{id}")) {
-        if value["meta"]["status"] == "resolved" {
-            eprintln!("redline-agent: {id} resolved by the agent");
-            return;
-        }
-        if value["meta"]["status"] == "open" {
-            eprintln!("redline-agent: {id} handed back to the human with a new round");
-            return;
-        }
-        replied = value["meta"]["agent_state"] == "replied";
-    }
     eprintln!("redline-agent: {id} output tail: {}", tail(&outcome, 400));
-    if !replied {
-        let _ = mcp(
-            config,
-            "reply",
-            json!({ "session_id": id, "message": "The agent finished without a summary. Its changes are in the repository's working tree — check `git status` there." }),
-        );
+    // The CLI can exit a moment before the server finishes the last tool call; judge the session
+    // after a short grace period, and never invent a message for the human.
+    std::thread::sleep(Duration::from_secs(2));
+    if let Ok(value) = api_get(config, &format!("/api/sessions/{id}")) {
+        match value["meta"]["status"].as_str().unwrap_or_default() {
+            "resolved" => eprintln!("redline-agent: {id} resolved by the agent"),
+            "open" => eprintln!("redline-agent: {id} handed back to the human with a new round"),
+            _ => eprintln!("redline-agent: {id} finished without a reply or a round"),
+        }
     }
-    let _ = mcp(
-        config,
-        "resolve",
-        json!({ "session_id": id, "summary": "Resolved by the agent bridge" }),
-    );
 }
 
 fn first_line(text: &str) -> String {
@@ -286,7 +270,8 @@ fn tail(text: &str, limit: usize) -> String {
 
 /// Watch the server until `cancel` is set. One review at a time, no queue.
 pub fn run(config: AgentConfig, cancel: Arc<AtomicBool>) {
-    let mut seen: HashSet<String> = HashSet::new();
+    // Keyed by submission, not by session: a round-based review is submitted many times.
+    let mut seen: HashMap<String, String> = HashMap::new();
     eprintln!(
         "redline-agent: watching {} for submitted reviews; repo {}",
         config.url,
@@ -311,10 +296,14 @@ pub fn run(config: AgentConfig, cancel: Arc<AtomicBool>) {
                         continue;
                     }
                     let id = session["id"].as_str().unwrap_or_default().to_string();
-                    if id.is_empty() || seen.contains(&id) {
+                    let submitted = session["submitted_at"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_string();
+                    if id.is_empty() || seen.get(&id) == Some(&submitted) {
                         continue;
                     }
-                    seen.insert(id);
+                    seen.insert(id, submitted);
                     handle(&config, &session);
                     if cancel.load(Ordering::Relaxed) {
                         return;

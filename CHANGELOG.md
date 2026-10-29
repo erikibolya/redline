@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.14.1 — 2026-10-29
+
+Fixes found by using rounds for real.
+
+- **The canvas actually switches to the new round.** `/sessions/<id>/image` is a stable URL while
+  the file behind it changes, so the browser kept showing the previous screenshot; it is now
+  cache-busted with the image name.
+- **History updates.** The count is loaded with the session and refreshed when a round arrives,
+  instead of staying at 0 until the disclosure is opened.
+- **No invented messages from the bridge.** It no longer posts "check `git status`" or resolves on
+  the agent's behalf; it logs what happened and leaves the session in the state the agent left it.
+  A short grace period covers the CLI exiting just before the last tool call lands.
+- **Rounds keep running.** The bridge keys its "already handled" set by submission, not by session,
+  so the same review can be submitted again after a new round.
+- `post_round` clears `resolved_at` when it reopens a session.
+
+## Unreleased
+
+- **The canvas status pill moved below the toolbar.** It sat at `top: 14px`, the exact place the
+  tool bar floats, so while a review was `submitted` the "Agent is working…" pill covered the
+  tools. `--stage-toolbar-top` / `--stage-toolbar-height` now describe the bar once and the pill
+  is placed under it; the e2e checks the two rectangles do not intersect.
+- **A submitted review opens again.** `renderHeader()` read `this.events.length` while
+  `this.events` was still `undefined` (the conversation poll had not answered yet), so a fresh
+  load of a submitted session threw and the canvas said "Could not load this session". The lists
+  start empty in the constructor; the e2e reloads the page while submitted to keep it that way.
+- **Header icon buttons are square.** `.btn.icon` is a fixed 32 × 32 px box, so `?`, `☀` / `☾`,
+  `☰` and `⌥` no longer produce buttons of different widths that read as squashed rectangles.
+
 ## 0.14.0 — 2026-10-29
 
 One task is one session: the agent's follow-up no longer opens a new review.

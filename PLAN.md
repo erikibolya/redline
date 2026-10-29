@@ -6,7 +6,7 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.6.0` on holly — `https://redline.ibolya.cz`, container
+**Shipped and in production:** `v0.18.0` on holly — `https://redline.ibolya.cz`, container
 `ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
 
 ## What exists today
@@ -16,11 +16,11 @@ accounts, runs where the agents run.
 | Agent API | MCP over HTTP (`review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`, `reply`, `resolve`) + plain JSON API + CLI |
 | Capture | Headless Chromium server-side, from MCP or the UI (`/browser` image) |
 | Editor | 3-column shell: session rail, zoom/pan canvas, inspector with a conversation + composer (v0.9); rect/ellipse/arrow/pen; numbered, per-shape notes (v0.8); round history with a read-only viewer (v0.17); submitted lock + STOP; move, nudge, delete, undo/redo, grouping, z-order, align/distribute |
-| Sessions | open → submitted → resolved; grouped by project in the rail (v0.10); search, filters, badges, "new" dots; delete / mark done / reopen / purge done |
+| Sessions | open → submitted → resolved; repository-backed projects in the rail (v0.10, repo keys v0.19); search, filters, badges, "new" dots; delete / mark done / reopen / purge done |
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle (`redline-agent`, v0.13) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`) |
-| Tests | 58 Rust tests, 60-check browser E2E in CI on Linux + Windows |
+| Tests | 63 Rust tests, 72-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -89,6 +89,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 4. Session gallery on `/`.
 5. Touch toolbar + hover-free rail actions.
 6. macOS/Linux bundles.
+7. Multi-agent repo routing: `agent_id` and portable repo keys are already stored.
 
 ## Known limitations
 
@@ -96,6 +97,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - Capture needs the `:browser` image (~768 MB); the slim image returns an actionable error instead.
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
 - No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
+- Repo routing is single-agent: all agents watch the same queue; a claim/filter router is next.
 - No server-side pagination; the rail renders everything it gets.
 - Text notes have a fixed font family, one size per note.
 - The rail's per-session actions appear on hover, so they are invisible to touch users.

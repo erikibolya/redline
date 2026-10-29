@@ -214,6 +214,20 @@ a:hover { text-decoration: underline; }
   color: #86efac; background: #10231a; border: 1px solid #14532d;
   border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600;
 }
+.rail-project .pworking {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent);
+  border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600;
+}
+.rail-project .pworking b { font-weight: 600; }
+/* A running agent: the same spinner on the project header and on the review row, so "busy"
+   reads the same whether the project is expanded or collapsed. */
+.spin {
+  display: inline-block; width: 9px; height: 9px; flex: none; border-radius: 50%;
+  border: 1.5px solid currentColor; border-right-color: transparent;
+  animation: spin .9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .rail-group { margin: 10px 6px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #5c6879; }
 .session {
   display: flex; gap: 10px; align-items: flex-start;
@@ -245,6 +259,12 @@ a:hover { text-decoration: underline; }
   background: var(--panel-3); color: var(--muted); border: 1px solid var(--border);
 }
 .session .badge.new { background: var(--accent); border-color: var(--accent); color: #fff; }
+.session .badge.work {
+  display: inline-flex; align-items: center; gap: 5px; padding: 0 8px;
+  background: var(--panel-2); border-color: var(--accent); color: var(--accent);
+  font-size: 10px;
+}
+.session.working .dot { background: var(--accent); animation: conv-pulse 1.4s ease-in-out infinite; }
 .rail-empty { padding: 24px 12px; text-align: center; color: var(--muted); }
 .rail-tools { display: flex; gap: 6px; }
 .rail-tools .chip { width: 100%; text-align: center; }
@@ -474,6 +494,8 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .conv-run.working .conv-run-mark { animation: none; opacity: 1; }
+  .session.working .dot { animation: none; opacity: 1; }
+  .spin { animation: none; }
 }
 .composer { border-top: 1px solid var(--border-soft); padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 6px; }
 .composer textarea {

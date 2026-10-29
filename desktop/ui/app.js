@@ -17,6 +17,12 @@ const uid = () =>
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+/** An agent is working only while the round is submitted. A late narration line used to leave
+ *  `agent_state=working` on a review that had already been handed back, so the spinner ran
+ *  forever and the human could not tell a live agent from a dead one. */
+const agentWorking = (meta) => meta?.status === "submitted" && meta.agent_state === "working";
+
+
 /** "edit, shell and run" → "Edit, Shell and Run", the way a person lists tools. */
 function listNames(names) {
   const titled = names.map((name) => name.charAt(0).toUpperCase() + name.slice(1));
@@ -146,6 +152,14 @@ const Theme = {
 
 /* ------------------------------------------------------------------ rail */
 
+/// Which sessions an agent is running right now; the rail polls for this and redraws only when
+/// the set changes, so a live indicator does not rebuild the list every few seconds.
+const workingIds = (sessions) => (sessions || [])
+  .filter(agentWorking)
+  .map((session) => session.id)
+  .sort()
+  .join("\n");
+
 // "Active" is the default so finished sessions drop out of the way; "Done" is the archive.
 const FILTERS = [
   { id: "active", label: "Active", test: (s) => s.status !== "resolved" },
@@ -174,6 +188,7 @@ class Rail {
     this.filter = prefs.get("filter", "active");
     if (this.filter === "all") this.filter = "active"; // pre-v0.6 preference
     this.query = "";
+    this.agentTimer = null;
     this.wire();
   }
 
@@ -230,6 +245,26 @@ class Rail {
     this.sessions = sessions.sessions || [];
     this.projects = projects.projects || [];
     this.render();
+    this.watchAgentState();
+  }
+
+  /// The rail is the one screen that must say "an agent is busy here" without opening the review,
+  /// so it re-reads the session states even while the human stays on another page.
+  watchAgentState() {
+    clearInterval(this.agentTimer);
+    this.agentTimer = setInterval(() => this.refreshAgentState(), 8000);
+  }
+
+  async refreshAgentState() {
+    let sessions;
+    try {
+      sessions = (await api("/api/sessions")).sessions || [];
+    } catch {
+      return;
+    }
+    const before = workingIds(this.sessions);
+    this.sessions = sessions;
+    if (workingIds(sessions) !== before) this.render();
   }
 
   setSelected(id) {
@@ -314,11 +349,15 @@ class Rail {
       const label = project?.name || (slug === "inbox" ? "Inbox" : slug);
       const collapsed = this.collapsed.has(slug);
       const waiting = items.filter((session) => session.status === "submitted").length;
+      const working = items.filter(agentWorking).length;
       parts.push(`
         <div class="rail-project" data-project="${escapeHtml(slug)}" role="button" tabindex="0"
              aria-expanded="${!collapsed}" title="${collapsed ? "Expand" : "Collapse"} ${escapeHtml(label)}">
           <span class="caret">${collapsed ? "▸" : "▾"}</span>
           <span class="pname">${escapeHtml(label)}</span>
+          ${working ? `<span class="pworking" title="The agent is working on ${plural(working, "review")}">
+            <span class="spin" aria-hidden="true"></span>${working > 1 ? `<b>${working}</b>` : ""}working
+          </span>` : ""}
           ${waiting ? `<span class="pwait" title="${waiting} waiting for the agent">${waiting}</span>` : ""}
           <span class="pcount">${items.length}</span>
         </div>`);
@@ -336,14 +375,20 @@ class Rail {
         for (const session of dayItems) {
         const annotations = session.annotation_count || 0;
         const fresh = seen.isNew(session);
-        const badge = fresh
-          ? `<span class="badge new" title="new since you last looked">new</span>`
-          : annotations
-            ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
-            : "";
+        const working = agentWorking(session);
+        // An agent currently running outranks "new" and the annotation count: it is the one
+        // state that changes a few seconds later without the human touching anything.
+        const badge = working
+          ? `<span class="badge work" title="The agent is working on this review">
+            <span class="spin" aria-hidden="true"></span>working</span>`
+          : fresh
+            ? `<span class="badge new" title="new since you last looked">new</span>`
+            : annotations
+              ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
+              : "";
         const done = session.status === "resolved";
         parts.push(`
-          <div class="session ${escapeHtml(session.status)}${this.bulkMode ? " bulk" : ""}"
+          <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${this.bulkMode ? " bulk" : ""}"
                role="button" tabindex="0"
                data-id="${escapeHtml(session.id)}"
                aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}"
@@ -641,14 +686,22 @@ class Editor {
       stageStatus.hidden = !submitted;
       if (submitted) {
         const last = (this.events || [])[this.events.length - 1];
-        stageStatus.textContent = this.meta.agent_state === "working" && last
+        stageStatus.textContent = agentWorking(this.meta) && last
           ? `Agent is working — ${last.message}`
-          : "Waiting for the agent…";
+          : this.meta.agent_state === "replied"
+            // The answer can land before `resolve`; "waiting for the agent" would contradict
+            // the reply sitting in the conversation.
+            ? "The agent replied — read it in the conversation"
+            : "Waiting for the agent…";
       }
     }
     const agent = $("#agent-state");
     if (agent) {
-      const state = this.meta.agent_state;
+      // A stale "working" on a round that is over is not a state worth showing: the header would
+      // claim an agent is running on a review that is already back in the human's hands.
+      const state = this.meta.agent_state === "working" && !agentWorking(this.meta)
+        ? null
+        : this.meta.agent_state;
       agent.hidden = !state;
       agent.textContent = state || "";
       agent.className = `pill agent ${state || ""}`;
@@ -2035,17 +2088,22 @@ class Editor {
       ? `Used ${plural(steps, "tool")}: ${escapeHtml(listNames(tools))}`
       : `Used ${plural(steps, "tool")}`;
     const last = round[round.length - 1];
-    const working = this.meta?.agent_state === "working";
+    const working = agentWorking(this.meta);
+    const replied = this.meta?.agent_state === "replied";
     // Once the agent answers, the reply above is the signal; the card keeps the tally.
     const title = working
       ? "Working"
-      : this.meta?.agent_state === "replied"
+      : replied
         ? "Run finished"
         : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
+    // How long ago the last step was is the honest answer to "is it still working?": a spinner
+    // must never be the only evidence.
+    const age = relativeTime(last.at);
+    const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}`;
     return `<div class="conv-run${working ? " working" : ""}">`
       + `<span class="conv-run-mark" aria-hidden="true"></span><div>`
       + `<div class="conv-run-title">${title}</div>`
-      + `<div class="conv-run-sub">${used}</div></div></div>`;
+      + `<div class="conv-run-sub">${sub}</div></div></div>`;
   }
 
   renderConversation() {
@@ -2069,7 +2127,7 @@ class Editor {
     const activity = $("#conv-activity");
     if (activity) {
       const last = (this.events || [])[this.events.length - 1];
-      activity.textContent = this.meta?.agent_state === "working" && last ? `${last.message}…` : "";
+      activity.textContent = agentWorking(this.meta) && last ? `${last.message}…` : "";
     }
 
     const status = [];
@@ -2082,7 +2140,7 @@ class Editor {
         status.push(`<div class="conv-wait"><b>Waiting for an agent.</b> Nobody has read this yet — `
           + `submitted ${escapeHtml(relativeTime(this.meta.submitted_at))}. An agent must call `
           + `<code>get_feedback</code> or <code>wait_for_feedback</code>.</div>`);
-      } else if (this.meta.agent_state !== "working") {
+      } else if (!agentWorking(this.meta)) {
         status.push(`<div class="conv-wait quiet"><b>Agent received this.</b> `
           + `${escapeHtml(relativeTime(this.meta.seen_by_agent_at))}.</div>`);
       }

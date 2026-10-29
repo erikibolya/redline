@@ -207,8 +207,10 @@ const main = async () => {
     picker.tag === "SELECT" && picker.values.includes("e2e") && picker.values.includes("inbox")
       && picker.values.includes("e2e-repo") && picker.repos.includes("e2e-repo")
       && picker.others.includes("e2e") && picker.values.includes("__new__")
-      && picker.placeholder === "" && picker.required && !picker.capture,
+      && picker.required && !picker.capture,
     JSON.stringify(picker));
+  check("new review preselects the project of the open review",
+    picker.placeholder === "e2e", picker.placeholder);
   check("the page URL field explains capture and metadata",
     picker.urlHint.includes("captures it"), picker.urlHint);
 
@@ -863,6 +865,19 @@ const main = async () => {
   check("creating from the start page files the review in the picked repo project",
     picked.meta.project === "e2e-repo" && picked.meta.title === "from the project picker",
     `${picked.meta.project} · ${picked.meta.title}`);
+
+  // The pick survives a reload: the next review starts in the project the human works in.
+  await page.goto(`${BASE}/`);
+  await page.waitForSelector(".gallery .card", { timeout: 5000 });
+  await page.click("#new-review");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
+  const remembered = await page.$eval("#f-project", (el) => el.value);
+  check("a new review preselects the last used project after a reload",
+    remembered === "e2e-repo", `project=${remembered}`);
+  await page.click("#new-cancel");
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

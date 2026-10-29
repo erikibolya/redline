@@ -86,6 +86,15 @@ const prefs = {
   },
 };
 
+/** The project the human last worked in, so a new review starts there instead of at the placeholder. */
+const lastProject = {
+  get() { return prefs.get("project", ""); },
+  remember(slug) {
+    const value = (slug || "").trim();
+    if (value && value !== "__new__") prefs.set("project", value);
+  },
+};
+
 /** Sessions this browser has looked at, for the "new" dot. */
 const seen = {
   all() { return prefs.get("seen", {}); },
@@ -542,6 +551,7 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
+      lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
       this.serverAnnotations = JSON.stringify(server);
       const draft = this.drafts.get(id);
@@ -2346,8 +2356,9 @@ const NewReview = {
       }
       options.push('<option value="__new__">+ New project…</option>');
       select.innerHTML = options.join("");
-      select.value = [...select.options].some((option) => option.value === previous)
-        ? previous
+      const wanted = lastProject.get() || previous;
+      select.value = [...select.options].some((option) => option.value === wanted)
+        ? wanted
         : "";
       this.syncProjectInput();
     } catch { /* signed out; keep the placeholder and Inbox fallback */ }
@@ -2359,6 +2370,7 @@ const NewReview = {
     const creating = select.value === "__new__";
     input.hidden = !creating;
     if (creating) input.focus();
+    else lastProject.remember(select.value);
   },
   selectedProject() {
     const select = $("#f-project");
@@ -2452,6 +2464,7 @@ const NewReview = {
               project: project || undefined,
             }),
           });
+          lastProject.remember(body.meta.project);
           location.href = `/s/${encodeURIComponent(body.meta.id)}`;
         } catch (error) {
           $("#new-error").textContent = error.message;
@@ -2479,6 +2492,7 @@ const NewReview = {
             project: project || undefined,
           }),
         });
+        lastProject.remember(body.meta.project);
         location.href = `/s/${encodeURIComponent(body.meta.id)}`;
       } catch (error) {
         $("#new-error").textContent = error.message;

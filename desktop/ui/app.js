@@ -880,10 +880,10 @@ class Editor {
     $$("[data-distribute]").forEach((button) =>
       button.addEventListener("click", () => this.distributeSelected(button.dataset.distribute)));
 
-    $("#zoom-in").addEventListener("click", () => this.zoomAt(1.25));
-    $("#zoom-out").addEventListener("click", () => this.zoomAt(0.8));
-    $("#zoom-fit").addEventListener("click", () => this.fit());
-    $("#zoom-100").addEventListener("click", () => this.setZoom(1));
+    $("#zoom-in").addEventListener("click", () => { if (!this.locked) this.zoomAt(1.25); });
+    $("#zoom-out").addEventListener("click", () => { if (!this.locked) this.zoomAt(0.8); });
+    $("#zoom-fit").addEventListener("click", () => { if (!this.locked) this.fit(); });
+    $("#zoom-100").addEventListener("click", () => { if (!this.locked) this.setZoom(1); });
     NewReview.wire();
     $("#new-review").addEventListener("click", () => NewReview.open());
     addEventListener("resize", () => this.resize());
@@ -1037,10 +1037,10 @@ class Editor {
         case "g":
           event.shiftKey ? this.ungroupSelected() : this.groupSelected();
           break;
-        case "+": case "=": this.zoomAt(1.25); break;
-        case "-": this.zoomAt(0.8); break;
-        case "0": this.fit(); break;
-        case "1": this.setZoom(1); break;
+        case "+": case "=": if (!this.locked) this.zoomAt(1.25); break;
+        case "-": if (!this.locked) this.zoomAt(0.8); break;
+        case "0": if (!this.locked) this.fit(); break;
+        case "1": if (!this.locked) this.setZoom(1); break;
         case "[": $("#toggle-rail").click(); break;
         case "]": $("#toggle-inspector").click(); break;
         default: break;
@@ -1525,6 +1525,7 @@ class Editor {
 
     stage.addEventListener("wheel", (event) => {
       event.preventDefault();
+      if (this.locked) return;
       const rect = stage.getBoundingClientRect();
       const cx = event.clientX - rect.left;
       const cy = event.clientY - rect.top;
@@ -2110,6 +2111,21 @@ class Editor {
     $$('.tool[data-tool]').forEach((button) => {
       button.toggleAttribute("disabled", this.readOnly);
     });
+    ["#zoom-in", "#zoom-out", "#zoom-fit", "#zoom-100"].forEach((id) => {
+      const button = $(id);
+      if (button) button.disabled = this.locked;
+    });
+    const dim = $("#stage-dim");
+    if (dim) dim.hidden = !this.locked;
+    if (this.locked) {
+      this.pan = null;
+      this.draw = null;
+      this.marquee = null;
+      this.drag = null;
+      this.pointers.clear();
+      this.spacePan = false;
+      this.stage.classList.remove("panning");
+    }
     this.root.classList.toggle("locked", this.locked);
     // The inspector was rendered before the meta arrived on a reload: re-render it, or a
     // submitted round still shows its delete buttons and write toolbar.

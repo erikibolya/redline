@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **A locked canvas also freezes the view.** While a submitted review waits for the agent, the
+  wheel, zoom buttons, keyboard zoom and pan no longer move the screenshot, and a light scrim
+  covers the stage; STOP removes both. The toolbar and status pill stay above the scrim.
 - **Multiple server profiles in the desktop app.** The local **Servers** page (tray → *Servers…*)
   lists Production, Dev and *This computer*, shows each server's version/state and switches the
   window with one click. Profiles and tokens are stored side by side in `config.json`; switching

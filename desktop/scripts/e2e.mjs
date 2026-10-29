@@ -768,6 +768,28 @@ const main = async () => {
       && locked.red === "rgb(220, 38, 38)" && locked.square,
     JSON.stringify(locked));
 
+  const lockedView = await page.evaluate(() => ({
+    dim: !document.querySelector("#stage-dim").hidden,
+    zoomDisabled: document.querySelector("#zoom-in").disabled,
+    scale: window.redline.view.scale,
+    x: window.redline.view.x,
+    y: window.redline.view.y,
+  }));
+  await page.$eval("#stage", (stage) => stage.dispatchEvent(new WheelEvent("wheel", {
+    deltaY: -240, ctrlKey: true, bubbles: true, cancelable: true,
+  })));
+  await page.keyboard.press("+");
+  const lockedViewAfter = await page.evaluate(() => ({
+    scale: window.redline.view.scale,
+    x: window.redline.view.x,
+    y: window.redline.view.y,
+  }));
+  check("a locked canvas dims and ignores scroll and zoom",
+    lockedView.dim && lockedView.zoomDisabled
+      && lockedViewAfter.scale === lockedView.scale
+      && lockedViewAfter.x === lockedView.x && lockedViewAfter.y === lockedView.y,
+    JSON.stringify({ lockedView, lockedViewAfter }));
+
   // The lock must *refuse* edits, not merely report `locked`: the inspector's align/layer/group
   // bar stayed armed after a submit, and Delete/arrow keys still rewrote the selected annotation.
   await page.evaluate(() => window.redline.select(0));
@@ -828,11 +850,14 @@ const main = async () => {
   await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
   const unlocked = await page.evaluate(() => ({
     locked: Boolean(window.redline.locked),
+    dim: !document.querySelector("#stage-dim").hidden,
+    zoomDisabled: document.querySelector("#zoom-in").disabled,
     label: document.querySelector("#submit").textContent.trim(),
     annotations: window.redline.annotations.length,
   }));
   check("STOP unlocks the canvas and keeps the annotations",
-    !unlocked.locked && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
+    !unlocked.locked && !unlocked.dim && !unlocked.zoomDisabled
+      && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
     JSON.stringify(unlocked));
 
   // ---- touch mode: bigger tools, row actions not hover-only

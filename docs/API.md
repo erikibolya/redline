@@ -93,6 +93,48 @@ Errors:
 - `404` — unknown session.
 - `500` — unhandled storage error (check server log).
 
+### `GET /api/projects`
+
+Projects are conversation areas; repository projects also carry a portable `repo` key (relative
+to the agent's repo root).
+
+```json
+{
+  "projects": [
+    {
+      "slug": "redline",
+      "name": "redline",
+      "agent": "holly",
+      "repo": "redline",
+      "created_at": "2026-10-29T18:20:00+00:00",
+      "sessions": 4,
+      "waiting": 1,
+      "done": 3,
+      "last_activity": "2026-10-29T18:30:00+00:00"
+    }
+  ]
+}
+```
+
+`repo` is `null` for legacy label-only projects.
+
+### `POST /api/agent/repos`
+
+An agent reports the repositories it can see. The endpoint is idempotent and never deletes a
+project that has reviews. `agent_id` is `[a-z0-9_-]{1,64}`; keys are relative paths without `.` or
+`..`, at most 200 characters.
+
+```http
+POST /api/agent/repos
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{"agent_id":"holly","repos":[{"key":"redline","name":"redline"},{"key":"ActiUnit/Au.Net","name":"Au.Net"}]}
+```
+
+Returns `{"ok": true, "projects": [ … ]}`. Re-reporting the same key updates its `name`/`agent` and
+keeps its slug, so sessions keep their project.
+
 ### `GET /health`
 
 `{"ok": true}`.

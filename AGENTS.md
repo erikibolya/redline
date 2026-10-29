@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.6.0.** Live in production on holly:
+**Current release: v0.18.0.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -121,12 +121,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 
 ## 6. Architecture in one screen
 
-- `redline-agent` — unattended bridge: watch submitted reviews → `opencode run` → progress/reply/resolve.
-  Also embedded in the desktop app (tray → *Start local agent*); see `docs/LOCAL-AGENT.md`.
+- `redline-agent` — unattended bridge: watch submitted reviews → resolve the project's repo →
+  `opencode run` → progress/reply/resolve. It syncs the git repos it can see (`POST
+  /api/agent/repos`) and runs each review in its project's repo. Also embedded in the desktop app
+  (tray → *Start local agent*); see `docs/LOCAL-AGENT.md`.
 - `redline-core` — session folder store (`meta.json`, `annotations.json`, `review.md`,
-  `annotated.png`, `history/`), project folders (`sessions/projects/<slug>/`, v0.10), axum HTTP
-  API, bearer/cookie auth, MCP JSON-RPC, headless capture (shells out to Chromium), annotation
-  diffing, loopback HTTP client.
+  `annotated.png`, `history/`), project folders (`sessions/projects/<slug>/`, v0.10; optional
+  `repo` key + `agent`), axum HTTP API, bearer/cookie auth, MCP JSON-RPC, headless capture
+  (shells out to Chromium), annotation diffing, loopback HTTP client.
 - Auth: token from `/data/token`; `Authorization: Bearer`, `redline_token` cookie (set by
   `/s/<id>?t=…` → 307), or `?t=`. `Sec-Fetch-Site: cross-site` is refused.
 - MCP tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`,
@@ -176,6 +178,15 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   format with the browser's locale — `clockTime()` / `stampTime()` in `app.js`. Capture screenshots
   inherit the *container's* timezone (usually UTC), so a "fixed clocks" screenshot looks unfixed
   unless you capture from a browser started with `TZ=Europe/Prague`.
+- **A project is not a repository.** RedLine projects began as labels; a label does not tell the
+  agent where to work. Repo projects now store a **relative** key (`redline`, `ActiUnit/Au.Net`)
+  plus an agent id. Never store an absolute mount path: the OpenCode server, the agent container
+  and the Windows app can see the same repo through different roots. Resolve keys under
+  `REDLINE_AGENT_REPO_ROOT`, canonicalize and refuse escapes/missing paths — a silent fallback to
+  the default repo is worse than a visible error.
+- **The OpenCode project API is experimental.** `/api/project` is useful for display names and
+  active projects, but discovery must still scan the repo root for `.git`; dedupe the same repo
+  seen through two mounts (`/mnt/user/...` and `/mnt/c/...`).
 - **An empty-state class outlives the empty state.** `#history-list` was declared once in
   `index.html` as `inspector-empty` (22 px padding, centred text) and never lost the class when
   rows were injected, so a populated list still carried the empty state's dead space. Toggle the
@@ -209,6 +220,11 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_feedback","arguments":{"session_id":"<id>"}}}' \
   https://redline.ibolya.cz/mcp
 
+# agent repo sync (what redline-agent does on startup and every 60 s)
+curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"agent_id":"holly","repos":[{"key":"redline","name":"redline"}]}' \
+  https://redline.ibolya.cz/api/agent/repos
+
 # session lifecycle
 curl -X POST -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>/resolve
 curl -X POST -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>/reopen
@@ -224,6 +240,11 @@ No code signing (SmartScreen warns), no macOS/Linux desktop bundles, no touch to
 multi-select across groups beyond membership, and the `/` page is still a start screen rather than
 a gallery. Since v0.8 text notes live in the inspector, not on the canvas — there is nothing to
 size or style, and legacy text annotations are read-only history.
+
+Repo routing is single-agent: all agents watch the same queue, so run one `redline-agent` per
+RedLine server for now. Project records already carry `agent`, and repo keys are portable, so a
+claim/filter router can be added without migrating data.
+
 See `PLAN.md` § "Next" for the ordered list.
 
 ## 11. If you are the next session

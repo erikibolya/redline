@@ -219,3 +219,43 @@ fn malformed_png_payload_is_a_bad_request_not_a_crash() {
         .unwrap_err();
     assert!(matches!(err, redline_core::Error::BadRequest(_)));
 }
+
+#[test]
+fn repo_projects_are_idempotent_and_survive_agent_resync() {
+    let (_dir, store) = store();
+    let first = store
+        .sync_repo_project("holly", "ActiUnit/Au.Net", "Au.Net")
+        .unwrap();
+    assert_eq!(first.slug, "actiunit-au-net");
+    assert_eq!(first.repo.as_deref(), Some("ActiUnit/Au.Net"));
+    assert_eq!(first.agent.as_deref(), Some("holly"));
+
+    let renamed = store
+        .sync_repo_project("holly", "ActiUnit/Au.Net", "Au.Net UI")
+        .unwrap();
+    assert_eq!(renamed.slug, first.slug);
+    assert_eq!(renamed.name, "Au.Net UI");
+
+    // A second agent reporting the same key updates the record instead of duplicating it.
+    let other = store
+        .sync_repo_project("local", "ActiUnit/Au.Net", "Au.Net")
+        .unwrap();
+    assert_eq!(other.slug, first.slug);
+    assert_eq!(other.agent.as_deref(), Some("local"));
+
+    // A legacy label with the same name must not be silently turned into a repo project.
+    let legacy = store.ensure_project("redline").unwrap();
+    assert_eq!(legacy.slug, "redline");
+    let repo = store
+        .sync_repo_project("holly", "redline", "redline")
+        .unwrap();
+    assert_eq!(repo.slug, "redline-2");
+    assert_eq!(repo.repo.as_deref(), Some("redline"));
+
+    let projects = store.projects().unwrap();
+    let found = projects
+        .iter()
+        .find(|project| project.slug == repo.slug)
+        .unwrap();
+    assert_eq!(found.repo.as_deref(), Some("redline"));
+}

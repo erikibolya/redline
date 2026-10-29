@@ -169,10 +169,12 @@ try {
     <label for="f-title">Title</label>
     <input id="f-title" type="text" placeholder="Button / default" />
     <label for="f-project">Project</label>
-    <select id="f-project">
+    <select id="f-project" required aria-describedby="project-hint">
+      <option value="" disabled selected>Choose a project…</option>
       <option value="inbox">Inbox</option>
     </select>
     <input id="f-project-new" type="text" placeholder="New project name" aria-label="New project name" hidden />
+    <p class="field-hint" id="project-hint">Repositories are synced from the agent. <b>+ New project…</b> creates a label without a repo.</p>
     <label for="f-url">Page URL (optional)</label>
     <input id="f-url" type="text" placeholder="http://localhost:5016/button" spellcheck="false" aria-describedby="url-hint" />
     <p class="field-hint" id="url-hint">The page in the screenshot. If you add no image, RedLine opens this URL and captures it.</p>

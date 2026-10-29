@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Projects are repositories now.** The agent discovers git repos from OpenCode
+  (`/api/project`) and by scanning its repo root, then syncs them to `POST /api/agent/repos`.
+  Projects store a **portable relative key** (`redline`, `ActiUnit/Au.Net`) and an agent id, never
+  an absolute mount path. The New review select is grouped into **Repositories** and **Other
+  projects**, requires a choice, and hides empty legacy leftovers. `+ New project…` still creates a
+  label without a repo.
+- **Reviews run in their project's repo.** Before each run the agent resolves the project key
+  under `REDLINE_AGENT_REPO_ROOT`, canonicalizes it and refuses a missing or escaping path instead
+  of silently using the default repo. Legacy projects without a key keep using
+  `REDLINE_AGENT_REPO`; error reviews get a reply and are resolved so they do not spin.
 - **New review picks a project from the server's list.** The free-text project field (and its
   datalist, which only the editor had) is now a `<select>` fed by `GET /api/projects` on both the
   editor and the start page, so projects created by agents are selectable without typing.

@@ -437,6 +437,7 @@ fn start_agent(app: &AppHandle, ctx: &Ctx) {
         None => (ctx.local.base_url.clone(), ctx.local.token.clone()),
     };
     let mut config = redline_agent::AgentConfig::new(url, token, repo);
+    config.agent_id = "local".to_string();
     if let Some(model) = settings.model.clone().filter(|value| !value.trim().is_empty()) {
         config.model = model;
     }

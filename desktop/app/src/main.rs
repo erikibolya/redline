@@ -139,6 +139,10 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let agent_repo =
         MenuItem::with_id(app, "agent-repo", "Choose agent repository…", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check-updates", "Check for updates…", true, None::<&str>)?;
+    let dev_update =
+        MenuItem::with_id(app, "dev-update", "Install latest dev build…", true, None::<&str>)?;
+    let revert =
+        MenuItem::with_id(app, "stable-revert", "Revert to last stable version…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit RedLine", true, Some("CmdOrCtrl+Q"))?;
     let separator = PredefinedMenuItem::separator(app)?;
     let agent_separator = PredefinedMenuItem::separator(app)?;
@@ -156,7 +160,7 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         ],
     )?;
     let help =
-        Submenu::with_items(app, "Help", true, &[&docs, &check, &help_separator, &about])?;
+        Submenu::with_items(app, "Help", true, &[&docs, &check, &dev_update, &revert, &help_separator, &about])?;
     app.set_menu(Menu::with_items(app, &[&file, &help])?)?;
 
     let handler_ctx = ctx.clone();
@@ -185,6 +189,10 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let agent_repo =
         MenuItem::with_id(app, "agent-repo", "Choose agent repository…", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check-updates", "Check for updates…", true, None::<&str>)?;
+    let dev_update =
+        MenuItem::with_id(app, "dev-update", "Install latest dev build…", true, None::<&str>)?;
+    let revert =
+        MenuItem::with_id(app, "stable-revert", "Revert to last stable version…", true, None::<&str>)?;
     let status = match read_remote(&ctx.data_dir) {
         Some(remote) => format!("Server: {}", remote.base_url),
         None => format!("Standalone: {}", ctx.local.base_url),
@@ -197,7 +205,8 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         app,
         &[
             &open, &connect, &login, &copy_link, &copy_config, &separator, &agent_start,
-            &agent_stop, &agent_repo, &agent_separator, &check, &address, &separator, &quit,
+            &agent_stop, &agent_repo, &agent_separator, &check, &dev_update, &revert, &address,
+            &separator, &quit,
         ],
     )?;
 
@@ -252,6 +261,8 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
         "agent-stop" => stop_agent(ctx),
         "agent-repo" => choose_agent_repo(app, ctx),
         "check-updates" => check_for_updates(app.clone(), true),
+        "dev-update" => check_dev_update(app.clone()),
+        "stable-revert" => revert_to_stable(app.clone()),
         "autostart" => {
             let manager = app.autolaunch();
             let result = if manager.is_enabled().unwrap_or(false) {
@@ -568,12 +579,24 @@ fn navigate(app: &AppHandle, url: &str) {
     }
 }
 
+/// Stable releases come from the rolling `latest` manifest; dev builds from the rolling `dev`
+/// prerelease. Both are GitHub release assets, so no extra infrastructure.
+const STABLE_MANIFEST: &str =
+    "https://github.com/erikibolya/redline/releases/latest/download/latest.json";
+const DEV_MANIFEST: &str = "https://github.com/erikibolya/redline/releases/download/dev/latest.json";
+
+#[derive(Clone, Copy)]
+enum UpdateChannel {
+    Stable,
+    Dev,
+    Revert,
+}
+
 /// Check for updates. At launch nothing is in flight, so install silently; from the menu the
 /// human asked, so report either way.
 fn check_for_updates(app: AppHandle, notify: bool) {
     tauri::async_runtime::spawn(async move {
         use tauri_plugin_updater::UpdaterExt;
-
         let updater = match app.updater() {
             Ok(updater) => updater,
             Err(err) => {
@@ -588,68 +611,168 @@ fn check_for_updates(app: AppHandle, notify: bool) {
                 return;
             }
         };
+        offer_update(app, updater, UpdateChannel::Stable, notify).await;
+    });
+}
 
-        match updater.check().await {
-            Ok(Some(update)) => {
-                let version = update.version.clone();
-                let interactive = app.clone();
-                // Never restart the app behind the human's back: ask, with the version named.
-                app.dialog()
-                    .message(format!(
-                        "RedLine {version} is available.\n\nUpdate now? The app restarts when \
-                         the installer finishes."
-                    ))
-                    .title("Update available")
-                    .buttons(MessageDialogButtons::OkCancelCustom(
-                        "Update now".to_string(),
-                        "Later".to_string(),
-                    ))
-                    .show(move |confirmed| {
-                        if !confirmed {
-                            return;
-                        }
-                        let app = interactive.clone();
-                        let update = update.clone();
-                        tauri::async_runtime::spawn(async move {
-                            match update.download_and_install(|_, _| {}, || {}).await {
-                                // On Windows the installer takes over and exits this process.
-                                Ok(()) => restart(&app),
-                                Err(err) => {
-                                    eprintln!("redline: update failed: {err}");
-                                    app.dialog()
-                                        .message(format!("Update to {version} failed: {err}"))
-                                        .title("RedLine")
-                                        .kind(MessageDialogKind::Error)
-                                        .show(|_| {});
-                                }
-                            }
-                        });
-                    });
-            }
-            Ok(None) => {
-                if notify {
-                    app.dialog()
-                        .message(format!(
-                            "You are on the latest version ({}).",
-                            app.package_info().version
-                        ))
-                        .title("RedLine")
-                        .kind(MessageDialogKind::Info)
-                        .show(|_| {});
-                }
-            }
+fn check_dev_update(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_updater::UpdaterExt;
+        let Some(url) = manifest_url(DEV_MANIFEST) else {
+            return;
+        };
+        let updater = match app
+            .updater_builder()
+            .endpoints(vec![url])
+            .and_then(|builder| builder.build())
+        {
+            Ok(updater) => updater,
             Err(err) => {
-                eprintln!("redline: update check failed: {err}");
-                if notify {
-                    app.dialog()
-                        .message(format!("Could not check for updates: {err}"))
-                        .title("RedLine")
-                        .kind(MessageDialogKind::Error)
-                        .show(|_| {});
-                }
+                report(&app, "Dev build unavailable", format!("{err}"));
+                return;
+            }
+        };
+        offer_update(app, updater, UpdateChannel::Dev, true).await;
+    });
+}
+
+fn revert_to_stable(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_updater::UpdaterExt;
+        let Some(url) = manifest_url(STABLE_MANIFEST) else {
+            return;
+        };
+        // The default comparator only accepts newer versions; a revert is exactly the opposite.
+        let updater = match app
+            .updater_builder()
+            .endpoints(vec![url])
+            .and_then(|builder| {
+                builder
+                    .version_comparator(|current, remote| remote.version != current)
+                    .build()
+            })
+        {
+            Ok(updater) => updater,
+            Err(err) => {
+                report(&app, "Revert unavailable", format!("{err}"));
+                return;
+            }
+        };
+        offer_update(app, updater, UpdateChannel::Revert, true).await;
+    });
+}
+
+fn manifest_url(url: &str) -> Option<tauri::Url> {
+    match tauri::Url::parse(url) {
+        Ok(url) => Some(url),
+        Err(err) => {
+            eprintln!("redline: bad manifest url {url}: {err}");
+            None
+        }
+    }
+}
+
+fn report(app: &AppHandle, title: &str, message: String) {
+    app.dialog()
+        .message(message)
+        .title(title)
+        .kind(MessageDialogKind::Error)
+        .show(|_| {});
+}
+
+async fn offer_update(
+    app: AppHandle,
+    updater: tauri_plugin_updater::Updater,
+    channel: UpdateChannel,
+    notify: bool,
+) {
+    let current = app.package_info().version.to_string();
+    match updater.check().await {
+        Ok(Some(update)) => {
+            let version = update.version.clone();
+            let message = match channel {
+                UpdateChannel::Stable => format!(
+                    "RedLine {version} is available.\n\nUpdate now? The app restarts when the \
+                     installer finishes."
+                ),
+                UpdateChannel::Dev => format!(
+                    "RedLine dev build {version} is available (you are on {current}).\n\nDev \
+                     builds are unreleased snapshots; install it anyway?"
+                ),
+                UpdateChannel::Revert => format!(
+                    "Revert to the last stable version {version}?\n\nYou are on {current}; the \
+                     app will restart on {version}."
+                ),
+            };
+            let title = match channel {
+                UpdateChannel::Stable => "Update available",
+                UpdateChannel::Dev => "Dev build available",
+                UpdateChannel::Revert => "Revert to stable",
+            };
+            let confirm = match channel {
+                UpdateChannel::Revert => "Revert",
+                _ => "Install",
+            };
+            let interactive = app.clone();
+            // Never restart the app behind the human's back: ask, with the version named.
+            app.dialog()
+                .message(message)
+                .title(title)
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    confirm.to_string(),
+                    "Later".to_string(),
+                ))
+                .show(move |confirmed| {
+                    if !confirmed {
+                        return;
+                    }
+                    let app = interactive.clone();
+                    let update = update.clone();
+                    tauri::async_runtime::spawn(async move {
+                        match update.download_and_install(|_, _| {}, || {}).await {
+                            // On Windows the installer takes over and exits this process.
+                            Ok(()) => restart(&app),
+                            Err(err) => {
+                                eprintln!("redline: update failed: {err}");
+                                app.dialog()
+                                    .message(format!("Update to {version} failed: {err}"))
+                                    .title("RedLine")
+                                    .kind(MessageDialogKind::Error)
+                                    .show(|_| {});
+                            }
+                        }
+                    });
+                });
+        }
+        Ok(None) => {
+            if notify {
+                let text = match channel {
+                    UpdateChannel::Stable => format!("You are on the latest version ({current})."),
+                    UpdateChannel::Dev => {
+                        format!("No dev build newer than {current}. Nothing to install.")
+                    }
+                    UpdateChannel::Revert => {
+                        format!("You are already on the latest stable version ({current}).")
+                    }
+                };
+                app.dialog()
+                    .message(text)
+                    .title("RedLine")
+                    .kind(MessageDialogKind::Info)
+                    .show(|_| {});
             }
         }
-    });
+        Err(err) => {
+            eprintln!("redline: update check failed: {err}");
+            if notify {
+                app.dialog()
+                    .message(format!("Could not check for updates: {err}"))
+                    .title("RedLine")
+                    .kind(MessageDialogKind::Error)
+                    .show(|_| {});
+            }
+        }
+    }
 }
 
 fn open_url(url: &str) {

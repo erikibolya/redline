@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **Menu actions no longer run twice.** Tray items use their own `tray:` ids and the dispatcher
+  ignores the same action within 400 ms, so update dialogs and the repository picker open once.
+
 - **The connect wizard matches the app and can be left.** It uses the app's tokens and buttons, has
   a **← Back to sessions** link, a proper **Use this computer** button (disconnect, no token
   needed) and a clearer hint where the token comes from.

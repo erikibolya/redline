@@ -36,6 +36,14 @@ Columns collapse: `[` toggles the left rail, `]` the right panel. Both states pe
 `localStorage`. The canvas always fills what is left — no fixed page width, no centred 1000 px
 column.
 
+The three vertical/horizontal borders are **draggable**: the rail's right edge, the
+inspector's left edge, and the line above the conversation. Each is a 9 px transparent strip over
+the hairline that highlights in the accent colour on hover or focus; drag it (or focus it and use
+the arrow keys, Shift for bigger steps) and the panel follows while the canvas is re-measured
+mid-drag. Sizes live in CSS variables (`--rail`, `--inspector`, `--conv`) and are remembered per
+browser (`redline:railWidth`, `redline:inspectorWidth`, `redline:convHeight`). Limits keep the
+stage usable (≥ 360 px) and leave room for the annotation list above the conversation.
+
 Header icon buttons (`?`, theme, rail, inspector) are a fixed **32 × 32 px square**: the glyph
 inside changes width (`?` is narrower than `☀`), the button must not.
 

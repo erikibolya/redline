@@ -32,6 +32,8 @@ try {
   </header>
 
   <aside class="rail">
+    <span class="splitter splitter-x" id="rail-resizer" role="separator" aria-orientation="vertical"
+          aria-label="Resize sessions panel" title="Drag to resize" tabindex="0"></span>
     <div class="rail-head">
       <button class="btn accent" id="new-review">+ New review</button>
       <input class="search" id="search" placeholder="Search sessions…" spellcheck="false" />
@@ -89,6 +91,8 @@ try {
   </main>
 
   <aside class="inspector">
+    <span class="splitter splitter-x" id="inspector-resizer" role="separator" aria-orientation="vertical"
+          aria-label="Resize inspector" title="Drag to resize" tabindex="0"></span>
     <div class="inspector-head">
       Annotations <span class="count" id="ann-count">0</span>
     </div>
@@ -121,6 +125,8 @@ try {
     <div class="inspector-body" id="ann-list"></div>
 
     <section class="conversation" id="conversation">
+      <span class="splitter splitter-y" id="conv-resizer" role="separator" aria-orientation="horizontal"
+            aria-label="Resize conversation" title="Drag to resize" tabindex="0"></span>
       <div class="conv-head">
         <span>Conversation</span>
         <span class="conv-activity" id="conv-activity"></span>

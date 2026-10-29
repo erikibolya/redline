@@ -11,6 +11,58 @@ const escapeHtml = (value) =>
 
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 
+/**
+ * Drag a divider with the pointer (or the arrow keys when it has focus). `size` reads the
+ * current dimension, `apply` writes the new one, `min`/`max` are re-read on every move so the
+ * limits can follow the window. `sign` is -1 for edges that grow when dragged left or up.
+ */
+function bindSplitter(handle, { axis = "x", sign = 1, min, max, size, apply, step = 8 }) {
+  if (!handle) return;
+  const position = (event) => (axis === "x" ? event.clientX : event.clientY);
+  let origin = 0;
+  let from = 0;
+  let dragging = false;
+
+  const clampTo = (raw) => Math.round(clamp(raw, min(), max()));
+  const move = (px) => apply(clampTo(px));
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    dragging = true;
+    from = position(event);
+    origin = size();
+    handle.setPointerCapture(event.pointerId);
+    handle.classList.add("dragging");
+    document.body.classList.add(axis === "x" ? "resizing-x" : "resizing-y");
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    move(origin + sign * (position(event) - from));
+  });
+  const finish = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("dragging");
+    document.body.classList.remove("resizing-x", "resizing-y");
+    if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+  };
+  handle.addEventListener("pointerup", finish);
+  handle.addEventListener("pointercancel", finish);
+
+  const keys = axis === "x"
+    ? { ArrowLeft: -1, ArrowRight: 1 }
+    : { ArrowUp: -1, ArrowDown: 1 };
+  handle.addEventListener("keydown", (event) => {
+    const direction = keys[event.key];
+    if (!direction) return;
+    // Keep the editor's arrow-key nudge from firing as well.
+    event.preventDefault();
+    event.stopPropagation();
+    move(size() + sign * direction * (event.shiftKey ? step * 5 : step));
+  });
+}
+
 /** Stable identity per annotation: lets history diffing tell "moved" from "deleted + added". */
 const uid = () =>
   (globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
@@ -529,6 +581,7 @@ class Editor {
       },
     });
     this.bindChrome();
+    this.bindPanels();
     this.bindCanvas();
     this.bindKeyboard();
     this.syncToolButtons();
@@ -847,6 +900,75 @@ class Editor {
 
   syncWidthLabel() {
     $("#width-value").textContent = `${this.lineWidth}px`;
+  }
+
+  /**
+   * The three dividers: the rail's right edge, the inspector's left edge and the top of the
+   * conversation. Sizes land in CSS variables on #app, so the grid follows the drag, and are
+   * remembered per browser. The stage is re-measured on every move or the canvas keeps its
+   * old pixel size while zooming around a stale centre.
+   */
+  bindPanels() {
+    const app = $("#app");
+    const inspector = $(".inspector");
+    const conversation = $("#conversation");
+    const width = (name, fallback) => parseFloat(app.style.getPropertyValue(name)) || fallback;
+    const railWidth = () => width("--rail", 272);
+    const inspectorWidth = () => width("--inspector", 304);
+
+    const setRail = (px, persist = true) => {
+      app.style.setProperty("--rail", `${px}px`);
+      if (persist) prefs.set("railWidth", px);
+      this.resize();
+    };
+    const setInspector = (px, persist = true) => {
+      app.style.setProperty("--inspector", `${px}px`);
+      if (persist) prefs.set("inspectorWidth", px);
+      this.resize();
+    };
+    const setConversation = (px, persist = true) => {
+      app.style.setProperty("--conv", `${px}px`);
+      if (persist) prefs.set("convHeight", px);
+    };
+
+    // A column may not eat the stage: leave room for a readable canvas on either side.
+    const railMax = () => Math.max(160, Math.min(560, innerWidth - inspectorWidth() - 360));
+    const inspectorMax = () => Math.max(200, Math.min(680, innerWidth - railWidth() - 360));
+    // Whatever the conversation takes, the annotation list and the disclosures keep some room.
+    const conversationMax = () => Math.max(180, inspector.clientHeight - 170);
+
+    // Restoring (and clamping) is not a resize: keep the preferred size for a wider window.
+    setRail(Math.min(prefs.get("railWidth", 272), railMax()), false);
+    setInspector(Math.min(prefs.get("inspectorWidth", 304), inspectorMax()), false);
+    setConversation(Math.min(prefs.get("convHeight", 300), conversationMax()), false);
+
+    bindSplitter($("#rail-resizer"), {
+      min: () => 200,
+      max: railMax,
+      size: railWidth,
+      apply: setRail,
+    });
+    bindSplitter($("#inspector-resizer"), {
+      sign: -1,
+      min: () => 240,
+      max: inspectorMax,
+      size: inspectorWidth,
+      apply: setInspector,
+    });
+    bindSplitter($("#conv-resizer"), {
+      axis: "y",
+      sign: -1,
+      min: () => 140,
+      max: conversationMax,
+      size: () => conversation.getBoundingClientRect().height,
+      apply: setConversation,
+    });
+
+    addEventListener("resize", () => {
+      setRail(Math.min(railWidth(), railMax()), false);
+      setInspector(Math.min(inspectorWidth(), inspectorMax()), false);
+      setConversation(Math.min(prefs.get("convHeight", 300), conversationMax()), false);
+    });
   }
 
   bindKeyboard() {

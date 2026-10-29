@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Panels are resizable.** The two column borders and the line above the conversation in the
+  editor are now drag handles: the session rail, the annotation inspector and the conversation
+  each remember the size you drag them to (`localStorage`), the canvas is re-measured mid-drag, and
+  the handles are keyboard-operable (`←/→` or `↑/↓`, Shift for bigger steps). Limits keep the stage
+  at least ~360 px wide and stop the conversation from swallowing the annotation list. The browser
+  e2e covers all three dividers, including a reload.
+
 - **A finished round can no longer keep saying "working".** The agent's last narration line often
   arrives *after* `post_round` (review handed back) or `reply` (answer posted); `progress` used to
   set `agent_state=working` unconditionally, so the review kept pulsing a spinner with a green

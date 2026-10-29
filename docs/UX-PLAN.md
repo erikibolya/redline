@@ -19,7 +19,7 @@ the tool it changes.
 
 ---
 
-## W1 — Brand: `redline` → `RedLine`
+## W1 — Brand: `redline` → `RedLine` (shipped in 0.8.0)
 
 **Goal:** the product is called RedLine in every human-facing place.
 
@@ -41,7 +41,7 @@ Deliberately **unchanged** (technical identifiers, changing them breaks installs
 
 ---
 
-## W2 — Notes instead of a text tool
+## W2 — Notes instead of a text tool (shipped in 0.8.0)
 
 **Goal:** draw a mark, then write what is wrong there. Text never floats on the canvas.
 
@@ -168,9 +168,9 @@ deploy to holly, then a self-capture review in the new UI.
 | # | Question | Answer |
 |---|---|---|
 | 1 | Rename scope | **Display only.** Binary, image, container, paths, MCP key and env vars keep `redline`. |
-| 2 | Notes on `annotated.png` | **Open.** Numbered badges recommended; alternative is a clean image with notes only in the panel/JSON. |
+| 2 | Notes on `annotated.png` | **Numbered badges on every shape**, the same number in the inspector, the canvas and `annotated.png`; the note text is expandable in the panel and never painted on the image. |
 | 3 | `working` | **Explicit, with detail** — what the agent is doing (tool, step, thinking line), not just a spinner. See W3. |
-| 4 | Composer | **Bottom of the right panel**: textarea + Submit. The top-right Submit goes away. |
+| 4 | Composer | **Bottom of the right panel**: textarea + Submit. The top-right Submit goes away. Future: draggable/snapping panels for a custom layout. |
 | 5 | Project model | **First-class folder with its own tree** (`projects/<slug>/…`), not a label on a session. |
 
 ## Non-goals

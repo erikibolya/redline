@@ -957,6 +957,61 @@ const main = async () => {
     picked.meta.project === "e2e-repo" && picked.meta.title === "from the project picker",
     `${picked.meta.project} · ${picked.meta.title}`);
 
+  // ---- the dividers resize the panels (rail width, inspector width, conversation height)
+  const panels = () => page.evaluate(() => ({
+    rail: Math.round(document.querySelector(".rail").getBoundingClientRect().width),
+    inspector: Math.round(document.querySelector(".inspector").getBoundingClientRect().width),
+    conv: Math.round(document.querySelector("#conversation").getBoundingClientRect().height),
+    canvas: document.querySelector("#canvas").width,
+    stored: {
+      rail: Number(localStorage.getItem("redline:railWidth")),
+      inspector: Number(localStorage.getItem("redline:inspectorWidth")),
+      conv: Number(localStorage.getItem("redline:convHeight")),
+    },
+  }));
+  const handleAt = (selector) => page.$eval(selector, (el) => {
+    const rect = el.getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  });
+
+  const panelsBefore = await panels();
+  const railHandle = await handleAt("#rail-resizer");
+  await drag(page, railHandle, { x: railHandle.x + 70, y: railHandle.y });
+  const railDragged = await panels();
+  check("dragging the rail divider widens the session list",
+    Math.abs(railDragged.rail - panelsBefore.rail - 70) <= 2,
+    `${panelsBefore.rail}px → ${railDragged.rail}px`);
+  check("the canvas is re-measured while the rail moves",
+    railDragged.canvas < panelsBefore.canvas, `${panelsBefore.canvas} → ${railDragged.canvas}`);
+
+  const inspectorHandle = await handleAt("#inspector-resizer");
+  await drag(page, inspectorHandle, { x: inspectorHandle.x - 60, y: inspectorHandle.y });
+  const inspectorDragged = await panels();
+  check("dragging the inspector divider widens the annotation panel",
+    Math.abs(inspectorDragged.inspector - panelsBefore.inspector - 60) <= 2,
+    `${panelsBefore.inspector}px → ${inspectorDragged.inspector}px`);
+
+  const convHandle = await handleAt("#conv-resizer");
+  await drag(page, convHandle, { x: convHandle.x, y: convHandle.y - 50 });
+  const convDragged = await panels();
+  check("dragging the conversation divider gives it more room",
+    Math.abs(convDragged.conv - panelsBefore.conv - 50) <= 2,
+    `${panelsBefore.conv}px → ${convDragged.conv}px`);
+  check("panel sizes are remembered",
+    Math.abs(convDragged.stored.rail - convDragged.rail) <= 1
+      && Math.abs(convDragged.stored.inspector - convDragged.inspector) <= 1
+      && Math.abs(convDragged.stored.conv - convDragged.conv) <= 2,
+    JSON.stringify(convDragged.stored));
+
+  await page.reload({ waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
+  const restored = await panels();
+  check("panel sizes survive a reload",
+    Math.abs(restored.rail - convDragged.rail) <= 2
+      && Math.abs(restored.inspector - convDragged.inspector) <= 2
+      && Math.abs(restored.conv - convDragged.conv) <= 2,
+    `${restored.rail} / ${restored.inspector} / ${restored.conv}`);
+
   // The pick survives a reload: the next review starts in the project the human works in.
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
@@ -969,7 +1024,6 @@ const main = async () => {
   check("a new review preselects the last used project after a reload",
     remembered === "e2e-repo", `project=${remembered}`);
   await page.click("#new-cancel");
-
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 
   await browser.close();

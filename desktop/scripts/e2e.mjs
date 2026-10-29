@@ -337,7 +337,9 @@ const main = async () => {
     `${history.submissions.length} archived`);
 
   // ---- history opens a previous round read-only, and Current brings the live canvas back
-  await page.click("#history-block > summary");
+  if (!(await page.$eval("#history-block", (el) => el.open))) {
+    await page.click("#history-block > summary");
+  }
   await page.waitForFunction(
     () => document.querySelectorAll("#history-list [data-round]").length > 0,
     { timeout: 5000 },
@@ -492,6 +494,39 @@ const main = async () => {
   check("agent round appears in the conversation, without a picture",
     round.text.includes("e2e next round") && !round.picture, JSON.stringify(round).slice(0, 120));
   check("round fills the history", Number(round.history) >= 1, round.history);
+
+  // ---- the live row keeps its own count while another round is previewed
+  if (!(await page.$eval("#history-block", (el) => el.open))) {
+    await page.click("#history-block > summary");
+  }
+  await page.evaluate(() => window.redline.loadHistory());
+  await page.waitForFunction(
+    () => Boolean(document.querySelector('#history-list [data-round="current"]')),
+    { timeout: 5000 },
+  );
+  const liveBefore = await page.evaluate(() => window.redline.annotations.length);
+
+  await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#history-list [data-round]")];
+    (rows.find((row) => row.dataset.round !== "current") || rows[0]).click();
+  });
+  await page.waitForFunction(() => Boolean(window.redline.viewing), { timeout: 5000 });
+  // `viewRound` re-renders the list asynchronously; wait for the rebuild before reading it.
+  await page.waitForFunction(
+    () => Boolean(document.querySelector('#history-list [data-round="current"]')),
+    { timeout: 5000 },
+  );
+  const historyState = await page.evaluate(() => ({
+    current: document.querySelector('#history-list [data-round="current"]')?.textContent || "",
+    live: Boolean(document.querySelector("#history-list .history-row.live")),
+    selected: Boolean(document.querySelector("#history-list .history-row.selected")),
+  }));
+  check("Current keeps the live count while a round is previewed",
+    historyState.current.includes(`${liveBefore} annotation`), historyState.current.trim());
+  check("history marks the live and the selected row",
+    historyState.live && historyState.selected, JSON.stringify(historyState));
+  await page.click("#viewing-bar");
+  await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
 
   // ---- unsent annotations survive a session switch
   await page.keyboard.press("r");

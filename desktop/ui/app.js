@@ -1687,19 +1687,25 @@ class Editor {
       this.historyEntries = rounds;
       const currentArchived = rounds.find((round) => round.current);
       const rows = [];
+      // The live count belongs to the canvas, never to the round being previewed.
+      const liveCount = this.viewing
+        ? (this.live?.count ?? 0)
+        : (this.annotations || []).length;
       // `Current` is the way back from a historical round; it is omitted when the newest
       // archived round *is* the live one (labelled "Round N (current)" instead).
       if (!currentArchived) {
-        const count = (this.annotations || []).length;
-        rows.push(`<div class="ann-row history-row${this.viewing ? "" : " current"}"
+        rows.push(`<div class="ann-row history-row live${this.viewing ? "" : " selected"}"
                         data-round="current" role="button" tabindex="0">
           <span class="glyph">●</span>
-          <span class="label"><b>Current</b><span>${plural(count, "annotation")} · live</span></span>
+          <span class="label"><b>Current</b><span>${plural(liveCount, "annotation")} · live</span></span>
         </div>`);
       }
       for (const round of rounds) {
-        const active = this.viewing ? this.viewing.stamp === round.stamp : round.current;
-        rows.push(`<div class="ann-row history-row${active ? " current" : ""}"
+        const isLive = Boolean(round.current);
+        const selected = this.viewing
+          ? this.viewing.stamp === round.stamp
+          : isLive;
+        rows.push(`<div class="ann-row history-row${isLive ? " live" : ""}${selected ? " selected" : ""}"
                         data-round="${escapeHtml(round.stamp)}" role="button" tabindex="0">
           <span class="glyph">${round.round}</span>
           <span class="label">
@@ -1754,7 +1760,12 @@ class Editor {
       );
       if (!image) return;
       if (!this.viewing) {
-        this.live = { image: this.image, annotations: this.annotations, meta: this.meta };
+        this.live = {
+          image: this.image,
+          annotations: this.annotations,
+          meta: this.meta,
+          count: this.annotations.length,
+        };
       }
       this.viewing = {
         stamp,

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The connect wizard matches the app and can be left.** It uses the app's tokens and buttons, has
+  a **← Back to sessions** link, a proper **Use this computer** button (disconnect, no token
+  needed) and a clearer hint where the token comes from.
+
 - **Bulk operations in the rail**: *Select* turns rows into checkboxes with a bar to resolve or
   delete several sessions at once; Escape leaves the mode.
 - **Touch toolbar**: on coarse pointers the tools, chips and buttons grow to 40 px targets and the

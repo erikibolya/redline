@@ -176,6 +176,10 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   format with the browser's locale — `clockTime()` / `stampTime()` in `app.js`. Capture screenshots
   inherit the *container's* timezone (usually UTC), so a "fixed clocks" screenshot looks unfixed
   unless you capture from a browser started with `TZ=Europe/Prague`.
+- **An empty-state class outlives the empty state.** `#history-list` was declared once in
+  `index.html` as `inspector-empty` (22 px padding, centred text) and never lost the class when
+  rows were injected, so a populated list still carried the empty state's dead space. Toggle the
+  class with the content — a populated list needs its own layout class.
 
 ## 8. Working rules
 

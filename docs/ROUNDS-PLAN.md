@@ -33,13 +33,21 @@ Change:
 
 **Data needed (backend):**
 
-- `archive_previous()` currently copies `annotations.json` and `annotated.png` only when the round
-  has annotations, and never the screenshot. It must also copy the round's source screenshot to
-  `history/<stamp>-source.png` (the file name is already served by `/sessions/<id>/history/<file>`).
-- `HistoryEntry` gains `source: bool` and `round: usize` (1-based, computed oldest→newest).
-- Archiving should happen even for an empty round (a submission with a prompt but no annotations
-  is still a round), while `annotated.png` may be absent.
+- **A round is created by the submit**, not by the next submit. Today `submit()` archives the
+  *previous* round before overwriting; that is why the first submission leaves History empty.
+  Change: after writing the submission, snapshot the submitted state into
+  `history/<submitted_at>/` immediately (`annotations.json`, `annotated.png`, `-source.png`).
+  `post_round` must stop archiving (the submitted round is already archived, otherwise the round
+  would appear twice).
+- The snapshot includes the round's **source screenshot** copied to `history/<stamp>-source.png`
+  (already served by `/sessions/<id>/history/<file>`).
+- `HistoryEntry` gains `source: bool` and `round: usize` (1-based, oldest→newest).
+- Archive even an empty round (a submission with a prompt and no annotations is still a round);
+  `annotated.png` may then be identical to the source.
 - `prune_history` must delete `-source.png` with its stamp and keep the last 20 rounds.
+- **No duplicates**: while the live canvas is the last submitted round, History shows it once as
+  `Round N (current)`. A new round starts when the agent posts a new screenshot (or the human
+  resubmits after edits); it appears as `Current` until submitted.
 
 ## 3. Ghost and diff leave the UI
 
@@ -103,14 +111,18 @@ Change:
 
 Suggested releases: **0.16.0** = 1–3 + 5; **0.17.0** = 4. Both on `dev` first.
 
-## 8. Decisions to confirm
+## 8. Decisions (2026-10-29)
 
-1. Round view renders the **source screenshot + archived annotations** (zoomable, crisp) rather
-   than the pre-baked `annotated.png` — ok?
-2. History order: newest first with `Current` at the top (recommended), or oldest first?
-3. STOP kills the running agent (bridge watcher) or only unlocks the canvas and lets the agent
-   finish? Killing is what the button says; confirm.
-4. Drafts in memory only (recommended) or also `localStorage` (survives app restart, can go stale
-   against a new round)?
-5. Do agent rounds get a separator in History (`— agent replied —`), or is History strictly one row
-   per human submission?
+| # | Question | Answer |
+|---|---|---|
+| 1 | Round view: pre-baked `annotated.png` or source + annotations? | **Source + archived annotations** (pending final confirmation). |
+| 2 | History order | **Newest first**, `Current` at the top. |
+| 3 | STOP | **Kills the running agent** (bridge watches the status and kills the child). |
+| 4 | Drafts | **Memory only**; a quit confirmation warns that unsaved changes are lost. |
+| 5 | Agent rounds in History | **One entry per completed submission.** The agent's new screenshot starts the next live round; it is recorded when the human submits. STOP does not create a round. No duplicates. |
+
+## 9. Quit warning
+
+The webview reports "has drafts" to the app through a Tauri command (`set_dirty`); the quit action
+(menu/tray) checks the flag and asks *"Unsaved changes will be lost. Quit anyway?"*. Memory-only
+drafts still survive session switching, which is the reported bug.

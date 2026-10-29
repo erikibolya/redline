@@ -129,6 +129,13 @@ const main = async () => {
   await page.waitForFunction(() => !document.querySelector("#overlay").hidden, { timeout: 5000 });
   const pastedTitle = await page.$eval("#f-title", (el) => el.value);
   check("ctrl+v fills the new review dialog", pastedTitle === "Pasted screenshot", pastedTitle);
+  const preview = await page.evaluate(() => {
+    const img = document.querySelector("#drop-preview");
+    if (!img) return null;
+    return { hidden: img.hidden, blob: img.src.startsWith("blob:"), w: img.naturalWidth };
+  });
+  check("pasted image is previewed as a thumbnail",
+    preview && !preview.hidden && preview.blob && preview.w === 320, JSON.stringify(preview));
   await page.click("#new-cancel");
 
   await page.waitForSelector(".rail-project", { timeout: 5000 });

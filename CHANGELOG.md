@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.2 — 2026-10-29
+
+- **New review** — the drop zone shows a thumbnail of the attached image (dropped, chosen or
+  pasted) instead of only `image.png — 285 KB`. You can now see that you pasted the right screen
+  before creating the review. The caption keeps the file name and size plus *click to replace*;
+  the preview is capped in height and the dialog scrolls on short screens.
+
 ## 0.13.1 — 2026-10-29
 
 - **Desktop app** — *Check for updates…* moved from the **RedLine** menu to **Help**, where people

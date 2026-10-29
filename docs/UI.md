@@ -98,6 +98,15 @@ string, and the note is the *only* place the human writes prose.
 - `annotations.json` carries `note` per shape (free-form map, additive), and `review.md` appends
   `— “note”` to the numbered region line.
 
+## Thumbnail in the New review dialog (v0.13.2)
+
+- The drop zone previews the image once something is attached — dropped, chosen, or pasted —
+  instead of printing only `name — size KB`. The caption keeps the name and size and adds
+  *click to replace*. The preview is an `objectURL` (revoked when it is replaced), so a pasted
+  clipboard image never makes a round-trip to the server before Create.
+- The preview is capped at `min(240px, 30vh)` and the modal scrolls (`max-height: 94vh`), so a
+  tall screenshot cannot push *Create review* off the screen.
+
 ## Clocks in the audience's timezone (v0.13.1)
 
 The server stores and serves RFC 3339 UTC (`+00:00`) everywhere. The UI formats those with `Date`

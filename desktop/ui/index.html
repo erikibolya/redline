@@ -151,7 +151,10 @@ try {
   <form class="modal" id="new-form">
     <h2>New review</h2>
     <p class="hint">Drop a screenshot, paste it with <b>Ctrl+V</b>, or click to choose a file. Then say what to look at.</p>
-    <div class="drop" id="drop">Drop an image, or click to browse</div>
+    <div class="drop" id="drop">
+      <img class="drop-preview" id="drop-preview" alt="Selected screenshot" hidden />
+      <span class="drop-label" id="drop-label">Drop an image, or click to browse</span>
+    </div>
     <input type="file" id="file" accept="image/*" hidden />
     <label for="f-title">Title</label>
     <input id="f-title" type="text" placeholder="Button / default" />

@@ -1934,14 +1934,23 @@ const NewReview = {
     if (!overlay) return;
     const drop = $("#drop");
     const file = $("#file");
+    const preview = $("#drop-preview");
+    const label = $("#drop-label");
     let picked = null;
+    let previewUrl = null;
     const take = (candidate) => {
       if (!candidate || !candidate.type.startsWith("image/")) {
         $("#new-error").textContent = "That is not an image.";
         return;
       }
       picked = candidate;
-      drop.textContent = `${candidate.name || "pasted image"} — ${Math.round(candidate.size / 1024)} KB`;
+      // Show the image itself: a filename and a size say nothing about what was captured.
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = URL.createObjectURL(candidate);
+      preview.src = previewUrl;
+      preview.hidden = false;
+      drop.classList.add("has-image");
+      label.textContent = `${candidate.name || "pasted image"} — ${Math.round(candidate.size / 1024)} KB · click to replace`;
       const title = $("#f-title");
       if (!title.value) {
         const name = (candidate.name || "").replace(/\.[^.]+$/, "");

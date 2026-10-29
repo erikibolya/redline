@@ -64,6 +64,13 @@ Fixes found by using rounds for real.
 
 ## Unreleased
 
+- **The submitted lock is a status pill, not a modal.** While a review was `submitted` a dark
+  scrim plus a centred "Submitted — waiting for the agent / STOP unlocks the canvas" box covered
+  the screenshot — while the same agent state already floated above the toolbar. The modal is
+  gone (`#review-lock` and `.lock-box` removed); the stage status pill is centred where the box
+  was, keeps the message short ("Agent is working — …" / "Waiting for the agent…"), carries the
+  STOP hint as a tooltip and lets the screenshot show through. The `locked` guards in `app.js` are
+  untouched, so editing stays blocked.
 - **History rows are compact and bounded.** Each round was rendered as a full annotation card
   inside the empty-state wrapper, whose 22 px padding and centred text left most of the section
   white. The list is now a stack of small bordered rows (stamp + count, ghost / diff / screenshot

@@ -273,21 +273,30 @@ const main = async () => {
   check("submission says it is waiting for an agent", waiting.includes("Waiting for an agent"),
     waiting.slice(0, 60));
 
-  // ---- the status toast must not sit on the toolbar (the tools live there)
+  // ---- the status toast sits in the middle of the stage, clear of the toolbar
   const toastBox = await page.evaluate(() => {
     const toast = document.querySelector("#stage-status");
     const bar = document.querySelector(".options");
-    if (!toast || toast.hidden || !bar) return null;
+    const stage = document.querySelector("#stage");
+    if (!toast || toast.hidden || !bar || !stage) return null;
     const a = toast.getBoundingClientRect();
     const b = bar.getBoundingClientRect();
+    const s = stage.getBoundingClientRect();
     return {
       overlap: a.top < b.bottom && a.bottom > b.top && a.left < b.right && a.right > b.left,
+      offCentre: Math.abs((a.left + a.right) / 2 - (s.left + s.right) / 2),
+      offMiddle: Math.abs((a.top + a.bottom) / 2 - (s.top + s.bottom) / 2),
       toastTop: Math.round(a.top),
       barBottom: Math.round(b.bottom),
     };
   });
   check("status toast sits below the toolbar", toastBox && !toastBox.overlap,
     toastBox ? `toast top ${toastBox.toastTop} · toolbar bottom ${toastBox.barBottom}` : "no toast");
+  check("status toast is centred in the stage where the old lock modal was",
+    toastBox && toastBox.offCentre <= 2 && toastBox.offMiddle <= 2,
+    toastBox ? `off centre ${Math.round(toastBox.offCentre)} · off middle ${Math.round(toastBox.offMiddle)}` : "no toast");
+  const noModal = await page.evaluate(() => !document.querySelector("#review-lock"));
+  check("the submitted lock is a status pill, not a dimming modal", noModal);
 
   // ---- a fresh load of a submitted session must not die before the event poll lands
   await page.reload({ waitUntil: "networkidle0" });
@@ -590,8 +599,10 @@ const main = async () => {
   await new Promise((resolve) => setTimeout(resolve, 1700));
   const locked = await page.evaluate(() => {
     const button = document.querySelector("#submit");
+    const status = document.querySelector("#stage-status");
     return {
-      overlay: !document.querySelector("#review-lock").hidden,
+      status: status && !status.hidden ? status.textContent.trim() : "",
+      locked: Boolean(window.redline.locked),
       stop: button.textContent.trim(),
       red: getComputedStyle(button).backgroundColor,
       square: Boolean(button.querySelector(".stop-square")),
@@ -599,7 +610,7 @@ const main = async () => {
     };
   });
   check("submitting locks the canvas and turns Submit into a red STOP with a square",
-    locked.overlay && locked.stop === "STOP" && locked.composer
+    locked.status.length > 0 && locked.locked && locked.stop === "STOP" && locked.composer
       && locked.red === "rgb(220, 38, 38)" && locked.square,
     JSON.stringify(locked));
 
@@ -611,12 +622,12 @@ const main = async () => {
   await page.click("#submit");
   await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
   const unlocked = await page.evaluate(() => ({
-    overlay: !document.querySelector("#review-lock").hidden,
+    locked: Boolean(window.redline.locked),
     label: document.querySelector("#submit").textContent.trim(),
     annotations: window.redline.annotations.length,
   }));
   check("STOP unlocks the canvas and keeps the annotations",
-    !unlocked.overlay && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
+    !unlocked.locked && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
     JSON.stringify(unlocked));
 
   // ---- touch mode: bigger tools, row actions not hover-only

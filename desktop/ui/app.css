@@ -124,16 +124,6 @@ a:hover { text-decoration: underline; }
 [hidden] { display: none !important; }
 .pill[hidden] { display: none; }
 .pill.agent { color: #fbbf24; border-color: #78350f; background: #231a08; }
-.review-lock {
-  position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
-  background: rgba(5, 9, 14, .55);
-}
-.review-lock .lock-box {
-  display: flex; flex-direction: column; gap: 4px; text-align: center;
-  padding: 12px 18px; border-radius: 10px; background: rgba(15, 23, 42, .9);
-  border: 1px solid #334155; color: #e2e8f0; font-size: 13px;
-}
-.review-lock .lock-box span { color: #94a3b8; font-size: 11px; }
 #submit.btn.stop { background: #dc2626; border-color: #b91c1c; color: #fff; }
 #submit.btn.stop:hover { background: #ef4444; }
 .btn.stop .stop-square {
@@ -283,11 +273,14 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 /* ---------------------------------------------------------------- stage */
 .stage-status {
   position: absolute; z-index: 6;
-  /* Below the toolbar, never on it: the toolbar is where the tools are. */
-  top: calc(var(--stage-toolbar-top) + var(--stage-toolbar-height) + 8px);
-  left: 50%; transform: translateX(-50%);
-  padding: 4px 12px; border-radius: 999px; pointer-events: none;
-  background: var(--panel); border: 1px solid var(--border); color: var(--muted); font-size: 11px;
+  /* Centred in the stage: the submitted lock used to be a dimming modal here, which hid the
+     screenshot. The status pill says the same thing (and what the agent is doing) without it. */
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  max-width: min(70%, 520px);
+  padding: 7px 14px; border-radius: 999px; pointer-events: none; text-align: center;
+  background: rgba(15, 23, 42, .9); border: 1px solid #334155;
+  color: #e2e8f0; font-size: 12px; line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
 }
 .stage {
   grid-area: stage;

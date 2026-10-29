@@ -132,8 +132,10 @@ and converts them).
 
 ## Submitted lock and STOP (v0.17)
 
-- While `status == submitted` a dark overlay covers the canvas (`#review-lock`): pointer events are
-  swallowed, tools and the note field are disabled, and the composer textarea is disabled.
+- While `status == submitted` the canvas is locked for editing: the annotation guards refuse edits,
+  tools and the note field are disabled, and the composer textarea is disabled. There is **no
+  dimming modal** — a single status pill in the middle of the stage says *"Agent is working — …"*
+  (or *"Waiting for the agent…"*), so the screenshot stays visible.
 - The composer's primary button becomes a red **STOP**; it asks *"Stop the agent and edit this
   review?"* and calls `POST /api/sessions/<id>/cancel`. The canvas unlocks with the annotations
   intact and the button returns to *Submit review*.

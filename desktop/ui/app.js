@@ -1894,8 +1894,10 @@ class Editor {
 
   updateLock() {
     this.locked = this.meta?.status === "submitted" && !this.viewing;
-    const overlay = $("#review-lock");
-    if (overlay) overlay.hidden = !this.locked;
+    // No modal overlay: the stage status pill is the visible signal (tools stay usable for
+    // viewing/panning, the annotation guards refuse edits while `locked`).
+    const status = $("#stage-status");
+    if (status) status.title = this.locked ? "STOP unlocks the canvas for another round." : "";
   }
 
   updateViewingBar() {

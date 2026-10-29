@@ -1,0 +1,90 @@
+# RedLine without a server
+
+RedLine is two independent halves:
+
+- the **server + UI** (a Docker container, or the embedded server in the desktop app),
+- the **agent runtime** (OpenCode, wherever it runs).
+
+They talk over MCP for pull (`get_feedback`, `wait_for_feedback`) and over `redline-agent` for
+push (a submission becomes an agent run). A user with no home server runs both on one PC.
+
+## Two topologies
+
+**Server on a NAS (the author's setup)** — repositories live there, agents connect to it:
+
+```
+desktop OpenCode ──▶ OpenCode server on the NAS
+                          ├─ repositories
+                          └─ redline (Docker)  ◀── https://redline.example (LAN/VPN)
+```
+
+**Everything on one Windows PC** — the desktop app *is* the server:
+
+```
+RedLine desktop app ──▶ embedded server 127.0.0.1:8788
+      ▲                          ▲
+   browser                  OpenCode (MCP at /mcp)
+                                   │
+                              local repository
+```
+
+No Docker, no domain, no NAS. The data lives in `%APPDATA%\redline`, the token is generated on
+first start.
+
+## Desktop app (local agent)
+
+The app always starts its embedded server, so a single install is enough:
+
+1. Install RedLine from [Releases](https://github.com/erikibolya/redline/releases) and OpenCode.
+2. `opencode auth login` (one provider is enough).
+3. Tray menu → **Choose agent repository…** → pick the project folder.
+4. Tray menu → **Start local agent**.
+5. In the app: **Copy MCP config** and paste it into your OpenCode MCP settings.
+6. Submit a review. It shows `received`, then `working` with activity, then the reply.
+
+The agent uses the repository's own `AGENTS.md` and the user's OpenCode permissions; it can run
+tests, build and — if the review asks for a visual result — deploy, but it never rewrites
+published git history.
+
+### Settings
+
+`agent.json` next to `config.json` (created when you pick a repository):
+
+```json
+{ "repo": "C:\\src\\app", "model": "deepseek/deepseek-flash", "opencode_server": "" }
+```
+
+- `model` — any OpenCode model id (`opencode models`).
+- `opencode_server` — set to e.g. `http://127.0.0.1:4096` to dispatch into the OpenCode that is
+  already running instead of starting a private one.
+
+## Headless (server-side)
+
+Download `redline-agent` from Releases or run the container:
+
+```bash
+REDLINE_URL=https://redline.example \
+REDLINE_TOKEN=… \
+REDLINE_AGENT_REPO=/repos/app \
+redline-agent
+```
+
+```bash
+docker run -d --name redline-agent \
+  --network traefik_network \
+  -e REDLINE_URL=http://redline:8788 \
+  -e REDLINE_AGENT_REPO=/src \
+  -v /srv/repos/app:/src \
+  -v /srv/opencode-auth:/root/.local/share/opencode \
+  -v /usr/local/bin/opencode:/usr/local/bin/opencode:ro \
+  redline-agent
+```
+
+The token can also be mounted at `/data/token` instead of passed in the environment.
+
+## What RedLine does *not* do
+
+- It never runs a model itself; the agent is always the user's.
+- It does not sandbox the agent. The container/mounts decide what the agent can touch — that is the
+  operator's choice, not a RedLine setting.
+- It does not push over MCP; `redline-agent` and `REDLINE_WEBHOOK_URL` are the push mechanisms.

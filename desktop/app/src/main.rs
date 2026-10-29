@@ -13,6 +13,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 use axum::Router;
 use redline_core::api::{router, AppState};
@@ -47,11 +48,19 @@ struct Local {
     token: String,
 }
 
+/// The local agent runs in a thread next to the app; this is the only handle to it.
+#[derive(Default)]
+struct AgentState {
+    cancel: Mutex<Option<Arc<AtomicBool>>>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
 /// Everything the tray and menu handlers need; cloned into each closure.
 #[derive(Clone)]
 struct Ctx {
     data_dir: PathBuf,
     local: Local,
+    agent: Arc<AgentState>,
 }
 
 fn main() {
@@ -94,7 +103,11 @@ fn main() {
                 }
             });
 
-            let ctx = Ctx { data_dir, local };
+            let ctx = Ctx {
+                data_dir,
+                local,
+                agent: Arc::new(AgentState::default()),
+            };
             build_tray(app, &ctx)?;
             build_app_menu(app, &ctx)?;
             check_for_updates(app.handle().clone(), false);
@@ -121,9 +134,14 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let connect = MenuItem::with_id(app, "connect", "Connect to a server…", true, None::<&str>)?;
     let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_mcp = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
+    let agent_start = MenuItem::with_id(app, "agent-start", "Start local agent", true, None::<&str>)?;
+    let agent_stop = MenuItem::with_id(app, "agent-stop", "Stop local agent", true, None::<&str>)?;
+    let agent_repo =
+        MenuItem::with_id(app, "agent-repo", "Choose agent repository…", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check-updates", "Check for updates…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit RedLine", true, Some("CmdOrCtrl+Q"))?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let agent_separator = PredefinedMenuItem::separator(app)?;
     let docs = MenuItem::with_id(app, "docs", "Documentation", true, None::<&str>)?;
     let about = MenuItem::with_id(app, "about", "About RedLine", true, None::<&str>)?;
     let help_separator = PredefinedMenuItem::separator(app)?;
@@ -132,7 +150,10 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         app,
         "RedLine",
         true,
-        &[&sessions, &connect, &copy_link, &copy_mcp, &check, &separator, &quit],
+        &[
+            &sessions, &connect, &copy_link, &copy_mcp, &separator, &agent_start, &agent_stop,
+            &agent_repo, &agent_separator, &check, &quit,
+        ],
     )?;
     let help = Submenu::with_items(app, "Help", true, &[&docs, &help_separator, &about])?;
     app.set_menu(Menu::with_items(app, &[&file, &help])?)?;
@@ -158,6 +179,10 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     )?;
     let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_config = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
+    let agent_start = MenuItem::with_id(app, "agent-start", "Start local agent", true, None::<&str>)?;
+    let agent_stop = MenuItem::with_id(app, "agent-stop", "Stop local agent", true, None::<&str>)?;
+    let agent_repo =
+        MenuItem::with_id(app, "agent-repo", "Choose agent repository…", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check-updates", "Check for updates…", true, None::<&str>)?;
     let status = match read_remote(&ctx.data_dir) {
         Some(remote) => format!("Server: {}", remote.base_url),
@@ -165,11 +190,13 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     };
     let address = MenuItem::with_id(app, "address", &status, false, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
+    let agent_separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "Quit RedLine", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
-            &open, &connect, &login, &copy_link, &copy_config, &check, &address, &separator, &quit,
+            &open, &connect, &login, &copy_link, &copy_config, &separator, &agent_start,
+            &agent_stop, &agent_repo, &agent_separator, &check, &address, &separator, &quit,
         ],
     )?;
 
@@ -220,6 +247,9 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
         "copy-mcp" => {
             copy_or_complain(app, &mcp_config(&ctx.data_dir, &ctx.local), "MCP config");
         }
+        "agent-start" => start_agent(app, ctx),
+        "agent-stop" => stop_agent(ctx),
+        "agent-repo" => choose_agent_repo(app, ctx),
         "check-updates" => check_for_updates(app.clone(), true),
         "autostart" => {
             let manager = app.autolaunch();
@@ -289,6 +319,129 @@ fn reachable(base_url: &str, token: &str) -> bool {
     redline_core::client::Client::new(&format!("{}/", base_url.trim_end_matches('/')), token)
         .and_then(|client| client.get("/api/config"))
         .is_ok()
+}
+
+/// Repo/model/server for the local agent, stored beside `config.json`.
+#[derive(Default)]
+struct AgentSettings {
+    repo: Option<PathBuf>,
+    model: Option<String>,
+    opencode_server: Option<String>,
+}
+
+fn agent_config_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("agent.json")
+}
+
+fn read_agent_settings(data_dir: &Path) -> AgentSettings {
+    let Ok(text) = std::fs::read_to_string(agent_config_path(data_dir)) else {
+        return AgentSettings::default();
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return AgentSettings::default();
+    };
+    AgentSettings {
+        repo: value["repo"].as_str().map(PathBuf::from),
+        model: value["model"].as_str().map(str::to_string),
+        opencode_server: value["opencode_server"].as_str().map(str::to_string),
+    }
+}
+
+fn write_agent_settings(data_dir: &Path, settings: &AgentSettings) {
+    let mut value = serde_json::Map::new();
+    if let Some(repo) = &settings.repo {
+        value.insert("repo".into(), serde_json::json!(repo.display().to_string()));
+    }
+    if let Some(model) = &settings.model {
+        value.insert("model".into(), serde_json::json!(model));
+    }
+    if let Some(server) = &settings.opencode_server {
+        value.insert("opencode_server".into(), serde_json::json!(server));
+    }
+    let text = serde_json::to_string_pretty(&serde_json::Value::Object(value)).unwrap_or_default();
+    if let Err(err) = std::fs::write(agent_config_path(data_dir), text) {
+        eprintln!("redline: cannot write agent.json: {err}");
+    }
+}
+
+fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
+    let picked = app.dialog().file().blocking_pick_folder()?;
+    match picked {
+        tauri_plugin_dialog::FilePath::Path(path) => Some(path),
+        tauri_plugin_dialog::FilePath::Url(url) => url.to_file_path().ok(),
+    }
+}
+
+fn start_agent(app: &AppHandle, ctx: &Ctx) {
+    if ctx
+        .agent
+        .thread
+        .lock()
+        .map(|slot| slot.is_some())
+        .unwrap_or(false)
+    {
+        app.dialog()
+            .message("The local agent is already running.")
+            .title("RedLine")
+            .kind(MessageDialogKind::Info)
+            .show(|_| {});
+        return;
+    }
+    let mut settings = read_agent_settings(&ctx.data_dir);
+    let Some(repo) = settings.repo.clone().or_else(|| pick_folder(app)) else {
+        return;
+    };
+    settings.repo = Some(repo.clone());
+    write_agent_settings(&ctx.data_dir, &settings);
+
+    // The agent talks to whichever server this app is showing: the remote one if configured,
+    // otherwise the embedded one.
+    let (url, token) = match read_remote(&ctx.data_dir) {
+        Some(remote) => (remote.base_url, remote.token),
+        None => (ctx.local.base_url.clone(), ctx.local.token.clone()),
+    };
+    let mut config = redline_agent::AgentConfig::new(url, token, repo);
+    if let Some(model) = settings.model.clone().filter(|value| !value.trim().is_empty()) {
+        config.model = model;
+    }
+    if let Some(server) = settings
+        .opencode_server
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+    {
+        config.opencode_server = Some(server);
+    }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let signal = cancel.clone();
+    let handle = std::thread::spawn(move || redline_agent::run(config, signal));
+    if let Ok(mut slot) = ctx.agent.cancel.lock() {
+        *slot = Some(cancel);
+    }
+    if let Ok(mut slot) = ctx.agent.thread.lock() {
+        *slot = Some(handle);
+    }
+}
+
+fn stop_agent(ctx: &Ctx) {
+    if let Ok(mut slot) = ctx.agent.cancel.lock() {
+        if let Some(cancel) = slot.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
+    // Detach: the loop stops at the next poll, a run in flight finishes on its own.
+    if let Ok(mut slot) = ctx.agent.thread.lock() {
+        *slot = None;
+    }
+}
+
+fn choose_agent_repo(app: &AppHandle, ctx: &Ctx) {
+    let Some(repo) = pick_folder(app) else {
+        return;
+    };
+    let mut settings = read_agent_settings(&ctx.data_dir);
+    settings.repo = Some(repo);
+    write_agent_settings(&ctx.data_dir, &settings);
 }
 
 fn read_remote(data_dir: &Path) -> Option<Local> {

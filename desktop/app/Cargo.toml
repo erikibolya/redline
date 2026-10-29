@@ -1,6 +1,6 @@
 [package]
 name = "redline-app"
-version = "0.12.0"
+version = "0.13.0"
 edition = "2021"
 license = "MIT"
 description = "Tray-resident redline desktop app"
@@ -15,6 +15,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 redline-core = { path = "../crates/redline-core" }
+redline-agent = { path = "../crates/redline-agent" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 tauri-plugin-autostart = "2"

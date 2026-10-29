@@ -57,8 +57,10 @@ jobs:
           } | ConvertTo-Json -Depth 6 | Set-Content desktop/app/tauri.signing.conf.json -Encoding utf8
           "TAURI_EXTRA_ARGS=--config tauri.signing.conf.json" | Out-File -Append $env:GITHUB_ENV
 
-      - name: Build the CLI
-        run: cargo build --release --manifest-path desktop/Cargo.toml -p redline
+      - name: Build the CLI and the agent
+        run: |
+          cargo build --release --manifest-path desktop/Cargo.toml -p redline
+          cargo build --release --manifest-path desktop/Cargo.toml -p redline-agent
 
       - name: Build and publish
         uses: tauri-apps/tauri-action@v0
@@ -86,14 +88,18 @@ jobs:
             `redline.exe` (below) is the command-line client for the same app:
             `redline open shot.png --title "Button / default"`.
 
+            `redline-agent.exe` (below) is the unattended agent bridge — see
+            `docs/LOCAL-AGENT.md`. The app starts it from the tray (*Start local agent*).
+
             Redline the screenshot, the agent writes the fix.
 
-      - name: Attach the CLI
+      - name: Attach the CLI and the agent
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
           gh release upload "${{ github.event.inputs.tag || github.ref_name }}"
-          desktop/target/release/redline.exe --clobber
+          desktop/target/release/redline.exe
+          desktop/target/release/redline-agent.exe --clobber
 
   linux:
     name: linux server binary
@@ -111,14 +117,18 @@ jobs:
       # Static musl build: runs on Unraid (or any Linux) with no dependencies, no container.
       - name: Build static binary
         run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
           rustup target add x86_64-unknown-linux-musl
           cargo build --release --target x86_64-unknown-linux-musl -p redline --manifest-path desktop/Cargo.toml
+          cargo build --release --target x86_64-unknown-linux-musl -p redline-agent --manifest-path desktop/Cargo.toml
       - name: Attach to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cp desktop/target/x86_64-unknown-linux-musl/release/redline redline-linux-x86_64
-          gh release upload "${{ github.event.inputs.tag || github.ref_name }}" redline-linux-x86_64 --clobber
+          cp desktop/target/x86_64-unknown-linux-musl/release/redline-agent redline-agent-linux-x86_64
+          gh release upload "${{ github.event.inputs.tag || github.ref_name }}" \
+            redline-linux-x86_64 redline-agent-linux-x86_64 --clobber
 
   image:
     name: container image (ghcr.io)

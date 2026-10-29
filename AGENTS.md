@@ -117,6 +117,8 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 
 ## 6. Architecture in one screen
 
+- `redline-agent` — unattended bridge: watch submitted reviews → `opencode run` → progress/reply/resolve.
+  Also embedded in the desktop app (tray → *Start local agent*); see `docs/LOCAL-AGENT.md`.
 - `redline-core` — session folder store (`meta.json`, `annotations.json`, `review.md`,
   `annotated.png`, `history/`), project folders (`sessions/projects/<slug>/`, v0.10), axum HTTP
   API, bearer/cookie auth, MCP JSON-RPC, headless capture (shells out to Chromium), annotation

@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.13.0 — 2026-10-29
+
+The agent side becomes part of the product.
+
+- **`redline-agent`** — a Rust bridge (binary + library) that turns a submission into an OpenCode
+  run: polls submitted reviews, reads the feedback, runs `opencode run` in the repository
+  (optionally against an already running OpenCode), and lets the run report `progress`, `reply`
+  and `resolve`. Replaces the Python prototype.
+- **Desktop app** — tray menu: *Choose agent repository…*, *Start local agent*, *Stop local agent*.
+  Settings live in `agent.json`; the agent talks to the embedded server in standalone mode or to
+  the configured remote server.
+- **`docs/LOCAL-AGENT.md`** — server-on-a-NAS vs everything-on-one-PC, headless and container
+  recipes.
+- Release assets: `redline-agent` for Windows and Linux.
+
 ## 0.12.0 — 2026-10-29
 
 Silence after Submit is the bug this release fixes.

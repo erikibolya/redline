@@ -1,0 +1,17 @@
+[package]
+name = "redline-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Unattended RedLine agent bridge: a submission becomes an OpenCode run"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ureq = { version = "2", default-features = false, features = ["tls"] }
+wait-timeout = "0.2"
+
+[[bin]]
+name = "redline-agent"
+path = "src/main.rs"

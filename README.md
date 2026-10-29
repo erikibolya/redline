@@ -16,7 +16,7 @@ personal GitHub account and has no company-specific code or paths.
 > [releases page](https://github.com/erikibolya/redline/releases): a tray application that embeds
 > this server plus an MCP endpoint, so agents connect directly and no terminal stays open. It runs
 > standalone on your desktop or as a thin client of a server next to your agents (Unraid/Docker).
-> See [`docs/DESKTOP.md`](docs/DESKTOP.md).
+> See [`docs/DESKTOP.md`](docs/DESKTOP.md) and [`docs/LOCAL-AGENT.md`](docs/LOCAL-AGENT.md) (RedLine with no server at all).
 >
 > Server image (Unraid/NAS/Docker): `docker pull ghcr.io/erikibolya/redline:latest` — bind
 > `/data`, publish `8788`, set `REDLINE_TOKEN`. The Windows app then connects to it from the tray.

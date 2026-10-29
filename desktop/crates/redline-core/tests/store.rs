@@ -23,6 +23,7 @@ fn creates_the_v01_folder_layout() {
             "check hover",
             None,
             None,
+            None,
         )
         .expect("create");
 
@@ -66,14 +67,14 @@ fn rejects_path_traversal_and_duplicate_ids() {
     assert!(valid_id("20260101-120000-button-1a2b"));
 
     assert!(store
-        .create_from_bytes(PNG, "a.png", "a", "", "", Some("../escape"), None)
+        .create_from_bytes(PNG, "a.png", "a", "", "", Some("../escape"), None, None)
         .is_err());
 
     store
-        .create_from_bytes(PNG, "a.png", "a", "", "", Some("fixed-id"), None)
+        .create_from_bytes(PNG, "a.png", "a", "", "", Some("fixed-id"), None, None)
         .unwrap();
     let err = store
-        .create_from_bytes(PNG, "a.png", "a", "", "", Some("fixed-id"), None)
+        .create_from_bytes(PNG, "a.png", "a", "", "", Some("fixed-id"), None, None)
         .unwrap_err();
     assert!(matches!(err, redline_core::Error::Exists(_)));
 }
@@ -88,6 +89,7 @@ fn submission_writes_all_four_artifacts() {
             "Button",
             "http://x/button",
             "hover + focus",
+            None,
             None,
             None,
         )
@@ -150,11 +152,11 @@ fn submission_writes_all_four_artifacts() {
 fn list_is_newest_first_and_remove_is_permanent() {
     let (_dir, store) = store();
     let a = store
-        .create_from_bytes(PNG, "a.png", "first", "", "", Some("aaa"), None)
+        .create_from_bytes(PNG, "a.png", "first", "", "", Some("aaa"), None, None)
         .unwrap();
     std::thread::sleep(std::time::Duration::from_millis(1100)); // created_at has second precision
     let b = store
-        .create_from_bytes(PNG, "b.png", "second", "", "", Some("bbb"), None)
+        .create_from_bytes(PNG, "b.png", "second", "", "", Some("bbb"), None, None)
         .unwrap();
 
     let ids: Vec<String> = store.list().unwrap().into_iter().map(|m| m.id).collect();
@@ -172,7 +174,7 @@ fn list_is_newest_first_and_remove_is_permanent() {
 fn writes_leave_no_temp_files_behind() {
     let (_dir, store) = store();
     let meta = store
-        .create_from_bytes(PNG, "a.png", "t", "", "", None, None)
+        .create_from_bytes(PNG, "a.png", "t", "", "", None, None, None)
         .unwrap();
     store
         .submit(
@@ -201,7 +203,7 @@ fn writes_leave_no_temp_files_behind() {
 fn malformed_png_payload_is_a_bad_request_not_a_crash() {
     let (_dir, store) = store();
     let meta = store
-        .create_from_bytes(PNG, "a.png", "t", "", "", None, None)
+        .create_from_bytes(PNG, "a.png", "t", "", "", None, None, None)
         .unwrap();
     let err = store
         .submit(

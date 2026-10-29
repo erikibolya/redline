@@ -98,6 +98,20 @@ string, and the note is the *only* place the human writes prose.
 - `annotations.json` carries `note` per shape (free-form map, additive), and `review.md` appends
   `— “note”` to the numbered region line.
 
+## Projects in the rail (v0.10)
+
+The rail lists projects (conversation areas), not a flat stream of requests.
+
+- A project is a folder: `sessions/projects/<slug>/project.json` plus its sessions one level
+  deeper. `POST /api/projects` creates one; agents get it implicitly with `project` on
+  `review_screenshot` / `capture_review`.
+- Sessions created without a project live flat and are shown as **Inbox** — there is no migration,
+  the label is added on read.
+- Each project header shows its name, the number of waiting submissions (green) and the total.
+  Click to collapse; the state persists per browser.
+- Filters and search still apply inside every project; day separators appear only in long lists.
+- The New review dialog has a project field with autocomplete from `GET /api/projects`.
+
 ## Conversation and composer (v0.9)
 
 The inspector's lower half is the conversation, so the tool stops feeling like a queue of requests.

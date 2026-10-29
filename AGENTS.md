@@ -118,12 +118,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 ## 6. Architecture in one screen
 
 - `redline-core` — session folder store (`meta.json`, `annotations.json`, `review.md`,
-  `annotated.png`, `history/`), axum HTTP API, bearer/cookie auth, MCP JSON-RPC, headless capture
-  (shells out to Chromium), annotation diffing, loopback HTTP client.
+  `annotated.png`, `history/`), project folders (`sessions/projects/<slug>/`, v0.10), axum HTTP
+  API, bearer/cookie auth, MCP JSON-RPC, headless capture (shells out to Chromium), annotation
+  diffing, loopback HTTP client.
 - Auth: token from `/data/token`; `Authorization: Bearer`, `redline_token` cookie (set by
   `/s/<id>?t=…` → 307), or `?t=`. `Sec-Fetch-Site: cross-site` is refused.
 - MCP tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`,
-  `list_reviews`, `reply`, `progress`, `resolve`. Resources: `redline://session/<id>/{annotated.png,review.md}`.
+  `list_reviews`, `list_projects`, `reply`, `progress`, `resolve`. Resources: `redline://session/<id>/{annotated.png,review.md}`.
 - Agent state: `get_feedback` stamps `seen_by_agent_at` and sets `agent_state=received`;
   `progress` appends to `agent-events.jsonl` and sets `working`; `reply` sets `replied`.
   The editor polls meta + thread + events every 5 s and renders them as a conversation.

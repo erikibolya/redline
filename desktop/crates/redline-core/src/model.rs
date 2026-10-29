@@ -37,6 +37,20 @@ pub struct Meta {
     /// What the agent is doing: `received`, `working`, `replied` (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
+    /// Project slug this session belongs to (v0.10). Missing on disk means the Inbox.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// A conversation area: one agent + one piece of work, holding its sessions and history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
+    pub slug: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -185,4 +199,7 @@ pub struct NewSession {
     /// Absolute path on the machine running redline. Convenience for local agents.
     #[serde(default)]
     pub image_path: Option<String>,
+    /// Project name or slug (v0.10). Created on first use; omitted means the Inbox.
+    #[serde(default)]
+    pub project: Option<String>,
 }

@@ -117,7 +117,7 @@ be — that is just a message).
 
 ---
 
-## W5 — Projects in the rail
+## W5 — Projects in the rail (shipped in 0.10.0)
 
 **Goal:** the rail is a list of projects/conversations, not of requests.
 

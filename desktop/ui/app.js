@@ -131,6 +131,8 @@ class Rail {
     this.onAction = onAction;
     this.onPurge = onPurge;
     this.sessions = [];
+    this.projects = [];
+    this.collapsed = new Set(prefs.get("collapsedProjects", []));
     this.filter = prefs.get("filter", "active");
     if (this.filter === "all") this.filter = "active"; // pre-v0.6 preference
     this.query = "";
@@ -159,8 +161,12 @@ class Rail {
   }
 
   async load() {
-    const { sessions } = await api("/api/sessions");
-    this.sessions = sessions || [];
+    const [sessions, projects] = await Promise.all([
+      api("/api/sessions").catch(() => ({ sessions: [] })),
+      api("/api/projects").catch(() => ({ projects: [] })),
+    ]);
+    this.sessions = sessions.sessions || [];
+    this.projects = projects.projects || [];
     this.render();
   }
 
@@ -219,18 +225,49 @@ class Rail {
       return;
     }
 
-    const groups = new Map();
+    // Group by project: the rail is a list of conversations, not of requests.
+    const byProject = new Map();
     for (const session of sessions) {
-      const label = dayLabel(session.created_at);
-      if (!groups.has(label)) groups.set(label, []);
-      groups.get(label).push(session);
+      const slug = session.project || "inbox";
+      if (!byProject.has(slug)) byProject.set(slug, []);
+      byProject.get(slug).push(session);
     }
+    const known = new Map((this.projects || []).map((project) => [project.slug, project]));
+    const order = [...byProject.keys()].sort((a, b) => {
+      if (a === "inbox") return -1;
+      if (b === "inbox") return 1;
+      const left = known.get(a)?.name || a;
+      const right = known.get(b)?.name || b;
+      return left.localeCompare(right);
+    });
 
-    const showGroups = sessions.length > 12;
     const parts = [];
-    for (const [label, items] of groups) {
-      if (showGroups) parts.push(`<div class="rail-group">${escapeHtml(label)}</div>`);
+    for (const slug of order) {
+      const items = byProject.get(slug);
+      const project = known.get(slug);
+      const label = project?.name || (slug === "inbox" ? "Inbox" : slug);
+      const collapsed = this.collapsed.has(slug);
+      const waiting = items.filter((session) => session.status === "submitted").length;
+      parts.push(`
+        <div class="rail-project" data-project="${escapeHtml(slug)}" role="button" tabindex="0"
+             aria-expanded="${!collapsed}" title="${collapsed ? "Expand" : "Collapse"} ${escapeHtml(label)}">
+          <span class="caret">${collapsed ? "▸" : "▾"}</span>
+          <span class="pname">${escapeHtml(label)}</span>
+          ${waiting ? `<span class="pwait" title="${waiting} waiting for the agent">${waiting}</span>` : ""}
+          <span class="pcount">${items.length}</span>
+        </div>`);
+      if (collapsed) continue;
+
+      const groups = new Map();
       for (const session of items) {
+        const day = dayLabel(session.created_at);
+        if (!groups.has(day)) groups.set(day, []);
+        groups.get(day).push(session);
+      }
+      const showDays = items.length > 12;
+      for (const [day, dayItems] of groups) {
+        if (showDays) parts.push(`<div class="rail-group">${escapeHtml(day)}</div>`);
+        for (const session of dayItems) {
         const annotations = session.annotation_count || 0;
         const fresh = seen.isNew(session);
         const badge = fresh
@@ -258,6 +295,7 @@ class Rail {
             </span>
             ${badge}
           </div>`);
+        }
       }
     }
     this.body.innerHTML = parts.join("");
@@ -266,6 +304,22 @@ class Rail {
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         this.onAction?.(button.dataset.act, button.closest(".session").dataset.id);
+      });
+    });
+    $$(".rail-project", this.body).forEach((header) => {
+      const toggle = () => {
+        const slug = header.dataset.project;
+        if (this.collapsed.has(slug)) this.collapsed.delete(slug);
+        else this.collapsed.add(slug);
+        prefs.set("collapsedProjects", [...this.collapsed]);
+        this.render();
+      };
+      header.addEventListener("click", toggle);
+      header.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggle();
+        }
       });
     });
     $$(".session", this.body).forEach((row) => {
@@ -1788,7 +1842,18 @@ const NewReview = {
     overlay.hidden = false;
     const error = $("#new-error");
     if (error) error.textContent = "";
+    this.fillProjects();
     $("#f-title").focus();
+  },
+  async fillProjects() {
+    const list = $("#project-names");
+    if (!list) return;
+    try {
+      const { projects } = await api("/api/projects");
+      list.innerHTML = (projects || [])
+        .map((project) => `<option value="${escapeHtml(project.name)}"></option>`)
+        .join("");
+    } catch { /* signed out */ }
   },
   close() { const overlay = $("#overlay"); if (overlay) overlay.hidden = true; },
   wire() {
@@ -1845,6 +1910,7 @@ const NewReview = {
               note: $("#f-note").value.trim(),
               viewport: "1440x900",
               agent: "human",
+              project: $("#f-project")?.value.trim() || undefined,
             }),
           });
           location.href = `/s/${encodeURIComponent(body.meta.id)}`;
@@ -1871,6 +1937,7 @@ const NewReview = {
             note: $("#f-note").value.trim(),
             image_base64: dataUrl,
             agent: "human",
+            project: $("#f-project")?.value.trim() || undefined,
           }),
         });
         location.href = `/s/${encodeURIComponent(body.meta.id)}`;

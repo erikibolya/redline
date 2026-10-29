@@ -14,6 +14,9 @@ use crate::model::{Annotation, AnnotationSet, ImageRef, Meta, Status, Submission
 
 /// Same rule as v0.1: one leading alphanumeric, then alphanumerics/`.`/`_`/`-`, max 121 chars.
 /// This is what stops `../` and friends from escaping the sessions directory.
+/// The virtual project that holds sessions created without one (legacy flat folders).
+pub const INBOX: &str = "inbox";
+
 pub fn valid_id(id: &str) -> bool {
     let mut chars = id.chars();
     match chars.next() {
@@ -23,7 +26,7 @@ pub fn valid_id(id: &str) -> bool {
     id.len() <= 121 && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-fn slugify(value: &str) -> String {
+pub fn slugify(value: &str) -> String {
     let mut out = String::new();
     let mut last_dash = false;
     for ch in value.trim().to_lowercase().chars() {
@@ -275,7 +278,80 @@ impl Store {
         if !valid_id(id) {
             return Err(Error::InvalidId);
         }
-        Ok(self.root.join(id))
+        let flat = self.root.join(id);
+        if flat.is_dir() {
+            return Ok(flat);
+        }
+        // Project sessions live one level deeper: projects/<slug>/<id>.
+        if let Ok(entries) = fs::read_dir(self.projects_root()) {
+            for entry in entries.flatten() {
+                let candidate = entry.path().join(id);
+                if candidate.is_dir() {
+                    return Ok(candidate);
+                }
+            }
+        }
+        Ok(flat)
+    }
+
+    pub fn projects_root(&self) -> PathBuf {
+        self.root.join("projects")
+    }
+
+    /// Read a project by slug (name or slug accepted for the caller's convenience).
+    pub fn project(&self, name: &str) -> Result<Option<crate::model::Project>> {
+        let slug = slugify(name);
+        let path = self.projects_root().join(&slug).join("project.json");
+        Ok(read_json(&path).and_then(|value| serde_json::from_value(value).ok()))
+    }
+
+    /// Create the project folder if it does not exist yet. Idempotent: agents pass a name.
+    pub fn ensure_project(&self, name: &str) -> Result<crate::model::Project> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(Error::BadRequest("project name is required".to_string()));
+        }
+        if let Some(existing) = self.project(name)? {
+            return Ok(existing);
+        }
+        let slug = slugify(name);
+        let dir = self.projects_root().join(&slug);
+        fs::create_dir_all(&dir)?;
+        let project = crate::model::Project {
+            slug: slug.clone(),
+            name: name.to_string(),
+            agent: None,
+            created_at: now(),
+        };
+        write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
+        Ok(project)
+    }
+
+    /// Every project, plus the virtual Inbox that holds legacy flat sessions.
+    pub fn projects(&self) -> Result<Vec<crate::model::Project>> {
+        let mut out: Vec<crate::model::Project> = Vec::new();
+        if let Ok(entries) = fs::read_dir(self.projects_root()) {
+            for entry in entries.flatten() {
+                if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                    continue;
+                }
+                if let Some(project) = read_json(&entry.path().join("project.json"))
+                    .and_then(|value| serde_json::from_value(value).ok())
+                {
+                    out.push(project);
+                }
+            }
+        }
+        if !out.iter().any(|project| project.slug == INBOX) {
+            out.push(crate::model::Project {
+                slug: INBOX.to_string(),
+                name: "Inbox".to_string(),
+                agent: None,
+                created_at: String::new(),
+            });
+        }
+        out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(out)
     }
 
     pub fn get(&self, id: &str) -> Result<Option<Meta>> {
@@ -294,13 +370,43 @@ impl Store {
         let mut metas = Vec::new();
         for entry in fs::read_dir(&self.root)? {
             let entry = entry?;
-            if !entry.file_type()?.is_dir() {
+            if !entry.file_type()?.is_dir() || entry.file_name() == "projects" {
                 continue;
             }
             if let Some(meta) = read_json(&entry.path().join("meta.json"))
                 .and_then(|value| serde_json::from_value::<Meta>(value).ok())
             {
                 metas.push(meta);
+            }
+        }
+        if let Ok(projects) = fs::read_dir(self.projects_root()) {
+            for project in projects.flatten() {
+                if !project
+                    .file_type()
+                    .map(|kind| kind.is_dir())
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                let Ok(sessions) = fs::read_dir(project.path()) else {
+                    continue;
+                };
+                for entry in sessions.flatten() {
+                    if !entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false) {
+                        continue;
+                    }
+                    if let Some(meta) = read_json(&entry.path().join("meta.json"))
+                        .and_then(|value| serde_json::from_value::<Meta>(value).ok())
+                    {
+                        metas.push(meta);
+                    }
+                }
+            }
+        }
+        // Flat sessions are the Inbox: no folder, no migration, just a label on read.
+        for meta in &mut metas {
+            if meta.project.is_none() {
+                meta.project = Some(INBOX.to_string());
             }
         }
         metas.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -375,13 +481,22 @@ impl Store {
         note: &str,
         id: Option<&str>,
         agent: Option<&str>,
+        project: Option<&str>,
     ) -> Result<Meta> {
         if image.is_empty() {
             return Err(Error::BadRequest("empty image".to_string()));
         }
         self.ensure()?;
+        let project = match project.map(str::trim).filter(|name| !name.is_empty()) {
+            Some(name) => Some(self.ensure_project(name)?),
+            None => None,
+        };
+        let parent = match &project {
+            Some(project) => self.projects_root().join(&project.slug),
+            None => self.root.clone(),
+        };
         let sid = self.new_id(title, id)?;
-        let dir = self.root.join(&sid);
+        let dir = parent.join(&sid);
         fs::create_dir(&dir).map_err(|err| {
             if err.kind() == std::io::ErrorKind::AlreadyExists {
                 Error::Exists(sid.clone())
@@ -413,6 +528,7 @@ impl Store {
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
+            project: project.as_ref().map(|project| project.slug.clone()),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         write_json(
@@ -430,6 +546,7 @@ impl Store {
         url: &str,
         note: &str,
         id: Option<&str>,
+        project: Option<&str>,
     ) -> Result<Meta> {
         let bytes = fs::read(image)?;
         let name = image
@@ -441,7 +558,7 @@ impl Store {
         } else {
             title
         };
-        self.create_from_bytes(&bytes, name, title, url, note, id, None)
+        self.create_from_bytes(&bytes, name, title, url, note, id, None, project)
     }
 
     fn new_id(&self, title: &str, id: Option<&str>) -> Result<String> {
@@ -449,7 +566,7 @@ impl Store {
             if !valid_id(id) {
                 return Err(Error::InvalidId);
             }
-            if self.root.join(id).exists() {
+            if self.dir(id)?.is_dir() {
                 return Err(Error::Exists(id.to_string()));
             }
             return Ok(id.to_string());
@@ -459,7 +576,7 @@ impl Store {
         for _ in 0..8 {
             let suffix = uuid::Uuid::new_v4().simple().to_string();
             let candidate = format!("{stamp}-{slug}-{}", &suffix[..4]);
-            if !self.root.join(&candidate).exists() {
+            if !self.dir(&candidate)?.is_dir() {
                 return Ok(candidate);
             }
         }

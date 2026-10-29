@@ -81,6 +81,7 @@ pub fn tool_definitions() -> Value {
                     "title": { "type": "string", "description": "What is being reviewed, e.g. 'Button / default'." },
                     "url": { "type": "string", "description": "Page URL the screenshot came from." },
                     "note": { "type": "string", "description": "What the human should look at." },
+                    "project": { "type": "string", "description": "Project name or slug; created on first use. Default: Inbox." },
                     "wait_seconds": { "type": "number", "description": "Block up to this long for a submission (default 0)." }
                 },
                 "required": ["title"],
@@ -99,6 +100,7 @@ pub fn tool_definitions() -> Value {
                     "url": { "type": "string", "description": "Page to capture." },
                     "title": { "type": "string", "description": "What is being reviewed." },
                     "note": { "type": "string", "description": "What the human should look at." },
+                    "project": { "type": "string", "description": "Project name or slug; created on first use. Default: Inbox." },
                     "viewport": { "type": "string", "description": "e.g. 1440x900 (default)." },
                     "wait_seconds": { "type": "number", "description": "Block up to this long for a submission." }
                 },
@@ -128,14 +130,20 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "list_reviews",
-            "description": "List review sessions, newest first, optionally filtered by status.",
+            "description": "List review sessions, newest first, optionally filtered by status or project.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "status": { "type": "string", "enum": ["open", "submitted", "resolved"] },
+                    "project": { "type": "string", "description": "Project name or slug." },
                     "limit": { "type": "number", "description": "Default 50." }
                 }
             }
+        },
+        {
+            "name": "list_projects",
+            "description": "List projects (conversation areas) with their session counts.",
+            "inputSchema": { "type": "object", "properties": {} }
         },
         {
             "name": "progress",
@@ -193,6 +201,7 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
         "get_feedback" => get_feedback(ctx, &args),
         "wait_for_feedback" => wait_for_feedback(ctx, &args).await,
         "list_reviews" => list_reviews(ctx, &args),
+        "list_projects" => list_projects(ctx),
         "progress" => progress(ctx, &args),
         "reply" => reply(ctx, &args),
         "resolve" => resolve(ctx, &args),
@@ -258,6 +267,7 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
             args.get("note").and_then(Value::as_str).unwrap_or_default(),
             None,
             Some("mcp"),
+            args.get("project").and_then(Value::as_str),
         )
         .map_err(|err| err.to_string())?;
 
@@ -316,6 +326,7 @@ async fn capture_review(ctx: &McpContext<'_>, args: &Value) -> Result<Value, Str
             args.get("note").and_then(Value::as_str).unwrap_or_default(),
             None,
             Some("mcp"),
+            args.get("project").and_then(Value::as_str),
         )
         .map_err(|err| err.to_string())?;
 
@@ -404,6 +415,7 @@ async fn wait_for_status(store: &Store, id: &str, timeout_seconds: u64) -> Resul
 
 fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let wanted = string_arg(args, "status");
+    let wanted_project = string_arg(args, "project").map(|value| crate::store::slugify(&value));
     let limit = args
         .get("limit")
         .and_then(Value::as_u64)
@@ -416,6 +428,10 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
             Some(status) => meta.status.as_str() == status.as_str(),
             None => true,
         })
+        .filter(|meta| match &wanted_project {
+            Some(project) => meta.project.as_deref() == Some(project.as_str()),
+            None => true,
+        })
         .take(limit)
         .map(|meta| {
             json!({
@@ -424,10 +440,34 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
                 "status": meta.status.as_str(),
                 "created_at": meta.created_at,
                 "submitted_at": meta.submitted_at,
+                "project": meta.project,
             })
         })
         .collect();
     Ok(json!({ "sessions": items }))
+}
+
+fn list_projects(ctx: &McpContext<'_>) -> Result<Value, String> {
+    let projects = ctx.store.projects().map_err(|err| err.to_string())?;
+    let sessions = ctx.store.list().map_err(|err| err.to_string())?;
+    let items: Vec<Value> = projects
+        .into_iter()
+        .map(|project| {
+            let mine: Vec<&Meta> = sessions
+                .iter()
+                .filter(|meta| meta.project.as_deref() == Some(project.slug.as_str()))
+                .collect();
+            json!({
+                "slug": project.slug,
+                "name": project.name,
+                "agent": project.agent,
+                "sessions": mine.len(),
+                "waiting": mine.iter().filter(|meta| meta.status == Status::Submitted).count(),
+                "done": mine.iter().filter(|meta| meta.status == Status::Resolved).count(),
+            })
+        })
+        .collect();
+    Ok(json!({ "projects": items }))
 }
 
 fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {

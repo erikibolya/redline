@@ -83,6 +83,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/setup", get(setup_status).post(save_setup))
         .route("/api/setup/disconnect", post(disconnect_setup))
         .route("/api/sessions", get(list_sessions).post(create_session))
+        .route("/api/projects", get(list_projects).post(create_project))
         .route(
             "/api/sessions/{id}",
             get(get_session).delete(delete_session),
@@ -349,6 +350,62 @@ async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Err
     Ok(Json(json!({ "sessions": items })))
 }
 
+async fn list_projects(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    let projects = state.store.projects()?;
+    let sessions = state.store.list()?;
+    let items: Vec<Value> = projects
+        .into_iter()
+        .map(|project| {
+            let mine: Vec<&crate::model::Meta> = sessions
+                .iter()
+                .filter(|meta| meta.project.as_deref() == Some(project.slug.as_str()))
+                .collect();
+            let waiting = mine
+                .iter()
+                .filter(|meta| meta.status.as_str() == "submitted")
+                .count();
+            let done = mine
+                .iter()
+                .filter(|meta| meta.status.as_str() == "resolved")
+                .count();
+            let last = mine
+                .iter()
+                .map(|meta| {
+                    meta.submitted_at
+                        .clone()
+                        .unwrap_or_else(|| meta.created_at.clone())
+                })
+                .max();
+            json!({
+                "slug": project.slug,
+                "name": project.name,
+                "agent": project.agent,
+                "created_at": project.created_at,
+                "sessions": mine.len(),
+                "waiting": waiting,
+                "done": done,
+                "last_activity": last,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "projects": items })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NewProject {
+    name: String,
+    #[serde(default)]
+    agent: Option<String>,
+}
+
+async fn create_project(
+    State(state): State<AppState>,
+    Json(body): Json<NewProject>,
+) -> Result<Json<Value>, Error> {
+    let project = state.store.ensure_project(&body.name)?;
+    Ok(Json(json!({ "project": project })))
+}
+
 async fn get_session(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
@@ -414,6 +471,7 @@ pub fn create_from_request(
         &body.note,
         body.id.as_deref(),
         body.agent.as_deref(),
+        body.project.as_deref(),
     )
 }
 
@@ -540,6 +598,8 @@ struct CaptureRequest {
     viewport: Option<String>,
     #[serde(default)]
     agent: Option<String>,
+    #[serde(default)]
+    project: Option<String>,
 }
 
 /// Screenshot a URL server-side and open a review for it. Same engine as the MCP tool, so the
@@ -581,6 +641,7 @@ async fn capture_session(
         &body.note,
         None,
         Some(body.agent.as_deref().unwrap_or("human")),
+        body.project.as_deref(),
     )?;
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({ "meta": meta, "review_url": review_url })))

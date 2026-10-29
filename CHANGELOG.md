@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.10.0 — 2026-10-29
+
+The rail becomes a list of projects, so a conversation has a home and a history.
+
+- **Projects are folders**: `sessions/projects/<slug>/project.json` with their sessions one level
+  deeper. `GET`/`POST /api/projects` (counts, waiting, last activity), a `project` argument on
+  `review_screenshot` / `capture_review`, a filter on `list_reviews`, a new `list_projects` MCP
+  tool and `redline open --project`.
+- **Inbox, not migration.** Sessions created without a project stay flat and are labelled Inbox on
+  read; no data is moved.
+- **Rail grouping**: collapsible project headers with waiting/total counts, filters and search
+  still apply inside each project, day separators only for long lists.
+- The New review dialog gains a project field with autocomplete.
+
 ## 0.9.1 — 2026-10-29
 
 - Hide the agent-state pill when there is no state (author `display` was overriding `[hidden]`).

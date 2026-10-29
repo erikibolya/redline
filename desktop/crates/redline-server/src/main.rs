@@ -30,7 +30,7 @@ RedLine — local visual review queue for humans and AI agents
 
 USAGE
   redline serve [options]                  run the HTTP + MCP server (foreground)
-  redline open IMAGE [options]             create a review session from a screenshot
+  redline open IMAGE [--project NAME]       create a review session from a screenshot
   redline list                             list sessions
   redline get ID                           print a session and its annotations
   redline wait ID [--timeout 600]          block until the human submits
@@ -77,6 +77,7 @@ const VALUE_FLAGS: &[&str] = &[
     "data-dir",
     "sessions",
     "ui",
+    "project",
     "public-url",
     "token",
     "title",
@@ -306,6 +307,9 @@ fn open(flags: &Flags, base_url: &str, auth: &Auth) -> Result<i32, String> {
     });
     if let Some(id) = flags.value("id") {
         body["id"] = serde_json::Value::String(id.to_string());
+    }
+    if let Some(project) = flags.value("project") {
+        body["project"] = serde_json::Value::String(project.to_string());
     }
 
     let client = client(base_url, auth)?;

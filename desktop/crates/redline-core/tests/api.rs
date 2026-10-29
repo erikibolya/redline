@@ -969,3 +969,69 @@ async fn feedback_marks_received_and_progress_shows_activity() {
     let (_, _, session) = send(&h.app, request).await;
     assert_eq!(session["meta"]["agent_state"], "working");
 }
+
+/// W5: a session can live in a project folder; sessions without one stay in the virtual Inbox.
+#[tokio::test]
+async fn sessions_can_live_in_a_project_folder() {
+    let h = harness();
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "In project", "image_base64": PNG_B64, "project": "RedLine UI"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["meta"]["project"], "redline-ui");
+    assert!(h
+        .store
+        .projects_root()
+        .join("redline-ui")
+        .join(&id)
+        .join("meta.json")
+        .is_file());
+
+    // A session without a project is still the Inbox.
+    let (_, _, flat) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "Inbox", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    assert_eq!(flat["meta"]["project"], Value::Null);
+
+    let request = Request::builder()
+        .uri("/api/projects")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, projects) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{projects}");
+    let items = projects["projects"].as_array().unwrap();
+    let project = items
+        .iter()
+        .find(|item| item["slug"] == "redline-ui")
+        .expect("project listed");
+    assert_eq!(project["sessions"], 1);
+    let inbox = items
+        .iter()
+        .find(|item| item["slug"] == "inbox")
+        .expect("inbox listed");
+    assert_eq!(inbox["sessions"], 1);
+
+    // The project session is reachable by id even though it is nested one level deeper.
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, session) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(session["meta"]["project"], "redline-ui");
+}

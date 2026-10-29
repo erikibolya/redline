@@ -89,7 +89,7 @@ const main = async () => {
   // A real screenshot size, so the fitted zoom is not 1:1 — coordinate mapping must survive it.
   const created = await api("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ title: "e2e canvas", image_base64: makePng() }),
+    body: JSON.stringify({ title: "e2e canvas", image_base64: makePng(), project: "E2E" }),
   });
   const id = created.meta.id;
 
@@ -110,6 +110,10 @@ const main = async () => {
     y: window.redline.view.y,
   }));
   check("editor booted with an image", true, `scale ${view.scale.toFixed(3)}`);
+
+  await page.waitForSelector(".rail-project", { timeout: 5000 });
+  const projectHeader = await page.$eval(".rail-project .pname", (el) => el.textContent.trim());
+  check("rail groups sessions by project", projectHeader === "E2E", `header=${projectHeader}`);
 
   const canvas = await page.$eval("#canvas", (el) => {
     const rect = el.getBoundingClientRect();

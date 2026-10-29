@@ -128,6 +128,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 
 ## 6. Architecture in one screen
 
+- Desktop profiles: `config.json` holds `servers[]` + `active`; the local server serves
+  `/servers`, and switching only navigates the webview to another origin. All profiles/tokens
+  stay; never treat "switch" as "disconnect".
 - `redline-agent` — unattended bridge: watch submitted reviews → resolve the project's repo →
   `opencode run` → progress/reply/resolve. It syncs the git repos it can see (`POST
   /api/agent/repos`) and runs each review in its project's repo. Also embedded in the desktop app
@@ -185,6 +188,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   format with the browser's locale — `clockTime()` / `stampTime()` in `app.js`. Capture screenshots
   inherit the *container's* timezone (usually UTC), so a "fixed clocks" screenshot looks unfixed
   unless you capture from a browser started with `TZ=Europe/Prague`.
+- **Switching a server is not logging out.** The desktop app keeps every profile and token in
+  `config.json`; `/servers` only changes `active` and navigates to the chosen server. Cookies are
+  per origin, so the other servers stay signed in. "Use this computer" must also preserve profiles.
 - **A project is not a repository.** RedLine projects began as labels; a label does not tell the
   agent where to work. Repo projects now store a **relative** key (`redline`, `ActiUnit/Au.Net`)
   plus an agent id. Never store an absolute mount path: the OpenCode server, the agent container

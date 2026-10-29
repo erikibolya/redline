@@ -747,7 +747,13 @@ async fn setup_saves_a_server_that_answers_and_can_disconnect() {
     let (status, _, body) = send(&h.app, request).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["mode"], "local");
-    assert!(!config.exists());
+    // Switching back to this computer must not delete the other server profile.
+    assert!(config.exists());
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(saved["active"], "local");
+    assert_eq!(saved["servers"][0]["url"], remote_url.as_str());
+    assert!(saved.get("remote_url").is_none());
 }
 
 #[tokio::test]
@@ -1455,4 +1461,70 @@ async fn cancelling_after_the_agent_read_the_round_keeps_it() {
         .unwrap();
     let (_, _, history) = send(&h.app, request).await;
     assert_eq!(history["submissions"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn switching_servers_keeps_every_profile_and_token() {
+    let h = harness();
+    let config = h._dir.path().join("config.json");
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/setup",
+            json!({"name": "Production", "remote_url": "https://prod.example", "token": "p"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/servers",
+            json!({"name": "Dev", "url": "https://dev.example", "token": "d"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["active"], "dev");
+
+    let request = Request::builder()
+        .uri("/api/servers")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["servers"].as_array().unwrap().len(), 2);
+    assert_eq!(body["active"], "dev");
+    assert!(body["servers"][0].get("token").is_none());
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/servers/production/activate")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["open_url"], "https://prod.example/?t=p");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/setup/disconnect")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(saved["active"], "local");
+    assert_eq!(saved["servers"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["servers"][0]["token"], "p");
+    assert_eq!(saved["servers"][1]["token"], "d");
 }

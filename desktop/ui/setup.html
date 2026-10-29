@@ -65,6 +65,11 @@ try {
 
     <form id="form" autocomplete="off">
       <div class="field">
+        <label for="name">Server name (optional)</label>
+        <input id="name" name="name" placeholder="Production" spellcheck="false" />
+      </div>
+
+      <div class="field">
         <label for="url">Server address</label>
         <input id="url" name="url" placeholder="http://holly:8788" spellcheck="false" />
         <p class="hint">The address printed by the container: <code>http://&lt;host&gt;:8788</code></p>
@@ -97,6 +102,7 @@ try {
 <script>
 const params = new URLSearchParams(location.search);
 const localToken = params.get("t") || "";
+const adding = params.has("new");
 const statusBox = document.getElementById("status");
 const banner = document.getElementById("banner");
 const saveButton = document.getElementById("save");
@@ -120,8 +126,10 @@ async function loadStatus() {
     const state = await response.json();
     const current = document.getElementById("current");
     if (state.mode === "remote") {
-      current.innerHTML = `Currently connected to <b>${state.remote_url}</b>.`;
-      if (state.remote_url) document.getElementById("url").value = state.remote_url;
+      current.innerHTML = `Currently connected to <b>${state.active_name || state.remote_url}</b>
+        (<span>${state.remote_url}</span>).`;
+      if (!adding && state.remote_url) document.getElementById("url").value = state.remote_url;
+      if (!adding && state.active_name) document.getElementById("name").value = state.active_name;
     } else {
       current.innerHTML = "Standalone — this computer is the server.";
     }
@@ -132,6 +140,7 @@ async function loadStatus() {
 
 document.getElementById("form").addEventListener("submit", async (event) => {
   event.preventDefault();
+  const name = document.getElementById("name").value.trim();
   const url = document.getElementById("url").value.trim();
   const token = document.getElementById("token").value.trim();
   if (!url || !token) {
@@ -144,7 +153,7 @@ document.getElementById("form").addEventListener("submit", async (event) => {
     const response = await fetch(`/api/setup?t=${encodeURIComponent(localToken)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ remote_url: url, token }),
+      body: JSON.stringify({ name: name || undefined, remote_url: url, token }),
     });
     const data = await response.json();
     if (!response.ok) {

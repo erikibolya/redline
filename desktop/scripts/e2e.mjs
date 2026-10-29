@@ -913,6 +913,19 @@ const main = async () => {
       && setup.secondary.includes("btn") && setup.card !== "0px",
     JSON.stringify(setup));
 
+  await page.goto(`${BASE}/servers?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => (document.querySelector("#list")?.textContent || "").includes("desktop app"),
+    { timeout: 5000 },
+  );
+  const serversPage = await page.evaluate(() => ({
+    title: document.querySelector("h1")?.textContent.trim() || "",
+    text: document.querySelector("#list")?.textContent || "",
+  }));
+  check("servers page is local-only and explains headless mode",
+    serversPage.title === "Servers" && serversPage.text.includes("desktop app"),
+    JSON.stringify(serversPage));
+
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);

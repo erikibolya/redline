@@ -19,11 +19,15 @@ blocks (it looks dead). The rows are not clickable as a whole.
 
 Change:
 
-- **One row per round, clickable.** `Round N · date · X annotations` and a `Current` row at the
-  top. Rows are read-only views, not actions.
+- **One row per round, clickable.** `Round N · date · X annotations` and a **`Current` row that is
+  always present**, even when the live round has not been submitted — it is the only way back from
+  a historical view. `Current` is never duplicated with the last archived round: when the live
+  canvas *is* the last submitted round, the top row is labelled `Round N (current)` instead.
+  Rows are read-only views, not actions.
 - **Clicking a round swaps the canvas to that round**: the archived source screenshot plus that
   round's annotations, rendered read-only (no tools, no selection, no editing). A bar at the top
-  says `Viewing round N — Back to current`.
+  says `Viewing round N — Back to current`. **Only `Current` is editable**; history is a viewer,
+  because those pixels were already sent to the agent.
 - **Current** returns to the live session.
 - The inspector shows the archived annotations while viewing (clicking one highlights it on the
   canvas but cannot edit it).
@@ -74,7 +78,10 @@ Change:
   no longer `submitted` (cancelled or otherwise), it kills the child process and logs it. A late
   `reply`/`post_round` from the model after the kill is ignored by the UI (it belongs to a
   cancelled run) — the bridge must not post anything itself.
-- `cancel` is idempotent and only valid while submitted; it never touches `annotations.json`.
+- **Cancelling a submission that no agent has read yet withdraws its round** from History (the
+  archive created by that submit is deleted). If `seen_by_agent_at` is set, the round stays: the
+  agent may already have acted on it. `cancel` is idempotent and only valid while submitted; it
+  never touches the live `annotations.json`.
 
 ## 5. Unsent annotations survive a session switch
 
@@ -115,11 +122,11 @@ Suggested releases: **0.16.0** = 1–3 + 5; **0.17.0** = 4. Both on `dev` first.
 
 | # | Question | Answer |
 |---|---|---|
-| 1 | Round view: pre-baked `annotated.png` or source + annotations? | **Source + archived annotations** (pending final confirmation). |
+| 1 | Round view: pre-baked `annotated.png` or source + annotations? | **Source + archived annotations**, read-only; only `Current` is editable. |
 | 2 | History order | **Newest first**, `Current` at the top. |
 | 3 | STOP | **Kills the running agent** (bridge watches the status and kills the child). |
 | 4 | Drafts | **Memory only**; a quit confirmation warns that unsaved changes are lost. |
-| 5 | Agent rounds in History | **One entry per completed submission.** The agent's new screenshot starts the next live round; it is recorded when the human submits. STOP does not create a round. No duplicates. |
+| 5 | Agent rounds in History | **One entry per completed submission.** The agent's new screenshot starts the next live round; it is recorded when the human submits. STOP before the agent reads it withdraws the round; STOP after it keeps it. No duplicates. |
 
 ## 9. Quit warning
 

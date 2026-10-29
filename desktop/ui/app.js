@@ -140,7 +140,7 @@ const FILTERS = [
 ];
 
 class Rail {
-  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge }) {
+  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk }) {
     this.body = body;
     this.chips = chips;
     this.search = search;
@@ -149,6 +149,9 @@ class Rail {
     this.onSelect = onSelect;
     this.onAction = onAction;
     this.onPurge = onPurge;
+    this.onBulk = onBulk;
+    this.bulkMode = false;
+    this.selection = new Set();
     this.sessions = [];
     this.projects = [];
     this.collapsed = new Set(prefs.get("collapsedProjects", []));
@@ -168,6 +171,13 @@ class Rail {
         }
       });
     }
+    $("#bulk-mode")?.addEventListener("click", () => this.toggleBulk());
+    $("#bulk-cancel")?.addEventListener("click", () => this.exitBulk());
+    $("#bulk-resolve")?.addEventListener("click", () => this.applyBulk("resolve"));
+    $("#bulk-delete")?.addEventListener("click", () => this.applyBulk("delete"));
+    addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && this.bulkMode) this.exitBulk();
+    });
     if (this.search) {
       this.search.value = prefs.get("query", "");
       this.query = this.search.value;
@@ -177,6 +187,23 @@ class Rail {
         this.render();
       });
     }
+  }
+
+  toggleBulk(force) {
+    this.bulkMode = force === undefined ? !this.bulkMode : force;
+    this.selection.clear();
+    const mode = $("#bulk-mode");
+    if (mode) mode.setAttribute("aria-pressed", String(this.bulkMode));
+    this.render();
+  }
+
+  exitBulk() {
+    this.toggleBulk(false);
+  }
+
+  applyBulk(action) {
+    if (!this.selection.size) return;
+    this.onBulk?.(action, [...this.selection]);
   }
 
   async load() {
@@ -235,6 +262,10 @@ class Rail {
 
   render() {
     this.renderChips();
+    const bar = $("#rail-bulk");
+    if (bar) bar.hidden = !this.bulkMode;
+    const bulkLabel = $("#bulk-label");
+    if (bulkLabel) bulkLabel.textContent = `${this.selection.size} selected`;
     const sessions = this.visible();
     if (!sessions.length) {
       this.body.innerHTML = `
@@ -296,11 +327,15 @@ class Rail {
             : "";
         const done = session.status === "resolved";
         parts.push(`
-          <div class="session ${escapeHtml(session.status)}"
+          <div class="session ${escapeHtml(session.status)}${this.bulkMode ? " bulk" : ""}"
                role="button" tabindex="0"
                data-id="${escapeHtml(session.id)}"
-               aria-current="${session.id === this.selectedId}">
-            <span class="dot"></span>
+               aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}"
+               aria-current="${session.id === this.selectedId}"
+               ${this.bulkMode ? `aria-pressed="${this.selection.has(session.id)}"` : ""}>
+            ${this.bulkMode
+              ? `<span class="bulk-check" aria-hidden="true">${this.selection.has(session.id) ? "✓" : ""}</span>`
+              : `<span class="dot"></span>`}
             <div class="body">
               <div class="name">${escapeHtml(session.title || session.id)}</div>
               <div class="sub">${escapeHtml(relativeTime(session.submitted_at || session.created_at))}${
@@ -342,7 +377,16 @@ class Rail {
       });
     });
     $$(".session", this.body).forEach((row) => {
-      const activate = () => this.onSelect(row.dataset.id, row);
+      const activate = () => {
+        if (this.bulkMode) {
+          const id = row.dataset.id;
+          if (this.selection.has(id)) this.selection.delete(id);
+          else this.selection.add(id);
+          this.render();
+          return;
+        }
+        this.onSelect(row.dataset.id, row);
+      };
       row.addEventListener("click", activate);
       row.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -404,6 +448,24 @@ class Editor {
       onSelect: (id) => this.openSession(id),
       onAction: (action, id) => this.railAction(action, id),
       onPurge: (ids) => this.purgeSessions(ids),
+      onBulk: async (action, ids) => {
+        if (action === "delete"
+          && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
+        try {
+          for (const id of ids) {
+            if (action === "delete") {
+              await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+            } else {
+              await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+            }
+          }
+        } catch (error) {
+          alert(`Could not ${action}: ${error.message}`);
+        }
+        this.rail.exitBulk();
+        await this.rail.load();
+        if (action === "delete" && ids.includes(this.sessionId)) location.href = "/";
+      },
     });
     this.bindChrome();
     this.bindCanvas();
@@ -2350,6 +2412,23 @@ async function bootList() {
       }
       await rail.load();
     },
+    onBulk: async (action, ids) => {
+      if (action === "delete"
+        && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
+      try {
+        for (const id of ids) {
+          if (action === "delete") {
+            await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+          } else {
+            await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+          }
+        }
+      } catch (error) {
+        alert(`Could not ${action}: ${error.message}`);
+      }
+      rail.exitBulk();
+      await rail.load();
+    },
   });
   await rail.load();
   renderGallery(rail);
@@ -2384,6 +2463,9 @@ async function bootList() {
 /* ------------------------------------------------------------------ boot */
 
 document.addEventListener("DOMContentLoaded", () => {
+  if (matchMedia("(pointer: coarse)").matches || navigator.maxTouchPoints > 0) {
+    document.body.classList.add("touch");
+  }
   Theme.apply(Theme.current());
   $$("[data-theme-toggle]").forEach((button) =>
     button.addEventListener("click", () => Theme.toggle()));

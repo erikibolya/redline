@@ -619,6 +619,84 @@ const main = async () => {
     !unlocked.overlay && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
     JSON.stringify(unlocked));
 
+  // ---- touch mode: bigger tools, row actions not hover-only
+  const touch = await page.evaluate(() => {
+    document.body.classList.add("touch");
+    const tool = document.querySelector(".options .tool");
+    const act = document.querySelector(".session .act");
+    const style = getComputedStyle(tool);
+    const opacity = act ? getComputedStyle(act).opacity : "1";
+    // `getComputedStyle` is live: read the values before dropping the class again.
+    const width = style.minWidth;
+    const height = style.minHeight;
+    document.body.classList.remove("touch");
+    return { width, height, opacity };
+  });
+  check("touch mode enlarges tools and shows row actions",
+    touch.width === "40px" && touch.height === "40px" && touch.opacity === "1",
+    JSON.stringify(touch));
+
+  // ---- bulk resolve from the rail
+  // The rail may still be filtered to Done from the reopen test; new sessions are active.
+  await page.evaluate(() => {
+    const chip = [...document.querySelectorAll(".chip")]
+      .find((element) => element.textContent.trim().startsWith("Active"));
+    chip?.click();
+  });
+  const extra = [];
+  for (const title of ["bulk one", "bulk two"]) {
+    const made = await api("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({ title, image_base64: makePng() }),
+    });
+    extra.push(made.meta.id);
+  }
+  await page.evaluate(() => window.redline.rail.load());
+  await page.waitForFunction(
+    (ids) => ids.every((id) => document.querySelector(`.session[data-id="${id}"]`)),
+    { timeout: 5000 },
+    extra,
+  );
+  await page.click("#bulk-mode");
+  await page.waitForFunction(() => !document.querySelector("#rail-bulk").hidden);
+  await page.evaluate((ids) => {
+    for (const id of ids) document.querySelector(`.session[data-id="${id}"]`).click();
+  }, extra);
+  const bulkSelected = await page.evaluate(() => window.redline.rail.selection.size);
+  check("bulk mode selects sessions without opening them", bulkSelected === 2, `${bulkSelected}`);
+  await page.click("#bulk-resolve");
+  await page.waitForFunction(() => window.redline.rail.bulkMode === false, { timeout: 10000 });
+  const bulkStatuses = [];
+  for (const id of extra) bulkStatuses.push((await api(`/api/sessions/${id}`)).meta.status);
+  check("bulk resolve marks every selected session done",
+    bulkStatuses.every((status) => status === "resolved"), bulkStatuses.join(","));
+
+  // ---- accessible names and a live region
+  const a11y = await page.evaluate(() => ({
+    canvas: document.querySelector("#canvas")?.getAttribute("role") === "img",
+    canvasLabel: Boolean(document.querySelector("#canvas")?.getAttribute("aria-label")),
+    composer: Boolean(document.querySelector("#composer-text")?.getAttribute("aria-label")),
+    live: document.querySelector("#conv-log")?.getAttribute("aria-live"),
+    labels: [...document.querySelectorAll(".session")].every((row) => row.getAttribute("aria-label")),
+  }));
+  check("accessible names and live region are present",
+    a11y.canvas && a11y.canvasLabel && a11y.composer && a11y.live === "polite" && a11y.labels,
+    JSON.stringify(a11y));
+
+  // ---- the connect wizard uses the app shell and always offers a way back
+  await page.goto(`${BASE}/setup?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  const setup = await page.evaluate(() => ({
+    back: document.querySelector("#back")?.getAttribute("href") || "",
+    primary: document.querySelector("#save")?.className || "",
+    secondary: document.querySelector("#local")?.className || "",
+    card: getComputedStyle(document.querySelector(".setup-card")).borderRadius,
+    css: getComputedStyle(document.body).backgroundColor,
+  }));
+  check("setup page has a way back and app-styled buttons",
+    setup.back.startsWith("/") && setup.primary.includes("accent")
+      && setup.secondary.includes("btn") && setup.card !== "0px",
+    JSON.stringify(setup));
+
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);

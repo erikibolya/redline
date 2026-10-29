@@ -119,6 +119,17 @@ and `dayLabel` were already local; the conversation timeline, agent activity lin
 round labels now are too (history folder names are flattened UTC stamps, `stampTime` un-flattens
 and converts them).
 
+## Touch, bulk and accessibility (unreleased)
+
+- **Touch**: `body.touch` (set from `pointer: coarse` / `maxTouchPoints`) raises every tool, chip
+  and button to at least 40 px and makes the rail's resolve/delete actions always visible — no
+  hover-only affordances.
+- **Bulk**: the rail's *Select* mode turns rows into toggles (`aria-pressed`) with a bottom bar:
+  *Resolve*, *Delete*, *Cancel*; Escape exits. The actions reuse the single-session endpoints.
+- **Accessibility**: `:focus-visible` rings on every interactive element; `role="img"` + label on
+  the canvas; `aria-label` on the composer, session rows and history rows; the conversation log is
+  `aria-live="polite"`.
+
 ## Submitted lock and STOP (v0.17)
 
 - While `status == submitted` a dark overlay covers the canvas (`#review-lock`): pointer events are

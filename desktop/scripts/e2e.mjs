@@ -139,8 +139,6 @@ const main = async () => {
   await page.click("#new-cancel");
 
   await page.waitForSelector(".rail-project", { timeout: 5000 });
-  const ghostHidden = await page.$eval("#ghost-pill", (el) => el.hidden);
-  check("ghost chip stays hidden until a round is ghosted", ghostHidden);
   const projectHeader = await page.$eval(".rail-project .pname", (el) => el.textContent.trim());
   check("rail groups sessions by project", projectHeader === "E2E", `header=${projectHeader}`);
 
@@ -185,7 +183,10 @@ const main = async () => {
   );
 
   // ---- move it with the select tool
-  // Drawing focuses the note field, so hand the keyboard back to the canvas first.
+  // Drawing focuses the note field on the next frame; wait for it, then hand the keyboard back.
+  await page
+    .waitForFunction(() => document.activeElement?.id === "note-text", { timeout: 2000 })
+    .catch(() => {});
   await page.evaluate(() => document.activeElement?.blur());
   await page.keyboard.press("v");
   const centre = at(310, 230);
@@ -335,19 +336,30 @@ const main = async () => {
   check("a second submission archives the first round", history.submissions.length >= 1,
     `${history.submissions.length} archived`);
 
-  // ---- ghost the previous round behind the current annotations
+  // ---- history opens a previous round read-only, and Current brings the live canvas back
   await page.click("#history-block > summary");
-  await page.waitForSelector("#history-list [data-ghost]", { timeout: 5000 });
-  await page.$eval("#history-list [data-ghost]", (button) => button.click());
-  await page.waitForFunction(() => (window.redline.ghosts || []).length > 0, { timeout: 5000 });
-  const ghost = await page.evaluate(() => ({
-    count: window.redline.ghosts.length,
-    pill: !document.querySelector("#ghost-pill").hidden,
+  await page.waitForFunction(
+    () => document.querySelectorAll("#history-list [data-round]").length > 0,
+    { timeout: 5000 },
+  );
+  const opened = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#history-list [data-round]")];
+    const target = rows.find((row) => row.dataset.round !== "current") || rows[0];
+    target?.click();
+    return Boolean(target);
+  });
+  check("history lists at least one round", opened);
+  await page.waitForFunction(() => Boolean(window.redline.viewing), { timeout: 5000 });
+  const viewing = await page.evaluate(() => ({
+    round: window.redline.viewing.round,
+    readonly: window.redline.annotations === window.redline.viewing.annotations,
+    bar: !document.querySelector("#viewing-bar").hidden,
   }));
-  check("ghost overlay shows the previous round", ghost.count >= 1 && ghost.pill, JSON.stringify(ghost));
-  await page.$eval("#ghost-pill", (button) => button.click());
-  const ghostCleared = await page.evaluate(() => window.redline.ghosts === null);
-  check("ghost overlay can be cleared", ghostCleared);
+  check("history opens a round read-only", viewing.round >= 1 && viewing.readonly && viewing.bar,
+    JSON.stringify(viewing));
+  await page.click("#viewing-bar");
+  await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
+  check("Current returns to the live canvas", true);
 
   // ---- ellipse tool draws a real ellipse
   await page.keyboard.press("e");
@@ -400,7 +412,8 @@ const main = async () => {
 
   // ---- diff between the archived round and now
   const rounds = await api(`/api/sessions/${id}/history`);
-  const stamp = rounds.submissions[0]?.stamp;
+  // The newest entry is the live submission (every submit is a round now); compare the oldest.
+  const stamp = (rounds.submissions[rounds.submissions.length - 1] || rounds.submissions[0])?.stamp;
   if (stamp) {
     const diff = await api(`/api/sessions/${id}/history/${stamp}/diff`);
     check("diff endpoint compares rounds", typeof diff.from.annotations === "number"
@@ -476,9 +489,29 @@ const main = async () => {
     round.image);
   check("canvas reloads the new round (cache-busted)", round.src.includes(round.image),
     round.src);
-  check("agent round shows in the conversation with its picture",
-    round.text.includes("e2e next round") && round.picture, JSON.stringify(round).slice(0, 120));
+  check("agent round appears in the conversation, without a picture",
+    round.text.includes("e2e next round") && !round.picture, JSON.stringify(round).slice(0, 120));
   check("round fills the history", Number(round.history) >= 1, round.history);
+
+  // ---- unsent annotations survive a session switch
+  await page.keyboard.press("r");
+  await drag(page, at(300, 520), at(420, 580));
+  const beforeSwitch = await page.evaluate(() => window.redline.annotations.length);
+  const other = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "draft target", image_base64: makePng() }),
+  });
+  await page.evaluate((otherId) => window.redline.openSession(otherId), other.meta.id);
+  await page.waitForFunction((otherId) => window.redline.sessionId === otherId, {}, other.meta.id);
+  await page.evaluate((self) => window.redline.openSession(self), id);
+  await page.waitForFunction(
+    (self) => window.redline.sessionId === self && window.redline.annotations.length > 0,
+    { timeout: 5000 },
+    id,
+  );
+  const afterSwitch = await page.evaluate(() => window.redline.annotations.length);
+  check("unsent annotations survive a session switch", afterSwitch === beforeSwitch,
+    `${beforeSwitch} → ${afterSwitch}`);
 
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });

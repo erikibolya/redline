@@ -382,7 +382,8 @@ async fn history_diff_reports_what_changed_between_rounds() {
         .body(Body::empty())
         .unwrap();
     let (_, _, body) = send(&h.app, request).await;
-    let stamp = body["submissions"][0]["stamp"]
+    // Newest first: submissions[0] is the round just submitted, submissions[1] the one before.
+    let stamp = body["submissions"][1]["stamp"]
         .as_str()
         .unwrap()
         .to_string();
@@ -451,11 +452,17 @@ async fn resubmitting_archives_the_previous_round() {
     let (status, _, body) = send(&h.app, request).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let rounds = body["submissions"].as_array().unwrap();
-    assert_eq!(rounds.len(), 1, "one previous round archived: {body}");
-    assert_eq!(rounds[0]["annotations"], 1);
-    assert_eq!(rounds[0]["png"], true);
+    assert_eq!(rounds.len(), 2, "every submission is a round: {body}");
+    // Newest first.
+    assert_eq!(rounds[0]["annotations"], 2);
+    assert_eq!(rounds[0]["round"], 2);
+    assert_eq!(rounds[0]["current"], true);
+    assert_eq!(rounds[0]["source"], true);
+    assert_eq!(rounds[1]["annotations"], 1);
+    assert_eq!(rounds[1]["round"], 1);
+    assert_eq!(rounds[1]["current"], false);
 
-    let stamp = rounds[0]["stamp"].as_str().unwrap().to_string();
+    let stamp = rounds[1]["stamp"].as_str().unwrap().to_string();
     let request = Request::builder()
         .uri(format!("/sessions/{id}/history/{stamp}.json"))
         .header("authorization", format!("Bearer {TOKEN}"))
@@ -1186,7 +1193,12 @@ async fn posting_a_round_stays_in_the_same_session() {
         .body(Body::empty())
         .unwrap();
     let (_, _, history) = send(&h.app, request).await;
-    assert!(!history["submissions"].as_array().unwrap().is_empty());
+    let rounds = history["submissions"].as_array().unwrap();
+    assert_eq!(
+        rounds.len(),
+        1,
+        "post_round must not archive the round again: {history}"
+    );
 
     let request = Request::builder()
         .uri(format!("/api/sessions/{id}/thread"))

@@ -250,11 +250,12 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
   agent answers it settles to **Run finished**; a round with no activity shows no card. This is the
   interactive-run view an agent's own terminal chat shows, so the human does not have to read the
   step lines to know whether anything is still happening.
-- **"Working" means the round is still submitted.** The card and the header pill also show *last
-  step X ago*; a review that already went back to the human can never keep pulsing, even if a late
-  narration line arrives after `post_round` or `reply` (the server refuses to revive a finished
-  round, and the UI derives the state from `status` as well as `agent_state`). A spinner that never
-  stops is indistinguishable from a dead agent, so the age of the last step is always on screen.
+- **"Working" means the round is still submitted.** The run card also shows *last step X ago*, and
+  the header pill never claims `working` on a review that already went back to the human — even if
+  a late narration line arrives after `post_round` or `reply` (the server refuses to revive a
+  finished round, and the UI derives the state from `status` as well as `agent_state`). A spinner
+  that never stops is indistinguishable from a dead agent, so the age of the last step is always on
+  screen.
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.

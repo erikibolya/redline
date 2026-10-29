@@ -52,7 +52,6 @@ pr_number="$(gh pr list --head "$branch" --base "$base" --state open --json numb
 if [ -z "$pr_number" ]; then
   body="${summary:-Feature branch marked ready by RedLine.}"
   gh pr create \
-    --draft \
     --base "$base" \
     --head "$branch" \
     --title "$(git log -1 --pretty=%s)" \

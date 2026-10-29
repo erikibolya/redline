@@ -160,6 +160,34 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "post_round",
+            "description": "Post a new round into an existing review instead of creating a new one: the agent's answer, optionally with a fresh screenshot. Archives the previous round and hands the session back to the human.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "note": { "type": "string", "description": "Short message for the human." },
+                    "image_base64": { "type": "string" },
+                    "image_path": { "type": "string" }
+                },
+                "required": ["session_id"]
+            }
+        },
+        {
+            "name": "capture_round",
+            "description": "Capture a URL and post it as the next round of an existing review (no new session).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "url": { "type": "string" },
+                    "note": { "type": "string" },
+                    "viewport": { "type": "string", "description": "e.g. 1440x900 (default)." }
+                },
+                "required": ["session_id", "url"]
+            }
+        },
+        {
             "name": "reply",
             "description": "Attach an agent message or question to a session so the human sees it in the editor.",
             "inputSchema": {
@@ -202,6 +230,8 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
         "wait_for_feedback" => wait_for_feedback(ctx, &args).await,
         "list_reviews" => list_reviews(ctx, &args),
         "list_projects" => list_projects(ctx),
+        "post_round" => post_round(ctx, &args),
+        "capture_round" => capture_round(ctx, &args).await,
         "progress" => progress(ctx, &args),
         "reply" => reply(ctx, &args),
         "resolve" => resolve(ctx, &args),
@@ -468,6 +498,77 @@ fn list_projects(ctx: &McpContext<'_>) -> Result<Value, String> {
         })
         .collect();
     Ok(json!({ "projects": items }))
+}
+
+fn post_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+    use base64::Engine as _;
+    let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    let note = string_arg(args, "note").unwrap_or_default();
+    let (bytes, name) = match (
+        string_arg(args, "image_base64"),
+        string_arg(args, "image_path"),
+    ) {
+        (Some(encoded), _) => {
+            let raw = encoded
+                .split_once(',')
+                .map(|(_, data)| data)
+                .unwrap_or(&encoded);
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(raw.trim())
+                .map_err(|err| format!("image_base64 is not valid base64: {err}"))?;
+            (Some(bytes), "screenshot.png".to_string())
+        }
+        (None, Some(path)) => {
+            let path = std::path::PathBuf::from(&path);
+            let bytes = std::fs::read(&path)
+                .map_err(|err| format!("cannot read image_path {path:?}: {err}"))?;
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("screenshot.png")
+                .to_string();
+            (Some(bytes), name)
+        }
+        (None, None) => (None, "screenshot.png".to_string()),
+    };
+    if bytes.is_none() && note.is_empty() {
+        return Err("post_round needs a note, an image, or both".to_string());
+    }
+    let meta = ctx
+        .store
+        .post_round(&id, bytes.as_deref(), &name, &note, None, None)
+        .map_err(|err| err.to_string())?;
+    Ok(
+        json!({ "session_id": id, "posted": true, "status": meta.status.as_str(), "image": meta.image }),
+    )
+}
+
+async fn capture_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+    let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    let url = string_arg(args, "url").ok_or("url is required")?;
+    let (width, height) = match string_arg(args, "viewport") {
+        Some(viewport) => crate::capture::parse_viewport(&viewport)?,
+        None => (1440, 900),
+    };
+    let request = crate::capture::CaptureRequest { url, width, height };
+    let png = tokio::task::spawn_blocking(move || crate::capture::capture(&request))
+        .await
+        .map_err(|err| format!("capture task failed: {err}"))??;
+    let note = string_arg(args, "note").unwrap_or_default();
+    let meta = ctx
+        .store
+        .post_round(
+            &id,
+            Some(&png),
+            "screenshot.png",
+            &note,
+            Some(width),
+            Some(height),
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(
+        json!({ "session_id": id, "posted": true, "status": meta.status.as_str(), "image": meta.image }),
+    )
 }
 
 fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {

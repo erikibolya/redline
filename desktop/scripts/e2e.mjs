@@ -413,6 +413,33 @@ const main = async () => {
   });
   check("annotated.png is served", annotated.ok, `${annotated.status}`);
 
+  // ---- the agent posts the next round into the same session instead of opening a new review
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "post_round",
+        arguments: { session_id: id, note: "e2e next round", image_base64: makePng() },
+      },
+    }),
+  });
+  await page.waitForFunction(
+    () => String(window.redline.meta.image || "").startsWith("screenshot-"),
+    { timeout: 25000 },
+  );
+  const round = await page.evaluate(() => ({
+    image: window.redline.meta.image,
+    text: document.querySelector("#conv-log")?.textContent || "",
+    picture: Boolean(document.querySelector("#conv-log .conv-img")),
+  }));
+  check("agent round replaces the canvas image in place", round.image.startsWith("screenshot-"),
+    round.image);
+  check("agent round shows in the conversation with its picture",
+    round.text.includes("e2e next round") && round.picture, JSON.stringify(round).slice(0, 120));
+
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);

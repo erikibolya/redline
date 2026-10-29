@@ -107,6 +107,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/capture", post(capture_session))
         .route("/sessions/{id}/image", get(image))
         .route("/sessions/{id}/annotated.png", get(annotated))
+        .route("/sessions/{id}/rounds/{name}", get(round_image))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
         .route("/mcp", post(mcp_post))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
@@ -804,6 +805,21 @@ fn read_config(state: &AppState) -> Option<Value> {
 }
 
 /// Exactly what the agent reads, for the human to check before/after submitting.
+/// Screenshots posted by the agent as later rounds of the same review.
+async fn round_image(
+    State(state): State<AppState>,
+    RoutePath((id, name)): RoutePath<(String, String)>,
+) -> Result<Response, Error> {
+    if name.contains('/') || name.contains('\\') || name.contains("..") || !name.ends_with(".png") {
+        return Err(Error::BadRequest("invalid round image".to_string()));
+    }
+    let path = state.store.dir(&id)?.join(&name);
+    if !path.is_file() {
+        return Err(Error::NotFound(format!("{id}/{name}")));
+    }
+    Ok(serve_file(&path, Some("image/png")))
+}
+
 async fn review_markdown_route(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,

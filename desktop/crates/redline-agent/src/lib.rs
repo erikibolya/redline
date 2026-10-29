@@ -126,11 +126,13 @@ Your job:
    curl -s -H "Authorization: Bearer $REDLINE_TOKEN" -H 'content-type: application/json' \
      -d '{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"progress","arguments":{{"session_id":"{id}","message":"...","state":"tool"}}}}}}' \
      "$REDLINE_URL/mcp"
-4. When done, send a short reply for the human in their language (tool `reply`, session `{id}`)
-   and mark the review resolved (tool `resolve`). If you can produce a screenshot of the result,
-   create a follow-up review with `capture_review` and put its review URL in the reply.
-   The reply and the resolve are the last two tool calls of every run; the bridge resolves the
-   review for you if you forget, but the human still needs your summary.
+4. Finish the round in one of two ways:
+   - If the human must look at a new screenshot: post it INTO THIS review with `capture_round`
+     (session id `{id}`, a URL, a short note) or `post_round` (an image). Never create a separate
+     review for a follow-up round — one task is one session. Do not resolve in this case: the
+     review goes back to the human for the next annotation.
+   - If no visual follow-up is needed: send a short `reply` in the human's language, then
+     `resolve`.
 
 Do not ask questions: nobody is watching. If something is ambiguous, pick the smallest sensible
 interpretation and say what you assumed in the reply."#,
@@ -239,6 +241,10 @@ fn handle(config: &AgentConfig, session: &Value) {
     if let Ok(value) = api_get(config, &format!("/api/sessions/{id}")) {
         if value["meta"]["status"] == "resolved" {
             eprintln!("redline-agent: {id} resolved by the agent");
+            return;
+        }
+        if value["meta"]["status"] == "open" {
+            eprintln!("redline-agent: {id} handed back to the human with a new round");
             return;
         }
         replied = value["meta"]["agent_state"] == "replied";

@@ -585,6 +585,65 @@ impl Store {
         ))
     }
 
+    /// Post a new round into an existing session: the agent's answer, optionally with a fresh
+    /// screenshot. This is what keeps one task as one rail item instead of a new review per turn.
+    ///
+    /// The previous round is archived, the canvas image is replaced (old files stay for history),
+    /// the annotations are cleared and the session goes back to the human (`open`).
+    pub fn post_round(
+        &self,
+        id: &str,
+        image: Option<&[u8]>,
+        image_name: &str,
+        note: &str,
+        width: Option<u32>,
+        height: Option<u32>,
+    ) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let stamp = now();
+        archive_previous(&dir, meta.submitted_at.as_deref().unwrap_or(&stamp))?;
+
+        let mut image_file = meta.image.clone();
+        if let Some(bytes) = image {
+            let extension = image_extension(image_name);
+            image_file = format!("screenshot-{}{extension}", safe_stamp(&stamp));
+            write_atomic(&dir.join(&image_file), bytes)?;
+            meta.image = image_file.clone();
+            meta.image_width = width;
+            meta.image_height = height;
+        }
+
+        let set = AnnotationSet {
+            session: id.to_string(),
+            title: Some(meta.title.clone()),
+            url: Some(meta.url.clone()),
+            image: Some(ImageRef {
+                file: Some(image_file.clone()),
+                width,
+                height,
+            }),
+            annotations: Vec::new(),
+            submitted_at: None,
+        };
+        write_json(&dir.join("annotations.json"), &serde_json::to_value(&set)?)?;
+
+        meta.status = Status::Open;
+        meta.submitted_at = None;
+        meta.agent_state = Some("replied".to_string());
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+
+        // The conversation keeps the round (and its picture) beside the human's annotations.
+        use std::io::Write as _;
+        let line = json!({ "at": stamp, "message": note, "image": image_file });
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("agent-thread.jsonl"))?;
+        writeln!(file, "{line}")?;
+        Ok(meta)
+    }
+
     /// Write a submission: `annotations.json`, `meta.json`, `review.md`, and `annotated.png`.
     pub fn submit(&self, id: &str, submission: &Submission) -> Result<(Meta, AnnotationSet)> {
         let dir = self.dir(id)?;

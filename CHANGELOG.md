@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.14.0 — 2026-10-29
+
+One task is one session: the agent's follow-up no longer opens a new review.
+
+- **`post_round` / `capture_round`** (MCP): post the next screenshot (uploaded or captured) into an
+  existing review. The previous round is archived, the canvas image is replaced, annotations are
+  cleared and the session returns to the human (`open`), so the rail keeps one item and History
+  fills up.
+- **The editor follows the round**: when the poll sees a new image, the canvas reloads it and the
+  conversation shows the round with its thumbnail.
+- **Waiting state on the canvas**: while `submitted`, a small pill at the top of the stage says
+  "Waiting for the agent…" or the latest activity line; it never blocks annotation.
+- The bridge prompt now forbids creating a new review for a follow-up round and tells the agent to
+  hand the session back instead of resolving when it posts a screenshot.
+
 ## 0.13.4 — 2026-10-29
 
 - **New-message indicator in the conversation.** When you scroll up and a reply or activity line

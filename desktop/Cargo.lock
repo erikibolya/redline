@@ -638,7 +638,7 @@ dependencies = [
 
 [[package]]
 name = "redline"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "axum",
  "base64",
@@ -651,7 +651,7 @@ dependencies = [
 
 [[package]]
 name = "redline-agent"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "redline-core"
-version = "0.13.3"
+version = "0.14.0"
 dependencies = [
  "axum",
  "base64",

@@ -1113,3 +1113,90 @@ async fn submitting_fires_the_webhook() {
     assert!(request.contains("\"event\":\"submitted\""), "{request}");
     assert!(request.contains(&id), "{request}");
 }
+
+/// One task stays one session: the agent's follow-up round replaces the canvas image in place.
+#[tokio::test]
+async fn posting_a_round_stays_in_the_same_session() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "One task", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let first_image = created["meta"]["image"].as_str().unwrap().to_string();
+
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({
+                "annotations": [{"type": "rect", "note": "green please"}],
+                "note": "make it green",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, posted) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "post_round", "arguments": {
+                    "session_id": id,
+                    "note": "here is the new screenshot",
+                    "image_base64": PNG_B64
+                }}
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{posted}");
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, session) = send(&h.app, request).await;
+    assert_eq!(session["meta"]["status"], "open", "back to the human");
+    let image = session["meta"]["image"].as_str().unwrap();
+    assert_ne!(image, first_image, "the canvas image was replaced");
+    assert!(image.starts_with("screenshot-"));
+    assert_eq!(
+        session["annotations"]["annotations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/history"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, history) = send(&h.app, request).await;
+    assert!(!history["submissions"].as_array().unwrap().is_empty());
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/thread"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, thread) = send(&h.app, request).await;
+    assert_eq!(
+        thread["messages"][0]["message"],
+        "here is the new screenshot"
+    );
+    assert_eq!(thread["messages"][0]["image"], image);
+}

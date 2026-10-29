@@ -116,6 +116,21 @@ and `dayLabel` were already local; the conversation timeline, agent activity lin
 round labels now are too (history folder names are flattened UTC stamps, `stampTime` un-flattens
 and converts them).
 
+## Rounds: one task, one session (v0.14)
+
+An agent that answers with a new screenshot must post it **into the same review**, not create a
+new one.
+
+- `post_round` (upload) and `capture_round` (server-side capture) archive the previous round,
+  write a uniquely named screenshot (`screenshot-<stamp>.png`), clear the annotations and set the
+  status back to `open` — the human's turn.
+- The editor polls the session meta; when `meta.image` changes it reloads the canvas and keeps the
+  conversation scrolled where the reader is.
+- The round appears in the conversation with a thumbnail (`/sessions/<id>/rounds/<file>`), next to
+  the agent's note. History keeps the archived annotated rounds.
+- A small pill at the top of the stage says "Waiting for the agent…" (or the latest activity)
+  while `submitted`; it is `pointer-events: none`, so annotating is never blocked.
+
 ## Waiting states and the webhook (v0.12)
 
 - After Submit, the conversation says what is happening: **Waiting for an agent** (nobody has read

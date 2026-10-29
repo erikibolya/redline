@@ -522,6 +522,17 @@ class Editor {
     status.className = `pill ${this.meta.status}`;
     const submitted = this.meta.status !== "open";
     $("#submit").textContent = submitted ? "Submit again" : "Submit review";
+    const stageStatus = $("#stage-status");
+    if (stageStatus) {
+      const submitted = this.meta.status === "submitted";
+      stageStatus.hidden = !submitted;
+      if (submitted) {
+        const last = (this.events || [])[this.events.length - 1];
+        stageStatus.textContent = this.meta.agent_state === "working" && last
+          ? `Agent is working — ${last.message}`
+          : "Waiting for the agent…";
+      }
+    }
     const agent = $("#agent-state");
     if (agent) {
       const state = this.meta.agent_state;
@@ -1749,11 +1760,24 @@ class Editor {
         api(`/api/sessions/${id}/thread`),
         api(`/api/sessions/${id}/events`),
       ]);
+      const previousImage = this.meta?.image;
       this.meta = session.meta;
       this.thread = Array.isArray(thread.messages) ? thread.messages : [];
       this.events = Array.isArray(events.events) ? events.events : [];
       this.renderHeader();
       this.renderConversation();
+      // The agent posted a new round: the canvas switches to the new screenshot.
+      if (previousImage && this.meta.image && this.meta.image !== previousImage) {
+        this.annotations = (session.annotations && session.annotations.annotations) || [];
+        this.selected.clear();
+        this.history = [];
+        this.future = [];
+        this.ghosts = null;
+        await this.loadImage(this.meta.image);
+        this.fit();
+        this.render();
+        this.renderInspector();
+      }
     } catch (error) {
       if (!quiet) {
         log.innerHTML = `<div class="inspector-empty">Could not load the conversation: ${escapeHtml(error.message)}</div>`;
@@ -1775,7 +1799,12 @@ class Editor {
       items.push({ at: event.at || "", kind: "event", text: event.message || "", state: event.state });
     }
     for (const message of this.thread || []) {
-      items.push({ at: message.at || "", kind: "agent", text: message.message || "" });
+      items.push({
+        at: message.at || "",
+        kind: "agent",
+        text: message.message || "",
+        image: message.image || null,
+      });
     }
     items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
 
@@ -1807,9 +1836,13 @@ class Editor {
           + `<time>${escapeHtml(when)}</time></div>`;
       }
       const who = item.kind === "human" ? "you" : "agent";
+      const picture = item.image
+        ? `<img class="conv-img" loading="lazy" alt=""
+             src="/sessions/${encodeURIComponent(this.sessionId)}/rounds/${encodeURIComponent(item.image)}" />`
+        : "";
       return `<div class="conv-msg ${item.kind}">
         <div class="conv-meta">${who}${when ? ` · ${escapeHtml(when)}` : ""}</div>
-        <div class="conv-text">${escapeHtml(item.text)}</div>
+        <div class="conv-text">${escapeHtml(item.text)}</div>${picture}
       </div>`;
     }).join("");
     const html = rendered + status.join("");

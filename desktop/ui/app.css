@@ -348,6 +348,19 @@ a:hover { text-decoration: underline; }
 .ann-row:hover .del { opacity: 1; }
 .ann-row .del:hover { color: var(--danger); background: rgba(225, 29, 72, .12); }
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
+/* History rounds are a list of small, bounded rows — no dead space around them. */
+#history-list.history-list { display: flex; flex-direction: column; gap: 4px; }
+.history-row {
+  padding: 4px 6px; gap: 6px; border-radius: 6px;
+  background: var(--panel-2); border-color: var(--border);
+}
+.history-row + .history-row { margin-top: 0; border-top-color: var(--border); }
+.history-row:hover { background: var(--panel-3); }
+.history-row .glyph { width: 18px; height: 18px; border-radius: 4px; font-size: 10px; }
+.history-row .label b { font-size: 11px; }
+.history-row .label span { font-size: 10px; }
+.history-row .del { padding: 2px; font-size: 11px; line-height: 1; }
+#history-list .pre { margin: 0; }
 .conversation {
   display: flex; flex-direction: column; min-height: 190px; max-height: 48%;
   border-top: 1px solid var(--border-soft);

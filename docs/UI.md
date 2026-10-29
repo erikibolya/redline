@@ -229,7 +229,8 @@ or `REDLINE_CHROME`; otherwise the dialog shows the actionable error.
 Each *Submit again* archives the round it replaces into `sessions/<id>/history/<timestamp>.json`
 plus `.png` (last 20 kept). `GET /api/sessions/<id>/history` lists them, and the inspector's
 **History** section links to the old screenshots — so a re-review can compare what changed instead
-of overwriting the evidence.
+of overwriting the evidence. Rounds are compact bordered rows (stamp, annotation count, then
+ghost / diff / screenshot actions), not full-size annotation cards, so the list stays scannable.
 
 ## Layers, groups, text size (v0.5)
 

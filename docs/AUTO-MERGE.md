@@ -52,3 +52,5 @@ passes unit tests cannot land.
 Because a push is not a completion signal. Agents push checkpoints, WIP commits and fixes; merging
 them would put unfinished features into the dev build and make the whole channel unreliable. The
 draft PR plus `feature-ready.sh` is the explicit hand-off.
+
+Verified end-to-end on 2026-10-29: draft PR -> feature-ready -> required CI -> auto-merge -> dev build.

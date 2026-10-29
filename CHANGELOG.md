@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The submitted lock actually holds.** After a submit, Delete/Backspace, arrow-key nudging,
+  undo/redo, the inspector's align/layer/group buttons, the note field and the keyboard tool
+  shortcuts could still change annotations while the stage pill claimed the canvas was locked.
+  All annotation writes now funnel through one `Editor.mutate` guard that refuses while the round
+  waits for the agent (and while a history round is open), the drawing tools are `disabled` and
+  dimmed instead of merely ignoring clicks, and the inspector's write toolbar hides with the note
+  field. The browser e2e proves the refusal, not just the flag.
+
 ## 0.19.0 — 2026-10-29
 
 - **Projects are repositories now.** The agent discovers git repos from OpenCode

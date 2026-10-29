@@ -655,6 +655,7 @@ class Editor {
         this.noteSnapshot = JSON.stringify(this.annotations);
       });
       noteField.addEventListener("input", () => {
+        if (this.readOnly) return;
         const index = this.primary();
         if (index < 0) return;
         this.annotations[index].note = noteField.value;
@@ -1161,7 +1162,16 @@ class Editor {
     this.future.length = 0;
   }
 
+  /// Every annotation change goes through `mutate`, so the lock lives here as well as on the
+  /// pointer and tool guards: a submitted round is the agent's to read, not the human's to edit.
+  /// Keyboard Delete/arrow keys and the inspector's align/layer/group buttons used to slip past
+  /// the canvas guard and change annotations anyway.
+  get readOnly() {
+    return Boolean(this.locked || this.viewing);
+  }
+
   mutate(fn) {
+    if (this.readOnly) return;
     this.snapshot();
     fn();
     this.renderInspector();
@@ -1169,7 +1179,7 @@ class Editor {
   }
 
   undo() {
-    if (!this.history.length) return;
+    if (this.readOnly || !this.history.length) return;
     this.future.push(JSON.stringify(this.annotations));
     this.annotations = JSON.parse(this.history.pop());
     this.selected.clear();
@@ -1178,7 +1188,7 @@ class Editor {
   }
 
   redo() {
-    if (!this.future.length) return;
+    if (this.readOnly || !this.future.length) return;
     this.history.push(JSON.stringify(this.annotations));
     this.annotations = JSON.parse(this.future.pop());
     this.selected.clear();
@@ -1579,6 +1589,7 @@ class Editor {
   }
 
   startText(point, event, existingIndex = -1) {
+    if (this.readOnly) return;
     this.closeTextEditor();
     const rect = this.stage.getBoundingClientRect();
     const existing = existingIndex >= 0 ? this.annotations[existingIndex] : null;
@@ -1666,6 +1677,10 @@ class Editor {
     if (this.viewing || this.locked) {
       const editor = $("#note-editor");
       if (editor) editor.classList.add("hidden");
+      // The align/layer/group bar is a set of write buttons: leaving it armed after a submit was
+      // one of the ways the lock leaked, and an armed button that refuses clicks is worse.
+      const tools = $("#selection-tools");
+      if (tools) tools.classList.add("hidden");
       $("#ann-count").textContent = String(this.annotations.length);
       body.innerHTML = this.annotations.map((annotation, index) => {
         const label = String(
@@ -1900,11 +1915,20 @@ class Editor {
   }
 
   updateLock() {
-    this.locked = this.meta?.status === "submitted" && !this.viewing;
-    // No modal overlay: the stage status pill is the visible signal (tools stay usable for
-    // viewing/panning, the annotation guards refuse edits while `locked`).
+    const before = this.locked;
+    this.locked = Boolean(this.meta && this.meta.status === "submitted") && !this.viewing;
+    // No modal overlay: the stage status pill is the visible signal. The drawing tools are
+    // disabled as well — a button that looks armed but silently refuses every click reads as a
+    // broken lock, which is exactly how this was reported.
     const status = $("#stage-status");
     if (status) status.title = this.locked ? "STOP unlocks the canvas for another round." : "";
+    $$('.tool[data-tool]').forEach((button) => {
+      button.toggleAttribute("disabled", this.readOnly);
+    });
+    this.root.classList.toggle("locked", this.locked);
+    // The inspector was rendered before the meta arrived on a reload: re-render it, or a
+    // submitted round still shows its delete buttons and write toolbar.
+    if (before !== this.locked) this.renderInspector();
   }
 
   updateViewingBar() {

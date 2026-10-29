@@ -701,6 +701,31 @@ const main = async () => {
       && locked.red === "rgb(220, 38, 38)" && locked.square,
     JSON.stringify(locked));
 
+  // The lock must *refuse* edits, not merely report `locked`: the inspector's align/layer/group
+  // bar stayed armed after a submit, and Delete/arrow keys still rewrote the selected annotation.
+  await page.evaluate(() => window.redline.select(0));
+  const guarded = await page.evaluate(() => ({
+    before: JSON.stringify(window.redline.annotations),
+    tool: window.redline.tool,
+    toolsHidden: document.querySelector("#selection-tools").classList.contains("hidden"),
+    toolsDisabled: [...document.querySelectorAll(".options .tool[data-tool]")]
+      .every((button) => button.disabled),
+  }));
+  await page.keyboard.press("Delete");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("a");
+  await drag(page, { x: 400, y: 500 }, { x: 520, y: 560 });
+  const stillLocked = await page.evaluate(() => ({
+    after: JSON.stringify(window.redline.annotations),
+    tool: window.redline.tool,
+  }));
+  check("a locked review refuses drawing, deleting, nudging and the inspector write tools",
+    guarded.toolsHidden && guarded.toolsDisabled && stillLocked.after === guarded.before
+      && stillLocked.tool === guarded.tool,
+    JSON.stringify({ toolsHidden: guarded.toolsHidden, toolsDisabled: guarded.toolsDisabled,
+      changed: stillLocked.after !== guarded.before, tool: stillLocked.tool }));
+  await page.evaluate(() => window.redline.select(-1));
+
   await page.waitForFunction(() => {
     const button = document.querySelector("#submit");
     return button && !button.disabled && button.textContent.trim() === "STOP";

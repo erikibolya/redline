@@ -85,13 +85,13 @@ REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per
 
 # Ship a feature (dev is protected; never push it directly)
 git push origin feat/my-feature
-bash desktop/scripts/feature-ready.sh "what changed and why"
+feature-ready "what changed and why"
 # draft PR -> ready -> required CI -> auto-merge -> dev build
 
-# Release (only after an explicit yes)
-git checkout main
-git merge --ff-only refs/heads/dev
-git push origin main
+# Release (only after an explicit yes; main is protected)
+gh pr create --base main --head dev --title "release: vX.Y.Z" --body "Release notes"
+# wait for the required checks, merge the PR, then:
+git checkout main && git pull --ff-only
 git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z   # release: installer, CLI, linux binary, images
 REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.cz \
   bash desktop/install-unraid.sh                        # deploy to holly
@@ -195,7 +195,7 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   active projects, but discovery must still scan the repo root for `.git`; dedupe the same repo
   seen through two mounts (`/mnt/user/...` and `/mnt/c/...`).
 - **A push is not a done signal.** A feature branch becomes a PR only when the agent runs
-  `desktop/scripts/feature-ready.sh`; auto-merge then waits for the required checks. Merging on
+  `feature-ready`; auto-merge then waits for the required checks. Merging on
   every push would ship checkpoints and half-finished work. Do not open a non-draft PR while the
   feature is still being worked on.
 - **An empty-state class outlives the empty state.** `#history-list` was declared once in
@@ -226,9 +226,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 
 - Ask before destructive actions (see global AGENTS.md). Creating/updating the `redline` container
   is normal work; say what is lost first if a review is in flight.
-- **`dev` is protected.** Do not merge or push it directly. Push a feature branch; when the work is
-  done run `bash desktop/scripts/feature-ready.sh "summary"`. It creates the ready PR and
-  auto-merge lands it after the required checks. See `docs/AUTO-MERGE.md`.
+- **`dev` and `main` are protected.** Do not merge or push either directly. Push a feature
+  branch; when the work is done run `feature-ready "summary"` (global agent tool; the repo copy
+  still works). It creates the ready PR and auto-merge lands it in `dev`. A release is a PR from
+  `dev` to `main`, merged after the required checks and an explicit human yes; tag afterwards.
+  See `docs/AUTO-MERGE.md`.
 - Do not hand-edit `annotations.json`, `meta.json`, `review.md` or `annotated.png` in a session.
 - Never commit screenshots, sessions, tokens or keys. `sessions/` and `target/` are gitignored.
 - Keep the UI dependency-free (vanilla JS/CSS, served from the binary).
@@ -264,7 +266,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/ses
 curl -X DELETE -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>
 
 # mark a feature ready (from its branch; no dirty files)
-bash desktop/scripts/feature-ready.sh "what changed and why"
+feature-ready "what changed and why"
 
 # rebuild/redeploy
 REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.cz bash desktop/install-unraid.sh

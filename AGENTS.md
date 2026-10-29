@@ -83,8 +83,15 @@ docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust
 docker build -q -f desktop/Dockerfile.browser -t redline:local .
 REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per check
 
-# Ship
-git push origin main            # CI: core+cli on Linux & Windows, tauri shell, browser e2e
+# Ship a feature (dev is protected; never push it directly)
+git push origin feat/my-feature
+bash desktop/scripts/feature-ready.sh "what changed and why"
+# draft PR -> ready -> required CI -> auto-merge -> dev build
+
+# Release (only after an explicit yes)
+git checkout main
+git merge --ff-only refs/heads/dev
+git push origin main
 git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z   # release: installer, CLI, linux binary, images
 REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.cz \
   bash desktop/install-unraid.sh                        # deploy to holly
@@ -187,6 +194,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - **The OpenCode project API is experimental.** `/api/project` is useful for display names and
   active projects, but discovery must still scan the repo root for `.git`; dedupe the same repo
   seen through two mounts (`/mnt/user/...` and `/mnt/c/...`).
+- **A push is not a done signal.** Feature branches are draft PRs until the agent explicitly marks
+  them ready with `desktop/scripts/feature-ready.sh`. Auto-merge only enables on
+  `ready_for_review`; merging on every push would ship checkpoints and half-finished work.
 - **An empty-state class outlives the empty state.** `#history-list` was declared once in
   `index.html` as `inspector-empty` (22 px padding, centred text) and never lost the class when
   rows were injected, so a populated list still carried the empty state's dead space. Toggle the
@@ -203,6 +213,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 
 - Ask before destructive actions (see global AGENTS.md). Creating/updating the `redline` container
   is normal work; say what is lost first if a review is in flight.
+- **`dev` is protected.** Do not merge or push it directly. Push a feature branch; when the work is
+  done run `bash desktop/scripts/feature-ready.sh "summary"`. It marks the draft PR ready and
+  auto-merge lands it after the required checks. See `docs/AUTO-MERGE.md`.
 - Do not hand-edit `annotations.json`, `meta.json`, `review.md` or `annotated.png` in a session.
 - Never commit screenshots, sessions, tokens or keys. `sessions/` and `target/` are gitignored.
 - Keep the UI dependency-free (vanilla JS/CSS, served from the binary).
@@ -236,6 +249,9 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
 curl -X POST -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>/resolve
 curl -X POST -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>/reopen
 curl -X DELETE -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>
+
+# mark a feature ready (from its branch; no dirty files)
+bash desktop/scripts/feature-ready.sh "what changed and why"
 
 # rebuild/redeploy
 REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.cz bash desktop/install-unraid.sh

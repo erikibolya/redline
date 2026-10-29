@@ -1,22 +1,19 @@
 # Changelog
 
-## Unreleased
+## 0.18.0 — 2026-10-29
 
 - **Menu actions no longer run twice.** Tray items use their own `tray:` ids and the dispatcher
   ignores the same action within 400 ms, so update dialogs and the repository picker open once.
-
 - **The connect wizard matches the app and can be left.** It uses the app's tokens and buttons, has
   a **← Back to sessions** link, a proper **Use this computer** button (disconnect, no token
   needed) and a clearer hint where the token comes from.
-
 - **Bulk operations in the rail**: *Select* turns rows into checkboxes with a bar to resolve or
   delete several sessions at once; Escape leaves the mode.
 - **Touch toolbar**: on coarse pointers the tools, chips and buttons grow to 40 px targets and the
   rail's per-session actions stop being hover-only.
 - **Accessibility**: visible `:focus-visible` rings, accessible names on the canvas, composer,
   session rows and history rows, and the conversation is an `aria-live` region.
-- **README rewritten** for 0.17 (desktop, server, agent bridge, the round loop, configuration).
-
+- **README rewritten** for 0.18 (desktop, server, agent bridge, the round loop, configuration).
 
 ## 0.17.0 — 2026-10-29
 

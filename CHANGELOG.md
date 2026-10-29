@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.0 — 2026-10-29
+
+Small daily-use wins, plus the comparison the review loop was missing.
+
+- **Ctrl+V** opens the New review dialog with the clipboard image attached; no file on disk.
+- **Gallery on `/`**: the last twelve reviews as cards with screenshot, project, time and status.
+- **Diff overlay**: the History panel's `◫` ghosts a previous round's annotations behind the
+  current ones (35 % opacity) with a `Ghost · <stamp>` chip in the header to clear it.
+- Fixed: the New review dialog was never wired on the editor page, so it did nothing there.
+
 ## 0.10.0 — 2026-10-29
 
 The rail becomes a list of projects, so a conversation has a home and a history.

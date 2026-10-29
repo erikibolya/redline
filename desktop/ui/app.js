@@ -351,6 +351,8 @@ class Editor {
     this.annotations = [];
     this.history = [];
     this.future = [];
+    this.ghosts = null;
+    this.ghostStamp = null;
     this.selected = new Set();
     this.marquee = null;
     this.tool = "select";
@@ -442,6 +444,7 @@ class Editor {
       this.annotations = (data.annotations && data.annotations.annotations) || [];
       this.history = [];
       this.future = [];
+      this.setGhost(null, []);
       this.selected.clear();
       this.renderInspector();
       this.renderHeader();
@@ -537,6 +540,7 @@ class Editor {
       });
     }
     $("#submit").addEventListener("click", () => this.submit());
+    $("#ghost-pill")?.addEventListener("click", () => this.setGhost(null, []));
     $("#toggle-rail").addEventListener("click", () => {
       const app = $("#app");
       app.classList.toggle("rail-hidden");
@@ -617,6 +621,7 @@ class Editor {
     $("#zoom-out").addEventListener("click", () => this.zoomAt(0.8));
     $("#zoom-fit").addEventListener("click", () => this.fit());
     $("#zoom-100").addEventListener("click", () => this.setZoom(1));
+    NewReview.wire();
     $("#new-review").addEventListener("click", () => NewReview.open());
     addEventListener("resize", () => this.resize());
     addEventListener("popstate", () => {
@@ -800,6 +805,12 @@ class Editor {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(this.image, 0, 0);
 
+    if (this.ghosts?.length) {
+      ctx.save();
+      ctx.globalAlpha = 0.35;
+      for (const annotation of this.ghosts) this.paint(ctx, annotation, false);
+      ctx.restore();
+    }
     this.annotations.forEach((annotation, index) => {
       this.paint(ctx, annotation, this.selected.has(index));
     });
@@ -1590,6 +1601,33 @@ class Editor {
     this.render();
   }
 
+  setGhost(stamp, annotations) {
+    this.ghostStamp = stamp;
+    this.ghosts = stamp ? annotations : null;
+    const pill = $("#ghost-pill");
+    if (pill) {
+      pill.hidden = !stamp;
+      const label = $("#ghost-stamp");
+      if (label) label.textContent = stamp ? String(stamp).replace("T", " ").slice(0, 16) : "";
+    }
+    this.render();
+  }
+
+  async toggleGhost(stamp) {
+    if (this.ghostStamp === stamp) {
+      this.setGhost(null, []);
+      return;
+    }
+    try {
+      const response = await fetch(`/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(`${stamp}.json`)}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const set = await response.json();
+      this.setGhost(stamp, Array.isArray(set.annotations) ? set.annotations : []);
+    } catch (error) {
+      console.warn("ghost failed", error);
+    }
+  }
+
   // ---------------------------------------------------------- history
 
   async loadHistory() {
@@ -1612,6 +1650,8 @@ class Editor {
             <b>${escapeHtml(round.stamp.replace("T", " ").replace(/-([0-9]{2})-([0-9]{2})$/, ":$1:$2"))}</b>
             <span>${plural(round.annotations, "annotation")}${round.png ? " · image" : ""}</span>
           </span>
+          <button class="del" style="opacity:1" data-ghost="${escapeHtml(round.stamp)}"
+                  title="Show this round behind the current annotations">◫</button>
           <button class="del" style="opacity:1" data-diff="${escapeHtml(round.stamp)}"
                   title="What changed since this round">Δ</button>
           ${round.png ? `<a class="del" style="opacity:1;text-decoration:none" target="_blank"
@@ -1622,6 +1662,8 @@ class Editor {
 
       $$("[data-diff]", list).forEach((button) =>
         button.addEventListener("click", () => this.loadDiff(button.dataset.diff)));
+      $$("[data-ghost]", list).forEach((button) =>
+        button.addEventListener("click", () => this.toggleGhost(button.dataset.ghost)));
     } catch (error) {
       list.textContent = `Could not load history: ${error.message}`;
     }
@@ -1868,9 +1910,12 @@ const NewReview = {
         return;
       }
       picked = candidate;
-      drop.textContent = `${candidate.name} — ${Math.round(candidate.size / 1024)} KB`;
+      drop.textContent = `${candidate.name || "pasted image"} — ${Math.round(candidate.size / 1024)} KB`;
       const title = $("#f-title");
-      if (!title.value) title.value = candidate.name.replace(/\.[^.]+$/, "");
+      if (!title.value) {
+        const name = (candidate.name || "").replace(/\.[^.]+$/, "");
+        title.value = !name || name === "image" ? "Pasted screenshot" : name;
+      }
     };
     drop.addEventListener("click", () => file.click());
     file.addEventListener("change", () => take(file.files[0]));
@@ -1881,6 +1926,16 @@ const NewReview = {
         if (type === "drop") take(event.dataTransfer.files[0]);
       }),
     );
+    addEventListener("paste", (event) => {
+      const items = [...(event.clipboardData?.items || [])];
+      const image = items.find((item) => item.type.startsWith("image/"));
+      const file = image?.getAsFile?.();
+      if (!file) return;
+      event.preventDefault();
+      if (overlay.hidden) NewReview.open();
+      take(file);
+      $("#new-error").textContent = "Pasted from the clipboard — add a title, then create.";
+    });
     addEventListener("dragover", (event) => event.preventDefault());
     addEventListener("drop", (event) => {
       if (!event.dataTransfer.files.length) return;
@@ -1952,6 +2007,29 @@ const NewReview = {
 
 /* ------------------------------------------------------------------ list page */
 
+/// The start page is a gallery: the last few reviews with their screenshots.
+function renderGallery(rail) {
+  const box = $("#gallery");
+  if (!box) return;
+  const sessions = (rail.sessions || []).slice(0, 12);
+  if (!sessions.length) {
+    box.hidden = true;
+    return;
+  }
+  const names = new Map((rail.projects || []).map((project) => [project.slug, project.name]));
+  box.hidden = false;
+  box.innerHTML = sessions.map((session) => {
+    const project = names.get(session.project || "inbox") || (session.project || "Inbox");
+    return `<a class="card" href="/s/${encodeURIComponent(session.id)}">
+      <img src="/sessions/${encodeURIComponent(session.id)}/image" loading="lazy" alt="" />
+      <div class="card-body">
+        <b>${escapeHtml(session.title || session.id)}</b>
+        <span>${escapeHtml(project)} · ${escapeHtml(relativeTime(session.submitted_at || session.created_at))} · ${escapeHtml(session.status)}</span>
+      </div>
+    </a>`;
+  }).join("");
+}
+
 async function bootList() {
   const rail = new Rail({
     body: $("#rail-body"),
@@ -1982,6 +2060,7 @@ async function bootList() {
     },
   });
   await rail.load();
+  renderGallery(rail);
   NewReview.wire();
   $("#new-review").addEventListener("click", () => NewReview.open());
   const count = $("#sessions-count");

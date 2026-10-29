@@ -98,6 +98,17 @@ string, and the note is the *only* place the human writes prose.
 - `annotations.json` carries `note` per shape (free-form map, additive), and `review.md` appends
   `— “note”` to the numbered region line.
 
+## Paste, gallery and diff overlay (v0.11)
+
+- **Ctrl+V** anywhere in the app opens the New review dialog with the clipboard image already
+  attached (title defaults to "Pasted screenshot"). No file on disk, no upload round-trip.
+  Works on the editor and on the start page; drops still work the same way.
+- **Gallery on `/`**: the last twelve reviews as cards with their screenshot, project, relative
+  time and status. The start screen below it is unchanged.
+- **Diff overlay**: in the History disclosure, the `◫` button ghosts that round's annotations
+  behind the current ones at 35 % opacity; a `Ghost · <stamp>` chip in the header clears it.
+  The `Δ` button still prints the textual diff.
+
 ## Projects in the rail (v0.10)
 
 The rail lists projects (conversation areas), not a flat stream of requests.

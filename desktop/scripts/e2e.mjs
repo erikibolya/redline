@@ -111,6 +111,26 @@ const main = async () => {
   }));
   check("editor booted with an image", true, `scale ${view.scale.toFixed(3)}`);
 
+  // Ctrl+V in the page fills the New review dialog from the clipboard.
+  await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 200;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#2f81f7";
+    ctx.fillRect(0, 0, 320, 200);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], "image.png", { type: "image/png" }));
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: data });
+    window.dispatchEvent(event);
+  });
+  await page.waitForFunction(() => !document.querySelector("#overlay").hidden, { timeout: 5000 });
+  const pastedTitle = await page.$eval("#f-title", (el) => el.value);
+  check("ctrl+v fills the new review dialog", pastedTitle === "Pasted screenshot", pastedTitle);
+  await page.click("#new-cancel");
+
   await page.waitForSelector(".rail-project", { timeout: 5000 });
   const projectHeader = await page.$eval(".rail-project .pname", (el) => el.textContent.trim());
   check("rail groups sessions by project", projectHeader === "E2E", `header=${projectHeader}`);
@@ -258,6 +278,20 @@ const main = async () => {
   check("a second submission archives the first round", history.submissions.length >= 1,
     `${history.submissions.length} archived`);
 
+  // ---- ghost the previous round behind the current annotations
+  await page.click("#history-block > summary");
+  await page.waitForSelector("#history-list [data-ghost]", { timeout: 5000 });
+  await page.$eval("#history-list [data-ghost]", (button) => button.click());
+  await page.waitForFunction(() => (window.redline.ghosts || []).length > 0, { timeout: 5000 });
+  const ghost = await page.evaluate(() => ({
+    count: window.redline.ghosts.length,
+    pill: !document.querySelector("#ghost-pill").hidden,
+  }));
+  check("ghost overlay shows the previous round", ghost.count >= 1 && ghost.pill, JSON.stringify(ghost));
+  await page.$eval("#ghost-pill", (button) => button.click());
+  const ghostCleared = await page.evaluate(() => window.redline.ghosts === null);
+  check("ghost overlay can be cleared", ghostCleared);
+
   // ---- ellipse tool draws a real ellipse
   await page.keyboard.press("e");
   const ellipseSpot = at(420, 620);
@@ -351,6 +385,11 @@ const main = async () => {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
   check("annotated.png is served", annotated.ok, `${annotated.status}`);
+
+  await page.goto(`${BASE}/`);
+  await page.waitForSelector(".gallery .card", { timeout: 5000 });
+  const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
+  check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

@@ -24,6 +24,8 @@ try {
     <div class="header-actions">
       <span class="pill" id="session-status">open</span>
       <span class="pill agent" id="agent-state" hidden>working</span>
+      <button class="btn ghost-chip" id="ghost-pill" hidden
+              title="Clear the comparison">Ghost · <b id="ghost-stamp"></b> ✕</button>
       <button class="btn icon" data-help-open title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button class="btn icon" data-theme-toggle title="Toggle theme">☀</button>
       <button class="btn icon" id="toggle-rail" title="Toggle sessions ( [ )" aria-label="Toggle sessions">☰</button>
@@ -148,7 +150,7 @@ try {
 <div class="overlay" id="overlay" hidden>
   <form class="modal" id="new-form">
     <h2>New review</h2>
-    <p class="hint">Drop a screenshot — or click to choose a file. Then say what to look at.</p>
+    <p class="hint">Drop a screenshot, paste it with <b>Ctrl+V</b>, or click to choose a file. Then say what to look at.</p>
     <div class="drop" id="drop">Drop an image, or click to browse</div>
     <input type="file" id="file" accept="image/*" hidden />
     <label for="f-title">Title</label>

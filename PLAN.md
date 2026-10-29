@@ -15,12 +15,12 @@ accounts, runs where the agents run.
 |---|---|
 | Agent API | MCP over HTTP (`review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`, `reply`, `resolve`) + plain JSON API + CLI |
 | Capture | Headless Chromium server-side, from MCP or the UI (`/browser` image) |
-| Editor | 3-column shell: session rail, zoom/pan canvas, inspector with a conversation + composer (v0.9); rect/ellipse/arrow/pen; numbered, per-shape notes (v0.8); move, nudge, delete, undo/redo, grouping, z-order, align/distribute |
+| Editor | 3-column shell: session rail, zoom/pan canvas, inspector with a conversation + composer (v0.9); rect/ellipse/arrow/pen; numbered, per-shape notes (v0.8); ghost overlay of a previous round (v0.11); move, nudge, delete, undo/redo, grouping, z-order, align/distribute |
 | Sessions | open → submitted → resolved; grouped by project in the rail (v0.10); search, filters, badges, "new" dots; delete / mark done / reopen / purge done |
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, menu bar, setup wizard, auto-update, port pinned to 8788 |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`) |
-| Tests | 52 Rust tests, 36-check browser E2E in CI on Linux + Windows |
+| Tests | 52 Rust tests, 40-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -104,7 +104,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 - `cargo test --workspace` — 52 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, path/config helpers, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 36 checks in real Chromium: tool clicks, coordinate mapping at 46 %
+- `desktop/scripts/e2e.sh` — 40 checks in real Chromium: tool clicks, coordinate mapping at 46 %
   zoom, drag, undo, inline text (diacritics), submit, multi-select, align, grouping, z-order, text
   size, history, diff, rail resolve/reopen.
 - CI runs both on every push; releases are cut from tags only after green.

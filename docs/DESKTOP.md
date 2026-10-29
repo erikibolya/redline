@@ -1,4 +1,4 @@
-# DESKTOP — redline as a tray application (v1.0)
+# DESKTOP — RedLine as a tray application (v1.0)
 
 Status: **accepted**, branch `desktop`. Supersedes parts of `PLAN.md` and decision **D5**.
 Owner: Erik. Last updated: 2026-10-28.

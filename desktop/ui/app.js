@@ -283,7 +283,7 @@ class Rail {
 
 /* ------------------------------------------------------------------ editor */
 
-const TOOLS = ["select", "rect", "arrow", "pen", "text"];
+const TOOLS = ["select", "rect", "ellipse", "arrow", "pen"];
 
 class Editor {
   constructor(root) {
@@ -445,12 +445,38 @@ class Editor {
     $("#submit").textContent = submitted ? "Submit again" : "Submit review";
     $("#agent-note").textContent = this.meta.note || "(no message — just the annotations)";
     $("#agent-url").textContent = this.meta.url || "";
-    document.title = `${this.meta.title || this.meta.id} · redline`;
+    document.title = `${this.meta.title || this.meta.id} · RedLine`;
     const idLabel = $("#session-id-status");
     if (idLabel) idLabel.textContent = this.meta.id;
   }
 
   bindChrome() {
+    const noteField = $("#note-text");
+    if (noteField) {
+      noteField.addEventListener("focus", () => {
+        this.noteSnapshot = JSON.stringify(this.annotations);
+      });
+      noteField.addEventListener("input", () => {
+        const index = this.primary();
+        if (index < 0) return;
+        this.annotations[index].note = noteField.value;
+        this.renderInspector();
+        this.render();
+      });
+      noteField.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") {
+          event.preventDefault();
+          noteField.blur();
+        }
+      });
+      noteField.addEventListener("blur", () => {
+        if (this.noteSnapshot && this.noteSnapshot !== JSON.stringify(this.annotations)) {
+          this.history.push(this.noteSnapshot);
+          this.future.length = 0;
+        }
+        this.noteSnapshot = null;
+      });
+    }
     $("#submit").addEventListener("click", () => this.submit());
     $("#toggle-rail").addEventListener("click", () => {
       const app = $("#app");
@@ -573,7 +599,7 @@ class Editor {
       }
       if (typing(event)) return;
 
-      const map = { v: "select", r: "rect", a: "arrow", p: "pen", t: "text" };
+      const map = { v: "select", r: "rect", e: "ellipse", a: "arrow", p: "pen" };
       if (map[event.key.toLowerCase()] && !meta) {
         this.setTool(map[event.key.toLowerCase()]);
         return;
@@ -724,6 +750,9 @@ class Editor {
     this.annotations.forEach((annotation, index) => {
       this.paint(ctx, annotation, this.selected.has(index));
     });
+    this.annotations.forEach((annotation, index) => {
+      if (annotation.type !== "text") this.paintBadge(ctx, annotation, index + 1, 12 / this.view.scale, 2 / this.view.scale);
+    });
     if (this.draw) this.paint(ctx, this.draw, false);
     ctx.restore();
 
@@ -761,6 +790,17 @@ class Editor {
       const w = Math.abs(end.x - start.x);
       const h = Math.abs(end.y - start.y);
       ctx.strokeRect(x, y, w, h);
+    } else if (annotation.type === "ellipse") {
+      const { start, end } = annotation;
+      ctx.beginPath();
+      ctx.ellipse(
+        (start.x + end.x) / 2,
+        (start.y + end.y) / 2,
+        Math.abs(end.x - start.x) / 2,
+        Math.abs(end.y - start.y) / 2,
+        0, 0, Math.PI * 2,
+      );
+      ctx.stroke();
     } else if (annotation.type === "arrow") {
       const { start, end } = annotation;
       ctx.beginPath();
@@ -814,8 +854,34 @@ class Editor {
     ctx.restore();
   }
 
+  /// The number the human sees on the canvas, in the panel and on `annotated.png`.
+  paintBadge(ctx, annotation, number, radius, inset) {
+    const box = this.bounds(annotation);
+    // Sit on the corner/start point instead of inside the shape: the badge must not cover the
+    // very thing the human marked.
+    const anchor = annotation.start
+      || (annotation.points && annotation.points[0])
+      || { x: box.x, y: box.y };
+    const cx = anchor.x + inset;
+    const cy = anchor.y + inset;
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fillStyle = annotation.color || "#e11d48";
+    ctx.fill();
+    ctx.lineWidth = Math.max(1, radius / 8);
+    ctx.strokeStyle = "rgba(13,17,23,.55)";
+    ctx.stroke();
+    ctx.fillStyle = "#fff";
+    ctx.font = `700 ${radius * 1.15}px -apple-system, "Segoe UI", system-ui, sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(String(number), cx, cy);
+    ctx.restore();
+  }
+
   bounds(annotation) {
-    if (annotation.type === "rect") {
+    if (annotation.type === "rect" || annotation.type === "ellipse") {
       const x = Math.min(annotation.start.x, annotation.end.x);
       const y = Math.min(annotation.start.y, annotation.end.y);
       return { x, y, w: Math.abs(annotation.end.x - annotation.start.x), h: Math.abs(annotation.end.y - annotation.start.y) };
@@ -1129,13 +1195,6 @@ class Editor {
         return;
       }
 
-      if (this.tool === "text") {
-        // Stop the browser's default focus change: it blurs (and therefore commits) the
-        // textarea we are about to create.
-        event.preventDefault();
-        this.startText(point, event);
-        return;
-      }
 
       this.draw = {
         type: this.tool,
@@ -1232,6 +1291,7 @@ class Editor {
       }
       if (this.draw) {
         const drawing = this.draw;
+        const before = this.annotations.length;
         this.draw = null;
         const width = Math.abs(drawing.end.x - drawing.start.x);
         const height = Math.abs(drawing.end.y - drawing.start.y);
@@ -1256,6 +1316,17 @@ class Editor {
               end: { x: Math.round(drawing.end.x), y: Math.round(drawing.end.y) },
             });
           });
+        } else if (drawing.type === "ellipse" && (width > 2 || height > 2)) {
+          this.mutate(() => {
+            this.annotations.push({
+              id: uid(),
+              type: "ellipse",
+              color: drawing.color,
+              width: drawing.width,
+              start: { x: Math.round(drawing.start.x), y: Math.round(drawing.start.y) },
+              end: { x: Math.round(drawing.end.x), y: Math.round(drawing.end.y) },
+            });
+          });
         } else if (drawing.type === "arrow" && Math.hypot(width, height) > 4) {
           this.mutate(() => {
             this.annotations.push({
@@ -1269,6 +1340,10 @@ class Editor {
           });
         }
         this.render();
+        if (this.annotations.length > before) {
+          this.select(this.annotations.length - 1);
+          requestAnimationFrame(() => $("#note-text")?.focus());
+        }
       }
       if (stage.hasPointerCapture?.(event.pointerId)) stage.releasePointerCapture(event.pointerId);
     };
@@ -1396,22 +1471,37 @@ class Editor {
       element.classList.toggle("disabled", !multi));
     $$('[data-group="ungroup"]').forEach((element) =>
       element.classList.toggle("disabled", ![...this.selected].some((i) => this.annotations[i].group)));
+    const single = this.selected.size === 1 ? [...this.selected][0] : -1;
+    const target = single >= 0 ? this.annotations[single] : null;
+    const editor = $("#note-editor");
+    if (editor) {
+      const editable = Boolean(target) && target.type !== "text";
+      editor.classList.toggle("hidden", !editable);
+      if (editable) {
+        const number = $("#note-num");
+        number.textContent = String(single + 1);
+        number.style.background = target.color || "#e11d48";
+        $("#note-kind").textContent = target.type;
+        const field = $("#note-text");
+        if (document.activeElement !== field) field.value = target.note || "";
+      }
+    }
     if (!this.annotations.length) {
       body.innerHTML = `<div class="inspector-empty">Nothing drawn yet.<br>Pick a tool above the canvas.</div>`;
       return;
     }
     body.innerHTML = this.annotations.map((annotation, index) => {
-      const base = { rect: "▭", arrow: "↗", pen: "✎", text: "T" }[annotation.type] || "?";
-      const glyph = annotation.group ? `${base}⧉` : base;
       const label = annotation.type === "text"
         ? escapeHtml(annotation.text || "")
-        : annotation.type === "rect"
+        : annotation.type === "rect" || annotation.type === "ellipse"
           ? `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)} → ${Math.round(annotation.end.x)}, ${Math.round(annotation.end.y)}`
           : `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)}`;
+      const note = String(annotation.note || "").trim();
+      const meta = note ? escapeHtml(note) : annotation.type;
       return `
         <div class="ann-row" data-index="${index}" aria-current="${this.selected.has(index)}">
-          <span class="glyph" style="color:${escapeHtml(annotation.color || "#e11d48")}">${glyph}</span>
-          <span class="label"><b>${index + 1}. ${label}</b><span>${annotation.type}</span></span>
+          <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
+          <span class="label"><b>${label}</b><span>${meta}${annotation.group ? " · group" : ""}</span></span>
           <button class="del" data-delete="${index}" title="Delete">✕</button>
         </div>`;
     }).join("");
@@ -1578,6 +1668,9 @@ class Editor {
       const ctx = exportCanvas.getContext("2d");
       ctx.drawImage(this.image, 0, 0);
       for (const annotation of this.annotations) this.paint(ctx, annotation, false);
+      this.annotations.forEach((annotation, index) => {
+        if (annotation.type !== "text") this.paintBadge(ctx, annotation, index + 1, 14, 2);
+      });
 
       const payload = {
         annotations: this.annotations,
@@ -1597,6 +1690,8 @@ class Editor {
       if ($("#agent-block")?.open) this.loadAgentView();
       if ($("#history-block")?.open) this.loadHistory();
       this.loadThread({ quiet: true });
+      // Hand the keyboard back to the canvas: the review is sent, the next key is a shortcut.
+      document.activeElement?.blur?.();
       await this.rail.load();
       button.textContent = "Submitted ✓";
       setTimeout(() => { button.textContent = "Submit again"; button.disabled = false; }, 1400);

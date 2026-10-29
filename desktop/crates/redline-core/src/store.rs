@@ -137,33 +137,36 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
         lines.push(String::new());
     }
 
-    let shapes: Vec<&Annotation> = annotations.iter().filter(|a| !a.is_text()).collect();
+    // Numbers must match the badges the human sees on the canvas and on `annotated.png`, so they
+    // are the position in the full annotation list, not in the filtered shape list.
+    let shapes: Vec<(usize, &Annotation)> = annotations
+        .iter()
+        .enumerate()
+        .filter(|(_, annotation)| !annotation.is_text())
+        .collect();
     if !shapes.is_empty() {
         lines.push("### Marked regions".to_string());
         lines.push(String::new());
-        for (index, item) in shapes.iter().enumerate() {
-            if item.kind == "rect" {
-                let (sx, sy) = item.point("start").unwrap_or_default();
-                let (ex, ey) = item.point("end").unwrap_or_default();
-                lines.push(format!(
-                    "- {}. rectangle ({}, {}) → ({}, {}), color {}, width {}",
-                    index + 1,
-                    num(sx),
-                    num(sy),
-                    num(ex),
-                    num(ey),
-                    item.color().unwrap_or("-"),
-                    item.number("width")
-                        .map(num)
-                        .unwrap_or_else(|| "-".to_string()),
-                ));
+        for (index, item) in shapes {
+            let name = match item.kind.as_str() {
+                "rect" => "rectangle",
+                "pen" => "freehand",
+                other => other,
+            };
+            let coords = match (item.point("start"), item.point("end")) {
+                (Some((sx, sy)), Some((ex, ey))) => {
+                    format!(" ({}, {}) → ({}, {})", num(sx), num(sy), num(ex), num(ey))
+                }
+                (Some((sx, sy)), None) => format!(" ({}, {})", num(sx), num(sy)),
+                _ => String::new(),
+            };
+            let note = item.note_of().unwrap_or("").trim();
+            let note = if note.is_empty() {
+                String::new()
             } else {
-                lines.push(format!(
-                    "- {}. {} (see annotations.json)",
-                    index + 1,
-                    item.kind
-                ));
-            }
+                format!(" — \u{201c}{note}\u{201d}")
+            };
+            lines.push(format!("- {}. {}{}{}", index + 1, name, coords, note));
         }
         lines.push(String::new());
     }

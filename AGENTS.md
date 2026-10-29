@@ -196,9 +196,10 @@ REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.c
 
 ## 10. Known limitations / next
 
-No code signing (SmartScreen warns), no macOS/Linux desktop bundles, no zoom-independent text
-backgrounds, no touch toolbar, text size is per annotation but not per-word, no multi-select
-across groups beyond membership, and the `/` page is still a start screen rather than a gallery.
+No code signing (SmartScreen warns), no macOS/Linux desktop bundles, no touch toolbar, no
+multi-select across groups beyond membership, and the `/` page is still a start screen rather than
+a gallery. Since v0.8 text notes live in the inspector, not on the canvas — there is nothing to
+size or style, and legacy text annotations are read-only history.
 See `PLAN.md` § "Next" for the ordered list.
 
 ## 11. If you are the next session

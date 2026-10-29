@@ -1,6 +1,6 @@
-# redline
+# RedLine
 
-**Redline the screenshot. The agent writes the fix.**
+**Mark the screenshot. The agent writes the fix.**
 
 A local, dependency-free visual review queue for human ↔ AI collaboration.
 

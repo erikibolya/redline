@@ -26,7 +26,7 @@ const UI_FILES: &[(&str, &str)] = &[
 ];
 
 const USAGE: &str = "\
-redline — local visual review queue for humans and AI agents
+RedLine — local visual review queue for humans and AI agents
 
 USAGE
   redline serve [options]                  run the HTTP + MCP server (foreground)
@@ -150,7 +150,7 @@ fn run(args: Vec<String>) -> Result<i32, String> {
         return Ok(0);
     }
     if args[0] == "--version" || args[0] == "version" {
-        println!("redline {}", redline_core::VERSION);
+        println!("RedLine {}", redline_core::VERSION);
         return Ok(0);
     }
 
@@ -248,10 +248,10 @@ fn serve(flags: &Flags, data_dir: &Path, auth: Auth) -> Result<i32, String> {
             .map_err(|_| format!("invalid address: {host}:{port}"))?;
         let listener = tokio::net::TcpListener::bind(address)
             .await
-            .map_err(|err| format!("cannot bind {address}: {err} (is redline already running?)"))?;
+            .map_err(|err| format!("cannot bind {address}: {err} (is RedLine already running?)"))?;
         let bound = listener.local_addr().map_err(|err| err.to_string())?;
 
-        println!("redline {} listening on http://{bound}", redline_core::VERSION);
+        println!("RedLine {} listening on http://{bound}", redline_core::VERSION);
         println!("sessions: {}", sessions_root.display());
         println!("open (human):   http://{bound}/?t={}", auth.token());
         println!("agents (local): http://127.0.0.1:{port}/mcp");

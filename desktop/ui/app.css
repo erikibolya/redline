@@ -274,6 +274,23 @@ a:hover { text-decoration: underline; }
   width: 22px; height: 22px; flex: none; display: grid; place-items: center;
   border-radius: 6px; background: var(--panel-3); color: var(--muted); font-size: 11px; border: 1px solid var(--border);
 }
+.ann-row .ann-num {
+  width: 22px; height: 22px; flex: none; display: grid; place-items: center;
+  border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700;
+}
+.note-editor { padding: 10px 14px 12px; border-bottom: 1px solid var(--border-soft); }
+.note-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 12px; }
+.note-num {
+  width: 22px; height: 22px; display: grid; place-items: center;
+  border-radius: 50%; color: #fff; font-size: 11px; font-weight: 700;
+}
+.note-kind { color: var(--muted); }
+#note-text {
+  width: 100%; min-height: 62px; resize: vertical; padding: 8px;
+  background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; font: inherit; font-size: 12px;
+}
+#note-text:focus { outline: 1px solid var(--accent); }
 .ann-row .label { min-width: 0; flex: 1; }
 .ann-row .label b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ann-row .label span { color: var(--muted); font-size: 11px; }

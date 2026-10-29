@@ -15,7 +15,7 @@ accounts, runs where the agents run.
 |---|---|
 | Agent API | MCP over HTTP (`review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`, `reply`, `resolve`) + plain JSON API + CLI |
 | Capture | Headless Chromium server-side, from MCP or the UI (`/browser` image) |
-| Editor | 3-column shell: session rail, zoom/pan canvas, inspector; rect/arrow/pen/text; move, nudge, delete, undo/redo, grouping, z-order, align/distribute, text sizes |
+| Editor | 3-column shell: session rail, zoom/pan canvas, inspector; rect/ellipse/arrow/pen; numbered, per-shape notes in the panel (v0.8); move, nudge, delete, undo/redo, grouping, z-order, align/distribute |
 | Sessions | open → submitted → resolved; search, filters, badges, "new" dots; delete / mark done / reopen / purge done |
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, menu bar, setup wizard, auto-update, port pinned to 8788 |

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.8.0 — 2026-10-29
+
+The review becomes a conversation: text moves off the canvas and onto the marks.
+
+- **Notes on shapes.** Every rectangle, ellipse, arrow and freehand mark carries an optional note,
+  written in the inspector right after drawing. The text tool is gone; legacy text annotations
+  still render, read-only.
+- **Numbers everywhere.** Shapes get a numbered badge on the canvas, in the annotation list, on
+  `annotated.png` and in `review.md`, so the agent can match a paragraph to a region.
+- **Ellipse tool** (`E`) — the missing "circle that" gesture.
+- **RedLine branding** in the UI, CLI banner, desktop menus and docs (display only: binary, image,
+  container and paths keep `redline`).
+- `docs/UX-PLAN.md`: projects, chat flow and agent status — the rest of the 1.0 rework.
+
 ## 0.7.0 — 2026-10-29
 
 Found by pointing redline at itself: an agent reply had nowhere to appear, and the start page

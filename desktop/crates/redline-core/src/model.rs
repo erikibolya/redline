@@ -71,6 +71,11 @@ impl Annotation {
         self.fields.get("text").and_then(Value::as_str)
     }
 
+    /// The remark the human attached to a shape (v0.8: text lives beside the mark, not on it).
+    pub fn note_of(&self) -> Option<&str> {
+        self.fields.get("note").and_then(Value::as_str)
+    }
+
     pub fn number(&self, key: &str) -> Option<f64> {
         self.fields.get(key).and_then(Value::as_f64)
     }

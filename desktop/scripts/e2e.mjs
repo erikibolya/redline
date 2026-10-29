@@ -118,7 +118,7 @@ const main = async () => {
   const at = (dx, dy) => ({ x: canvas.x + dx, y: canvas.y + dy });
 
   // ---- tools must respond to clicks (they sit inside the stage, which captures pointers)
-  for (const tool of ["rect", "arrow", "pen", "text", "select"]) {
+  for (const tool of ["rect", "ellipse", "arrow", "pen", "select"]) {
     await page.click(`.tool[data-tool="${tool}"]`);
     const state = await page.evaluate(() => ({
       tool: window.redline.tool,
@@ -152,6 +152,8 @@ const main = async () => {
   );
 
   // ---- move it with the select tool
+  // Drawing focuses the note field, so hand the keyboard back to the canvas first.
+  await page.evaluate(() => document.activeElement?.blur());
   await page.keyboard.press("v");
   const centre = at(310, 230);
   await drag(page, centre, { x: centre.x + 60, y: centre.y + 40 });
@@ -176,16 +178,18 @@ const main = async () => {
     `${state[0].start.x} vs ${rect.start.x}`,
   );
 
-  // ---- inline text, no window.prompt
-  await page.keyboard.press("t");
-  const textSpot = at(240, 380);
-  await page.mouse.click(textSpot.x, textSpot.y);
-  await page.waitForSelector(".text-editor", { timeout: 5000 });
-  await page.type(".text-editor", "Toto tlačítko by mělo být zelené");
-  await page.keyboard.press("Enter");
+  // ---- the note lives in the panel, attached to the shape
+  await page.keyboard.press("v");
+  await page.mouse.click(centre.x, centre.y);
+  await page.waitForFunction(
+    () => !document.querySelector("#note-editor").classList.contains("hidden"),
+    { timeout: 5000 },
+  );
+  await page.click("#note-text");
+  await page.type("#note-text", "Toto tlačítko by mělo být zelené");
   state = await page.evaluate(() => window.redline.annotations);
-  const text = state.find((a) => a.type === "text");
-  check("text committed from the inline editor", text && text.text.startsWith("Toto"), text?.text || "");
+  const noted = state[state.length - 1];
+  check("note attached to the drawn shape", noted?.note?.startsWith("Toto"), noted?.note || "");
 
   // ---- submit
   await page.keyboard.down("Control");
@@ -198,9 +202,9 @@ const main = async () => {
 
   const saved = await api(`/api/sessions/${id}`);
   const stored = saved.annotations.annotations;
-  check("server stored both annotations", stored.length === 2, `${stored.length}: ${stored.map((a) => a.type).join(",")}`);
+  check("server stored the shape", stored.length === 1, `${stored.length}: ${stored.map((a) => a.type).join(",")}`);
   check("rect survived the round-trip", stored.some((a) => a.type === "rect"));
-  check("text survived with its diacritics", stored.some((a) => a.text?.includes("zelené")));
+  check("note survived with its diacritics", stored.some((a) => a.note?.includes("zelené")));
   check("screenshot was composited", saved.meta.status === "submitted");
 
   // ---- multi-select with shift-click, then align left
@@ -241,20 +245,15 @@ const main = async () => {
   check("a second submission archives the first round", history.submissions.length >= 1,
     `${history.submissions.length} archived`);
 
-  // ---- text size applies to new text
-  await page.select("#text-size", "32");
-  await page.keyboard.press("t");
-  const bigSpot = at(420, 620);
-  await page.mouse.click(bigSpot.x, bigSpot.y);
-  await page.waitForSelector(".text-editor");
-  await page.type(".text-editor", "big note");
-  await page.keyboard.press("Enter");
-  const bigNote = await page.evaluate(() => {
-    const texts = window.redline.annotations.filter((a) => a.type === "text");
-    return texts[texts.length - 1] ? { ...texts[texts.length - 1] } : null;
+  // ---- ellipse tool draws a real ellipse
+  await page.keyboard.press("e");
+  const ellipseSpot = at(420, 620);
+  await drag(page, ellipseSpot, { x: ellipseSpot.x + 140, y: ellipseSpot.y + 70 });
+  const ellipse = await page.evaluate(() => {
+    const shapes = window.redline.annotations.filter((a) => a.type === "ellipse");
+    return shapes[shapes.length - 1] ? { ...shapes[shapes.length - 1] } : null;
   });
-  check("text size selector applies to new notes", bigNote?.size === 32,
-    `${bigNote?.size}px, text=${JSON.stringify(bigNote?.text)}`);
+  check("ellipse tool draws an ellipse", Boolean(ellipse), ellipse ? JSON.stringify(ellipse.type) : "none");
 
   // ---- group: clicking one member selects the whole group
   // Draw a fresh rectangle inside the image so the coordinates cannot go stale from the

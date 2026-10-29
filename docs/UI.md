@@ -69,18 +69,34 @@ column.
 - `Ctrl/Cmd+Z` undo, `Ctrl/Cmd+Shift+Z` redo (full history, not just "remove last").
 - `Esc` cancels the in-progress shape or clears selection.
 - `Ctrl/Cmd+Enter` submits the review.
-- Hit testing covers rect edges+interior, arrow segment, pen polyline, text box.
+- Hit testing covers rect/ellipse bounds+interior, arrow segment, pen polyline, legacy text box.
 
 ## Right panel
 
-- **Annotations** list: index, type glyph, text preview or coordinates; click selects (canvas
-  highlights), bin icon deletes. Drag on canvas keeps this list in sync.
+- **Annotations** list: numbered badge (same number as on the canvas), type, note preview or
+  coordinates; click selects (canvas highlights), bin icon deletes. Drag on canvas keeps this list
+  in sync.
 - **Message to agent** collapsed by default — this is the session `note` (what the agent asked).
   It is context, not the main event, so it hides behind a disclosure.
 - **Agent replies** (v0.7.0): the other half of the loop. The MCP `reply` tool appends to
   `agent-thread.jsonl`; `GET /api/sessions/<id>/thread` exposes it and the panel polls every 5 s,
   so an answer appears while the review is open. Before this the file was written and never read.
 - Below it, a small `review.md` preview toggle (what the agent will read).
+
+## Notes on shapes, not text on the canvas (v0.8)
+
+The text tool is gone. Every mark — rectangle, ellipse, arrow, freehand — owns an optional `note`
+string, and the note is the *only* place the human writes prose.
+
+- Draw a shape, the inspector focuses **Note for the agent** for that shape.
+- The canvas shows a numbered badge at the shape's start point; the same number appears in the
+  annotation list, in `annotated.png` and in `review.md`, so the agent can match a paragraph to a
+  region without guessing.
+- Selecting a shape shows its note; the list previews it under the coordinates.
+- Notes are not painted on the image (only the number is), so they never cover the UI under review.
+- Legacy `text` annotations still render and still export; no new ones can be created.
+- `annotations.json` carries `note` per shape (free-form map, additive), and `review.md` appends
+  `— “note”` to the numbered region line.
 
 ## Status bar
 
@@ -132,8 +148,8 @@ of overwriting the evidence.
 - **G** groups the selection (assigns a shared `group` id), **Shift+G** ungroups. Clicking one
   member selects the whole group, so moving or deleting a group is one gesture. The annotation
   list marks grouped rows with `⧉`.
-- A text-size selector (14/18/24/32/48) in the options bar applies to new notes and to any
-  selected text; the value is remembered.
+- The text-size selector was removed with the text tool in v0.8; legacy text keeps the size it
+  was saved with.
 - New annotations carry a stable `id`, which is what makes history diffing able to say "moved"
   instead of "deleted and added" for older rounds.
 
@@ -166,5 +182,5 @@ Each stage is a tagged release; the old page keeps working until the new one cov
 
 ## Non-goals
 
-Layers, blending modes, shapes beyond rect/arrow/pen/text, colour pickers beyond presets,
+Layers, blending modes, shapes beyond rect/ellipse/arrow/pen, colour pickers beyond presets,
 multi-select, exporting to other formats. This is a review tool, not an editor.

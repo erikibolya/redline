@@ -74,17 +74,27 @@ States (stored in `meta.json`, additive):
 | `open` | human creates | nothing submitted yet |
 | `submitted` | human submits | waiting for the agent |
 | `received` | agent reads feedback | `seen_by_agent_at`, set automatically by `get_feedback` / `wait_for_feedback` |
-| `working` | agent says so | new MCP tool or `reply` with `state: "working"` |
+| `working` | agent says so | explicit, with a live activity line |
 | `replied` | agent writes | `reply` lands |
 | `resolved` | agent finishes | existing `resolve` |
 
-- UI: status pill in the header + a timeline entry ("Agent received this 2 min ago"), and a subtle
-  "agent is working…" indicator while `working`.
-- No push channel: the editor already polls the thread every 5 s; extend that to the session meta.
-- CLI/MCP: `get_feedback` returns the same state so the agent can be idempotent.
+`working` is **explicit and detailed** (decision 2026-10-29): the agent reports what it is doing,
+not just that it is busy.
 
-**Decision needed:** is `working` explicit (agent must say it) or inferred from "received and no
-reply within N minutes"? Explicit is honest; inferred is zero-effort for the agent.
+- New MCP tool `progress` (name to settle): `{ session_id, state, message, tool? }` where `state` is
+  `thinking` / `tool` / `step`, `message` is one short human-readable line ("Reading app.js",
+  "Running the browser e2e"), and `tool` is the tool name when relevant.
+- Stored in `agent-events.jsonl` beside the thread (append-only, same tolerant reader), so the
+  history survives a restart and the timeline can replay it.
+- UI: status pill in the header, an activity line under it ("Agent is working — Running tests…"),
+  and a collapsible "Activity" section in the timeline with the last N events and relative times.
+- Throttle on the agent side: one event per meaningful step, never per token. The UI shows the last
+  event prominently and the rest folded.
+- No push channel: the editor already polls the thread every 5 s; extend that to meta + events.
+- `get_feedback` returns the same state so the agent can stay idempotent.
+
+**Decision needed:** nothing — the format above is the proposal; the exact tool name can wait for
+implementation.
 
 ---
 
@@ -153,13 +163,15 @@ deploy to holly, then a self-capture review in the new UI.
 
 ---
 
-## Open decisions (answer before 0.8.0)
+## Decisions (2026-10-29)
 
-1. Rename: display-only, or technical too?
-2. Notes: numbered badges on `annotated.png`, or clean image + notes only in the panel?
-3. `working`: explicit agent signal, or inferred timeout?
-4. Composer: bottom of the inspector, or a full-width bar?
-5. Project: a label on a session, or a first-class folder with its own tree?
+| # | Question | Answer |
+|---|---|---|
+| 1 | Rename scope | **Display only.** Binary, image, container, paths, MCP key and env vars keep `redline`. |
+| 2 | Notes on `annotated.png` | **Open.** Numbered badges recommended; alternative is a clean image with notes only in the panel/JSON. |
+| 3 | `working` | **Explicit, with detail** — what the agent is doing (tool, step, thinking line), not just a spinner. See W3. |
+| 4 | Composer | **Bottom of the right panel**: textarea + Submit. The top-right Submit goes away. |
+| 5 | Project model | **First-class folder with its own tree** (`projects/<slug>/…`), not a label on a session. |
 
 ## Non-goals
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>redline</title>
+<title>RedLine</title>
 <script>
 try {
   var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
@@ -16,7 +16,7 @@ try {
 <div class="app" id="app" data-session-id="">
 
   <header class="header">
-    <div class="brand"><span class="brand-mark"><i></i></span> redline</div>
+    <div class="brand"><span class="brand-mark"><i></i></span> RedLine</div>
     <div class="title">
       <b id="session-title">Loading…</b>
       <span id="session-sub"></span>
@@ -57,19 +57,11 @@ try {
       <button class="tool" data-tool="pen" aria-pressed="false" title="Pen (P)">
         <svg viewBox="0 0 24 24"><path d="M3 20l4-1 12-12-3-3L4 16z"/></svg>
       </button>
-      <button class="tool" data-tool="text" aria-pressed="false" title="Text (T)">
-        <svg viewBox="0 0 24 24"><path d="M5 5h14M12 5v14"/></svg>
+      <button class="tool" data-tool="ellipse" aria-pressed="false" title="Ellipse (E)">
+        <svg viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="8.5" ry="6.5"/></svg>
       </button>
       <span class="sep"></span>
       <input type="color" id="color" title="Colour" aria-label="Colour" />
-      <select id="text-size" title="Text size" aria-label="Text size"
-              style="background:var(--panel-2);border:1px solid var(--border);border-radius:7px;padding:4px 6px">
-        <option value="14">14</option>
-        <option value="18" selected>18</option>
-        <option value="24">24</option>
-        <option value="32">32</option>
-        <option value="48">48</option>
-      </select>
       <input type="range" id="width" min="1" max="10" step="1" title="Line width" aria-label="Line width" />
       <span class="zoom" id="width-value">3px</span>
       <span class="sep"></span>
@@ -107,6 +99,14 @@ try {
       <button class="tool" data-group="group" title="Group (G)">⧉</button>
       <button class="tool" data-group="ungroup" title="Ungroup (Shift+G)">⧈</button>
     </div>
+    <div class="note-editor hidden" id="note-editor">
+      <div class="note-head">
+        <span class="note-num" id="note-num">1</span>
+        <span class="note-kind" id="note-kind">rectangle</span>
+      </div>
+      <textarea id="note-text" rows="3" placeholder="What is wrong here? What should change?"></textarea>
+    </div>
+
     <div class="inspector-body" id="ann-list"></div>
 
     <details class="disclosure" id="agent-block">
@@ -171,11 +171,11 @@ try {
     <h2>Keyboard</h2>
     <p class="hint">Everything here also has a button — these are the fast paths.</p>
     <div class="help-grid">
-      <kbd>V</kbd><span>Select, drag to move, double-click text to edit</span>
+      <kbd>V</kbd><span>Select, drag to move, write the note in the panel</span>
       <kbd>R</kbd><span>Rectangle</span>
       <kbd>A</kbd><span>Arrow</span>
       <kbd>P</kbd><span>Pen</span>
-      <kbd>T</kbd><span>Text — click, type, Enter</span>
+      <kbd>E</kbd><span>Ellipse</span>
       <kbd>Delete</kbd><span>Remove the selected annotation</span>
       <kbd>↑ ↓ ← →</kbd><span>Nudge 1px (Shift: 10px)</span>
       <kbd>Ctrl Z</kbd><span>Undo</span>

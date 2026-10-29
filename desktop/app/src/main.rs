@@ -79,7 +79,7 @@ fn main() {
                 "main",
                 WebviewUrl::External(start_url.parse()?),
             )
-            .title("redline")
+            .title("RedLine")
             .inner_size(1280.0, 860.0)
             .min_inner_size(720.0, 480.0)
             .build()?;
@@ -122,15 +122,15 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_mcp = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
     let check = MenuItem::with_id(app, "check-updates", "Check for updates…", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit redline", true, Some("CmdOrCtrl+Q"))?;
+    let quit = MenuItem::with_id(app, "quit", "Quit RedLine", true, Some("CmdOrCtrl+Q"))?;
     let separator = PredefinedMenuItem::separator(app)?;
     let docs = MenuItem::with_id(app, "docs", "Documentation", true, None::<&str>)?;
-    let about = MenuItem::with_id(app, "about", "About redline", true, None::<&str>)?;
+    let about = MenuItem::with_id(app, "about", "About RedLine", true, None::<&str>)?;
     let help_separator = PredefinedMenuItem::separator(app)?;
 
     let file = Submenu::with_items(
         app,
-        "redline",
+        "RedLine",
         true,
         &[&sessions, &connect, &copy_link, &copy_mcp, &check, &separator, &quit],
     )?;
@@ -146,7 +146,7 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
 }
 
 fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open redline", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open RedLine", true, None::<&str>)?;
     let connect = MenuItem::with_id(app, "connect", "Connect to a server…", true, None::<&str>)?;
     let login = tauri::menu::CheckMenuItem::with_id(
         app,
@@ -165,7 +165,7 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     };
     let address = MenuItem::with_id(app, "address", &status, false, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit redline", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit RedLine", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -175,7 +175,7 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
 
     let handler_ctx = ctx.clone();
     TrayIconBuilder::with_id("main")
-        .tooltip("redline — redline the screenshot, the agent writes the fix")
+        .tooltip("RedLine — mark the screenshot, the agent writes the fix")
         .icon(
             app.default_window_icon()
                 .cloned()
@@ -236,10 +236,10 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
         "about" => {
             app.dialog()
                 .message(format!(
-                    "redline {}\n\nRedline the screenshot. The agent writes the fix.",
+                    "RedLine {}\n\nMark the screenshot. The agent writes the fix.",
                     app.package_info().version
                 ))
-                .title("About redline")
+                .title("About RedLine")
                 .kind(MessageDialogKind::Info)
                 .show(|_| {});
         }
@@ -255,7 +255,7 @@ fn copy_or_complain(app: &AppHandle, text: &str, what: &str) {
             eprintln!("redline: cannot copy {what}: {err}");
             app.dialog()
                 .message(format!("Could not copy the {what}: {err}"))
-                .title("redline")
+                .title("RedLine")
                 .kind(MessageDialogKind::Error)
                 .show(|_| {});
         }
@@ -427,7 +427,7 @@ fn check_for_updates(app: AppHandle, notify: bool) {
                 if notify {
                     app.dialog()
                         .message(format!("Updater unavailable: {err}"))
-                        .title("redline")
+                        .title("RedLine")
                         .kind(MessageDialogKind::Error)
                         .show(|_| {});
                 }
@@ -442,7 +442,7 @@ fn check_for_updates(app: AppHandle, notify: bool) {
                 // Never restart the app behind the human's back: ask, with the version named.
                 app.dialog()
                     .message(format!(
-                        "redline {version} is available.\n\nUpdate now? The app restarts when \
+                        "RedLine {version} is available.\n\nUpdate now? The app restarts when \
                          the installer finishes."
                     ))
                     .title("Update available")
@@ -464,7 +464,7 @@ fn check_for_updates(app: AppHandle, notify: bool) {
                                     eprintln!("redline: update failed: {err}");
                                     app.dialog()
                                         .message(format!("Update to {version} failed: {err}"))
-                                        .title("redline")
+                                        .title("RedLine")
                                         .kind(MessageDialogKind::Error)
                                         .show(|_| {});
                                 }
@@ -479,7 +479,7 @@ fn check_for_updates(app: AppHandle, notify: bool) {
                             "You are on the latest version ({}).",
                             app.package_info().version
                         ))
-                        .title("redline")
+                        .title("RedLine")
                         .kind(MessageDialogKind::Info)
                         .show(|_| {});
                 }
@@ -489,7 +489,7 @@ fn check_for_updates(app: AppHandle, notify: bool) {
                 if notify {
                     app.dialog()
                         .message(format!("Could not check for updates: {err}"))
-                        .title("redline")
+                        .title("RedLine")
                         .kind(MessageDialogKind::Error)
                         .show(|_| {});
                 }

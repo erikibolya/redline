@@ -91,6 +91,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/api/sessions/{id}/reopen", post(reopen))
         .route("/api/sessions/{id}/history", get(history))
+        .route("/api/sessions/{id}/thread", get(agent_thread))
         .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
         .route("/sessions/{id}/history/{file}", get(history_file))
         .route("/api/capture", post(capture_session))
@@ -484,6 +485,33 @@ async fn history_file(
         "image/png"
     };
     Ok(serve_file(&path, Some(content_type)))
+}
+
+/// Messages the agent attached with the MCP `reply` tool (`agent-thread.jsonl`).
+///
+/// Written by the agent, read by the human: without this route the file exists on disk and no
+/// screen ever shows it, so a human who submitted a review had no way to see an answer.
+async fn agent_thread(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    state.store.require(&id)?;
+    let path = state.store.dir(&id)?.join("agent-thread.jsonl");
+    let mut messages = Vec::new();
+    if path.is_file() {
+        let text = std::fs::read_to_string(&path)?;
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            // A half-written line (the agent died mid-append) must not break the whole thread.
+            if let Ok(entry) = serde_json::from_str::<Value>(line) {
+                messages.push(entry);
+            }
+        }
+    }
+    Ok(Json(json!({ "messages": messages })))
 }
 
 #[derive(Debug, serde::Deserialize)]

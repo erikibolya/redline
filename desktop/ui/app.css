@@ -281,6 +281,10 @@ a:hover { text-decoration: underline; }
 .ann-row:hover .del { opacity: 1; }
 .ann-row .del:hover { color: var(--danger); background: rgba(225, 29, 72, .12); }
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
+.thread-row { padding: 8px 0; border-bottom: 1px solid var(--border-soft); }
+.thread-row:last-child { border-bottom: 0; padding-bottom: 0; }
+.thread-at { color: var(--muted); font-size: 11px; margin-bottom: 2px; }
+.thread-text { white-space: pre-wrap; color: var(--text); }
 
 .disclosure { border-top: 1px solid var(--border-soft); }
 .disclosure > summary {

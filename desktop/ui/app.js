@@ -391,6 +391,7 @@ class Editor {
       this.selected.clear();
       this.renderInspector();
       this.renderHeader();
+      this.startThreadPolling();
       await this.loadImage(this.meta.image);
       this.fit();
       this.render();
@@ -1508,6 +1509,41 @@ class Editor {
     }
   }
 
+  // ---------------------------------------------------------- agent thread
+
+  /// The agent answers with the MCP `reply` tool; without a poll the human would have to reload
+  /// the page to notice, which is exactly the "I submitted and heard nothing" dead end.
+  startThreadPolling() {
+    clearInterval(this.threadTimer);
+    this.loadThread();
+    this.threadTimer = setInterval(() => this.loadThread({ quiet: true }), 5000);
+  }
+
+  async loadThread({ quiet = false } = {}) {
+    const box = $("#agent-thread");
+    if (!box) return;
+    if (!quiet) box.textContent = "Loading…";
+    try {
+      const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/thread`);
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      const counter = $("#thread-count");
+      if (counter) counter.textContent = String(messages.length);
+      if (!messages.length) {
+        box.innerHTML = `<div class="inspector-empty">No replies yet.</div>`;
+        return;
+      }
+      box.innerHTML = messages.map((entry) => {
+        const when = String(entry.at || "").replace("T", " ").slice(0, 16);
+        return `<div class="thread-row">
+          <div class="thread-at">${escapeHtml(when)}</div>
+          <div class="thread-text">${escapeHtml(entry.message || "")}</div>
+        </div>`;
+      }).join("");
+    } catch (error) {
+      if (!quiet) box.textContent = `Could not load replies: ${error.message}`;
+    }
+  }
+
   // ---------------------------------------------------------- agent view
 
   async loadAgentView() {
@@ -1560,6 +1596,7 @@ class Editor {
       this.renderInspector();
       if ($("#agent-block")?.open) this.loadAgentView();
       if ($("#history-block")?.open) this.loadHistory();
+      this.loadThread({ quiet: true });
       await this.rail.load();
       button.textContent = "Submitted ✓";
       setTimeout(() => { button.textContent = "Submit again"; button.disabled = false; }, 1400);
@@ -1748,8 +1785,11 @@ async function bootList() {
   try {
     const config = await api("/api/config");
     const json = JSON.stringify(config.mcp_config, null, 2);
+    // This page is a screenshot target (redline can capture itself), so the token is masked on
+    // screen. "Copy config" still copies the real JSON.
+    const masked = json.replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{6,}/g, "$1••••••••••••");
     const block = $("#mcp-json");
-    if (block) block.textContent = json;
+    if (block) block.textContent = masked;
     const copy = $("#copy-mcp");
     if (copy) {
       copy.addEventListener("click", async () => {

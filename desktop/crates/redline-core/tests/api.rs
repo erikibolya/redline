@@ -831,3 +831,53 @@ async fn mcp_endpoint_requires_the_token_and_answers_notifications_with_202() {
     .await;
     assert_eq!(status, StatusCode::ACCEPTED);
 }
+
+/// The agent's `reply` used to land in `agent-thread.jsonl` with no route and no UI reading it,
+/// so a human who submitted a review never saw an answer. The thread is now a first-class read.
+#[tokio::test]
+async fn agent_replies_are_readable_by_the_human() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "Self review", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, replied) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "reply",
+                    "arguments": { "session_id": id, "message": "Looking at it now." }
+                }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{replied}");
+    assert_eq!(replied["result"]["isError"], false);
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/thread"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, thread) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{thread}");
+    assert_eq!(thread["messages"][0]["message"], "Looking at it now.");
+
+    // Same protection as every other data route.
+    let (status, _, _) = send(&h.app, get(&format!("/api/sessions/{id}/thread"))).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

@@ -159,8 +159,8 @@ start). The container is preferred only because updates are a `docker pull`; the
 
 Tray → **Connect to a server…**, paste the address and token, **Save and connect**. The app probes
 the server with those credentials before saving anything, so a wrong token is an error message
-instead of a broken next launch. The tray then reads *Server: http://holly:8788*; **Use this
-computer instead** switches back to standalone.
+instead of a broken next launch. The tray then reads *Configured: http://holly:8788*; **Use this computer** in the wizard
+switches back to standalone.
 
 The wizard writes the same `%LOCALAPPDATA%\redline\config.json` (`remote_url`, `token`) for
 scripted setups; `REDLINE_REMOTE_URL` / `REDLINE_TOKEN` still override it. The local server keeps

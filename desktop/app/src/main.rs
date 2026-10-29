@@ -81,7 +81,12 @@ fn main() {
             // The local server always runs: it serves the wizard, and it is the app in standalone
             // mode. When a remote server is configured the window points there instead.
             let local = start_local_server(data_dir.clone())?;
-            let start_url = launch_url(&data_dir, &local);
+            let ctx = Ctx {
+                data_dir,
+                local,
+                agent: Arc::new(AgentState::default()),
+            };
+            let start_url = launch_url(&ctx.data_dir, &ctx.local);
 
             let window = WebviewWindowBuilder::new(
                 app,
@@ -96,18 +101,24 @@ fn main() {
             // Closing the window should not stop the reviewer: agents keep connecting while it
             // sits in the tray.
             let handle = window.clone();
-            window.on_window_event(move |event| {
-                if let WindowEvent::CloseRequested { api, .. } = event {
+            let focus_app = app.handle().clone();
+            let focus_data = ctx.data_dir.clone();
+            let focus_local = ctx.local.clone();
+            window.on_window_event(move |event| match event {
+                WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
                     let _ = handle.hide();
                 }
+                // A window left on the local server while `config.json` names a remote one looks
+                // connected in the tray but sends every review to the wrong place. Put it back on
+                // the configured server when it gets focus — but never yank the setup page away,
+                // because that page is served locally on purpose.
+                WindowEvent::Focused(true) => {
+                    align_window(&focus_app, &focus_data, &focus_local, true);
+                }
+                _ => {}
             });
 
-            let ctx = Ctx {
-                data_dir,
-                local,
-                agent: Arc::new(AgentState::default()),
-            };
             build_tray(app, &ctx)?;
             build_app_menu(app, &ctx)?;
             check_for_updates(app.handle().clone(), false);
@@ -194,7 +205,7 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let revert =
         MenuItem::with_id(app, "tray:stable-revert", "Revert to last stable version…", true, None::<&str>)?;
     let status = match read_remote(&ctx.data_dir) {
-        Some(remote) => format!("Server: {}", remote.base_url),
+        Some(remote) => format!("Configured: {}", remote.base_url),
         None => format!("Standalone: {}", ctx.local.base_url),
     };
     let address = MenuItem::with_id(app, "tray:address", &status, false, None::<&str>)?;
@@ -255,7 +266,7 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
         *last = Some((id.to_string(), std::time::Instant::now()));
     }
     match id {
-        "open" => show_window(app),
+        "open" => open_window(app, ctx),
         "connect" => {
             let url = format!("{}/setup?t={}", ctx.local.base_url, ctx.local.token);
             navigate(app, &url);
@@ -596,6 +607,45 @@ fn quit(app: &AppHandle) {
 fn restart(app: &AppHandle) {
     EXITING.store(true, Ordering::SeqCst);
     app.restart();
+}
+
+/// Show the window, but first put it on the server this app is configured for. The tray status
+/// comes from `config.json`; the window can still be sitting on the local URL (or an old server),
+/// which looks "connected" while every submission goes somewhere else.
+fn open_window(app: &AppHandle, ctx: &Ctx) {
+    align_window(app, &ctx.data_dir, &ctx.local, false);
+    show_window(app);
+}
+
+/// Navigate the window to the server named in `config.json` when it is showing another origin.
+/// Returns whether a navigation was started.
+fn align_window(app: &AppHandle, data_dir: &Path, local: &Local, skip_setup: bool) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    let Ok(current) = window.url() else {
+        return false;
+    };
+    if skip_setup && current.path().starts_with("/setup") {
+        return false;
+    }
+    let target = launch_url(data_dir, local);
+    let Ok(wanted) = tauri::Url::parse(&target) else {
+        return false;
+    };
+    if origin(&current) == origin(&wanted) {
+        return false;
+    }
+    navigate(app, &target);
+    true
+}
+
+fn origin(url: &tauri::Url) -> String {
+    let port = url
+        .port_or_known_default()
+        .map(|port| port.to_string())
+        .unwrap_or_default();
+    format!("{}://{}:{}", url.scheme(), url.host_str().unwrap_or(""), port)
 }
 
 fn show_window(app: &AppHandle) {

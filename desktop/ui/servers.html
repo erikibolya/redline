@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RedLine — servers</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css" />
+<style>
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    padding: 24px; background: var(--bg); color: var(--text); font-family: var(--font);
+  }
+  .servers { width: min(640px, 100%); }
+  .servers-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .servers-head .back { margin-left: auto; color: var(--muted); font-size: 12px; text-decoration: none; }
+  .servers-head .back:hover { color: var(--text); }
+  .servers-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 24px; box-shadow: 0 20px 50px rgba(0, 0, 0, .28);
+  }
+  .servers-card h1 { font-size: 18px; margin: 0 0 4px; }
+  .servers-card .lead { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+  .server-row {
+    display: flex; align-items: center; gap: 12px; padding: 12px 0;
+    border-top: 1px solid var(--border-soft);
+  }
+  .server-row:first-of-type { border-top: 0; }
+  .server-main { min-width: 0; flex: 1; }
+  .server-name { font-weight: 600; font-size: 14px; }
+  .server-name .active { color: var(--ok); font-size: 11px; font-weight: 500; margin-left: 6px; }
+  .server-url { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .server-state { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .server-actions { display: flex; gap: 6px; flex: none; }
+  .server-actions .btn { padding: 5px 9px; font-size: 12px; }
+  .server-actions .btn.danger { color: var(--danger); border-color: #7f1d1d; }
+  .servers-actions { display: flex; gap: 8px; margin-top: 20px; }
+  .servers-foot { color: var(--muted); font-size: 12px; margin: 14px 4px 0; }
+  .banner {
+    background: rgba(161, 98, 7, .16); border: 1px solid #a16207; color: #fde68a;
+    border-radius: var(--radius); padding: 10px 12px; font-size: 13px; margin-bottom: 16px;
+  }
+  .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+</style>
+</head>
+<body data-page="servers">
+<main class="servers">
+  <div class="servers-head">
+    <div class="brand"><span class="brand-mark"><i></i></span> RedLine</div>
+    <a class="back" id="back" href="/">← Back to sessions</a>
+  </div>
+
+  <section class="servers-card">
+    <h1>Servers</h1>
+    <p class="lead">Switch between RedLine servers. Each server keeps its own data, token and login.</p>
+    <div id="banner" class="banner" hidden></div>
+    <div id="list"><div class="empty">Loading servers…</div></div>
+    <div class="servers-actions">
+      <a class="btn accent" id="add" href="/setup">Add server</a>
+    </div>
+    <p class="servers-foot">Switching only changes which server this window talks to. Other servers stay signed in.</p>
+  </section>
+</main>
+
+<script>
+const params = new URLSearchParams(location.search);
+const token = params.get("t") || "";
+const withToken = (path) => token ? `${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(token)}` : path;
+const list = document.getElementById("list");
+const banner = document.getElementById("banner");
+const back = document.getElementById("back");
+const add = document.getElementById("add");
+
+back.href = withToken("/");
+add.href = withToken("/setup?new=1");
+if (params.get("unreachable")) {
+  banner.hidden = false;
+  banner.textContent = "The server this app was using did not answer. Pick another server, or use this computer.";
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[ch]);
+}
+
+async function json(path, options = {}) {
+  const response = await fetch(withToken(path), {
+    ...options,
+    headers: { "content-type": "application/json", ...(options.headers || {}) },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+  return body;
+}
+
+async function switchTo(id, local) {
+  try {
+    const data = await json(local ? "/api/servers/local/activate" : `/api/servers/${encodeURIComponent(id)}/activate`, {
+      method: "POST",
+    });
+    location.replace(data.open_url);
+  } catch (error) {
+    banner.hidden = false;
+    banner.textContent = error.message;
+  }
+}
+
+async function removeServer(id) {
+  if (!confirm("Remove this server from the list? Its data on the server is not deleted.")) return;
+  try {
+    await json(`/api/servers/${encodeURIComponent(id)}`, { method: "DELETE" });
+    render();
+  } catch (error) {
+    banner.hidden = false;
+    banner.textContent = error.message;
+  }
+}
+
+function row(server, local) {
+  const active = local ? server.active : server.active;
+  return `<div class="server-row" data-id="${escapeHtml(local ? "local" : server.id)}">
+    <div class="server-main">
+      <div class="server-name">${escapeHtml(local ? "This computer" : server.name)}${active ? '<span class="active">● active</span>' : ""}</div>
+      <div class="server-url">${escapeHtml(local ? server.url : server.url)}</div>
+      <div class="server-state" data-state>${local ? "local server" : "checking…"}</div>
+    </div>
+    <div class="server-actions">
+      ${active ? "" : `<button class="btn" data-use>Use</button>`}
+      ${local ? "" : `<button class="btn danger" data-remove>Remove</button>`}
+    </div>
+  </div>`;
+}
+
+async function render() {
+  try {
+    const data = await json("/api/servers");
+    const local = { active: data.active === "local", url: data.local_url };
+    const rows = [row(local, true)];
+    for (const server of data.servers || []) rows.push(row(server, false));
+    list.innerHTML = rows.join("");
+    list.querySelectorAll(".server-row").forEach((element) => {
+      const id = element.dataset.id;
+      const use = element.querySelector("[data-use]");
+      const remove = element.querySelector("[data-remove]");
+      if (use) use.addEventListener("click", () => switchTo(id, id === "local"));
+      if (remove) remove.addEventListener("click", () => removeServer(id));
+      if (id !== "local") probe(id, element.querySelector("[data-state]"));
+    });
+    probeLocal(list.querySelector('[data-id="local"] [data-state]'));
+  } catch (error) {
+    list.innerHTML = `<div class="empty">${escapeHtml(error.message)}<br>Server profiles are available in the desktop app.</div>`;
+  }
+}
+
+async function probe(id, node) {
+  if (!node) return;
+  try {
+    const data = await json(`/api/servers/${encodeURIComponent(id)}/probe`);
+    if (data.ok === false) node.textContent = "offline — " + (data.error || "no answer");
+    else if (data.version) node.textContent = "version " + data.version;
+    else node.textContent = "online";
+  } catch (error) {
+    node.textContent = "offline — " + error.message;
+  }
+}
+
+async function probeLocal(node) {
+  if (!node) return;
+  try {
+    const response = await fetch(withToken("/health"));
+    const data = await response.json();
+    node.textContent = "local server · version " + (data.version || "?");
+  } catch {
+    node.textContent = "local server";
+  }
+}
+
+render();
+</script>
+</body>
+</html>

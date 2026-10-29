@@ -9,7 +9,7 @@ use axum::extract::{DefaultBodyLimit, Path as RoutePath, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
@@ -91,6 +91,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config", get(config))
         .route("/api/setup", get(setup_status).post(save_setup))
         .route("/api/setup/disconnect", post(disconnect_setup))
+        .route("/api/servers", get(list_servers).post(upsert_server))
+        .route("/api/servers/local/activate", post(activate_local))
+        .route("/api/servers/{id}/activate", post(activate_server))
+        .route("/api/servers/{id}/probe", get(probe_server))
+        .route("/api/servers/{id}", delete(remove_server))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/agent/repos", post(sync_agent_repos))
@@ -120,6 +125,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(list_page))
         .route("/s/{id}", get(editor_page))
         .route("/setup", get(setup_page))
+        .route("/servers", get(servers_page))
         .merge(protected)
         .fallback(static_file)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -184,7 +190,19 @@ fn trade_token_for_cookie(
     if !state.auth.verify(token) {
         return None;
     }
-    let mut response = Redirect::temporary(path).into_response();
+    // Keep page-level parameters such as `new=1` or `unreachable=1`, but never echo the token.
+    let mut target = path.to_string();
+    if let Some(query) = query {
+        let rest: Vec<&str> = query
+            .split('&')
+            .filter(|pair| !pair.is_empty() && !pair.starts_with("t="))
+            .collect();
+        if !rest.is_empty() {
+            target.push('?');
+            target.push_str(&rest.join("&"));
+        }
+    }
+    let mut response = Redirect::temporary(&target).into_response();
     if let Ok(value) = HeaderValue::from_str(&auth::cookie_header(token)) {
         response.headers_mut().append(header::SET_COOKIE, value);
     }
@@ -226,6 +244,15 @@ async fn setup_page(State(state): State<AppState>, request: Request) -> Response
         return response;
     }
     serve_ui(&state, "setup.html")
+}
+
+async fn servers_page(State(state): State<AppState>, request: Request) -> Response {
+    if let Some(response) =
+        trade_token_for_cookie(request.headers(), request.uri().query(), "/servers", &state)
+    {
+        return response;
+    }
+    serve_ui(&state, "servers.html")
 }
 
 fn serve_ui(state: &AppState, name: &str) -> Response {
@@ -783,17 +810,396 @@ async fn annotated(
     Ok(serve_file(&path, Some("image/png")))
 }
 
-/// What the wizard shows: am I standalone or pointed at a server?
-async fn setup_status(State(state): State<AppState>) -> Json<Value> {
-    let config = read_config(&state);
-    let remote = config
-        .as_ref()
-        .and_then(|value| value.get("remote_url"))
+#[derive(Debug, Clone)]
+struct ServerProfile {
+    id: String,
+    name: String,
+    url: String,
+    token: String,
+}
+
+fn normalize_url(raw: &str) -> String {
+    raw.trim().trim_end_matches('/').to_string()
+}
+
+fn default_server_name(url: &str) -> String {
+    let host = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url);
+    if host.is_empty() {
+        url.to_string()
+    } else {
+        host.to_string()
+    }
+}
+
+fn unique_server_id(base: &str, used: &HashSet<String>) -> String {
+    let base = crate::store::slugify(base);
+    let mut id = base.clone();
+    let mut suffix = 2;
+    while used.contains(&id) {
+        id = format!("{base}-{suffix}");
+        suffix += 1;
+    }
+    id
+}
+
+/// Read both the current profiles schema and the pre-profiles `remote_url`/`token` file.
+fn servers_from_value(value: &Value) -> (Vec<ServerProfile>, String) {
+    let mut servers = Vec::new();
+    let mut used = HashSet::new();
+    if let Some(items) = value.get("servers").and_then(Value::as_array) {
+        for item in items {
+            let url = normalize_url(item.get("url").and_then(Value::as_str).unwrap_or(""));
+            if url.is_empty() {
+                continue;
+            }
+            let name = item
+                .get("name")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| default_server_name(&url));
+            let token = item
+                .get("token")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let base = item
+                .get("id")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .unwrap_or(&name);
+            let id = unique_server_id(base, &used);
+            used.insert(id.clone());
+            servers.push(ServerProfile {
+                id,
+                name,
+                url,
+                token,
+            });
+        }
+    }
+    let mut active = value
+        .get("active")
         .and_then(Value::as_str)
-        .map(str::to_string);
+        .unwrap_or("")
+        .to_string();
+
+    // Old clients wrote only these two fields. Keep those users connected on the first launch.
+    if servers.is_empty() {
+        if let Some(url) = value.get("remote_url").and_then(Value::as_str) {
+            let url = normalize_url(url);
+            if !url.is_empty() {
+                let name = default_server_name(&url);
+                let id = unique_server_id(&name, &used);
+                servers.push(ServerProfile {
+                    id: id.clone(),
+                    name,
+                    url,
+                    token: value
+                        .get("token")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                });
+                active = id;
+            }
+        }
+    }
+    if active.is_empty()
+        || (active != "local" && !servers.iter().any(|profile| profile.id == active))
+    {
+        active = servers
+            .first()
+            .map(|profile| profile.id.clone())
+            .unwrap_or_else(|| "local".to_string());
+    }
+    (servers, active)
+}
+
+fn config_for_servers(servers: &[ServerProfile], active: &str) -> Value {
+    let items: Vec<Value> = servers
+        .iter()
+        .map(|profile| {
+            json!({
+                "id": profile.id,
+                "name": profile.name,
+                "url": profile.url,
+                "token": profile.token,
+            })
+        })
+        .collect();
+    let mut value = json!({ "servers": items, "active": active });
+    if let Some(profile) = servers.iter().find(|profile| profile.id == active) {
+        // Keep the old keys in sync so an older build can still connect.
+        value["remote_url"] = json!(profile.url);
+        value["token"] = json!(profile.token);
+    }
+    value
+}
+
+fn load_servers(state: &AppState) -> (Vec<ServerProfile>, String) {
+    match read_config(state) {
+        Some(value) => servers_from_value(&value),
+        None => (Vec::new(), "local".to_string()),
+    }
+}
+
+fn write_servers(state: &AppState, servers: &[ServerProfile], active: &str) -> Result<(), Error> {
+    let path = state.config_path.clone().ok_or_else(|| {
+        Error::BadRequest("server profiles are only available in the desktop app".to_string())
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut text = serde_json::to_string_pretty(&config_for_servers(servers, active))?;
+    text.push('\n');
+    std::fs::write(path, text)?;
+    Ok(())
+}
+
+fn server_public(profile: &ServerProfile) -> Value {
+    json!({
+        "id": profile.id,
+        "name": profile.name,
+        "url": profile.url,
+        "has_token": !profile.token.is_empty(),
+    })
+}
+
+fn active_open_url(state: &AppState, servers: &[ServerProfile], active: &str) -> String {
+    servers
+        .iter()
+        .find(|profile| profile.id == active)
+        .map(|profile| format!("{}/?t={}", profile.url, profile.token))
+        .unwrap_or_else(|| format!("{}/?t={}", state.base_url, state.auth.token()))
+}
+
+async fn probe_http(url: &str, token: &str) -> Result<Value, String> {
+    if url.starts_with("https://") {
+        return Ok(json!({ "ok": null, "error": "https is trusted but not probed" }));
+    }
+    let url = url.to_string();
+    let token = token.to_string();
+    tokio::task::spawn_blocking(move || {
+        let client =
+            crate::client::Client::new(&format!("{url}/"), token).map_err(|err| err.to_string())?;
+        let (status, health) = client.get("/health").map_err(|err| err.to_string())?;
+        if status >= 400 {
+            return Err(format!("HTTP {status}"));
+        }
+        Ok(json!({
+            "ok": true,
+            "version": health.get("version").and_then(Value::as_str).unwrap_or(""),
+        }))
+    })
+    .await
+    .map_err(|err| format!("probe task failed: {err}"))?
+}
+
+async fn put_server(state: &AppState, body: ServerRequest) -> Result<Value, Error> {
+    if state.config_path.is_none() {
+        return Err(Error::BadRequest(
+            "server profiles are only available in the desktop app".to_string(),
+        ));
+    }
+    let url = normalize_url(&body.url);
+    if url.is_empty() {
+        return Err(Error::BadRequest("server URL is required".to_string()));
+    }
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err(Error::BadRequest(
+            "use an http:// or https:// URL".to_string(),
+        ));
+    }
+    let token = body.token.trim().to_string();
+    if token.is_empty() {
+        return Err(Error::BadRequest("token is required".to_string()));
+    }
+    probe_http(&url, &token)
+        .await
+        .map_err(|err| Error::BadRequest(format!("could not use that server: {err}")))?;
+
+    let (mut servers, mut active) = load_servers(state);
+    let name = body
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| default_server_name(&url));
+    let requested_id = body
+        .id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .unwrap_or(&name);
+    // `local` is the synthetic "this computer" profile.
+    let requested_id = if requested_id == "local" {
+        "local-server"
+    } else {
+        requested_id
+    };
+    let id = if let Some(profile) = servers
+        .iter_mut()
+        .find(|profile| profile.id == requested_id)
+    {
+        profile.name = name;
+        profile.url = url.clone();
+        profile.token = token.clone();
+        profile.id.clone()
+    } else {
+        let used: HashSet<String> = servers.iter().map(|profile| profile.id.clone()).collect();
+        let id = unique_server_id(requested_id, &used);
+        servers.push(ServerProfile {
+            id: id.clone(),
+            name,
+            url: url.clone(),
+            token: token.clone(),
+        });
+        id
+    };
+    if body.activate.unwrap_or(true) {
+        active = id.clone();
+    }
+    let saved = servers
+        .iter()
+        .find(|profile| profile.id == id)
+        .cloned()
+        .ok_or_else(|| Error::NotFound(id.clone()))?;
+    write_servers(state, &servers, &active)?;
+    Ok(json!({
+        "ok": true,
+        "server": server_public(&saved),
+        "active": active,
+        "open_url": active_open_url(state, &servers, &active),
+    }))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ServerRequest {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    url: String,
+    token: String,
+    #[serde(default)]
+    activate: Option<bool>,
+}
+
+/// What the local Servers page reads. Tokens never leave the config file.
+async fn list_servers(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    if state.config_path.is_none() {
+        return Err(Error::BadRequest(
+            "server profiles are only available in the desktop app".to_string(),
+        ));
+    }
+    let (servers, active) = load_servers(&state);
+    let items: Vec<Value> = servers
+        .iter()
+        .map(|profile| {
+            let mut item = server_public(profile);
+            item["active"] = json!(profile.id == active);
+            item
+        })
+        .collect();
+    Ok(Json(json!({
+        "servers": items,
+        "active": active,
+        "local_url": state.base_url,
+        "active_name": servers.iter().find(|profile| profile.id == active).map(|profile| profile.name.clone()),
+    })))
+}
+
+async fn activate_local(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    let (servers, _) = load_servers(&state);
+    write_servers(&state, &servers, "local")?;
+    Ok(Json(json!({
+        "ok": true,
+        "active": "local",
+        "open_url": format!("{}/?t={}", state.base_url, state.auth.token()),
+    })))
+}
+
+async fn activate_server(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    if id == "local" {
+        return activate_local(State(state)).await;
+    }
+    let (servers, _) = load_servers(&state);
+    let profile = servers
+        .iter()
+        .find(|profile| profile.id == id)
+        .cloned()
+        .ok_or_else(|| Error::NotFound(id.clone()))?;
+    write_servers(&state, &servers, &id)?;
+    Ok(Json(json!({
+        "ok": true,
+        "active": id,
+        "open_url": format!("{}/?t={}", profile.url, profile.token),
+    })))
+}
+
+async fn remove_server(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    if id == "local" {
+        return Err(Error::BadRequest(
+            "the local profile cannot be removed".to_string(),
+        ));
+    }
+    let (mut servers, active) = load_servers(&state);
+    let before = servers.len();
+    servers.retain(|profile| profile.id != id);
+    if servers.len() == before {
+        return Err(Error::NotFound(id));
+    }
+    let next = if active == id {
+        "local".to_string()
+    } else {
+        active
+    };
+    write_servers(&state, &servers, &next)?;
+    Ok(Json(json!({ "ok": true, "active": next })))
+}
+
+async fn probe_server(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    let (servers, _) = load_servers(&state);
+    let profile = servers
+        .iter()
+        .find(|profile| profile.id == id)
+        .cloned()
+        .ok_or_else(|| Error::NotFound(id))?;
+    let probed = probe_http(&profile.url, &profile.token).await;
+    match probed {
+        Ok(value) => Ok(Json(value)),
+        Err(err) => Ok(Json(json!({ "ok": false, "error": err }))),
+    }
+}
+
+/// Kept for the old single-server wizard. It now appends to the profile list and activates it.
+async fn setup_status(State(state): State<AppState>) -> Json<Value> {
+    let (servers, active) = load_servers(&state);
+    let current = servers.iter().find(|profile| profile.id == active);
     Json(json!({
-        "mode": if remote.is_some() { "remote" } else { "local" },
-        "remote_url": remote,
+        "mode": if current.is_some() { "remote" } else { "local" },
+        "remote_url": current.map(|profile| profile.url.clone()),
+        "active_name": current.map(|profile| profile.name.clone()),
+        "servers": servers.len(),
         "local_url": state.base_url,
         "sessions_dir": state.store.root().display().to_string(),
     }))
@@ -803,83 +1209,43 @@ async fn setup_status(State(state): State<AppState>) -> Json<Value> {
 struct SetupRequest {
     remote_url: String,
     token: String,
+    #[serde(default)]
+    name: Option<String>,
 }
 
-/// Persist "use that server instead", but only after proving the credentials work — a saved
-/// config that 401s on next launch is the worst possible first-run experience.
 async fn save_setup(
     State(state): State<AppState>,
     Json(body): Json<SetupRequest>,
 ) -> Result<Json<Value>, Error> {
-    let path = state.config_path.clone().ok_or_else(|| {
-        Error::BadRequest("setup is only available in the desktop app".to_string())
-    })?;
-
-    let remote_url = body.remote_url.trim().trim_end_matches('/').to_string();
-    if remote_url.is_empty() {
-        return Err(Error::BadRequest("server URL is required".to_string()));
-    }
-    if !remote_url.starts_with("http://") && !remote_url.starts_with("https://") {
-        return Err(Error::BadRequest(
-            "use an http:// or https:// URL".to_string(),
-        ));
-    }
-    // A plain-HTTP probe cannot validate a TLS endpoint; for https we let the webview be the
-    // judge (a bad certificate shows up immediately) instead of refusing the address.
-    let is_https = remote_url.starts_with("https://");
-    let token = body.token.trim().to_string();
-    if token.is_empty() {
-        return Err(Error::BadRequest("token is required".to_string()));
-    }
-
-    let probe_url = remote_url.clone();
-    let probe_token = token.clone();
-    let reachable = if is_https {
-        Ok(())
-    } else {
-        tokio::task::spawn_blocking(move || {
-            crate::client::Client::new(&format!("{probe_url}/"), probe_token)
-                .and_then(|client| client.get("/api/config"))
-                .map(|_| ())
-        })
-        .await
-        .map_err(|err| Error::BadRequest(format!("check failed: {err}")))?
-    };
-
-    if let Err(err) = reachable {
-        return Err(Error::BadRequest(format!(
-            "could not use that server: {err}"
-        )));
-    }
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let config = json!({ "remote_url": remote_url, "token": token });
-    let mut text = serde_json::to_string_pretty(&config)?;
-    text.push('\n');
-    std::fs::write(&path, text)?;
-
-    Ok(Json(json!({
-        "ok": true,
-        "remote_url": remote_url,
-        "open_url": format!("{remote_url}/?t={token}"),
-    })))
+    let result = put_server(
+        &state,
+        ServerRequest {
+            id: None,
+            name: body.name,
+            url: body.remote_url,
+            token: body.token,
+            activate: Some(true),
+        },
+    )
+    .await?;
+    Ok(Json(result))
 }
 
 async fn disconnect_setup(State(state): State<AppState>) -> Result<Json<Value>, Error> {
-    let path = state.config_path.clone().ok_or_else(|| {
-        Error::BadRequest("setup is only available in the desktop app".to_string())
-    })?;
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(Json(
-            json!({ "ok": true, "mode": "local", "local_url": state.base_url }),
-        )),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Json(
-            json!({ "ok": true, "mode": "local", "local_url": state.base_url }),
-        )),
-        Err(err) => Err(Error::Io(err)),
-    }
+    let (servers, _) = load_servers(&state);
+    write_servers(&state, &servers, "local")?;
+    Ok(Json(json!({
+        "ok": true,
+        "mode": "local",
+        "local_url": state.base_url,
+    })))
+}
+
+async fn upsert_server(
+    State(state): State<AppState>,
+    Json(body): Json<ServerRequest>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(put_server(&state, body).await?))
 }
 
 fn read_config(state: &AppState) -> Option<Value> {
@@ -926,5 +1292,59 @@ async fn mcp_post(State(state): State<AppState>, Json(request): Json<Value>) -> 
     match mcp::handle(&context, &request).await {
         Some(response) => Json(response).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
+    }
+}
+
+#[cfg(test)]
+mod server_profile_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_config_becomes_one_profile() {
+        let (servers, active) = servers_from_value(&json!({
+            "remote_url": "https://redline.example/",
+            "token": "secret",
+        }));
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].url, "https://redline.example");
+        assert_eq!(servers[0].token, "secret");
+        assert_eq!(active, servers[0].id);
+    }
+
+    #[test]
+    fn profiles_and_all_tokens_survive_a_switch() {
+        let value = json!({
+            "servers": [
+                { "id": "production", "name": "Production", "url": "https://prod.example", "token": "p" },
+                { "id": "dev", "name": "Dev", "url": "http://dev.example", "token": "d" }
+            ],
+            "active": "dev"
+        });
+        let (servers, active) = servers_from_value(&value);
+        assert_eq!(servers.len(), 2);
+        assert_eq!(active, "dev");
+        assert_eq!(servers[0].token, "p");
+        assert_eq!(servers[1].token, "d");
+
+        let saved = config_for_servers(&servers, "local");
+        assert_eq!(saved["active"], "local");
+        assert!(saved.get("remote_url").is_none());
+        assert_eq!(saved["servers"].as_array().unwrap().len(), 2);
+
+        let saved = config_for_servers(&servers, "production");
+        assert_eq!(saved["remote_url"], "https://prod.example");
+        assert_eq!(saved["token"], "p");
+    }
+
+    #[test]
+    fn duplicate_names_get_distinct_ids() {
+        let used = HashSet::new();
+        let first = unique_server_id("Production", &used);
+        let mut used = used;
+        used.insert(first.clone());
+        let second = unique_server_id("Production", &used);
+        assert_ne!(first, second);
+        assert_eq!(first, "production");
+        assert_eq!(second, "production-2");
     }
 }

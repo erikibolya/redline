@@ -317,6 +317,13 @@ body.touch .btn { min-height: 38px; }
 body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 
 /* ---------------------------------------------------------------- stage */
+/* A light scrim over the screenshot while the agent has the round. It stays below the toolbar
+   and the status pill, and pointer-events are off so only the explicit guards block input. */
+.stage-dim {
+  position: absolute; inset: 0; z-index: 4; pointer-events: none;
+  background: rgba(5, 9, 14, .18); transition: opacity .15s ease;
+}
+[data-theme="light"] .stage-dim { background: rgba(15, 23, 42, .10); }
 .stage-status {
   position: absolute; z-index: 6;
   /* Centred in the stage: the submitted lock used to be a dimming modal here, which hid the

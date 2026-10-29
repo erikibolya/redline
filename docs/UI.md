@@ -147,9 +147,10 @@ and converts them).
   hidden, and the composer textarea is disabled. The annotation list becomes a flat read-only list
   (`.ann-row.readonly`: no cursor affordance, no delete button) whose rows are separated by a
   full-width hairline — a `border-top` on a rounded row paints only the segment between the two
-  rounded corners, which reads as a broken frame. There is **no dimming modal** — a single status
-  pill in the middle of the stage says *"Agent is working — …"* (or *"Waiting for the agent…"*),
-  so the screenshot stays visible. Zoom and scrolling still work: reading is always allowed.
+  rounded corners, which reads as a broken frame. There is **no modal** — a single status pill in
+  the middle of the stage says *"Agent is working — …"* (or *"Waiting for the agent…"*) above a
+  light scrim. While locked, wheel, zoom buttons, keyboard zoom and pan are frozen; STOP removes
+  the scrim and restores the view. Reading other panels is still allowed.
 - The composer's primary button becomes a red **STOP**; it asks *"Stop the agent and edit this
   review?"* and calls `POST /api/sessions/<id>/cancel`. The canvas unlocks with the annotations
   intact and the button returns to *Submit review*.

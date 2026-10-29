@@ -202,11 +202,16 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `index.html` as `inspector-empty` (22 px padding, centred text) and never lost the class when
   rows were injected, so a populated list still carried the empty state's dead space. Toggle the
   class with the content — a populated list needs its own layout class.
+- **A rounded border is not a separator.** `.ann-row + .ann-row` used `border-top-color` on a
+  rounded row to draw the divider, so the line only appeared between the two rounded corners and
+  the annotation list read as a stack of open frames. A divider spans the row: square the top
+  corners (or use a pseudo-element), and assert it in the e2e — a "broken border" is invisible to
+  every DOM test that does not measure the row.
+
 - **A grid column resize is not a canvas resize.** Moving `--rail` or `--inspector` reflows the
   layout, but the `<canvas>` bitmap keeps its old pixel size until `resize()` runs — so the stage
   is measured again on every pointermove of a divider drag. Sizes belong in CSS variables plus
   `localStorage`, never only in the DOM element's inline width.
-
 - **A lock flag is not a lock.** The submitted lock set `Editor.locked` and guarded the canvas
   pointer plus `setTool`, but Delete/arrow keys, undo/redo, the inspector's align/layer/group
   buttons and the note field wrote anyway — the e2e only asserted `window.redline.locked`, so it

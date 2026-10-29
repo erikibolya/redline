@@ -144,7 +144,10 @@ and converts them).
   `Editor.mutate` (plus `undo`/`redo` and `startText`), and those refuse while locked or while a
   history round is being viewed — the canvas pointer guard alone was not enough. The drawing tool
   buttons are `disabled` (dimmed), the inspector's align/layer/group bar and the note field are
-  hidden, and the composer textarea is disabled. There is **no dimming modal** — a single status
+  hidden, and the composer textarea is disabled. The annotation list becomes a flat read-only list
+  (`.ann-row.readonly`: no cursor affordance, no delete button) whose rows are separated by a
+  full-width hairline — a `border-top` on a rounded row paints only the segment between the two
+  rounded corners, which reads as a broken frame. There is **no dimming modal** — a single status
   pill in the middle of the stage says *"Agent is working — …"* (or *"Waiting for the agent…"*),
   so the screenshot stays visible. Zoom and scrolling still work: reading is always allowed.
 - The composer's primary button becomes a red **STOP**; it asks *"Stop the agent and edit this

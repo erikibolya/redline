@@ -79,7 +79,7 @@ static/, redline.py       v0.1 Python implementation, frozen; do not add feature
 docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm \
   sh -c 'rustup component add rustfmt; cargo fmt --all; cargo test --workspace'
 
-# Browser end-to-end (31 checks: drawing, zoom mapping, move, groups, align, history, diff, rail actions)
+# Browser end-to-end (32 checks: drawing, zoom mapping, move, groups, align, history, diff, rail actions)
 docker build -q -f desktop/Dockerfile.browser -t redline:local .
 REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per check
 
@@ -150,6 +150,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   fresh container (the script does this).
 - **Test the UI by clicking**, not only via keyboard: dead tool buttons shipped because the e2e
   used shortcuts exclusively.
+- **A file nobody reads is not a feature.** `reply` appended `agent-thread.jsonl` and no route or
+  screen read it, so a human who submitted a review heard silence for three releases. The agent →
+  human half of the loop needs a route *and* a UI, just like the human → agent half.
+- **The start page printed the token** (`/api/config` returns it verbatim). Any screenshot of `/`
+  leaked it — including one made by redline's own capture. Mask secrets at render time, keep the
+  copy button working.
 
 ## 8. Working rules
 

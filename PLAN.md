@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, menu bar, setup wizard, auto-update, port pinned to 8788 |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`) |
-| Tests | 49 Rust tests, 32-check browser E2E in CI on Linux + Windows |
+| Tests | 50 Rust tests, 32-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 

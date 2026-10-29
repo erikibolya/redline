@@ -77,6 +77,9 @@ column.
   highlights), bin icon deletes. Drag on canvas keeps this list in sync.
 - **Message to agent** collapsed by default — this is the session `note` (what the agent asked).
   It is context, not the main event, so it hides behind a disclosure.
+- **Agent replies** (v0.7.0): the other half of the loop. The MCP `reply` tool appends to
+  `agent-thread.jsonl`; `GET /api/sessions/<id>/thread` exposes it and the panel polls every 5 s,
+  so an answer appears while the review is open. Before this the file was written and never read.
 - Below it, a small `review.md` preview toggle (what the agent will read).
 
 ## Status bar
@@ -153,7 +156,7 @@ section, `Δ` shows the summary inline:
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:
 coordinate mapping under a fitted zoom, dragging, undo, inline text (including diacritics), and
-submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 25 checks. It runs in CI on every push (`browser e2e` job) and locally via
+submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 32 checks. It runs in CI on every push (`browser e2e` job) and locally via
 `desktop/scripts/e2e.sh`.
 
 It has already earned its keep twice: it caught the text tool being broken by mousedown's focus

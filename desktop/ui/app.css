@@ -340,6 +340,12 @@ a:hover { text-decoration: underline; }
   display: flex; align-items: center; gap: 8px; padding: 10px 14px 6px;
   font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
 }
+.conv-new {
+  margin-left: 8px; padding: 1px 8px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--accent); background: var(--panel-3); color: var(--text);
+  font-size: 10px; letter-spacing: 0; text-transform: none;
+}
+.conv-new:hover { background: var(--panel-2); }
 .conv-activity {
   margin-left: auto; max-width: 62%; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; text-transform: none; letter-spacing: 0; color: var(--accent); font-size: 11px;

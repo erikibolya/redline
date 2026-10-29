@@ -463,6 +463,9 @@ class Editor {
       this.annotations = (data.annotations && data.annotations.annotations) || [];
       this.history = [];
       this.future = [];
+      this.seenCount = 0;
+      this.convCount = 0;
+      this.setNewBadge(0);
       this.setGhost(null, []);
       this.selected.clear();
       this.renderInspector();
@@ -560,6 +563,16 @@ class Editor {
     }
     $("#submit").addEventListener("click", () => this.submit());
     $("#ghost-pill")?.addEventListener("click", () => this.setGhost(null, []));
+    const convLog = $("#conv-log");
+    if (convLog) {
+      convLog.addEventListener("scroll", () => {
+        if (convLog.scrollHeight - convLog.scrollTop - convLog.clientHeight < 40) {
+          this.seenCount = this.convCount;
+          this.setNewBadge(0);
+        }
+      });
+      $("#conv-new")?.addEventListener("click", () => this.seenConversation());
+    }
     $("#toggle-rail").addEventListener("click", () => {
       const app = $("#app");
       app.classList.toggle("rail-hidden");
@@ -1800,13 +1813,34 @@ class Editor {
       </div>`;
     }).join("");
     const html = rendered + status.join("");
+    const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+    this.convCount = items.length + status.length;
     // Only touch the DOM when something changed, and only follow the tail when the reader is
     // already there — otherwise a 5 s poll yanks them back down mid-sentence.
     if (log.innerHTML !== html) {
-      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
       log.innerHTML = html;
       if (atBottom) log.scrollTop = log.scrollHeight;
     }
+    if (atBottom) {
+      this.seenCount = this.convCount;
+      this.setNewBadge(0);
+    } else if (this.convCount > this.seenCount) {
+      this.setNewBadge(this.convCount - this.seenCount);
+    }
+  }
+
+  setNewBadge(count) {
+    const badge = $("#conv-new");
+    if (!badge) return;
+    badge.hidden = count <= 0;
+    badge.textContent = count === 1 ? "↓ 1 new message" : `↓ ${count} new messages`;
+  }
+
+  seenConversation() {
+    const log = $("#conv-log");
+    if (log) log.scrollTop = log.scrollHeight;
+    this.seenCount = this.convCount;
+    this.setNewBadge(0);
   }
 
   // ---------------------------------------------------------- agent view
@@ -1866,6 +1900,7 @@ class Editor {
       this.renderInspector();
       if ($("#history-block")?.open) this.loadHistory();
       await this.loadConversation({ quiet: true });
+      this.seenConversation();
       // Hand the keyboard back to the canvas: the review is sent, the next key is a shortcut.
       document.activeElement?.blur?.();
       await this.rail.load();

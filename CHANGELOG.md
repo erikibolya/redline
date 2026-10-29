@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.4 — 2026-10-29
+
+- **New-message indicator in the conversation.** When you scroll up and a reply or activity line
+  arrives, the header shows `↓ N new messages`; click it (or scroll back down) to clear. The log
+  no longer jumps while you read.
+
 ## 0.13.3 — 2026-10-29
 
 - **Conversation keeps your place.** The 5 s poll only re-renders when something changed and only

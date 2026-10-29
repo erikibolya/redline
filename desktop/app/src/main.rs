@@ -553,6 +553,29 @@ fn mcp_config(data_dir: &Path, local: &Local) -> String {
 
 /// Exit for real. The flag is what distinguishes "the human asked" from "the last window hid".
 fn quit(app: &AppHandle) {
+    // The webview prefixes the window title with "• " while it holds unsaved drafts; no Tauri
+    // globals are exposed to the page, so this is the whole channel.
+    let dirty = app
+        .get_webview_window("main")
+        .and_then(|window| window.title().ok())
+        .is_some_and(|title| title.starts_with('•'));
+    if dirty {
+        let handle = app.clone();
+        app.dialog()
+            .message("Unsaved changes will be lost. Quit anyway?")
+            .title("RedLine")
+            .buttons(MessageDialogButtons::OkCancelCustom(
+                "Quit".to_string(),
+                "Cancel".to_string(),
+            ))
+            .show(move |confirmed| {
+                if confirmed {
+                    EXITING.store(true, Ordering::SeqCst);
+                    handle.exit(0);
+                }
+            });
+        return;
+    }
     EXITING.store(true, Ordering::SeqCst);
     app.exit(0);
 }

@@ -124,8 +124,12 @@ a:hover { text-decoration: underline; }
 [hidden] { display: none !important; }
 .pill[hidden] { display: none; }
 .pill.agent { color: #fbbf24; border-color: #78350f; background: #231a08; }
-.ghost-chip { border-color: #4c1d95; color: #c4b5fd; background: #1c142f; }
-.ghost-chip b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.viewing-bar {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 7;
+  padding: 5px 12px; border-radius: 999px; cursor: pointer;
+  background: #1c142f; border: 1px solid #4c1d95; color: #c4b5fd; font-size: 11px;
+}
+.viewing-bar:hover { background: #241a3d; }
 .pill.agent.working { color: #93c5fd; border-color: #1e3a5f; background: #12233a; }
 .pill.agent.replied { color: #86efac; border-color: #14532d; background: #10231a; }
 
@@ -385,10 +389,7 @@ a:hover { text-decoration: underline; }
 .conv-msg.agent { background: rgba(61, 143, 106, .10); border-color: rgba(61, 143, 106, .35); }
 .conv-meta { font-size: 10px; color: var(--muted); margin-bottom: 2px; text-transform: uppercase; letter-spacing: .04em; }
 .conv-text { white-space: pre-wrap; font-size: 12px; color: var(--text); }
-.conv-img {
-  display: block; max-width: 100%; margin-top: 6px; border-radius: 6px;
-  border: 1px solid var(--border); background: var(--panel-3);
-}
+
 .conv-event { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); padding: 0 2px; }
 .conv-event .conv-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex: none; }
 .conv-event time { margin-left: auto; font-variant-numeric: tabular-nums; }

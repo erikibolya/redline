@@ -37,6 +37,10 @@ pub struct Meta {
     /// What the agent is doing: `received`, `working`, `replied` (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
+    /// Stamp of the round this submission was archived under (v0.16). Unique even when two
+    /// submissions land in the same second.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round_stamp: Option<String>,
     /// Project slug this session belongs to (v0.10). Missing on disk means the Inbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,

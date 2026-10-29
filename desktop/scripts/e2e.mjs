@@ -115,6 +115,30 @@ const main = async () => {
   });
   const id = created.meta.id;
 
+  // The agent reports repos with portable keys; the UI and sessions use the resulting project.
+  const synced = await api("/api/agent/repos", {
+    method: "POST",
+    body: JSON.stringify({
+      agent_id: "e2e",
+      repos: [{ key: "e2e-repo", name: "E2E Repo" }],
+    }),
+  });
+  check("agent repo sync creates a project with a repo key",
+    synced.projects?.[0]?.repo === "e2e-repo" && synced.projects?.[0]?.agent === "e2e",
+    JSON.stringify(synced.projects?.[0] || {}));
+  const projects = await api("/api/projects");
+  const repoProject = projects.projects.find((project) => project.slug === "e2e-repo");
+  check("project list exposes the repo and agent",
+    repoProject?.repo === "e2e-repo" && repoProject?.agent === "e2e",
+    JSON.stringify(repoProject || {}));
+
+  const traversal = await fetch(`${BASE}/api/agent/repos`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify({ agent_id: "e2e", repos: [{ key: "../escape", name: "no" }] }),
+  });
+  check("agent repo sync rejects path traversal", traversal.status === 400, `status ${traversal.status}`);
+
   const browser = await puppeteer.connect({
     browserURL: CHROME,
     defaultViewport: { width: 1280, height: 820 },
@@ -159,18 +183,31 @@ const main = async () => {
   check("pasted image is previewed as a thumbnail",
     preview && !preview.hidden && preview.blob && preview.w === 320, JSON.stringify(preview));
 
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
   const picker = await page.evaluate(() => {
     const select = document.querySelector("#f-project");
+    const group = (label) => [
+      ...(select?.querySelectorAll(`optgroup[label="${label}"] option`) || []),
+    ].map((option) => option.value);
     return {
       tag: select?.tagName,
       values: [...(select?.options || [])].map((option) => option.value),
+      repos: group("Repositories"),
+      others: group("Other projects"),
+      placeholder: select?.value || "",
+      required: select?.required,
       urlHint: document.querySelector("#url-hint")?.textContent.trim() || "",
       capture: Boolean(document.querySelector("#f-capture")),
     };
   });
-  check("new review picks a project from a select",
+  check("new review picks a repo project from a grouped select",
     picker.tag === "SELECT" && picker.values.includes("e2e") && picker.values.includes("inbox")
-      && picker.values.includes("__new__") && !picker.capture,
+      && picker.values.includes("e2e-repo") && picker.repos.includes("e2e-repo")
+      && picker.others.includes("e2e") && picker.values.includes("__new__")
+      && picker.placeholder === "" && picker.required && !picker.capture,
     JSON.stringify(picker));
   check("the page URL field explains capture and metadata",
     picker.urlHint.includes("captures it"), picker.urlHint);
@@ -290,6 +327,10 @@ const main = async () => {
   check("screenshot was composited", saved.meta.status === "submitted");
   check("prompt travelled with the submission", saved.meta.prompt === "Make the button green and bump the contrast",
     String(saved.meta.prompt));
+  await page.waitForFunction(
+    () => (document.querySelector("#conv-log")?.textContent || "").includes("Make the button green"),
+    { timeout: 5000 },
+  );
   const conversation = await page.evaluate(() => document.querySelector("#conv-log")?.textContent || "");
   check("prompt appears in the conversation", conversation.includes("Make the button green"),
     conversation.slice(0, 80));
@@ -760,13 +801,17 @@ const main = async () => {
   check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
 
   await page.click("#new-review");
-  await page.waitForFunction(() => document.querySelectorAll("#f-project option").length > 1, { timeout: 5000 });
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
   const listProject = await page.evaluate(() => ({
     select: document.querySelector("#f-project")?.tagName,
     options: [...document.querySelectorAll("#f-project option")].map((option) => option.value),
   }));
   check("start page new review has the same project select",
-    listProject.select === "SELECT" && listProject.options.includes("e2e"), JSON.stringify(listProject));
+    listProject.select === "SELECT" && listProject.options.includes("e2e")
+      && listProject.options.includes("e2e-repo"), JSON.stringify(listProject));
 
   // Create through the picker: the project chosen in the select must be the one stored.
   await page.evaluate(async () => {
@@ -785,13 +830,13 @@ const main = async () => {
   });
   await page.waitForFunction(() => !document.querySelector("#drop-preview").hidden, { timeout: 5000 });
   await page.$eval("#f-title", (el) => { el.value = "from the project picker"; });
-  await page.select("#f-project", "e2e");
+  await page.select("#f-project", "e2e-repo");
   await page.click("#new-submit");
   await page.waitForFunction(() => location.pathname.startsWith("/s/"), { timeout: 15000 });
   const pickedId = new URL(page.url()).pathname.split("/").pop();
   const picked = await api(`/api/sessions/${pickedId}`);
-  check("creating from the start page files the review in the picked project",
-    picked.meta.project === "e2e" && picked.meta.title === "from the project picker",
+  check("creating from the start page files the review in the picked repo project",
+    picked.meta.project === "e2e-repo" && picked.meta.title === "from the project picker",
     `${picked.meta.project} · ${picked.meta.title}`);
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));

@@ -1,6 +1,7 @@
 //! HTTP surface. Same routes as v0.1, plus `POST /api/sessions` and `POST /mcp`, all behind a
 //! bearer token (or the editor cookie). The editor itself is unchanged.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use axum::body::Body;
@@ -92,6 +93,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/setup/disconnect", post(disconnect_setup))
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/projects", get(list_projects).post(create_project))
+        .route("/api/agent/repos", post(sync_agent_repos))
         .route(
             "/api/sessions/{id}",
             get(get_session).delete(delete_session),
@@ -390,6 +392,7 @@ async fn list_projects(State(state): State<AppState>) -> Result<Json<Value>, Err
                 "slug": project.slug,
                 "name": project.name,
                 "agent": project.agent,
+                "repo": project.repo,
                 "created_at": project.created_at,
                 "sessions": mine.len(),
                 "waiting": waiting,
@@ -414,6 +417,79 @@ async fn create_project(
 ) -> Result<Json<Value>, Error> {
     let project = state.store.ensure_project(&body.name)?;
     Ok(Json(json!({ "project": project })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RepoSync {
+    agent_id: String,
+    repos: Vec<RepoEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct RepoEntry {
+    key: String,
+    #[serde(default)]
+    name: String,
+}
+
+/// An agent reports the repositories it can see (OpenCode projects, filtered to git). RedLine
+/// stores them as projects with a relative `repo` key so the same record works on every agent
+/// mount. This endpoint only creates/updates; it never deletes reviews.
+async fn sync_agent_repos(
+    State(state): State<AppState>,
+    Json(body): Json<RepoSync>,
+) -> Result<Json<Value>, Error> {
+    let agent = normalize_agent_id(&body.agent_id)?;
+    if body.repos.len() > 200 {
+        return Err(Error::BadRequest(
+            "too many repositories (max 200)".to_string(),
+        ));
+    }
+    let mut seen = HashSet::new();
+    let mut projects = Vec::new();
+    for repo in body.repos {
+        let key = normalize_repo_key(&repo.key)?;
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let name: String = repo.name.trim().chars().take(120).collect::<String>();
+        let project = state.store.sync_repo_project(&agent, &key, &name)?;
+        projects.push(json!(project));
+    }
+    Ok(Json(json!({ "ok": true, "projects": projects })))
+}
+
+fn normalize_agent_id(raw: &str) -> Result<String, Error> {
+    let agent = raw.trim();
+    if agent.is_empty()
+        || agent.len() > 64
+        || !agent
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err(Error::BadRequest(
+            "agent_id must be 1-64 characters of [a-z0-9_-]".to_string(),
+        ));
+    }
+    Ok(agent.to_string())
+}
+
+fn normalize_repo_key(raw: &str) -> Result<String, Error> {
+    let key = raw.trim();
+    if key.is_empty()
+        || key.len() > 200
+        || key.starts_with('/')
+        || key.contains('\\')
+        || key.chars().any(char::is_control)
+        || key
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err(Error::BadRequest(format!(
+            "invalid repo key {raw:?}: use a relative path without . or .."
+        )));
+    }
+    Ok(key.to_string())
 }
 
 async fn get_session(

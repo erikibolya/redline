@@ -491,6 +491,7 @@ fn list_projects(ctx: &McpContext<'_>) -> Result<Value, String> {
                 "slug": project.slug,
                 "name": project.name,
                 "agent": project.agent,
+                "repo": project.repo,
                 "sessions": mine.len(),
                 "waiting": mine.iter().filter(|meta| meta.status == Status::Submitted).count(),
                 "done": mine.iter().filter(|meta| meta.status == Status::Resolved).count(),

@@ -203,16 +203,20 @@ new one.
 The rail lists projects (conversation areas), not a flat stream of requests.
 
 - A project is a folder: `sessions/projects/<slug>/project.json` plus its sessions one level
-  deeper. `POST /api/projects` creates one; agents get it implicitly with `project` on
-  `review_screenshot` / `capture_review`.
+  deeper. It can carry a `repo` key relative to the agent's repo root; that is what makes the
+  agent run the review in the right repository.
+- The agent syncs git repositories it discovers (`GET /api/project` from OpenCode, plus a scan of
+  its repo root) through `POST /api/agent/repos`. Repo keys are portable (`redline`,
+  `ActiUnit/Au.Net`), never absolute paths.
 - Sessions created without a project live flat and are shown as **Inbox** — there is no migration,
-  the label is added on read.
+  the label is added on read. **Inbox** and legacy label-only projects still work; the agent uses
+  its default `REDLINE_AGENT_REPO` for them.
 - Each project header shows its name, the number of waiting submissions (green) and the total.
   Click to collapse; the state persists per browser.
 - Filters and search still apply inside every project; day separators appear only in long lists.
-- The New review dialog picks the project from a **select** filled by `GET /api/projects`
-  (the same folders agents see through `list_projects`). **+ New project…** reveals a name field;
-  the project is created on first use.
+- The New review dialog picks the project from a **select** grouped into **Repositories** and
+  **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
+  a name field and creates a label without a repo (the agent falls back to its default repo).
 
 ## Conversation and composer (v0.9)
 

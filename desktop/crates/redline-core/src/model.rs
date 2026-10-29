@@ -56,6 +56,10 @@ pub struct Project {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
+    /// Repository key relative to the agent's repo root, e.g. `redline` or `ActiUnit/Au.Net`.
+    /// `None` for legacy label-only projects.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     #[serde(default)]
     pub created_at: String,
 }

@@ -60,6 +60,18 @@ fn main() {
     if let Some(server) = env("REDLINE_AGENT_OPENCODE_SERVER") {
         config.opencode_server = Some(server);
     }
+    if let Some(root) = env("REDLINE_AGENT_REPO_ROOT") {
+        config.repo_root = PathBuf::from(root);
+    }
+    if let Some(root) = env("REDLINE_AGENT_OPENCODE_ROOT") {
+        config.opencode_root = Some(PathBuf::from(root));
+    }
+    if let Some(agent) = env("REDLINE_AGENT_ID") {
+        config.agent_id = agent;
+    }
+    if let Some(sync) = env("REDLINE_AGENT_SYNC").and_then(|value| value.parse().ok()) {
+        config.repo_sync = Duration::from_secs(sync);
+    }
     if let Some(poll) = env("REDLINE_AGENT_POLL").and_then(|value| value.parse().ok()) {
         config.poll = Duration::from_secs(poll);
     }

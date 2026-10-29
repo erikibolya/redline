@@ -2213,6 +2213,9 @@ class Editor {
       if (composer) composer.value = "";
       this.renderHeader();
       this.renderInspector();
+      // The server stamped `prompt` and `submitted_at`; show them now instead of waiting for the
+      // 5 s conversation poll (otherwise a submit briefly reads "No messages yet").
+      this.renderConversation();
       if ($("#history-block")?.open) this.loadHistory();
       await this.loadConversation({ quiet: true });
       this.seenConversation();
@@ -2279,11 +2282,12 @@ const NewReview = {
     const fresh = $("#f-project-new");
     if (fresh) { fresh.value = ""; fresh.hidden = true; }
     const project = $("#f-project");
-    if (project?.value === "__new__") project.value = "inbox";
+    if (project?.value === "__new__") project.value = "";
     this.fillProjects();
     $("#f-title").focus();
   },
-  /// The server owns the project list, so anything an agent created is selectable here.
+  /// Repositories come from the agent sync; older label-only projects stay selectable while they
+  /// still have reviews, but empty leftovers are not offered.
   async fillProjects() {
     const select = $("#f-project");
     if (!select) return;
@@ -2291,16 +2295,38 @@ const NewReview = {
     try {
       const { projects } = await api("/api/projects");
       const items = projects || [];
-      const options = items.length
-        ? items.map((project) => `<option value="${escapeHtml(project.slug)}">${escapeHtml(project.name)}</option>`).join("")
-        : '<option value="inbox">Inbox</option>';
-      select.innerHTML = options + '<option value="__new__">+ New project…</option>';
-      const inbox = items.find((project) => project.slug === "inbox");
-      select.value = items.some((project) => project.slug === previous)
+      const repos = items.filter((project) => project.repo);
+      const others = items.filter(
+        (project) => !project.repo && (project.sessions > 0 || project.slug === "inbox"),
+      );
+      if (!repos.length && !others.length) {
+        others.push({ slug: "inbox", name: "Inbox", sessions: 0 });
+      }
+      const options = ['<option value="" disabled>Choose a project…</option>'];
+      if (repos.length) {
+        options.push('<optgroup label="Repositories">');
+        for (const project of repos) {
+          const label = project.repo && project.repo !== project.name
+            ? `${project.name} — ${project.repo}`
+            : project.name;
+          options.push(`<option value="${escapeHtml(project.slug)}">${escapeHtml(label)}</option>`);
+        }
+        options.push("</optgroup>");
+      }
+      if (others.length) {
+        options.push('<optgroup label="Other projects">');
+        for (const project of others) {
+          options.push(`<option value="${escapeHtml(project.slug)}">${escapeHtml(project.name)}</option>`);
+        }
+        options.push("</optgroup>");
+      }
+      options.push('<option value="__new__">+ New project…</option>');
+      select.innerHTML = options.join("");
+      select.value = [...select.options].some((option) => option.value === previous)
         ? previous
-        : inbox?.slug || items[0]?.slug || "inbox";
+        : "";
       this.syncProjectInput();
-    } catch { /* signed out; keep the Inbox fallback */ }
+    } catch { /* signed out; keep the placeholder and Inbox fallback */ }
   },
   syncProjectInput() {
     const select = $("#f-project");
@@ -2381,8 +2407,8 @@ const NewReview = {
         return;
       }
       const project = NewReview.selectedProject();
-      if ($("#f-project")?.value === "__new__" && !project) {
-        $("#new-error").textContent = "Name the new project, or pick an existing one.";
+      if (!project) {
+        $("#new-error").textContent = "Choose a project, or name the new one.";
         return;
       }
       const submit = $("#new-submit");

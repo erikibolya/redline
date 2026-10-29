@@ -80,6 +80,9 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Next (ordered)
 
+0. **UX rework for 1.0** — see `docs/UX-PLAN.md`: projects instead of requests, a chat flow with a
+   composer and visible agent status, notes attached to shapes instead of a text tool, RedLine
+   branding. Ships as 0.8 → 0.10, before the rest of this list.
 1. Code signing (blocked on a certificate — the pipeline is ready).
 2. Diff overlay in the editor; it makes re-reviews much faster than reading JSON.
 3. Text plates for legibility.

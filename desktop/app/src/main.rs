@@ -172,35 +172,35 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
 }
 
 fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open RedLine", true, None::<&str>)?;
-    let connect = MenuItem::with_id(app, "connect", "Connect to a server…", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "tray:open", "Open RedLine", true, None::<&str>)?;
+    let connect = MenuItem::with_id(app, "tray:connect", "Connect to a server…", true, None::<&str>)?;
     let login = tauri::menu::CheckMenuItem::with_id(
         app,
-        "autostart",
+        "tray:autostart",
         "Start at login",
         true,
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
-    let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
-    let copy_config = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
-    let agent_start = MenuItem::with_id(app, "agent-start", "Start local agent", true, None::<&str>)?;
-    let agent_stop = MenuItem::with_id(app, "agent-stop", "Stop local agent", true, None::<&str>)?;
+    let copy_link = MenuItem::with_id(app, "tray:copy-link", "Copy browser link", true, None::<&str>)?;
+    let copy_config = MenuItem::with_id(app, "tray:copy-mcp", "Copy MCP config", true, None::<&str>)?;
+    let agent_start = MenuItem::with_id(app, "tray:agent-start", "Start local agent", true, None::<&str>)?;
+    let agent_stop = MenuItem::with_id(app, "tray:agent-stop", "Stop local agent", true, None::<&str>)?;
     let agent_repo =
-        MenuItem::with_id(app, "agent-repo", "Choose agent repository…", true, None::<&str>)?;
-    let check = MenuItem::with_id(app, "check-updates", "Check for updates…", true, None::<&str>)?;
+        MenuItem::with_id(app, "tray:agent-repo", "Choose agent repository…", true, None::<&str>)?;
+    let check = MenuItem::with_id(app, "tray:check-updates", "Check for updates…", true, None::<&str>)?;
     let dev_update =
-        MenuItem::with_id(app, "dev-update", "Install latest dev build…", true, None::<&str>)?;
+        MenuItem::with_id(app, "tray:dev-update", "Install latest dev build…", true, None::<&str>)?;
     let revert =
-        MenuItem::with_id(app, "stable-revert", "Revert to last stable version…", true, None::<&str>)?;
+        MenuItem::with_id(app, "tray:stable-revert", "Revert to last stable version…", true, None::<&str>)?;
     let status = match read_remote(&ctx.data_dir) {
         Some(remote) => format!("Server: {}", remote.base_url),
         None => format!("Standalone: {}", ctx.local.base_url),
     };
-    let address = MenuItem::with_id(app, "address", &status, false, None::<&str>)?;
+    let address = MenuItem::with_id(app, "tray:address", &status, false, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let agent_separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit RedLine", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "tray:quit", "Quit RedLine", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[
@@ -221,8 +221,9 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, event| {
-            let id = event.id().as_ref().to_string();
-            handle_action(&id, app, &handler_ctx);
+            let raw = event.id().as_ref().to_string();
+            let id = raw.strip_prefix("tray:").unwrap_or(&raw);
+            handle_action(id, app, &handler_ctx);
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -240,7 +241,19 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
 }
 
 /// Every menu, tray and keyboard action funnels through here.
+/// A menu click can be delivered to both the app-menu handler and the tray handler. Ignoring the
+/// same action within a few hundred milliseconds keeps dialogs and file pickers from opening twice.
+static LAST_ACTION: Mutex<Option<(String, std::time::Instant)>> = Mutex::new(None);
+
 fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
+    if let Ok(mut last) = LAST_ACTION.lock() {
+        if let Some((previous, at)) = last.as_ref() {
+            if previous == id && at.elapsed() < std::time::Duration::from_millis(400) {
+                return;
+            }
+        }
+        *last = Some((id.to_string(), std::time::Instant::now()));
+    }
     match id {
         "open" => show_window(app),
         "connect" => {

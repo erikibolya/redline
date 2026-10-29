@@ -129,6 +129,8 @@ Your job:
 4. When done, send a short reply for the human in their language (tool `reply`, session `{id}`)
    and mark the review resolved (tool `resolve`). If you can produce a screenshot of the result,
    create a follow-up review with `capture_review` and put its review URL in the reply.
+   The reply and the resolve are the last two tool calls of every run; the bridge resolves the
+   review for you if you forget, but the human still needs your summary.
 
 Do not ask questions: nobody is watching. If something is ambiguous, pick the smallest sensible
 interpretation and say what you assumed in the reply."#,
@@ -216,7 +218,7 @@ fn handle(config: &AgentConfig, session: &Value) {
             let _ = mcp(
                 config,
                 "reply",
-                json!({ "session_id": id, "message": format!("Agent run failed:\n```\n{}\n```", tail(&output, 1200)) }),
+                json!({ "session_id": id, "message": format!("The agent run failed: {}", first_line(&output)) }),
             );
             return;
         }
@@ -231,19 +233,41 @@ fn handle(config: &AgentConfig, session: &Value) {
         }
     };
 
-    // The agent should have replied and resolved itself; if it forgot, say something useful.
+    // The agent should have replied and resolved itself. Keep the transcript in the server log;
+    // the human only ever sees a short note, never a wall of stdout.
+    let mut replied = false;
     if let Ok(value) = api_get(config, &format!("/api/sessions/{id}")) {
         if value["meta"]["status"] == "resolved" {
             eprintln!("redline-agent: {id} resolved by the agent");
             return;
         }
+        replied = value["meta"]["agent_state"] == "replied";
     }
-    let summary = tail(&outcome, 600);
+    eprintln!("redline-agent: {id} output tail: {}", tail(&outcome, 400));
+    if !replied {
+        let _ = mcp(
+            config,
+            "reply",
+            json!({ "session_id": id, "message": "The agent finished without a summary. Its changes are in the repository's working tree — check `git status` there." }),
+        );
+    }
     let _ = mcp(
         config,
-        "reply",
-        json!({ "session_id": id, "message": format!("The agent finished but did not resolve the review. Last output:\n\n{summary}") }),
+        "resolve",
+        json!({ "session_id": id, "summary": "Resolved by the agent bridge" }),
     );
+}
+
+fn first_line(text: &str) -> String {
+    let line = text
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("no output");
+    if line.len() <= 240 {
+        return line.to_string();
+    }
+    format!("{}…", &line[..240])
 }
 
 fn tail(text: &str, limit: usize) -> String {

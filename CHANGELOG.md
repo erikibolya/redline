@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.3 — 2026-10-29
+
+- **Conversation keeps your place.** The 5 s poll only re-renders when something changed and only
+  follows the tail when you are already at the bottom; scrolling up to read history no longer
+  yanks you back.
+- **No more stdout dumps in the conversation.** When the agent forgets to report, the bridge posts
+  one short note (changes are in the working tree) and resolves the review; the transcript stays
+  in the agent's server log. Failure messages are a single line, not a pasted stderr.
+- The bridge prompt now makes the closing `reply` + `resolve` explicit.
+
 ## 0.13.2 — 2026-10-29
 
 - **New review** — the drop zone shows a thumbnail of the attached image (dropped, chosen or

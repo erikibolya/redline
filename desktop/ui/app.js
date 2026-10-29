@@ -1799,8 +1799,14 @@ class Editor {
         <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
-    log.innerHTML = rendered + status.join("");
-    log.scrollTop = log.scrollHeight;
+    const html = rendered + status.join("");
+    // Only touch the DOM when something changed, and only follow the tail when the reader is
+    // already there — otherwise a 5 s poll yanks them back down mid-sentence.
+    if (log.innerHTML !== html) {
+      const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+      log.innerHTML = html;
+      if (atBottom) log.scrollTop = log.scrollHeight;
+    }
   }
 
   // ---------------------------------------------------------- agent view

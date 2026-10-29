@@ -390,7 +390,7 @@ services:
     build:
       context: /path/to/redline
       dockerfile: desktop/crates/redline-agent/Dockerfile
-    image: redline-agent:0.13.3
+    image: redline-agent:0.15.0
     container_name: redline-agent
     restart: unless-stopped
     networks: [traefik_network]
@@ -425,7 +425,7 @@ loop — the agent reconnects by service name on the next submission.
 
 `dev` is the integration branch. Stable releases still come from `v*` tags on `main`; every push
 to `dev` publishes a rolling prerelease under the moving **`dev`** tag
-(`.github/workflows/dev.yml`), versioned `0.15.0-dev.<run number>` (bump `DEV_BASE_VERSION` in the
+(`.github/workflows/dev.yml`), versioned `<next-minor>-dev.<run number>` (bump `DEV_BASE_VERSION` in the
 workflow when a new stable minor ships).
 
 The desktop app's menu (RedLine/Help and the tray):

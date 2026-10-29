@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.0 — 2026-10-29
+
+- **Dev update channel in the desktop app.** Help/tray gains *Install latest dev build…* (the
+  rolling `dev` prerelease) and *Revert to last stable version…* (the updater's comparator accepts
+  a downgrade, so a dev build can go back). Every push to `dev` publishes a dev build
+  (`.github/workflows/dev.yml`).
+- **History rows** are compact and bounded; the empty-state class no longer leaks into a populated
+  list.
+- The browser e2e waits for the canvas to actually swap after a round, not only for the metadata.
+
 ## 0.14.1 — 2026-10-29
 
 Fixes found by using rounds for real.

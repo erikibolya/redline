@@ -16,7 +16,7 @@ on:
 env:
   # Dev builds must sort *above* the current stable line, otherwise the updater refuses them.
   # Bump this when a new stable minor is released.
-  DEV_BASE_VERSION: "0.20.0"
+  DEV_BASE_VERSION: "0.21.0"
 
 jobs:
   windows:

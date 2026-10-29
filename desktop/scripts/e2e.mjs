@@ -115,6 +115,30 @@ const main = async () => {
   });
   const id = created.meta.id;
 
+  // The agent reports repos with portable keys; the UI and sessions use the resulting project.
+  const synced = await api("/api/agent/repos", {
+    method: "POST",
+    body: JSON.stringify({
+      agent_id: "e2e",
+      repos: [{ key: "e2e-repo", name: "E2E Repo" }],
+    }),
+  });
+  check("agent repo sync creates a project with a repo key",
+    synced.projects?.[0]?.repo === "e2e-repo" && synced.projects?.[0]?.agent === "e2e",
+    JSON.stringify(synced.projects?.[0] || {}));
+  const projects = await api("/api/projects");
+  const repoProject = projects.projects.find((project) => project.slug === "e2e-repo");
+  check("project list exposes the repo and agent",
+    repoProject?.repo === "e2e-repo" && repoProject?.agent === "e2e",
+    JSON.stringify(repoProject || {}));
+
+  const traversal = await fetch(`${BASE}/api/agent/repos`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify({ agent_id: "e2e", repos: [{ key: "../escape", name: "no" }] }),
+  });
+  check("agent repo sync rejects path traversal", traversal.status === 400, `status ${traversal.status}`);
+
   const browser = await puppeteer.connect({
     browserURL: CHROME,
     defaultViewport: { width: 1280, height: 820 },
@@ -158,6 +182,43 @@ const main = async () => {
   });
   check("pasted image is previewed as a thumbnail",
     preview && !preview.hidden && preview.blob && preview.w === 320, JSON.stringify(preview));
+
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
+  const picker = await page.evaluate(() => {
+    const select = document.querySelector("#f-project");
+    const group = (label) => [
+      ...(select?.querySelectorAll(`optgroup[label="${label}"] option`) || []),
+    ].map((option) => option.value);
+    return {
+      tag: select?.tagName,
+      values: [...(select?.options || [])].map((option) => option.value),
+      repos: group("Repositories"),
+      others: group("Other projects"),
+      placeholder: select?.value || "",
+      required: select?.required,
+      urlHint: document.querySelector("#url-hint")?.textContent.trim() || "",
+      capture: Boolean(document.querySelector("#f-capture")),
+    };
+  });
+  check("new review picks a repo project from a grouped select",
+    picker.tag === "SELECT" && picker.values.includes("e2e") && picker.values.includes("inbox")
+      && picker.values.includes("e2e-repo") && picker.repos.includes("e2e-repo")
+      && picker.others.includes("e2e") && picker.values.includes("__new__")
+      && picker.placeholder === "" && picker.required && !picker.capture,
+    JSON.stringify(picker));
+  check("the page URL field explains capture and metadata",
+    picker.urlHint.includes("captures it"), picker.urlHint);
+
+  await page.select("#f-project", "__new__");
+  const freshProject = await page.evaluate(() => ({
+    visible: !document.querySelector("#f-project-new").hidden,
+    focused: document.activeElement === document.querySelector("#f-project-new"),
+  }));
+  check("choosing a new project reveals its name field",
+    freshProject.visible && freshProject.focused, JSON.stringify(freshProject));
   await page.click("#new-cancel");
 
   await page.waitForSelector(".rail-project", { timeout: 5000 });
@@ -266,6 +327,10 @@ const main = async () => {
   check("screenshot was composited", saved.meta.status === "submitted");
   check("prompt travelled with the submission", saved.meta.prompt === "Make the button green and bump the contrast",
     String(saved.meta.prompt));
+  await page.waitForFunction(
+    () => (document.querySelector("#conv-log")?.textContent || "").includes("Make the button green"),
+    { timeout: 5000 },
+  );
   const conversation = await page.evaluate(() => document.querySelector("#conv-log")?.textContent || "");
   check("prompt appears in the conversation", conversation.includes("Make the button green"),
     conversation.slice(0, 80));
@@ -273,21 +338,30 @@ const main = async () => {
   check("submission says it is waiting for an agent", waiting.includes("Waiting for an agent"),
     waiting.slice(0, 60));
 
-  // ---- the status toast must not sit on the toolbar (the tools live there)
+  // ---- the status toast sits in the middle of the stage, clear of the toolbar
   const toastBox = await page.evaluate(() => {
     const toast = document.querySelector("#stage-status");
     const bar = document.querySelector(".options");
-    if (!toast || toast.hidden || !bar) return null;
+    const stage = document.querySelector("#stage");
+    if (!toast || toast.hidden || !bar || !stage) return null;
     const a = toast.getBoundingClientRect();
     const b = bar.getBoundingClientRect();
+    const s = stage.getBoundingClientRect();
     return {
       overlap: a.top < b.bottom && a.bottom > b.top && a.left < b.right && a.right > b.left,
+      offCentre: Math.abs((a.left + a.right) / 2 - (s.left + s.right) / 2),
+      offMiddle: Math.abs((a.top + a.bottom) / 2 - (s.top + s.bottom) / 2),
       toastTop: Math.round(a.top),
       barBottom: Math.round(b.bottom),
     };
   });
   check("status toast sits below the toolbar", toastBox && !toastBox.overlap,
     toastBox ? `toast top ${toastBox.toastTop} · toolbar bottom ${toastBox.barBottom}` : "no toast");
+  check("status toast is centred in the stage where the old lock modal was",
+    toastBox && toastBox.offCentre <= 2 && toastBox.offMiddle <= 2,
+    toastBox ? `off centre ${Math.round(toastBox.offCentre)} · off middle ${Math.round(toastBox.offMiddle)}` : "no toast");
+  const noModal = await page.evaluate(() => !document.querySelector("#review-lock"));
+  check("the submitted lock is a status pill, not a dimming modal", noModal);
 
   // ---- a fresh load of a submitted session must not die before the event poll lands
   await page.reload({ waitUntil: "networkidle0" });
@@ -319,6 +393,28 @@ const main = async () => {
   await page.emulateTimezone(null);
   const composerEmpty = await page.$eval("#composer-text", (el) => el.value === "");
   check("composer clears after submit", composerEmpty);
+
+  // ---- the conversation carries a live run summary, like the agent's own chat ("Working —
+  // used 2 tools: Edit and Shell"), so the human sees the agent's work as it happens.
+  for (const [message, tool] of [["Reading the annotations", "edit"], ["Running the e2e", "shell"]]) {
+    await api("/mcp", {
+      method: "POST",
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 7, method: "tools/call",
+        params: { name: "progress", arguments: { session_id: id, message, state: "tool", tool } },
+      }),
+    });
+  }
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const runCard = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return card ? { text: card.textContent, working: card.classList.contains("working") } : null;
+  });
+  check("conversation summarises the running agent",
+    runCard?.working && runCard.text.includes("Working")
+      && runCard.text.includes("Used 2 tools: Edit and Shell"),
+    runCard ? runCard.text : "no run summary");
+
   // Those checks need the submitted state; now unlock and keep drawing.
   await stopReview();
 
@@ -590,8 +686,10 @@ const main = async () => {
   await new Promise((resolve) => setTimeout(resolve, 1700));
   const locked = await page.evaluate(() => {
     const button = document.querySelector("#submit");
+    const status = document.querySelector("#stage-status");
     return {
-      overlay: !document.querySelector("#review-lock").hidden,
+      status: status && !status.hidden ? status.textContent.trim() : "",
+      locked: Boolean(window.redline.locked),
       stop: button.textContent.trim(),
       red: getComputedStyle(button).backgroundColor,
       square: Boolean(button.querySelector(".stop-square")),
@@ -599,7 +697,7 @@ const main = async () => {
     };
   });
   check("submitting locks the canvas and turns Submit into a red STOP with a square",
-    locked.overlay && locked.stop === "STOP" && locked.composer
+    locked.status.length > 0 && locked.locked && locked.stop === "STOP" && locked.composer
       && locked.red === "rgb(220, 38, 38)" && locked.square,
     JSON.stringify(locked));
 
@@ -611,12 +709,12 @@ const main = async () => {
   await page.click("#submit");
   await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
   const unlocked = await page.evaluate(() => ({
-    overlay: !document.querySelector("#review-lock").hidden,
+    locked: Boolean(window.redline.locked),
     label: document.querySelector("#submit").textContent.trim(),
     annotations: window.redline.annotations.length,
   }));
   check("STOP unlocks the canvas and keeps the annotations",
-    !unlocked.overlay && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
+    !unlocked.locked && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
     JSON.stringify(unlocked));
 
   // ---- touch mode: bigger tools, row actions not hover-only
@@ -701,6 +799,45 @@ const main = async () => {
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
   check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
+
+  await page.click("#new-review");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
+  const listProject = await page.evaluate(() => ({
+    select: document.querySelector("#f-project")?.tagName,
+    options: [...document.querySelectorAll("#f-project option")].map((option) => option.value),
+  }));
+  check("start page new review has the same project select",
+    listProject.select === "SELECT" && listProject.options.includes("e2e")
+      && listProject.options.includes("e2e-repo"), JSON.stringify(listProject));
+
+  // Create through the picker: the project chosen in the select must be the one stored.
+  await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 120;
+    canvas.height = 80;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#16a34a";
+    ctx.fillRect(0, 0, 120, 80);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], "picked.png", { type: "image/png" }));
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: data });
+    window.dispatchEvent(event);
+  });
+  await page.waitForFunction(() => !document.querySelector("#drop-preview").hidden, { timeout: 5000 });
+  await page.$eval("#f-title", (el) => { el.value = "from the project picker"; });
+  await page.select("#f-project", "e2e-repo");
+  await page.click("#new-submit");
+  await page.waitForFunction(() => location.pathname.startsWith("/s/"), { timeout: 15000 });
+  const pickedId = new URL(page.url()).pathname.split("/").pop();
+  const picked = await api(`/api/sessions/${pickedId}`);
+  check("creating from the start page files the review in the picked repo project",
+    picked.meta.project === "e2e-repo" && picked.meta.title === "from the project picker",
+    `${picked.meta.project} · ${picked.meta.title}`);
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

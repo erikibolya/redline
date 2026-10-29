@@ -159,8 +159,8 @@ start). The container is preferred only because updates are a `docker pull`; the
 
 Tray → **Connect to a server…**, paste the address and token, **Save and connect**. The app probes
 the server with those credentials before saving anything, so a wrong token is an error message
-instead of a broken next launch. The tray then reads *Server: http://holly:8788*; **Use this
-computer instead** switches back to standalone.
+instead of a broken next launch. The tray then reads *Configured: http://holly:8788*; **Use this computer** in the wizard
+switches back to standalone.
 
 The wizard writes the same `%LOCALAPPDATA%\redline\config.json` (`remote_url`, `token`) for
 scripted setups; `REDLINE_REMOTE_URL` / `REDLINE_TOKEN` still override it. The local server keeps
@@ -390,7 +390,7 @@ services:
     build:
       context: /path/to/redline
       dockerfile: desktop/crates/redline-agent/Dockerfile
-    image: redline-agent:0.15.0
+    image: redline-agent:0.19.0
     container_name: redline-agent
     restart: unless-stopped
     networks: [traefik_network]
@@ -399,7 +399,10 @@ services:
     env_file: /path/to/opencode/.env   # OPENCODE_PASSWORD
     environment:
       REDLINE_URL: http://redline:8788
-      REDLINE_AGENT_REPO: /repos/app
+      REDLINE_AGENT_REPO: /repos/app                 # fallback for legacy projects
+      REDLINE_AGENT_REPO_ROOT: /repos                # keys resolve here
+      REDLINE_AGENT_OPENCODE_ROOT: /srv/repos        # the same dir as OpenCode sees it
+      REDLINE_AGENT_ID: holly
       REDLINE_AGENT_OPENCODE_SERVER: http://opencode:4096
       REDLINE_AGENT_MODEL: deepseek/deepseek-flash
     volumes:
@@ -413,9 +416,15 @@ Three things that bite:
 - **Auth.** A shared OpenCode server with `OPENCODE_PASSWORD` refuses `opencode run --server`
   without that variable; give the agent the same environment.
 - **Paths.** `opencode run` sends its working directory to the server, so `REDLINE_AGENT_REPO`
-  must exist *inside the OpenCode container*, not just in the agent.
+  must exist *inside the OpenCode container*, not just in the agent. The repo sync stores **keys
+  relative to `REDLINE_AGENT_REPO_ROOT`**; `REDLINE_AGENT_OPENCODE_ROOT` is the prefix OpenCode
+  uses for the same directory, so both mounts collapse to `redline`, `ActiUnit/Au.Net`, ….
 - **Two owners.** Once compose owns the `redline` container name, do not run
   `install-unraid.sh` again; update with `docker compose pull && docker compose up -d`.
+
+The agent refreshes the repo list every `REDLINE_AGENT_SYNC` seconds (default 60) and at startup.
+It never deletes a project with reviews; a repo that disappears becomes an error in the review
+instead of silently running somewhere else.
 
 The agent container only needs the network, the token and the OpenCode CLI; the OpenCode server
 does the actual editing. Because it is a separate service, updating OpenCode no longer stops the

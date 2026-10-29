@@ -58,6 +58,11 @@ published git history.
 - `opencode_server` — set to e.g. `http://127.0.0.1:4096` to dispatch into the OpenCode that is
   already running instead of starting a private one.
 
+The local agent treats the **parent of the chosen repository** as its repo root, scans it for git
+repos and syncs them to RedLine as projects. Choosing `C:\src\app` therefore offers
+`app`, sibling repos and nested repos in the New review select. Reviews in a repo project run with
+that project's path; legacy label-only projects use the chosen repository.
+
 ## Headless (server-side)
 
 Download `redline-agent` from Releases or run the container:
@@ -66,6 +71,8 @@ Download `redline-agent` from Releases or run the container:
 REDLINE_URL=https://redline.example \
 REDLINE_TOKEN=… \
 REDLINE_AGENT_REPO=/repos/app \
+REDLINE_AGENT_REPO_ROOT=/repos \
+REDLINE_AGENT_ID=holly \
 redline-agent
 ```
 
@@ -88,3 +95,5 @@ The token can also be mounted at `/data/token` instead of passed in the environm
 - It does not sandbox the agent. The container/mounts decide what the agent can touch — that is the
   operator's choice, not a RedLine setting.
 - It does not push over MCP; `redline-agent` and `REDLINE_WEBHOOK_URL` are the push mechanisms.
+- It does not route reviews between multiple agents yet. Run one agent per RedLine server; the
+  `agent_id` and repo keys are stored so a router can be added without migrating projects.

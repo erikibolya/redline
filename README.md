@@ -75,7 +75,7 @@ Tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback
 
 | | |
 |---|---|
-| **Projects** | the rail groups reviews by project; the agent passes `project` and it is created on first use |
+| **Projects = repositories** | the agent syncs the git repos it can see; the rail groups reviews by repo and the agent runs each review in that project's repo |
 | **Rounds** | every submit is archived with its source screenshot and annotations; the canvas switches between rounds |
 | **Notes, not text on the canvas** | numbers tie a shape on the canvas to a paragraph in the panel, `annotated.png` and `review.md` |
 | **Conversation** | request, prompt, agent activity (`progress`), replies and state (`received`/`working`/`replied`), polled every 5 s |
@@ -93,7 +93,11 @@ Tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback
 | `REDLINE_TOKEN` | generated in `/data/token` | access token |
 | `REDLINE_CHROME` | auto-detected | Chromium binary for capture |
 | `REDLINE_WEBHOOK_URL` | — | POSTed on every submission, to wake an agent |
-| `REDLINE_AGENT_REPO` | current dir | repository the agent bridge works in |
+| `REDLINE_AGENT_REPO` | current dir | default repo for legacy projects without a repo binding |
+| `REDLINE_AGENT_REPO_ROOT` | parent of `REDLINE_AGENT_REPO` | root that project repo keys are resolved against |
+| `REDLINE_AGENT_OPENCODE_ROOT` | same as repo root | path prefix the OpenCode server uses for the same repos |
+| `REDLINE_AGENT_ID` | `default` | agent name sent with the repo sync |
+| `REDLINE_AGENT_SYNC` | `60` | seconds between repo-list refreshes |
 | `REDLINE_AGENT_MODEL` | `deepseek/deepseek-flash` | OpenCode model for the bridge |
 | `REDLINE_AGENT_OPENCODE_SERVER` | — | dispatch into an already running OpenCode |
 
@@ -113,7 +117,7 @@ Unattended agent: `redline-agent` (see [`docs/LOCAL-AGENT.md`](docs/LOCAL-AGENT.
 docker run --rm -v "$PWD":/src -w /src/desktop rust:1-bookworm \
   sh -c 'rustup component add rustfmt; cargo fmt --all; cargo test --workspace'
 
-# Browser end-to-end (56 checks, real Chromium)
+# Browser end-to-end (72 checks, real Chromium)
 docker build -q -f desktop/Dockerfile.browser -t redline:local .
 REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh
 ```

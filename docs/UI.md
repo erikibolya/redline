@@ -132,8 +132,10 @@ and converts them).
 
 ## Submitted lock and STOP (v0.17)
 
-- While `status == submitted` a dark overlay covers the canvas (`#review-lock`): pointer events are
-  swallowed, tools and the note field are disabled, and the composer textarea is disabled.
+- While `status == submitted` the canvas is locked for editing: the annotation guards refuse edits,
+  tools and the note field are disabled, and the composer textarea is disabled. There is **no
+  dimming modal** — a single status pill in the middle of the stage says *"Agent is working — …"*
+  (or *"Waiting for the agent…"*), so the screenshot stays visible.
 - The composer's primary button becomes a red **STOP**; it asks *"Stop the agent and edit this
   review?"* and calls `POST /api/sessions/<id>/cancel`. The canvas unlocks with the annotations
   intact and the button returns to *Submit review*.
@@ -201,14 +203,20 @@ new one.
 The rail lists projects (conversation areas), not a flat stream of requests.
 
 - A project is a folder: `sessions/projects/<slug>/project.json` plus its sessions one level
-  deeper. `POST /api/projects` creates one; agents get it implicitly with `project` on
-  `review_screenshot` / `capture_review`.
+  deeper. It can carry a `repo` key relative to the agent's repo root; that is what makes the
+  agent run the review in the right repository.
+- The agent syncs git repositories it discovers (`GET /api/project` from OpenCode, plus a scan of
+  its repo root) through `POST /api/agent/repos`. Repo keys are portable (`redline`,
+  `ActiUnit/Au.Net`), never absolute paths.
 - Sessions created without a project live flat and are shown as **Inbox** — there is no migration,
-  the label is added on read.
+  the label is added on read. **Inbox** and legacy label-only projects still work; the agent uses
+  its default `REDLINE_AGENT_REPO` for them.
 - Each project header shows its name, the number of waiting submissions (green) and the total.
   Click to collapse; the state persists per browser.
 - Filters and search still apply inside every project; day separators appear only in long lists.
-- The New review dialog has a project field with autocomplete from `GET /api/projects`.
+- The New review dialog picks the project from a **select** grouped into **Repositories** and
+  **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
+  a name field and creates a label without a repo (the agent falls back to its default repo).
 
 ## Conversation and composer (v0.9)
 
@@ -222,6 +230,12 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
 - **Agent state** pill in the header: `received` (the agent read the submission), `working` (it is
   doing something, with the latest activity line beside the conversation title) and `replied`.
   `seen_by_agent_at` records the first read.
+- **Run summary** at the tail of the conversation (v0.19): a card that reads **Working** with a
+  pulsing dot while `agent_state` is `working`, and **Used N tools: Edit and Shell** — the distinct
+  `tool` names the agent reported through `progress`, counted for the current round only. When the
+  agent answers it settles to **Run finished**; a round with no activity shows no card. This is the
+  interactive-run view an agent's own terminal chat shows, so the human does not have to read the
+  step lines to know whether anything is still happening.
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.
@@ -258,8 +272,9 @@ it makes the canvas feel instrumented.
 
 ## Capture from the UI (v0.4)
 
-*New review* takes a URL as well as a file: the server screenshots it (`POST /api/capture`, the
-same engine as the `capture_review` MCP tool) and opens the session. Requires the `:browser` image
+*New review* takes a URL as well as a file. **Page URL** is metadata for an uploaded screenshot;
+with no image attached the server screenshots that URL (`POST /api/capture`, the same engine as the
+`capture_review` MCP tool) and opens the session. Requires the `:browser` image
 or `REDLINE_CHROME`; otherwise the dialog shows the actionable error.
 
 ## Submission history (v0.4)

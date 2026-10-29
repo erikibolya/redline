@@ -17,6 +17,13 @@ const uid = () =>
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+/** "edit, shell and run" → "Edit, Shell and Run", the way a person lists tools. */
+function listNames(names) {
+  const titled = names.map((name) => name.charAt(0).toUpperCase() + name.slice(1));
+  if (titled.length <= 1) return titled.join("");
+  return `${titled.slice(0, -1).join(", ")} and ${titled[titled.length - 1]}`;
+}
+
 function relativeTime(iso) {
   if (!iso) return "";
   const then = new Date(iso).getTime();
@@ -1894,8 +1901,10 @@ class Editor {
 
   updateLock() {
     this.locked = this.meta?.status === "submitted" && !this.viewing;
-    const overlay = $("#review-lock");
-    if (overlay) overlay.hidden = !this.locked;
+    // No modal overlay: the stage status pill is the visible signal (tools stay usable for
+    // viewing/panning, the annotation guards refuse edits while `locked`).
+    const status = $("#stage-status");
+    if (status) status.title = this.locked ? "STOP unlocks the canvas for another round." : "";
   }
 
   updateViewingBar() {
@@ -1967,6 +1976,44 @@ class Editor {
     }
   }
 
+  /// The step lines say *what* the agent did; this says *how much* and *whether it is still
+  /// going* — the question a human asks while staring at a submitted review. Modelled on the
+  /// run summary an interactive agent shows in its own chat ("Used 12 tools: Edit, Shell and Run").
+  runSummary() {
+    const events = this.events || [];
+    // Only this round: an earlier round's steps would inflate the count. A round starts at the
+    // submission, or — once the agent has posted the next screenshot — at that post.
+    const start = this.meta?.submitted_at
+      || (this.thread || []).filter((message) => message.image).map((message) => message.at).pop()
+      || "";
+    const round = start ? events.filter((event) => String(event.at || "") >= String(start)) : events;
+    if (!round.length) return "";
+
+    const toolEvents = round.filter((event) => event.state === "tool");
+    // Older agents narrate without `state`; counting their lines is closer than showing nothing.
+    const steps = toolEvents.length || round.length;
+    const tools = [];
+    for (const event of toolEvents.concat(toolEvents.length ? [] : round)) {
+      const name = String(event.tool || "").trim();
+      if (name && !tools.includes(name)) tools.push(name);
+    }
+    const used = tools.length
+      ? `Used ${plural(steps, "tool")}: ${escapeHtml(listNames(tools))}`
+      : `Used ${plural(steps, "tool")}`;
+    const last = round[round.length - 1];
+    const working = this.meta?.agent_state === "working";
+    // Once the agent answers, the reply above is the signal; the card keeps the tally.
+    const title = working
+      ? "Working"
+      : this.meta?.agent_state === "replied"
+        ? "Run finished"
+        : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
+    return `<div class="conv-run${working ? " working" : ""}">`
+      + `<span class="conv-run-mark" aria-hidden="true"></span><div>`
+      + `<div class="conv-run-title">${title}</div>`
+      + `<div class="conv-run-sub">${used}</div></div></div>`;
+  }
+
   renderConversation() {
     const log = $("#conv-log");
     if (!log) return;
@@ -2022,7 +2069,7 @@ class Editor {
         <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
-    const html = rendered + status.join("");
+    const html = rendered + status.join("") + this.runSummary();
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     this.convCount = items.length + status.length;
     // Only touch the DOM when something changed, and only follow the tail when the reader is
@@ -2166,6 +2213,9 @@ class Editor {
       if (composer) composer.value = "";
       this.renderHeader();
       this.renderInspector();
+      // The server stamped `prompt` and `submitted_at`; show them now instead of waiting for the
+      // 5 s conversation poll (otherwise a submit briefly reads "No messages yet").
+      this.renderConversation();
       if ($("#history-block")?.open) this.loadHistory();
       await this.loadConversation({ quiet: true });
       this.seenConversation();
@@ -2229,18 +2279,68 @@ const NewReview = {
     overlay.hidden = false;
     const error = $("#new-error");
     if (error) error.textContent = "";
+    const fresh = $("#f-project-new");
+    if (fresh) { fresh.value = ""; fresh.hidden = true; }
+    const project = $("#f-project");
+    if (project?.value === "__new__") project.value = "";
     this.fillProjects();
     $("#f-title").focus();
   },
+  /// Repositories come from the agent sync; older label-only projects stay selectable while they
+  /// still have reviews, but empty leftovers are not offered.
   async fillProjects() {
-    const list = $("#project-names");
-    if (!list) return;
+    const select = $("#f-project");
+    if (!select) return;
+    const previous = select.value;
     try {
       const { projects } = await api("/api/projects");
-      list.innerHTML = (projects || [])
-        .map((project) => `<option value="${escapeHtml(project.name)}"></option>`)
-        .join("");
-    } catch { /* signed out */ }
+      const items = projects || [];
+      const repos = items.filter((project) => project.repo);
+      const others = items.filter(
+        (project) => !project.repo && (project.sessions > 0 || project.slug === "inbox"),
+      );
+      if (!repos.length && !others.length) {
+        others.push({ slug: "inbox", name: "Inbox", sessions: 0 });
+      }
+      const options = ['<option value="" disabled>Choose a project…</option>'];
+      if (repos.length) {
+        options.push('<optgroup label="Repositories">');
+        for (const project of repos) {
+          const label = project.repo && project.repo !== project.name
+            ? `${project.name} — ${project.repo}`
+            : project.name;
+          options.push(`<option value="${escapeHtml(project.slug)}">${escapeHtml(label)}</option>`);
+        }
+        options.push("</optgroup>");
+      }
+      if (others.length) {
+        options.push('<optgroup label="Other projects">');
+        for (const project of others) {
+          options.push(`<option value="${escapeHtml(project.slug)}">${escapeHtml(project.name)}</option>`);
+        }
+        options.push("</optgroup>");
+      }
+      options.push('<option value="__new__">+ New project…</option>');
+      select.innerHTML = options.join("");
+      select.value = [...select.options].some((option) => option.value === previous)
+        ? previous
+        : "";
+      this.syncProjectInput();
+    } catch { /* signed out; keep the placeholder and Inbox fallback */ }
+  },
+  syncProjectInput() {
+    const select = $("#f-project");
+    const input = $("#f-project-new");
+    if (!select || !input) return;
+    const creating = select.value === "__new__";
+    input.hidden = !creating;
+    if (creating) input.focus();
+  },
+  selectedProject() {
+    const select = $("#f-project");
+    if (!select) return "";
+    if (select.value === "__new__") return ($("#f-project-new")?.value || "").trim();
+    return select.value.trim();
   },
   close() { const overlay = $("#overlay"); if (overlay) overlay.hidden = true; },
   wire() {
@@ -2298,28 +2398,34 @@ const NewReview = {
       take(event.dataTransfer.files[0]);
     });
     $("#new-cancel").addEventListener("click", () => NewReview.close());
+    $("#f-project")?.addEventListener("change", () => NewReview.syncProjectInput());
     $("#new-form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const captureUrl = ($("#f-capture")?.value || "").trim();
-      if (!picked && !captureUrl) {
-        $("#new-error").textContent = "Choose a screenshot, or give a URL to capture.";
+      const pageUrl = ($("#f-url")?.value || "").trim();
+      if (!picked && !pageUrl) {
+        $("#new-error").textContent = "Add a screenshot, or paste a page URL to capture.";
+        return;
+      }
+      const project = NewReview.selectedProject();
+      if (!project) {
+        $("#new-error").textContent = "Choose a project, or name the new one.";
         return;
       }
       const submit = $("#new-submit");
       submit.disabled = true;
-      if (captureUrl) {
+      if (!picked) {
         $("#new-error").textContent = "Capturing… (a few seconds)";
         try {
           const body = await api("/api/capture", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              url: captureUrl,
-              title: $("#f-title").value.trim() || captureUrl,
+              url: pageUrl,
+              title: $("#f-title").value.trim() || pageUrl,
               note: $("#f-note").value.trim(),
               viewport: "1440x900",
               agent: "human",
-              project: $("#f-project")?.value.trim() || undefined,
+              project: project || undefined,
             }),
           });
           location.href = `/s/${encodeURIComponent(body.meta.id)}`;
@@ -2342,11 +2448,11 @@ const NewReview = {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             title: $("#f-title").value.trim() || picked.name,
-            url: $("#f-url").value.trim(),
+            url: pageUrl,
             note: $("#f-note").value.trim(),
             image_base64: dataUrl,
             agent: "human",
-            project: $("#f-project")?.value.trim() || undefined,
+            project: project || undefined,
           }),
         });
         location.href = `/s/${encodeURIComponent(body.meta.id)}`;

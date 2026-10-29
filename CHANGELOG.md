@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.19.0 — 2026-10-29
+
+- **Projects are repositories now.** The agent discovers git repos from OpenCode
+  (`/api/project`) and by scanning its repo root, then syncs them to `POST /api/agent/repos`.
+  Projects store a **portable relative key** (`redline`, `ActiUnit/Au.Net`) and an agent id, never
+  an absolute mount path. The New review select is grouped into **Repositories** and **Other
+  projects**, requires a choice, and hides empty legacy leftovers. `+ New project…` still creates a
+  label without a repo.
+- **Reviews run in their project's repo.** Before each run the agent resolves the project key
+  under `REDLINE_AGENT_REPO_ROOT`, canonicalizes it and refuses a missing or escaping path instead
+  of silently using the default repo. Legacy projects without a key keep using
+  `REDLINE_AGENT_REPO`; error reviews get a reply and are resolved so they do not spin.
+- **New review picks a project from the server's list.** The free-text project field (and its
+  datalist, which only the editor had) is now a `<select>` fed by `GET /api/projects` on both the
+  editor and the start page, so projects created by agents are selectable without typing.
+  **+ New project…** reveals a name field; the project is created on first use.
+- **One URL field, explained.** "Page URL" and "Or screenshot a URL" were two boxes doing almost
+  the same thing. There is now one *Page URL*: metadata for an uploaded screenshot, or — when no
+  image is attached — the page the server captures. "What should be checked?" is now "What should
+  the agent check?" with a hint that the note becomes the first message.
+- **The conversation shows the agent's run at a glance.** A card under the step lines reads
+  **Working** with a pulsing dot while `agent_state` is `working` and tallies the round:
+  **Used 4 tools: Edit and Shell**, from the `tool` names sent with `progress`. It settles to
+  **Run finished** when the agent replies, counts only the current round, and stays out of the way
+  when nobody has reported anything. The browser e2e covers it.
+- **The window follows the configured server.** The tray said *Server: …* from `config.json`
+  while the window could still be sitting on the local (or an old) server, so reviews were saved
+  somewhere the agent never watches. The label now reads **Configured**, *Open RedLine* navigates
+  the window to that server, and focusing a window left on another origin puts it back — except
+  the setup page, which is served locally on purpose.
+- **The submitted lock is a status pill, not a modal.** While a review was `submitted` a dark
+  scrim plus a centred "Submitted — waiting for the agent / STOP unlocks the canvas" box covered
+  the screenshot — while the same agent state already floated above the toolbar. The modal is
+  gone (`#review-lock` and `.lock-box` removed); the stage status pill is centred where the box
+  was, keeps the message short ("Agent is working — …" / "Waiting for the agent…"), carries the
+  STOP hint as a tooltip and lets the screenshot show through. The `locked` guards in `app.js` are
+  untouched, so editing stays blocked.
+
 ## 0.18.0 — 2026-10-29
 
 - **Menu actions no longer run twice.** Tray items use their own `tray:` ids and the dispatcher
@@ -61,23 +99,6 @@ Fixes found by using rounds for real.
 - **Rounds keep running.** The bridge keys its "already handled" set by submission, not by session,
   so the same review can be submitted again after a new round.
 - `post_round` clears `resolved_at` when it reopens a session.
-
-## Unreleased
-
-- **History rows are compact and bounded.** Each round was rendered as a full annotation card
-  inside the empty-state wrapper, whose 22 px padding and centred text left most of the section
-  white. The list is now a stack of small bordered rows (stamp + count, ghost / diff / screenshot
-  buttons) and drops the empty-state class once it has content.
-- **The canvas status pill moved below the toolbar.** It sat at `top: 14px`, the exact place the
-  tool bar floats, so while a review was `submitted` the "Agent is working…" pill covered the
-  tools. `--stage-toolbar-top` / `--stage-toolbar-height` now describe the bar once and the pill
-  is placed under it; the e2e checks the two rectangles do not intersect.
-- **A submitted review opens again.** `renderHeader()` read `this.events.length` while
-  `this.events` was still `undefined` (the conversation poll had not answered yet), so a fresh
-  load of a submitted session threw and the canvas said "Could not load this session". The lists
-  start empty in the constructor; the e2e reloads the page while submitted to keep it that way.
-- **Header icon buttons are square.** `.btn.icon` is a fixed 32 × 32 px box, so `?`, `☀` / `☾`,
-  `☰` and `⌥` no longer produce buttons of different widths that read as squashed rectangles.
 
 ## 0.14.0 — 2026-10-29
 
@@ -237,8 +258,3 @@ https://github.com/erikibolya/redline under the MIT license.
 - Unit tests for session creation, submission output and ID validation.
 - Documentation: README, AGENTS.md, PLAN.md, architecture/API/workflow docs.
 - MIT license.
-
-## Unreleased
-
-See `PLAN.md` M2–M5: zoom/pan, editable annotations, session auto-refresh, screenshot capture,
-atomic writes, packaging, auth.

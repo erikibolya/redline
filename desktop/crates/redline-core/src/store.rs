@@ -351,6 +351,66 @@ impl Store {
             slug: slug.clone(),
             name: name.to_string(),
             agent: None,
+            repo: None,
+            created_at: now(),
+        };
+        write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
+        Ok(project)
+    }
+
+    /// Bind a repository discovered by an agent to a project. Repo keys are global, so a second
+    /// agent reporting the same key updates the record instead of creating a duplicate project.
+    /// The slug is derived once from the key and never changes.
+    pub fn sync_repo_project(
+        &self,
+        agent: &str,
+        repo: &str,
+        name: &str,
+    ) -> Result<crate::model::Project> {
+        let name = name.trim();
+        let name = if name.is_empty() {
+            repo.rsplit('/').next().unwrap_or(repo)
+        } else {
+            name
+        };
+        if let Some(mut project) = self
+            .projects()?
+            .into_iter()
+            .find(|project| project.repo.as_deref() == Some(repo))
+        {
+            let mut changed = false;
+            if project.name != name {
+                project.name = name.to_string();
+                changed = true;
+            }
+            if project.agent.as_deref() != Some(agent) {
+                project.agent = Some(agent.to_string());
+                changed = true;
+            }
+            if changed {
+                let path = self
+                    .projects_root()
+                    .join(&project.slug)
+                    .join("project.json");
+                write_json(&path, &serde_json::to_value(&project)?)?;
+            }
+            return Ok(project);
+        }
+
+        let base = slugify(repo);
+        let mut slug = base.clone();
+        let mut suffix = 2;
+        while self.project(&slug)?.is_some() {
+            slug = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        let dir = self.projects_root().join(&slug);
+        fs::create_dir_all(&dir)?;
+        let project = crate::model::Project {
+            slug: slug.clone(),
+            name: name.to_string(),
+            agent: Some(agent.to_string()),
+            repo: Some(repo.to_string()),
             created_at: now(),
         };
         write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
@@ -377,6 +437,7 @@ impl Store {
                 slug: INBOX.to_string(),
                 name: "Inbox".to_string(),
                 agent: None,
+                repo: None,
                 created_at: String::new(),
             });
         }

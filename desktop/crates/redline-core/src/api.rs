@@ -92,6 +92,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/reopen", post(reopen))
         .route("/api/sessions/{id}/history", get(history))
         .route("/api/sessions/{id}/thread", get(agent_thread))
+        .route("/api/sessions/{id}/events", get(agent_events))
         .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
         .route("/sessions/{id}/history/{file}", get(history_file))
         .route("/api/capture", post(capture_session))
@@ -512,6 +513,20 @@ async fn agent_thread(
         }
     }
     Ok(Json(json!({ "messages": messages })))
+}
+
+/// What the agent said it is doing (`progress` → `agent-events.jsonl`). Newest last.
+async fn agent_events(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    state.store.require(&id)?;
+    let mut events = state.store.agent_events(&id)?;
+    let total = events.len();
+    if events.len() > 100 {
+        events.drain(..total - 100);
+    }
+    Ok(Json(json!({ "events": events })))
 }
 
 #[derive(Debug, serde::Deserialize)]

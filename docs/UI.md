@@ -98,6 +98,22 @@ string, and the note is the *only* place the human writes prose.
 - `annotations.json` carries `note` per shape (free-form map, additive), and `review.md` appends
   `— “note”` to the numbered region line.
 
+## Conversation and composer (v0.9)
+
+The inspector's lower half is the conversation, so the tool stops feeling like a queue of requests.
+
+- **Composer** at the bottom: a prompt ("What should change?") plus **Submit review**. The
+  top-right Submit button is gone; `Ctrl+Enter` still sends. The prompt is stored as
+  `meta.prompt` and appears in the timeline as a "you" bubble.
+- **Timeline**: the agent's request (grey), your prompt (blue), activity events (small lines with
+  a dot and a time) and agent replies (green), merged and sorted by timestamp.
+- **Agent state** pill in the header: `received` (the agent read the submission), `working` (it is
+  doing something, with the latest activity line beside the conversation title) and `replied`.
+  `seen_by_agent_at` records the first read.
+- Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
+- `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
+  (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.
+
 ## Status bar
 
 Zoom level, image dimensions, live cursor position in image pixels, session id. Cheap to add and

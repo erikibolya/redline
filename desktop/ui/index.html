@@ -23,11 +23,11 @@ try {
     </div>
     <div class="header-actions">
       <span class="pill" id="session-status">open</span>
+      <span class="pill agent" id="agent-state" hidden>working</span>
       <button class="btn icon" data-help-open title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button class="btn icon" data-theme-toggle title="Toggle theme">☀</button>
       <button class="btn icon" id="toggle-rail" title="Toggle sessions ( [ )" aria-label="Toggle sessions">☰</button>
       <button class="btn icon" id="toggle-inspector" title="Toggle inspector ( ] )" aria-label="Toggle inspector">⌥</button>
-      <button class="btn primary" id="submit">Submit review</button>
     </div>
   </header>
 
@@ -109,19 +109,21 @@ try {
 
     <div class="inspector-body" id="ann-list"></div>
 
-    <details class="disclosure" id="agent-block">
-      <summary>Message to agent</summary>
-      <div class="content">
-        <p id="agent-note"></p>
-        <p class="muted" id="agent-url"></p>
-        <p style="color:var(--muted)">Your annotations and the annotated screenshot are sent when you hit <b>Submit review</b>.</p>
+    <section class="conversation" id="conversation">
+      <div class="conv-head">
+        <span>Conversation</span>
+        <span class="conv-activity" id="conv-activity"></span>
       </div>
-    </details>
-
-    <details class="disclosure" id="agent-thread-block">
-      <summary>Agent replies <span class="count" id="thread-count">0</span></summary>
-      <div class="content"><div id="agent-thread" class="inspector-empty">No replies yet.</div></div>
-    </details>
+      <div class="conv-log" id="conv-log"></div>
+      <div class="composer">
+        <textarea id="composer-text" rows="2"
+                  placeholder="What should change? Sent with the annotations…"></textarea>
+        <div class="composer-row">
+          <span class="composer-hint">Ctrl + Enter</span>
+          <button class="btn primary" id="submit">Submit review</button>
+        </div>
+      </div>
+    </section>
 
     <details class="disclosure" id="history-block">
       <summary>History <span class="count" id="history-count">0</span></summary>

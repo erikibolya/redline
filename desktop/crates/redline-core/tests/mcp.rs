@@ -137,6 +137,7 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
         .submit(
             &id,
             &Submission {
+                note: None,
                 annotations: vec![redline_core::model::Annotation {
                     kind: "text".into(),
                     fields: serde_json::from_value(

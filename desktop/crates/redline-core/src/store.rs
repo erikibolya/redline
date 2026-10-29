@@ -110,6 +110,9 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
     if !meta.note.is_empty() {
         lines.push(format!("- Request: {}", meta.note));
     }
+    if let Some(prompt) = meta.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
+        lines.push(format!("- Prompt: {}", prompt));
+    }
     lines.push(format!("- Status: {}", meta.status.as_str()));
     lines.push(format!(
         "- Submitted: {}",
@@ -318,6 +321,49 @@ impl Store {
             }))
     }
 
+    /// Record what the agent is doing. `state` is `received`, `working` or `replied`; `seen`
+    /// also stamps the first time the agent read this submission.
+    pub fn set_agent_state(&self, id: &str, state: &str, seen: bool) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        meta.agent_state = Some(state.to_string());
+        if seen && meta.seen_by_agent_at.is_none() {
+            meta.seen_by_agent_at = Some(now());
+        }
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// Append one line to `agent-events.jsonl` (the activity feed the human watches).
+    pub fn append_agent_event(&self, id: &str, event: &serde_json::Value) -> Result<()> {
+        use std::io::Write as _;
+        let dir = self.dir(id)?;
+        let path = dir.join("agent-events.jsonl");
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        writeln!(file, "{event}")?;
+        Ok(())
+    }
+
+    pub fn agent_events(&self, id: &str) -> Result<Vec<serde_json::Value>> {
+        let path = self.dir(id)?.join("agent-events.jsonl");
+        let mut events = Vec::new();
+        if path.is_file() {
+            for line in fs::read_to_string(&path)?.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+                    events.push(value);
+                }
+            }
+        }
+        Ok(events)
+    }
+
     /// Create a session from bytes already in memory (MCP uploads, HTTP `image_base64`).
     #[allow(clippy::too_many_arguments)]
     pub fn create_from_bytes(
@@ -364,6 +410,9 @@ impl Store {
             image_height: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
+            prompt: None,
+            seen_by_agent_at: None,
+            agent_state: None,
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         write_json(
@@ -429,6 +478,15 @@ impl Store {
         let submitted_at = now();
         meta.status = Status::Submitted;
         meta.submitted_at = Some(submitted_at.clone());
+        // A fresh round has not been seen by the agent yet.
+        meta.seen_by_agent_at = None;
+        meta.agent_state = None;
+        if let Some(prompt) = submission.note.as_deref() {
+            let prompt = prompt.trim();
+            if !prompt.is_empty() {
+                meta.prompt = Some(prompt.to_string());
+            }
+        }
         if let Some(width) = submission.width {
             meta.image_width = Some(width);
         }

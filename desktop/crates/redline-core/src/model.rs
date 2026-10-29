@@ -28,6 +28,15 @@ pub struct Meta {
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_at: Option<String>,
+    /// The prompt the human wrote when submitting a round (v0.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    /// First time an agent read the current submission (v0.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seen_by_agent_at: Option<String>,
+    /// What the agent is doing: `received`, `working`, `replied` (v0.9).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -144,6 +153,9 @@ pub struct ImageRef {
 /// The payload the browser POSTs to `/api/sessions/{id}/annotations`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Submission {
+    /// The prompt the human wrote with this round. Additive (v0.9).
+    #[serde(default)]
+    pub note: Option<String>,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
     /// `data:image/png;base64,…` or bare base64. Optional (v0.1 behaviour).

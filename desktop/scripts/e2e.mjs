@@ -191,7 +191,9 @@ const main = async () => {
   const noted = state[state.length - 1];
   check("note attached to the drawn shape", noted?.note?.startsWith("Toto"), noted?.note || "");
 
-  // ---- submit
+  // ---- submit with a prompt from the composer
+  await page.click("#composer-text");
+  await page.type("#composer-text", "Make the button green and bump the contrast");
   await page.keyboard.down("Control");
   await page.keyboard.press("Enter");
   await page.keyboard.up("Control");
@@ -206,6 +208,13 @@ const main = async () => {
   check("rect survived the round-trip", stored.some((a) => a.type === "rect"));
   check("note survived with its diacritics", stored.some((a) => a.note?.includes("zelené")));
   check("screenshot was composited", saved.meta.status === "submitted");
+  check("prompt travelled with the submission", saved.meta.prompt === "Make the button green and bump the contrast",
+    String(saved.meta.prompt));
+  const conversation = await page.evaluate(() => document.querySelector("#conv-log")?.textContent || "");
+  check("prompt appears in the conversation", conversation.includes("Make the button green"),
+    conversation.slice(0, 80));
+  const composerEmpty = await page.$eval("#composer-text", (el) => el.value === "");
+  check("composer clears after submit", composerEmpty);
 
   // ---- multi-select with shift-click, then align left
   await page.keyboard.press("r");

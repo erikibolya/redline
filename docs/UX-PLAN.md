@@ -63,7 +63,7 @@ Deliberately **unchanged** (technical identifiers, changing them breaks installs
 
 ---
 
-## W3 — Agent status you can see
+## W3 — Agent status you can see (shipped in 0.9.0)
 
 **Goal:** after Submit, the human knows the agent picked it up.
 
@@ -98,7 +98,7 @@ implementation.
 
 ---
 
-## W4 — Chat flow: composer + timeline
+## W4 — Chat flow: composer + timeline (shipped in 0.9.0)
 
 **Goal:** the right panel becomes a conversation, not a form.
 
@@ -138,7 +138,7 @@ agents*? The answer decides whether `project` is a label or a first-class object
 
 ---
 
-## W6 — Chrome cleanup (ships with W4)
+## W6 — Chrome cleanup (shipped in 0.9.0)
 
 - Top-right audit: status, agent state, `?`, `⌘` shortcut hint, theme, rail/inspector toggles,
   `+ New review`. Nothing that duplicates the composer.

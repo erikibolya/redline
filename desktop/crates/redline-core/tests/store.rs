@@ -111,6 +111,7 @@ fn submission_writes_all_four_artifacts() {
         },
     ];
     let submission = Submission {
+        note: None,
         annotations: annotations.clone(),
         png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
         width: Some(1440),
@@ -177,6 +178,7 @@ fn writes_leave_no_temp_files_behind() {
         .submit(
             &meta.id,
             &Submission {
+                note: None,
                 annotations: vec![],
                 png: None,
                 width: None,
@@ -205,6 +207,7 @@ fn malformed_png_payload_is_a_bad_request_not_a_crash() {
         .submit(
             &meta.id,
             &Submission {
+                note: None,
                 annotations: vec![],
                 png: Some("data:image/png;base64,!!!not-base64!!!".to_string()),
                 width: None,

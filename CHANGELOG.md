@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0 — 2026-10-29
+
+The review becomes a conversation: the agent announces itself, and you submit from the chat.
+
+- **Agent state you can see.** `get_feedback` stamps `seen_by_agent_at` and sets `received`; the new
+  MCP `progress` tool narrates each step (`working`, with a message and an optional tool name in
+  `agent-events.jsonl`); `reply` sets `replied`. The header shows the state, the conversation shows
+  the activity feed.
+- **Conversation + composer.** The inspector's lower half is a timeline — agent request, your
+  prompt, activity events, replies — with a prompt box and **Submit review** at the bottom. The
+  top-right Submit button is gone.
+- **The prompt travels with the submission** (`meta.prompt`, shown in `review.md` and returned by
+  `get_feedback`).
+- `GET /api/sessions/{id}/events` exposes the activity feed.
+
 ## 0.8.0 — 2026-10-29
 
 The review becomes a conversation: text moves off the canvas and onto the marks.

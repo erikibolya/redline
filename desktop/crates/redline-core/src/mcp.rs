@@ -138,6 +138,20 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "progress",
+            "description": "Report what you are doing right now so the human sees activity instead of silence. One event per meaningful step, not per token.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "message": { "type": "string", "description": "One short line, e.g. \"Editing app.css\"." },
+                    "state": { "type": "string", "enum": ["thinking", "tool", "step"], "description": "Default: step." },
+                    "tool": { "type": "string", "description": "Tool name when relevant." }
+                },
+                "required": ["session_id", "message"]
+            }
+        },
+        {
             "name": "reply",
             "description": "Attach an agent message or question to a session so the human sees it in the editor.",
             "inputSchema": {
@@ -179,6 +193,7 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
         "get_feedback" => get_feedback(ctx, &args),
         "wait_for_feedback" => wait_for_feedback(ctx, &args).await,
         "list_reviews" => list_reviews(ctx, &args),
+        "progress" => progress(ctx, &args),
         "reply" => reply(ctx, &args),
         "resolve" => resolve(ctx, &args),
         "capture_review" => capture_review(ctx, &args).await,
@@ -339,7 +354,19 @@ fn review_url(ctx: &McpContext<'_>, id: &str) -> String {
 fn get_feedback(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
     let meta = ctx.store.require(&id).map_err(|err| err.to_string())?;
+    let meta = mark_seen(ctx.store, meta);
     Ok(feedback_payload(ctx, &meta))
+}
+
+/// Reading the feedback is the moment the human learns the agent picked it up. Never downgrade a
+/// session the agent is already working on.
+fn mark_seen(store: &Store, meta: Meta) -> Meta {
+    if meta.status == Status::Submitted && meta.agent_state.as_deref() != Some("working") {
+        return store
+            .set_agent_state(&meta.id, "received", true)
+            .unwrap_or(meta);
+    }
+    meta
 }
 
 async fn wait_for_feedback(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
@@ -359,6 +386,7 @@ async fn wait_for_feedback(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
             "message": "no submission yet; call wait_for_feedback again",
         }));
     }
+    let meta = mark_seen(ctx.store, meta);
     Ok(feedback_payload(ctx, &meta))
 }
 
@@ -402,6 +430,29 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     Ok(json!({ "sessions": items }))
 }
 
+fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+    let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    let message = string_arg(args, "message").ok_or("message is required")?;
+    let state = string_arg(args, "state").unwrap_or_else(|| "step".to_string());
+    let tool = string_arg(args, "tool");
+    ctx.store.require(&id).map_err(|err| err.to_string())?;
+    let mut event = json!({
+        "at": crate::store::now(),
+        "state": state,
+        "message": message,
+    });
+    if let Some(tool) = tool {
+        event["tool"] = Value::String(tool);
+    }
+    ctx.store
+        .append_agent_event(&id, &event)
+        .map_err(|err| err.to_string())?;
+    ctx.store
+        .set_agent_state(&id, "working", true)
+        .map_err(|err| err.to_string())?;
+    Ok(json!({ "session_id": id, "recorded": true }))
+}
+
 fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
     let message = string_arg(args, "message").ok_or("message is required")?;
@@ -421,6 +472,9 @@ fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
         .open(&path)
         .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
     writeln!(file, "{line}").map_err(|err| err.to_string())?;
+    ctx.store
+        .set_agent_state(&id, "replied", true)
+        .map_err(|err| err.to_string())?;
     Ok(json!({ "session_id": id, "appended": true }))
 }
 
@@ -455,6 +509,8 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         "title": meta.title,
         "url": meta.url,
         "note": meta.note,
+        "prompt": meta.prompt,
+        "agent_state": meta.agent_state,
         "submitted_at": meta.submitted_at,
         "annotations": set.annotations,
         "markdown": markdown,

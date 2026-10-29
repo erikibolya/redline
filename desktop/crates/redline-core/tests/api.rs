@@ -881,3 +881,91 @@ async fn agent_replies_are_readable_by_the_human() {
     let (status, _, _) = send(&h.app, get(&format!("/api/sessions/{id}/thread"))).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+/// W3: the human must be able to see that the agent read the review and what it is doing.
+#[tokio::test]
+async fn feedback_marks_received_and_progress_shows_activity() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "Status", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, submitted) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [], "note": "make the button green"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    assert_eq!(submitted["meta"]["prompt"], "make the button green");
+
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "get_feedback", "arguments": { "session_id": id } }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, session) = send(&h.app, request).await;
+    assert_eq!(session["meta"]["agent_state"], "received");
+    assert!(session["meta"]["seen_by_agent_at"].is_string());
+
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": "progress", "arguments": {
+                    "session_id": id,
+                    "message": "Editing app.css",
+                    "state": "tool",
+                    "tool": "edit"
+                }}
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/events"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, events) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{events}");
+    assert_eq!(events["events"][0]["message"], "Editing app.css");
+    assert_eq!(events["events"][0]["tool"], "edit");
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, session) = send(&h.app, request).await;
+    assert_eq!(session["meta"]["agent_state"], "working");
+}

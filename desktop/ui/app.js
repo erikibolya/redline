@@ -391,7 +391,7 @@ class Editor {
       this.selected.clear();
       this.renderInspector();
       this.renderHeader();
-      this.startThreadPolling();
+      this.startConversationPolling();
       await this.loadImage(this.meta.image);
       this.fit();
       this.render();
@@ -443,8 +443,13 @@ class Editor {
     status.className = `pill ${this.meta.status}`;
     const submitted = this.meta.status !== "open";
     $("#submit").textContent = submitted ? "Submit again" : "Submit review";
-    $("#agent-note").textContent = this.meta.note || "(no message — just the annotations)";
-    $("#agent-url").textContent = this.meta.url || "";
+    const agent = $("#agent-state");
+    if (agent) {
+      const state = this.meta.agent_state;
+      agent.hidden = !state;
+      agent.textContent = state || "";
+      agent.className = `pill agent ${state || ""}`;
+    }
     document.title = `${this.meta.title || this.meta.id} · RedLine`;
     const idLabel = $("#session-id-status");
     if (idLabel) idLabel.textContent = this.meta.id;
@@ -490,23 +495,17 @@ class Editor {
       prefs.set("inspectorHidden", app.classList.contains("inspector-hidden"));
       this.resize();
     });
-    const agentBlock = $("#agent-block");
-    if (agentBlock) {
-      agentBlock.addEventListener("toggle", () => {
-        if (agentBlock.open) this.loadAgentView();
+    const historyBlock = $("#history-block");
+    if (historyBlock) {
+      historyBlock.addEventListener("toggle", () => {
+        if (historyBlock.open) this.loadHistory();
       });
-      const historyBlock = $("#history-block");
-      if (historyBlock) {
-        historyBlock.addEventListener("toggle", () => {
-          if (historyBlock.open) this.loadHistory();
-        });
-      }
-      const viewBlock = $("#agent-view-block");
-      if (viewBlock) {
-        viewBlock.addEventListener("toggle", () => {
-          if (viewBlock.open) this.loadAgentView();
-        });
-      }
+    }
+    const viewBlock = $("#agent-view-block");
+    if (viewBlock) {
+      viewBlock.addEventListener("toggle", () => {
+        if (viewBlock.open) this.loadAgentView();
+      });
     }
 
     if (prefs.get("railHidden", false)) $("#app").classList.add("rail-hidden");
@@ -1599,39 +1598,82 @@ class Editor {
     }
   }
 
-  // ---------------------------------------------------------- agent thread
+  // ---------------------------------------------------------- conversation
 
-  /// The agent answers with the MCP `reply` tool; without a poll the human would have to reload
-  /// the page to notice, which is exactly the "I submitted and heard nothing" dead end.
-  startThreadPolling() {
+  /// The agent answers with `reply` and narrates with `progress`; without a poll the human would
+  /// have to reload to notice, which is the "I submitted and heard nothing" dead end.
+  startConversationPolling() {
     clearInterval(this.threadTimer);
-    this.loadThread();
-    this.threadTimer = setInterval(() => this.loadThread({ quiet: true }), 5000);
+    this.loadConversation();
+    this.threadTimer = setInterval(() => this.loadConversation({ quiet: true }), 5000);
   }
 
-  async loadThread({ quiet = false } = {}) {
-    const box = $("#agent-thread");
-    if (!box) return;
-    if (!quiet) box.textContent = "Loading…";
-    try {
-      const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/thread`);
-      const messages = Array.isArray(data.messages) ? data.messages : [];
-      const counter = $("#thread-count");
-      if (counter) counter.textContent = String(messages.length);
-      if (!messages.length) {
-        box.innerHTML = `<div class="inspector-empty">No replies yet.</div>`;
-        return;
-      }
-      box.innerHTML = messages.map((entry) => {
-        const when = String(entry.at || "").replace("T", " ").slice(0, 16);
-        return `<div class="thread-row">
-          <div class="thread-at">${escapeHtml(when)}</div>
-          <div class="thread-text">${escapeHtml(entry.message || "")}</div>
-        </div>`;
-      }).join("");
-    } catch (error) {
-      if (!quiet) box.textContent = `Could not load replies: ${error.message}`;
+  async loadConversation({ quiet = false } = {}) {
+    const log = $("#conv-log");
+    if (!log) return;
+    if (!quiet && !log.childElementCount) {
+      log.innerHTML = `<div class="inspector-empty">Loading…</div>`;
     }
+    try {
+      const id = encodeURIComponent(this.sessionId);
+      const [session, thread, events] = await Promise.all([
+        api(`/api/sessions/${id}`),
+        api(`/api/sessions/${id}/thread`),
+        api(`/api/sessions/${id}/events`),
+      ]);
+      this.meta = session.meta;
+      this.thread = Array.isArray(thread.messages) ? thread.messages : [];
+      this.events = Array.isArray(events.events) ? events.events : [];
+      this.renderHeader();
+      this.renderConversation();
+    } catch (error) {
+      if (!quiet) {
+        log.innerHTML = `<div class="inspector-empty">Could not load the conversation: ${escapeHtml(error.message)}</div>`;
+      }
+    }
+  }
+
+  renderConversation() {
+    const log = $("#conv-log");
+    if (!log) return;
+    const items = [];
+    if (this.meta?.note) {
+      items.push({ at: this.meta.created_at || "", kind: "request", text: this.meta.note });
+    }
+    if (this.meta?.prompt) {
+      items.push({ at: this.meta.submitted_at || "", kind: "human", text: this.meta.prompt });
+    }
+    for (const event of this.events || []) {
+      items.push({ at: event.at || "", kind: "event", text: event.message || "", state: event.state });
+    }
+    for (const message of this.thread || []) {
+      items.push({ at: message.at || "", kind: "agent", text: message.message || "" });
+    }
+    items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
+
+    const activity = $("#conv-activity");
+    if (activity) {
+      const last = (this.events || [])[this.events.length - 1];
+      activity.textContent = this.meta?.agent_state === "working" && last ? `${last.message}…` : "";
+    }
+
+    if (!items.length) {
+      log.innerHTML = `<div class="inspector-empty">No messages yet.<br>Write a prompt below, or just annotate and submit.</div>`;
+      return;
+    }
+    log.innerHTML = items.map((item) => {
+      const when = String(item.at).replace("T", " ").slice(11, 16);
+      if (item.kind === "event") {
+        return `<div class="conv-event"><span class="conv-dot"></span><span>${escapeHtml(item.text)}</span>`
+          + `<time>${escapeHtml(when)}</time></div>`;
+      }
+      const who = item.kind === "human" ? "you" : "agent";
+      return `<div class="conv-msg ${item.kind}">
+        <div class="conv-meta">${who}${when ? ` · ${escapeHtml(when)}` : ""}</div>
+        <div class="conv-text">${escapeHtml(item.text)}</div>
+      </div>`;
+    }).join("");
+    log.scrollTop = log.scrollHeight;
   }
 
   // ---------------------------------------------------------- agent view
@@ -1672,24 +1714,25 @@ class Editor {
         if (annotation.type !== "text") this.paintBadge(ctx, annotation, index + 1, 14, 2);
       });
 
+      const composer = $("#composer-text");
       const payload = {
         annotations: this.annotations,
         width: this.image.naturalWidth,
         height: this.image.naturalHeight,
         png: exportCanvas.toDataURL("image/png"),
+        note: composer ? composer.value.trim() : "",
       };
-      await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/annotations`, {
+      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/annotations`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      this.meta.status = "submitted";
-      this.meta.submitted_at = new Date().toISOString();
+      if (result?.meta) this.meta = result.meta;
+      if (composer) composer.value = "";
       this.renderHeader();
       this.renderInspector();
-      if ($("#agent-block")?.open) this.loadAgentView();
       if ($("#history-block")?.open) this.loadHistory();
-      this.loadThread({ quiet: true });
+      await this.loadConversation({ quiet: true });
       // Hand the keyboard back to the canvas: the review is sent, the next key is a shortcut.
       document.activeElement?.blur?.();
       await this.rail.load();

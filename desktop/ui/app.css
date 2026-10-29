@@ -124,6 +124,18 @@ a:hover { text-decoration: underline; }
 [hidden] { display: none !important; }
 .pill[hidden] { display: none; }
 .pill.agent { color: #fbbf24; border-color: #78350f; background: #231a08; }
+.review-lock {
+  position: absolute; inset: 0; z-index: 5; display: grid; place-items: center;
+  background: rgba(5, 9, 14, .55);
+}
+.review-lock .lock-box {
+  display: flex; flex-direction: column; gap: 4px; text-align: center;
+  padding: 12px 18px; border-radius: 10px; background: rgba(15, 23, 42, .9);
+  border: 1px solid #334155; color: #e2e8f0; font-size: 13px;
+}
+.review-lock .lock-box span { color: #94a3b8; font-size: 11px; }
+.btn.stop { background: #dc2626; border-color: #b91c1c; color: #fff; }
+.btn.stop:hover { background: #ef4444; }
 .viewing-bar {
   position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 7;
   padding: 5px 12px; border-radius: 999px; cursor: pointer;

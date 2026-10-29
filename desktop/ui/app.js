@@ -371,6 +371,7 @@ class Editor {
     this.history = [];
     this.future = [];
     this.drafts = new Map();
+    this.locked = false;
     this.serverAnnotations = "[]";
     this.viewing = null;
     this.live = null;
@@ -539,8 +540,20 @@ class Editor {
     const status = $("#session-status");
     status.textContent = this.meta.status;
     status.className = `pill ${this.meta.status}`;
-    const submitted = this.meta.status !== "open";
-    $("#submit").textContent = submitted ? "Submit again" : "Submit review";
+    const waiting = this.meta.status === "submitted";
+    const button = $("#submit");
+    button.textContent = waiting
+      ? "STOP"
+      : this.meta.status === "open" ? "Submit review" : "Submit again";
+    button.classList.toggle("stop", waiting);
+    const composer = $("#composer-text");
+    if (composer) {
+      composer.disabled = waiting;
+      composer.placeholder = waiting
+        ? "Waiting for the agent — press STOP to edit again"
+        : "What should change? Sent with the annotations…";
+    }
+    this.updateLock();
     const stageStatus = $("#stage-status");
     if (stageStatus) {
       const submitted = this.meta.status === "submitted";
@@ -779,7 +792,7 @@ class Editor {
   }
 
   setTool(tool) {
-    if (this.viewing) return;
+    if (this.viewing || this.locked) return;
     if (!TOOLS.includes(tool)) return;
     this.tool = tool;
     this.syncToolButtons();
@@ -1263,7 +1276,7 @@ class Editor {
     const pinch = { start: null, scale: 1 };
 
     stage.addEventListener("pointerdown", (event) => {
-      if (!this.image || this.viewing) return;
+      if (!this.image || this.viewing || this.locked) return;
       // The options bar and the inline text editor live inside the stage. Capturing the pointer
       // for marquee/pan on those would swallow their click events.
       if (event.target.closest(".options, .text-editor")) return;
@@ -1579,7 +1592,7 @@ class Editor {
 
   renderInspector() {
     const body = $("#ann-list");
-    if (this.viewing) {
+    if (this.viewing || this.locked) {
       const editor = $("#note-editor");
       if (editor) editor.classList.add("hidden");
       $("#ann-count").textContent = String(this.annotations.length);
@@ -1815,6 +1828,12 @@ class Editor {
     }
   }
 
+  updateLock() {
+    this.locked = this.meta?.status === "submitted" && !this.viewing;
+    const overlay = $("#review-lock");
+    if (overlay) overlay.hidden = !this.locked;
+  }
+
   updateViewingBar() {
     const bar = $("#viewing-bar");
     if (!bar) return;
@@ -1989,6 +2008,31 @@ class Editor {
     }
   }
 
+  /// STOP: take the submission back. The agent is expected to die (the bridge watches the
+  /// status); an unread round is withdrawn from history by the server.
+  async stop() {
+    if (this.meta?.status !== "submitted") return;
+    if (!confirm("Stop the agent and edit this review?")) return;
+    const button = $("#submit");
+    button.disabled = true;
+    button.textContent = "Stopping…";
+    try {
+      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/cancel`, {
+        method: "POST",
+      });
+      if (result?.meta) this.meta = result.meta;
+      button.disabled = false;
+      this.renderHeader();
+      this.renderInspector();
+      this.loadHistory();
+      this.loadConversation({ quiet: true });
+    } catch (error) {
+      button.disabled = false;
+      this.renderHeader();
+      alert(`Could not stop: ${error.message}`);
+    }
+  }
+
   /// Unsaved canvas work must survive switching sessions; a submitted round must not.
   saveDraft() {
     const id = this.sessionId;
@@ -2021,6 +2065,7 @@ class Editor {
   // ---------------------------------------------------------- submit
 
   async submit() {
+    if (this.meta?.status === "submitted") return this.stop();
     if (!this.image) return;
     const button = $("#submit");
     const label = button.textContent;

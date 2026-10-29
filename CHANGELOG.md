@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased — rounds, read-only history, drafts
+## Unreleased — rounds, read-only history, drafts, submitted lock
+
+- **Submitting locks the canvas**: a dark overlay blocks editing and the composer is disabled
+  while `submitted`; the primary button turns into a red **STOP**.
+- **STOP** calls `POST /api/sessions/<id>/cancel`, unlocks the canvas and keeps the annotations.
+  A round no agent has read yet is withdrawn from history; a round the agent has seen stays.
+  The bridge watches the session every 2 s while the agent runs and kills it on cancel.
+
 
 - **A round is archived when it is submitted**, not when the next one replaces it. History fills
   up immediately, keeps the source screenshot (`history/<stamp>-source.png`) and numbers rounds

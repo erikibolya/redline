@@ -87,6 +87,28 @@ async function drag(page, from, to, steps = 12) {
 
 const main = async () => {
   // A real screenshot size, so the fitted zoom is not 1:1 — coordinate mapping must survive it.
+  // Submitting locks the canvas now; tests that keep drawing must stop first. Ask the "agent"
+  // to read the submission so the round is kept instead of withdrawn.
+  const stopReview = async () => {
+    await api("/mcp", {
+      method: "POST",
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "get_feedback", arguments: { session_id: id } },
+      }),
+    });
+    // The submit button is briefly disabled ("Submitted ✓") right after a submit.
+    await page.waitForFunction(() => {
+      const button = document.querySelector("#submit");
+      return button && !button.disabled && button.textContent.trim() === "STOP";
+    }, { timeout: 5000 });
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.click("#submit");
+    await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
+  };
+
   const created = await api("/api/sessions", {
     method: "POST",
     body: JSON.stringify({ title: "e2e canvas", image_base64: makePng(), project: "E2E" }),
@@ -297,6 +319,8 @@ const main = async () => {
   await page.emulateTimezone(null);
   const composerEmpty = await page.$eval("#composer-text", (el) => el.value === "");
   check("composer clears after submit", composerEmpty);
+  // Those checks need the submitted state; now unlock and keep drawing.
+  await stopReview();
 
   // ---- multi-select with shift-click, then align left
   await page.keyboard.press("r");
@@ -362,6 +386,7 @@ const main = async () => {
   await page.click("#viewing-bar");
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
   check("Current returns to the live canvas", true);
+  await stopReview();
 
   // ---- ellipse tool draws a real ellipse
   await page.keyboard.press("e");
@@ -554,6 +579,36 @@ const main = async () => {
   const afterSwitch = await page.evaluate(() => window.redline.annotations.length);
   check("unsent annotations survive a session switch", afterSwitch === beforeSwitch,
     `${beforeSwitch} → ${afterSwitch}`);
+
+  // ---- submitting locks the canvas; STOP takes the submission back
+  const beforeStop = await page.evaluate(() => window.redline.annotations.length);
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Control");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  const locked = await page.evaluate(() => ({
+    overlay: !document.querySelector("#review-lock").hidden,
+    stop: document.querySelector("#submit").textContent.trim(),
+    composer: document.querySelector("#composer-text").disabled,
+  }));
+  check("submitting locks the canvas and turns Submit into STOP",
+    locked.overlay && locked.stop === "STOP" && locked.composer, JSON.stringify(locked));
+
+  await page.waitForFunction(() => {
+    const button = document.querySelector("#submit");
+    return button && !button.disabled && button.textContent.trim() === "STOP";
+  }, { timeout: 5000 });
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
+  const unlocked = await page.evaluate(() => ({
+    overlay: !document.querySelector("#review-lock").hidden,
+    label: document.querySelector("#submit").textContent.trim(),
+    annotations: window.redline.annotations.length,
+  }));
+  check("STOP unlocks the canvas and keeps the annotations",
+    !unlocked.overlay && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
+    JSON.stringify(unlocked));
 
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });

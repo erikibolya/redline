@@ -558,6 +558,7 @@ impl Store {
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
+            cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
         };
@@ -614,6 +615,31 @@ impl Store {
         Err(Error::BadRequest(
             "could not allocate a session id".to_string(),
         ))
+    }
+
+    /// Stop a submission. The canvas stays as it is; the agent is supposed to stop.
+    ///
+    /// If no agent has read the submission yet the round is withdrawn from history (the human
+    /// stopped it by mistake). Once an agent has seen it the round stays: it may have acted on it.
+    pub fn cancel(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        if meta.status != Status::Submitted {
+            return Err(Error::BadRequest("nothing to cancel".to_string()));
+        }
+        if meta.seen_by_agent_at.is_none() {
+            if let Some(stamp) = meta.round_stamp.take() {
+                let history = dir.join("history");
+                let _ = fs::remove_file(history.join(format!("{stamp}.json")));
+                let _ = fs::remove_file(history.join(format!("{stamp}.png")));
+                let _ = fs::remove_file(history.join(format!("{stamp}-source.png")));
+            }
+        }
+        meta.status = Status::Open;
+        meta.agent_state = None;
+        meta.cancelled_at = Some(now());
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
     }
 
     /// Post a new round into an existing session: the agent's answer, optionally with a fresh

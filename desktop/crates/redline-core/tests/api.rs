@@ -1212,3 +1212,125 @@ async fn posting_a_round_stays_in_the_same_session() {
     );
     assert_eq!(thread["messages"][0]["image"], image);
 }
+
+/// STOP before an agent read the submission: the round is withdrawn, the canvas is untouched.
+#[tokio::test]
+async fn cancelling_before_the_agent_reads_withdraws_the_round() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "stop", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let (_, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [{"type": "rect", "note": "x"}], "note": "change it"}),
+        ),
+    )
+    .await;
+
+    let history = |h: &Harness| {
+        let request = Request::builder()
+            .uri(format!("/api/sessions/{id}/history"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let app = h.app.clone();
+        async move {
+            let response = app.oneshot(request).await.unwrap();
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            serde_json::from_slice::<Value>(&bytes).unwrap()
+        }
+    };
+    assert_eq!(
+        history(&h).await["submissions"].as_array().unwrap().len(),
+        1
+    );
+
+    let (status, _, cancelled) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/cancel"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["meta"]["status"], "open");
+    assert!(cancelled["meta"]["cancelled_at"].is_string());
+    assert_eq!(
+        history(&h).await["submissions"].as_array().unwrap().len(),
+        0
+    );
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, session) = send(&h.app, request).await;
+    assert_eq!(
+        session["annotations"]["annotations"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+/// STOP after the agent read it: the round stays, it may already have acted on it.
+#[tokio::test]
+async fn cancelling_after_the_agent_read_the_round_keeps_it() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "stop late", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [], "note": "change it"}),
+        ),
+    )
+    .await;
+    send(
+        &h.app,
+        authed(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "get_feedback", "arguments": { "session_id": id } }
+            }),
+        ),
+    )
+    .await;
+
+    let (status, _, _) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/cancel"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/history"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, history) = send(&h.app, request).await;
+    assert_eq!(history["submissions"].as_array().unwrap().len(), 1);
+}

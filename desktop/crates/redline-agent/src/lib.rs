@@ -142,7 +142,11 @@ interpretation and say what you assumed in the reply."#,
 }
 
 /// Run one `opencode run` to completion. `Ok(true)` means the process exited successfully.
-fn run_opencode(config: &AgentConfig, prompt: &str) -> Result<(bool, String), String> {
+fn run_opencode(
+    config: &AgentConfig,
+    session_id: &str,
+    prompt: &str,
+) -> Result<(bool, String), String> {
     let mut command = Command::new(&config.opencode_bin);
     command.arg("run");
     match &config.opencode_server {
@@ -166,15 +170,31 @@ fn run_opencode(config: &AgentConfig, prompt: &str) -> Result<(bool, String), St
     let mut child = command
         .spawn()
         .map_err(|err| format!("cannot run opencode: {err}"))?;
-    let status = child
-        .wait_timeout(config.timeout)
-        .map_err(|err| err.to_string())?;
-    let status = match status {
-        Some(status) => status,
-        None => {
+    // Poll the session while the agent works: STOP must actually stop it, not just unlock the UI.
+    let started = Instant::now();
+    let mut last_check = Instant::now();
+    let status = loop {
+        match child
+            .wait_timeout(Duration::from_millis(500))
+            .map_err(|err| err.to_string())?
+        {
+            Some(status) => break status,
+            None => {}
+        }
+        if started.elapsed() >= config.timeout {
             let _ = child.kill();
             let _ = child.wait();
             return Err(format!("opencode timed out after {:?}", config.timeout));
+        }
+        if last_check.elapsed() >= Duration::from_secs(2) {
+            last_check = Instant::now();
+            if let Ok(value) = api_get(config, &format!("/api/sessions/{session_id}")) {
+                if value["meta"]["status"].as_str() != Some("submitted") {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("stopped by the human".to_string());
+                }
+            }
         }
     };
 
@@ -210,7 +230,7 @@ fn handle(config: &AgentConfig, session: &Value) {
     );
 
     let prompt = prompt_for(config, session, &feedback);
-    let outcome = match run_opencode(config, &prompt) {
+    let outcome = match run_opencode(config, &id, &prompt) {
         Ok((true, output)) => {
             eprintln!("redline-agent: {id} finished ({} bytes)", output.len());
             output
@@ -222,6 +242,10 @@ fn handle(config: &AgentConfig, session: &Value) {
                 "reply",
                 json!({ "session_id": id, "message": format!("The agent run failed: {}", first_line(&output)) }),
             );
+            return;
+        }
+        Err(err) if err == "stopped by the human" => {
+            eprintln!("redline-agent: {id} stopped by the human");
             return;
         }
         Err(err) => {

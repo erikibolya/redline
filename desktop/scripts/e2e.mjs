@@ -457,7 +457,12 @@ const main = async () => {
     }),
   });
   await page.waitForFunction(
-    () => String(window.redline.meta.image || "").startsWith("screenshot-"),
+    () => {
+      const meta = String(window.redline.meta.image || "");
+      const src = window.redline.image?.src || "";
+      // `meta` changes a poll before the new PNG has decoded, so wait for the canvas too.
+      return meta.startsWith("screenshot-") && src.includes(meta);
+    },
     { timeout: 25000 },
   );
   const round = await page.evaluate(() => ({

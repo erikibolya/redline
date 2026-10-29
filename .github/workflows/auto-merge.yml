@@ -35,4 +35,4 @@ jobs:
             echo "Auto-merge is already enabled for #$PR."
             exit 0
           fi
-          gh pr merge --auto --merge "$PR" --repo "$REPO"
+          gh pr merge --auto --merge --delete-branch "$PR" --repo "$REPO"

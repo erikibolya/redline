@@ -3,7 +3,7 @@
 #
 #   bash desktop/scripts/feature-ready.sh "one-line summary"
 #
-# Pushes the branch, finds (or opens) the draft PR into `dev`, marks it ready and lets the
+# Pushes the branch, finds (or opens) the PR into `dev`, marks it ready and lets the
 # auto-merge workflow take over. It never merges locally and never force-pushes.
 set -euo pipefail
 

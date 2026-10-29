@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A new review starts in the project you were just working in.** Opening a review (or picking a
+  project in the dialog) records it in the browser, and the next **Ctrl+V** or **New review** opens
+  with that project already selected instead of the placeholder — on the editor and on the start
+  page, and across reloads. The memory is per browser and per server origin; a project that no
+  longer exists or is hidden from the picker falls back to the placeholder. The browser e2e covers
+  both the preselect and its survival across a reload.
+
 - **The submitted lock actually holds.** After a submit, Delete/Backspace, arrow-key nudging,
   undo/redo, the inspector's align/layer/group buttons, the note field and the keyboard tool
   shortcuts could still change annotations while the stage pill claimed the canvas was locked.

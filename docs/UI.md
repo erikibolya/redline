@@ -220,6 +220,10 @@ The rail lists projects (conversation areas), not a flat stream of requests.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
   a name field and creates a label without a repo (the agent falls back to its default repo).
+- The dialog **remembers the project you last worked in**: opening a review, or choosing a project
+  for a new one, preselects it next time (Ctrl+V included) on the editor and the start page. It is
+  a browser preference (`redline:project` in localStorage), so it survives reloads and does not
+  follow you to another machine. A project missing from the picker falls back to the placeholder.
 
 ## Conversation and composer (v0.9)
 

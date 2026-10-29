@@ -1753,11 +1753,22 @@ class Editor {
       activity.textContent = this.meta?.agent_state === "working" && last ? `${last.message}…` : "";
     }
 
-    if (!items.length) {
+    const status = [];
+    if (this.meta?.status === "submitted") {
+      if (!this.meta.seen_by_agent_at) {
+        status.push(`<div class="conv-wait"><b>Waiting for an agent.</b> Nobody has read this yet — `
+          + `submitted ${escapeHtml(relativeTime(this.meta.submitted_at))}. An agent must call `
+          + `<code>get_feedback</code> or <code>wait_for_feedback</code>.</div>`);
+      } else if (this.meta.agent_state !== "working") {
+        status.push(`<div class="conv-wait quiet"><b>Agent received this.</b> `
+          + `${escapeHtml(relativeTime(this.meta.seen_by_agent_at))}.</div>`);
+      }
+    }
+    if (!items.length && !status.length) {
       log.innerHTML = `<div class="inspector-empty">No messages yet.<br>Write a prompt below, or just annotate and submit.</div>`;
       return;
     }
-    log.innerHTML = items.map((item) => {
+    const rendered = items.map((item) => {
       const when = String(item.at).replace("T", " ").slice(11, 16);
       if (item.kind === "event") {
         return `<div class="conv-event"><span class="conv-dot"></span><span>${escapeHtml(item.text)}</span>`
@@ -1769,6 +1780,7 @@ class Editor {
         <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
+    log.innerHTML = rendered + status.join("");
     log.scrollTop = log.scrollHeight;
   }
 

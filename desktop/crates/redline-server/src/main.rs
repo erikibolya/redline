@@ -233,6 +233,11 @@ fn serve(flags: &Flags, data_dir: &Path, auth: Auth) -> Result<i32, String> {
             .map(str::to_string)
             .unwrap_or_else(|| format!("http://127.0.0.1:{port}"));
         let mut state = AppState::new(store, auth.clone()).with_base_url(advertised);
+        if let Ok(webhook) = std::env::var("REDLINE_WEBHOOK_URL") {
+            if !webhook.trim().is_empty() {
+                state = state.with_webhook(webhook.trim());
+            }
+        }
         match flags.value("ui").map(PathBuf::from) {
             Some(ui) => state = state.with_ui(ui),
             None => state = state.with_inline_ui(UI_FILES),

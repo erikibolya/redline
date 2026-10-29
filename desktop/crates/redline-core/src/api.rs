@@ -33,6 +33,8 @@ pub struct AppState {
     /// Where the desktop app stores its `config.json`. `None` in headless mode, which disables
     /// the setup endpoints (a server does not configure itself).
     pub config_path: Option<PathBuf>,
+    /// `REDLINE_WEBHOOK_URL`: POSTed when the human submits (see `notify`).
+    pub webhook: Option<String>,
 }
 
 impl AppState {
@@ -44,7 +46,13 @@ impl AppState {
             inline_ui: None,
             base_url: "http://127.0.0.1:8788".to_string(),
             config_path: None,
+            webhook: None,
         }
+    }
+
+    pub fn with_webhook(mut self, url: impl Into<String>) -> Self {
+        self.webhook = Some(url.into());
+        self
     }
 
     pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
@@ -481,6 +489,20 @@ async fn submit(
     Json(body): Json<Submission>,
 ) -> Result<Json<Value>, Error> {
     let (meta, annotations) = state.store.submit(&id, &body)?;
+    // Wake up whatever agent the host wired in; a dead endpoint must not fail the submission.
+    if let Some(url) = state.webhook.clone() {
+        let payload = json!({
+            "event": "submitted",
+            "session_id": meta.id,
+            "title": meta.title,
+            "project": meta.project,
+            "prompt": meta.prompt,
+            "annotations": annotations.annotations.len(),
+            "submitted_at": meta.submitted_at,
+            "review_url": state.review_url(&meta.id),
+        });
+        std::thread::spawn(move || crate::notify::post_json(&url, &payload));
+    }
     Ok(Json(
         json!({ "ok": true, "meta": meta, "annotations": annotations }),
     ))

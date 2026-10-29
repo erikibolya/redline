@@ -18,6 +18,7 @@ pub mod diff;
 pub mod error;
 pub mod mcp;
 pub mod model;
+pub mod notify;
 pub mod paths;
 pub mod store;
 

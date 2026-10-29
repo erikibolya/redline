@@ -98,6 +98,17 @@ string, and the note is the *only* place the human writes prose.
 - `annotations.json` carries `note` per shape (free-form map, additive), and `review.md` appends
   `— “note”` to the numbered region line.
 
+## Waiting states and the webhook (v0.12)
+
+- After Submit, the conversation says what is happening: **Waiting for an agent** (nobody has read
+  it yet, with the age of the submission and the two MCP calls that would read it), **Agent
+  received this** (with the time), the live activity line while `working`, and the reply itself.
+- `REDLINE_WEBHOOK_URL=http://host:port/path` makes the server POST a small JSON body
+  (`event`, `session_id`, `title`, `project`, `prompt`, `annotations`, `review_url`) when the human
+  submits. It is a plain HTTP POST with a 5 s timeout, fire-and-forget: a dead endpoint never
+  fails the submission. Use it to wake an agent or a relay; RedLine still has no agent push of its
+  own.
+
 ## Paste, gallery and diff overlay (v0.11)
 
 - **Ctrl+V** anywhere in the app opens the New review dialog with the clipboard image already

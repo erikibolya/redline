@@ -132,6 +132,8 @@ const main = async () => {
   await page.click("#new-cancel");
 
   await page.waitForSelector(".rail-project", { timeout: 5000 });
+  const ghostHidden = await page.$eval("#ghost-pill", (el) => el.hidden);
+  check("ghost chip stays hidden until a round is ghosted", ghostHidden);
   const projectHeader = await page.$eval(".rail-project .pname", (el) => el.textContent.trim());
   check("rail groups sessions by project", projectHeader === "E2E", `header=${projectHeader}`);
 
@@ -237,6 +239,9 @@ const main = async () => {
   const conversation = await page.evaluate(() => document.querySelector("#conv-log")?.textContent || "");
   check("prompt appears in the conversation", conversation.includes("Make the button green"),
     conversation.slice(0, 80));
+  const waiting = await page.evaluate(() => document.querySelector(".conv-wait")?.textContent || "");
+  check("submission says it is waiting for an agent", waiting.includes("Waiting for an agent"),
+    waiting.slice(0, 60));
   const composerEmpty = await page.$eval("#composer-text", (el) => el.value === "");
   check("composer clears after submit", composerEmpty);
 

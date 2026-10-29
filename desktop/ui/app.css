@@ -117,6 +117,7 @@ a:hover { text-decoration: underline; }
 .pill.open { color: #93c5fd; border-color: #1e3a5f; background: #12233a; }
 .pill.submitted { color: #86efac; border-color: #14532d; background: #10231a; }
 .pill.resolved { color: #c4b5fd; border-color: #4c1d95; background: #1c142f; }
+[hidden] { display: none !important; }
 .pill[hidden] { display: none; }
 .pill.agent { color: #fbbf24; border-color: #78350f; background: #231a08; }
 .ghost-chip { border-color: #4c1d95; color: #c4b5fd; background: #1c142f; }
@@ -352,6 +353,13 @@ a:hover { text-decoration: underline; }
 .conv-event { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); padding: 0 2px; }
 .conv-event .conv-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); flex: none; }
 .conv-event time { margin-left: auto; font-variant-numeric: tabular-nums; }
+.conv-wait {
+  border: 1px dashed var(--border); border-radius: 8px; padding: 7px 9px;
+  font-size: 11px; color: var(--muted); line-height: 1.4;
+}
+.conv-wait b { color: var(--text); }
+.conv-wait code { font-size: 10px; color: var(--accent); }
+.conv-wait.quiet { border-style: solid; }
 .composer { border-top: 1px solid var(--border-soft); padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 6px; }
 .composer textarea {
   width: 100%; min-height: 44px; max-height: 120px; resize: vertical; padding: 7px 8px;

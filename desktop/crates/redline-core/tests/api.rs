@@ -18,12 +18,20 @@ struct Harness {
 }
 
 fn harness() -> Harness {
+    harness_with(None)
+}
+
+fn harness_with(webhook: Option<&str>) -> Harness {
     let dir = TempDir::new().unwrap();
     let store = Store::new(dir.path().join("sessions"));
     store.ensure().unwrap();
     let state =
         AppState::new(store.clone(), Auth::new(TOKEN)).with_base_url("http://127.0.0.1:8788");
     let state = state.with_config_path(dir.path().join("config.json"));
+    let state = match webhook {
+        Some(url) => state.with_webhook(url),
+        None => state,
+    };
     Harness {
         app: router(state),
         store,
@@ -1034,4 +1042,74 @@ async fn sessions_can_live_in_a_project_folder() {
     let (status, _, session) = send(&h.app, request).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(session["meta"]["project"], "redline-ui");
+}
+
+/// W6: a host can wake an agent up when the human submits.
+#[tokio::test]
+async fn submitting_fires_the_webhook() {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::time::Duration;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            // The body can arrive in a second packet: read until Content-Length is satisfied.
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 4096];
+            loop {
+                let read = stream.read(&mut chunk).unwrap_or(0);
+                if read == 0 {
+                    break;
+                }
+                buffer.extend_from_slice(&chunk[..read]);
+                let Some(header_end) = buffer.windows(4).position(|w| w == b"\r\n\r\n") else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&buffer[..header_end]);
+                let length = head
+                    .lines()
+                    .find_map(|line| line.strip_prefix("Content-Length: "))
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+                    .unwrap_or(0);
+                if buffer.len() >= header_end + 4 + length {
+                    break;
+                }
+            }
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            let _ = sender.send(String::from_utf8_lossy(&buffer).to_string());
+        }
+    });
+
+    let h = harness_with(Some(&format!("http://{address}/hook")));
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "Wake the agent", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [], "note": "look here"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let request = receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("webhook called");
+    assert!(request.contains("POST /hook"), "{request}");
+    assert!(request.contains("\"event\":\"submitted\""), "{request}");
+    assert!(request.contains(&id), "{request}");
 }

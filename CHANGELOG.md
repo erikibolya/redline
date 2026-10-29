@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.12.0 — 2026-10-29
+
+Silence after Submit is the bug this release fixes.
+
+- **Waiting states in the conversation**: "Waiting for an agent" (nobody has read the submission
+  yet, with its age and the MCP calls that would read it), "Agent received this" with the time,
+  then the live activity line while the agent works.
+- **`REDLINE_WEBHOOK_URL`**: the server POSTs a small JSON body on every submission so a host can
+  wake an agent or a relay. Plain HTTP, fire-and-forget, never blocks the submission.
+- Fixed: `[hidden]` was overridden by component `display` rules, so the ghost chip (and any future
+  hidden button) showed up with an empty label.
+
 ## 0.11.0 — 2026-10-29
 
 Small daily-use wins, plus the comparison the review loop was missing.

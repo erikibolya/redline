@@ -586,6 +586,8 @@ const main = async () => {
   await page.keyboard.press("Enter");
   await page.keyboard.up("Control");
   await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  // Let the "Submitted ✓" timeout fire: it used to overwrite STOP with "Submit again".
+  await new Promise((resolve) => setTimeout(resolve, 1700));
   const locked = await page.evaluate(() => {
     const button = document.querySelector("#submit");
     return {

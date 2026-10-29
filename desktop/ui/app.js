@@ -2111,7 +2111,12 @@ class Editor {
       document.activeElement?.blur?.();
       await this.rail.load();
       button.textContent = "Submitted ✓";
-      setTimeout(() => { button.textContent = "Submit again"; button.disabled = false; }, 1400);
+      // Re-render instead of hardcoding the next label: the status is `submitted` now, so the
+      // button must become the red STOP with its square, not "Submit again".
+      setTimeout(() => {
+        button.disabled = false;
+        this.renderHeader();
+      }, 1400);
     } catch (error) {
       button.textContent = label;
       button.disabled = false;

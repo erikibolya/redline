@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.13.1 — 2026-10-29
+
+- **Desktop app** — *Check for updates…* moved from the **RedLine** menu to **Help**, where people
+  look for it. The tray menu keeps its own entry (a tray has no Help submenu).
+- **Editor** — conversation timestamps are shown in the reader's timezone. The API sends RFC 3339
+  UTC and the UI sliced the clock out of the string, so a submission made at 13:03 in Prague read
+  “12:03”. Relative times (“5m ago”) and day labels were already local and are unchanged.
+
 ## 0.13.0 — 2026-10-29
 
 The agent side becomes part of the product.

@@ -98,6 +98,15 @@ string, and the note is the *only* place the human writes prose.
 - `annotations.json` carries `note` per shape (free-form map, additive), and `review.md` appends
   `— “note”` to the numbered region line.
 
+## Clocks in the audience's timezone (v0.13.1)
+
+The server stores and serves RFC 3339 UTC (`+00:00`) everywhere. The UI formats those with `Date`
+and the browser's locale, so a review submitted at 13:03 in Prague reads 13:03, not 12:03. Never
+slice a clock out of the ISO string (`slice(11, 16)`): that silently renders UTC. `relativeTime`
+and `dayLabel` were already local; the conversation timeline, agent activity lines and the history
+round labels now are too (history folder names are flattened UTC stamps, `stampTime` un-flattens
+and converts them).
+
 ## Waiting states and the webhook (v0.12)
 
 - After Submit, the conversation says what is happening: **Waiting for an agent** (nobody has read

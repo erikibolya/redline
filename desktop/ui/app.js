@@ -32,6 +32,25 @@ function relativeTime(iso) {
   return new Date(then).toLocaleDateString();
 }
 
+/** Wall-clock time in the viewer's timezone: the API sends UTC, people read their own clock. */
+function clockTime(at) {
+  if (!at) return "";
+  const date = at instanceof Date ? at : new Date(at);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+}
+
+/** History stamps are the UTC submission time with every ':' and '+' flattened to '-' by the store. */
+function stampTime(stamp) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(String(stamp ?? ""));
+  if (!match) return String(stamp ?? "");
+  const date = new Date(Date.UTC(
+    Number(match[1]), Number(match[2]) - 1, Number(match[3]),
+    Number(match[4]), Number(match[5]), Number(match[6]),
+  ));
+  return `${date.toLocaleDateString()} ${clockTime(date)}`;
+}
+
 function dayLabel(iso) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "Older";
@@ -1608,7 +1627,7 @@ class Editor {
     if (pill) {
       pill.hidden = !stamp;
       const label = $("#ghost-stamp");
-      if (label) label.textContent = stamp ? String(stamp).replace("T", " ").slice(0, 16) : "";
+      if (label) label.textContent = stamp ? stampTime(stamp) : "";
     }
     this.render();
   }
@@ -1647,7 +1666,7 @@ class Editor {
         <div class="ann-row" style="cursor:default">
           <span class="glyph">↺</span>
           <span class="label">
-            <b>${escapeHtml(round.stamp.replace("T", " ").replace(/-([0-9]{2})-([0-9]{2})$/, ":$1:$2"))}</b>
+            <b>${escapeHtml(stampTime(round.stamp))}</b>
             <span>${plural(round.annotations, "annotation")}${round.png ? " · image" : ""}</span>
           </span>
           <button class="del" style="opacity:1" data-ghost="${escapeHtml(round.stamp)}"
@@ -1769,7 +1788,7 @@ class Editor {
       return;
     }
     const rendered = items.map((item) => {
-      const when = String(item.at).replace("T", " ").slice(11, 16);
+      const when = clockTime(item.at);
       if (item.kind === "event") {
         return `<div class="conv-event"><span class="conv-dot"></span><span>${escapeHtml(item.text)}</span>`
           + `<time>${escapeHtml(when)}</time></div>`;

@@ -242,6 +242,21 @@ const main = async () => {
   const waiting = await page.evaluate(() => document.querySelector(".conv-wait")?.textContent || "");
   check("submission says it is waiting for an agent", waiting.includes("Waiting for an agent"),
     waiting.slice(0, 60));
+
+  // ---- the conversation clock is the viewer's wall clock, not the server's UTC
+  await page.emulateTimezone("Europe/Prague");
+  await page.evaluate(() => window.redline.renderConversation());
+  const clocks = await page.evaluate(() => {
+    const iso = window.redline.meta?.submitted_at || "";
+    const shown = document.querySelector("#conv-log .conv-msg.human .conv-meta")?.textContent || "";
+    const local = new Date(iso).toLocaleTimeString(undefined,
+      { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    return { shown, local, utc: `${iso.slice(11, 13)}:${iso.slice(14, 16)}` };
+  });
+  check("conversation clocks use the viewer's timezone",
+    clocks.local !== clocks.utc && clocks.shown.includes(clocks.local),
+    `shown ${clocks.shown.trim()} · local ${clocks.local} · utc ${clocks.utc}`);
+  await page.emulateTimezone(null);
   const composerEmpty = await page.$eval("#composer-text", (el) => el.value === "");
   check("composer clears after submit", composerEmpty);
 

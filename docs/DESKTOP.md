@@ -216,7 +216,8 @@ It needs a browser on the server: use the `:browser` image
 the tool returns an actionable error instead of failing silently.
 
 **Auto-update** — the app checks `releases/latest/download/latest.json` once at launch, and only
-restarts when an update actually downloaded and installed. Artifacts are signed with the updater
+restarts when an update actually downloaded and installed. The manual check lives in
+**Help → Check for updates…** (the tray menu keeps its own copy, since a tray has no Help menu). Artifacts are signed with the updater
 key (`TAURI_SIGNING_PRIVATE_KEY` secret); the public half lives in `tauri.conf.json`. The private
 key is at `/mnt/user/appdata/redline-secrets/updater.key` — **losing it means existing installs
 can never update again**.

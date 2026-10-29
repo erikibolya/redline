@@ -152,10 +152,11 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         true,
         &[
             &sessions, &connect, &copy_link, &copy_mcp, &separator, &agent_start, &agent_stop,
-            &agent_repo, &agent_separator, &check, &quit,
+            &agent_repo, &agent_separator, &quit,
         ],
     )?;
-    let help = Submenu::with_items(app, "Help", true, &[&docs, &help_separator, &about])?;
+    let help =
+        Submenu::with_items(app, "Help", true, &[&docs, &check, &help_separator, &about])?;
     app.set_menu(Menu::with_items(app, &[&file, &help])?)?;
 
     let handler_ctx = ctx.clone();

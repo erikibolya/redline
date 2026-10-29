@@ -7,3 +7,5 @@ sessions/
 desktop/target/
 desktop/app/target/
 desktop/app/gen/
+
+desktop/app/tauri.dev.conf.json

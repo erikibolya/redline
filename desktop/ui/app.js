@@ -1683,6 +1683,8 @@ class Editor {
   async loadHistory() {
     const list = $("#history-list");
     if (!list) return;
+    // `inspector-empty` centres and pads its text; on a populated list it just adds dead space.
+    list.className = "inspector-empty";
     list.textContent = "Loading…";
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/history`);
@@ -1690,11 +1692,13 @@ class Editor {
       const counter = $("#history-count");
       if (counter) counter.textContent = String(rounds.length);
       if (!rounds.length) {
-        list.innerHTML = `<div class="inspector-empty">No earlier submissions.</div>`;
+        list.className = "inspector-empty";
+        list.textContent = "No earlier submissions.";
         return;
       }
+      list.className = "history-list";
       list.innerHTML = rounds.map((round) => `
-        <div class="ann-row" style="cursor:default">
+        <div class="ann-row history-row" style="cursor:default">
           <span class="glyph">↺</span>
           <span class="label">
             <b>${escapeHtml(stampTime(round.stamp))}</b>
@@ -1715,6 +1719,7 @@ class Editor {
       $$("[data-ghost]", list).forEach((button) =>
         button.addEventListener("click", () => this.toggleGhost(button.dataset.ghost)));
     } catch (error) {
+      list.className = "inspector-empty";
       list.textContent = `Could not load history: ${error.message}`;
     }
   }

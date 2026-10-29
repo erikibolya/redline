@@ -1,0 +1,82 @@
+name: dev build
+
+# Rolling dev channel: every push to `dev` publishes a prerelease under the moving `dev` tag.
+# The desktop app's "Install latest dev build…" reads
+#   https://github.com/<owner>/<repo>/releases/download/dev/latest.json
+# and "Revert to last stable version…" reads the normal `latest` release.
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "desktop/**"
+      - ".github/workflows/dev.yml"
+  workflow_dispatch:
+
+env:
+  # Dev builds must sort *above* the current stable line, otherwise the updater refuses them.
+  # Bump this when a new stable minor is released.
+  DEV_BASE_VERSION: "0.16.0"
+
+jobs:
+  windows:
+    name: windows dev build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop, desktop/app
+
+      - name: Version the dev build
+        shell: pwsh
+        run: |
+          $version = "${{ env.DEV_BASE_VERSION }}-dev.${{ github.run_number }}"
+          @{ version = $version } | ConvertTo-Json -Compress |
+            Set-Content desktop/app/tauri.dev.conf.json -Encoding utf8
+          "DEV_VERSION=$version" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Build the CLI and the agent
+        run: |
+          cargo build --release --manifest-path desktop/Cargo.toml -p redline
+          cargo build --release --manifest-path desktop/Cargo.toml -p redline-agent
+
+      - name: Build and publish the dev release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: desktop/app
+          tagName: dev
+          releaseName: "RedLine dev"
+          releaseDraft: false
+          prerelease: true
+          includeUpdaterJson: true
+          args: --bundles nsis --config tauri.dev.conf.json
+          releaseBody: |
+            Rolling **dev** build from `dev` at `${{ github.sha }}` (version `${{ env.DEV_VERSION }}`).
+
+            Install it from the app: tray → **Install latest dev build…**.
+            Go back to the last stable release: tray → **Revert to last stable version…**.
+
+            Dev builds are unreleased snapshots. Windows SmartScreen warns because the build is
+            unsigned: *More info → Run anyway*.
+
+      - name: Attach the CLI and the agent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release upload dev
+          desktop/target/release/redline.exe
+          desktop/target/release/redline-agent.exe --clobber

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.15.0 — 2026-10-29
+
+- **Dev update channel in the desktop app.** Help/tray gains *Install latest dev build…* (the
+  rolling `dev` prerelease) and *Revert to last stable version…* (the updater's comparator accepts
+  a downgrade, so a dev build can go back). Every push to `dev` publishes a dev build
+  (`.github/workflows/dev.yml`).
+- **History rows** are compact and bounded; the empty-state class no longer leaks into a populated
+  list.
+- The browser e2e waits for the canvas to actually swap after a round, not only for the metadata.
+
 ## 0.14.1 — 2026-10-29
 
 Fixes found by using rounds for real.
@@ -18,6 +28,10 @@ Fixes found by using rounds for real.
 
 ## Unreleased
 
+- **History rows are compact and bounded.** Each round was rendered as a full annotation card
+  inside the empty-state wrapper, whose 22 px padding and centred text left most of the section
+  white. The list is now a stack of small bordered rows (stamp + count, ghost / diff / screenshot
+  buttons) and drops the empty-state class once it has content.
 - **The canvas status pill moved below the toolbar.** It sat at `top: 14px`, the exact place the
   tool bar floats, so while a review was `submitted` the "Agent is working…" pill covered the
   tools. `--stage-toolbar-top` / `--stage-toolbar-height` now describe the bar once and the pill

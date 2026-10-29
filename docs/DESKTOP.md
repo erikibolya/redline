@@ -390,7 +390,7 @@ services:
     build:
       context: /path/to/redline
       dockerfile: desktop/crates/redline-agent/Dockerfile
-    image: redline-agent:0.13.3
+    image: redline-agent:0.15.0
     container_name: redline-agent
     restart: unless-stopped
     networks: [traefik_network]
@@ -420,3 +420,25 @@ Three things that bite:
 The agent container only needs the network, the token and the OpenCode CLI; the OpenCode server
 does the actual editing. Because it is a separate service, updating OpenCode no longer stops the
 loop — the agent reconnects by service name on the next submission.
+
+## Dev channel and revert
+
+`dev` is the integration branch. Stable releases still come from `v*` tags on `main`; every push
+to `dev` publishes a rolling prerelease under the moving **`dev`** tag
+(`.github/workflows/dev.yml`), versioned `<next-minor>-dev.<run number>` (bump `DEV_BASE_VERSION` in the
+workflow when a new stable minor ships).
+
+The desktop app's menu (RedLine/Help and the tray):
+
+| Item | Manifest | Behaviour |
+|---|---|---|
+| **Check for updates…** | `releases/latest/download/latest.json` | stable channel, upgrades only |
+| **Install latest dev build…** | `releases/download/dev/latest.json` | dev channel, upgrades only |
+| **Revert to last stable version…** | `releases/latest/download/latest.json` | same manifest, but the updater's `version_comparator` accepts an older version, so a downgrade actually installs |
+
+Both installers are signed with the same updater key, so the dev channel needs no extra secret.
+Dev builds are unsigned for Windows SmartScreen (no Authenticode), exactly like stable.
+
+Why a separate comparator for revert: the updater refuses to install anything that is not newer
+than the running app. Revert flips that check to "any different version" and lets the NSIS
+installer replace the dev build in place. Data (`%APPDATA%\redline`) is untouched.

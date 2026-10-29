@@ -353,12 +353,12 @@ a:hover { text-decoration: underline; }
 .ann-row .del:hover { color: var(--danger); background: rgba(225, 29, 72, .12); }
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
 /* History rounds are a list of small, bounded rows — no dead space around them. */
-#history-list.history-row.live {
+#history-list .history-row.live {
   background: rgba(47, 129, 247, .10);
   border-color: rgba(47, 129, 247, .28);
 }
-.history-row.selected { border-color: var(--accent); background: var(--panel-3); }
-.history-row.selected.live { background: rgba(47, 129, 247, .16); }
+#history-list .history-row.selected { border-color: var(--accent); background: var(--panel-3); }
+#history-list .history-row.selected.live { background: rgba(47, 129, 247, .16); }
 .history-list { display: flex; flex-direction: column; gap: 4px; }
 .history-row {
   padding: 4px 6px; gap: 6px; border-radius: 6px;

@@ -525,6 +525,13 @@ const main = async () => {
     historyState.current.includes(`${liveBefore} annotation`), historyState.current.trim());
   check("history marks the live and the selected row",
     historyState.live && historyState.selected, JSON.stringify(historyState));
+  const borders = await page.evaluate(() => {
+    const row = document.querySelector("#history-list .history-row.selected");
+    const style = getComputedStyle(row);
+    return [style.borderTopColor, style.borderRightColor, style.borderBottomColor];
+  });
+  check("selected row is outlined on every side",
+    borders[0] === borders[1] && borders[1] === borders[2], borders.join(" / "));
   await page.click("#viewing-bar");
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
 

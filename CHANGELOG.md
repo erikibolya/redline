@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **The conversation shows the agent's run at a glance.** A card under the step lines reads
+  **Working** with a pulsing dot while `agent_state` is `working` and tallies the round:
+  **Used 4 tools: Edit and Shell**, from the `tool` names sent with `progress`. It settles to
+  **Run finished** when the agent replies, counts only the current round, and stays out of the way
+  when nobody has reported anything. The browser e2e covers it.
+
 ## 0.18.0 — 2026-10-29
 
 - **Menu actions no longer run twice.** Tray items use their own `tray:` ids and the dispatcher

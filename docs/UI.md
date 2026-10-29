@@ -224,6 +224,12 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
 - **Agent state** pill in the header: `received` (the agent read the submission), `working` (it is
   doing something, with the latest activity line beside the conversation title) and `replied`.
   `seen_by_agent_at` records the first read.
+- **Run summary** at the tail of the conversation (v0.19): a card that reads **Working** with a
+  pulsing dot while `agent_state` is `working`, and **Used N tools: Edit and Shell** — the distinct
+  `tool` names the agent reported through `progress`, counted for the current round only. When the
+  agent answers it settles to **Run finished**; a round with no activity shows no card. This is the
+  interactive-run view an agent's own terminal chat shows, so the human does not have to read the
+  step lines to know whether anything is still happening.
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.

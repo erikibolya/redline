@@ -17,6 +17,13 @@ const uid = () =>
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+/** "edit, shell and run" → "Edit, Shell and Run", the way a person lists tools. */
+function listNames(names) {
+  const titled = names.map((name) => name.charAt(0).toUpperCase() + name.slice(1));
+  if (titled.length <= 1) return titled.join("");
+  return `${titled.slice(0, -1).join(", ")} and ${titled[titled.length - 1]}`;
+}
+
 function relativeTime(iso) {
   if (!iso) return "";
   const then = new Date(iso).getTime();
@@ -1969,6 +1976,44 @@ class Editor {
     }
   }
 
+  /// The step lines say *what* the agent did; this says *how much* and *whether it is still
+  /// going* — the question a human asks while staring at a submitted review. Modelled on the
+  /// run summary an interactive agent shows in its own chat ("Used 12 tools: Edit, Shell and Run").
+  runSummary() {
+    const events = this.events || [];
+    // Only this round: an earlier round's steps would inflate the count. A round starts at the
+    // submission, or — once the agent has posted the next screenshot — at that post.
+    const start = this.meta?.submitted_at
+      || (this.thread || []).filter((message) => message.image).map((message) => message.at).pop()
+      || "";
+    const round = start ? events.filter((event) => String(event.at || "") >= String(start)) : events;
+    if (!round.length) return "";
+
+    const toolEvents = round.filter((event) => event.state === "tool");
+    // Older agents narrate without `state`; counting their lines is closer than showing nothing.
+    const steps = toolEvents.length || round.length;
+    const tools = [];
+    for (const event of toolEvents.concat(toolEvents.length ? [] : round)) {
+      const name = String(event.tool || "").trim();
+      if (name && !tools.includes(name)) tools.push(name);
+    }
+    const used = tools.length
+      ? `Used ${plural(steps, "tool")}: ${escapeHtml(listNames(tools))}`
+      : `Used ${plural(steps, "tool")}`;
+    const last = round[round.length - 1];
+    const working = this.meta?.agent_state === "working";
+    // Once the agent answers, the reply above is the signal; the card keeps the tally.
+    const title = working
+      ? "Working"
+      : this.meta?.agent_state === "replied"
+        ? "Run finished"
+        : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
+    return `<div class="conv-run${working ? " working" : ""}">`
+      + `<span class="conv-run-mark" aria-hidden="true"></span><div>`
+      + `<div class="conv-run-title">${title}</div>`
+      + `<div class="conv-run-sub">${used}</div></div></div>`;
+  }
+
   renderConversation() {
     const log = $("#conv-log");
     if (!log) return;
@@ -2024,7 +2069,7 @@ class Editor {
         <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
-    const html = rendered + status.join("");
+    const html = rendered + status.join("") + this.runSummary();
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     this.convCount = items.length + status.length;
     // Only touch the DOM when something changed, and only follow the tail when the reader is

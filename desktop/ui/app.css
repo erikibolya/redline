@@ -443,6 +443,24 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .conv-wait b { color: var(--text); }
 .conv-wait code { font-size: 10px; color: var(--accent); }
 .conv-wait.quiet { border-style: solid; }
+/* The run summary: "Working" + how much the agent has done in this round. */
+.conv-run {
+  display: flex; align-items: flex-start; gap: 8px; border-radius: 10px; padding: 7px 9px;
+  border: 1px solid var(--border-soft); background: var(--panel-2);
+}
+.conv-run-mark { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); margin-top: 4px; flex: none; }
+.conv-run-title { font-size: 11px; color: var(--text); }
+.conv-run-sub { font-size: 11px; color: var(--muted); }
+.conv-run.working { border-color: rgba(47, 129, 247, .35); background: rgba(47, 129, 247, .07); }
+.conv-run.working .conv-run-title { color: var(--accent); }
+.conv-run.working .conv-run-mark { background: var(--accent); animation: conv-pulse 1.4s ease-in-out infinite; }
+@keyframes conv-pulse {
+  0%, 100% { opacity: .25; transform: scale(.8); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .conv-run.working .conv-run-mark { animation: none; opacity: 1; }
+}
 .composer { border-top: 1px solid var(--border-soft); padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 6px; }
 .composer textarea {
   width: 100%; min-height: 44px; max-height: 120px; resize: vertical; padding: 7px 8px;

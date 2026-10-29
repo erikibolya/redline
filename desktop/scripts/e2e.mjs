@@ -328,6 +328,28 @@ const main = async () => {
   await page.emulateTimezone(null);
   const composerEmpty = await page.$eval("#composer-text", (el) => el.value === "");
   check("composer clears after submit", composerEmpty);
+
+  // ---- the conversation carries a live run summary, like the agent's own chat ("Working —
+  // used 2 tools: Edit and Shell"), so the human sees the agent's work as it happens.
+  for (const [message, tool] of [["Reading the annotations", "edit"], ["Running the e2e", "shell"]]) {
+    await api("/mcp", {
+      method: "POST",
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 7, method: "tools/call",
+        params: { name: "progress", arguments: { session_id: id, message, state: "tool", tool } },
+      }),
+    });
+  }
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const runCard = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return card ? { text: card.textContent, working: card.classList.contains("working") } : null;
+  });
+  check("conversation summarises the running agent",
+    runCard?.working && runCard.text.includes("Working")
+      && runCard.text.includes("Used 2 tools: Edit and Shell"),
+    runCard ? runCard.text : "no run summary");
+
   // Those checks need the submitted state; now unlock and keep drawing.
   await stopReview();
 

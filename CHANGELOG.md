@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.1 — 2026-10-29
+
+- Hide the agent-state pill when there is no state (author `display` was overriding `[hidden]`).
+
 ## 0.9.0 — 2026-10-29
 
 The review becomes a conversation: the agent announces itself, and you submit from the chat.

@@ -117,6 +117,7 @@ a:hover { text-decoration: underline; }
 .pill.open { color: #93c5fd; border-color: #1e3a5f; background: #12233a; }
 .pill.submitted { color: #86efac; border-color: #14532d; background: #10231a; }
 .pill.resolved { color: #c4b5fd; border-color: #4c1d95; background: #1c142f; }
+.pill[hidden] { display: none; }
 .pill.agent { color: #fbbf24; border-color: #78350f; background: #231a08; }
 .pill.agent.working { color: #93c5fd; border-color: #1e3a5f; background: #12233a; }
 .pill.agent.replied { color: #86efac; border-color: #14532d; background: #10231a; }

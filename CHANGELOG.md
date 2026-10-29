@@ -64,6 +64,11 @@ Fixes found by using rounds for real.
 
 ## Unreleased
 
+- **The window follows the configured server.** The tray said *Server: …* from `config.json`
+  while the window could still be sitting on the local (or an old) server, so reviews were saved
+  somewhere the agent never watches. The label now reads **Configured**, *Open RedLine* navigates
+  the window to that server, and focusing a window left on another origin puts it back — except
+  the setup page, which is served locally on purpose.
 - **The submitted lock is a status pill, not a modal.** While a review was `submitted` a dark
   scrim plus a centred "Submitted — waiting for the agent / STOP unlocks the canvas" box covered
   the screenshot — while the same agent state already floated above the toolbar. The modal is

@@ -162,6 +162,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - **The start page printed the token** (`/api/config` returns it verbatim). Any screenshot of `/`
   leaked it — including one made by redline's own capture. Mask secrets at render time, keep the
   copy button working.
+- **Never slice a clock out of an ISO stamp.** The inspector did `iso.slice(11, 16)`, which is UTC:
+  a review submitted at 13:03 in Prague was shown to every reader as 12:03. Parse (`new Date`) and
+  format with the browser's locale — `clockTime()` / `stampTime()` in `app.js`. Capture screenshots
+  inherit the *container's* timezone (usually UTC), so a "fixed clocks" screenshot looks unfixed
+  unless you capture from a browser started with `TZ=Europe/Prague`.
 
 ## 8. Working rules
 

@@ -366,3 +366,57 @@ plain `cargo test` works with the MSVC toolchain; the `.cargo/config.toml` secti
 - macOS: menu-bar-only app (`ActivationPolicy::Accessory`) or normal Dock presence with a window?
 - Should `capture_review` bundle a headless Chrome (large) or require one on `PATH`?
 - Auto-update on by default, or opt-in until the first few releases settle?
+
+## Compose deployment (server + agent)
+
+`desktop/install-unraid.sh` is the one-liner for a single container. If a compose project owns the
+deployment (Compose Manager, docker compose), put the server and the agent in the same stack so the
+agent survives server updates:
+
+```yaml
+services:
+  redline:
+    image: ghcr.io/erikibolya/redline:browser
+    container_name: redline
+    restart: unless-stopped
+    networks: [traefik_network]
+    entrypoint: ["/redline"]
+    command: ["serve", "--host", "0.0.0.0", "--data-dir", "/data",
+              "--public-url", "https://redline.example"]
+    volumes: ["/mnt/user/appdata/redline:/data"]
+    # …the same Traefik labels the installer writes…
+
+  redline-agent:
+    build:
+      context: /path/to/redline
+      dockerfile: desktop/crates/redline-agent/Dockerfile
+    image: redline-agent:0.13.2
+    container_name: redline-agent
+    restart: unless-stopped
+    networks: [traefik_network]
+    depends_on: [redline]
+    working_dir: /repos/app            # must exist inside the OpenCode server too
+    env_file: /path/to/opencode/.env   # OPENCODE_PASSWORD
+    environment:
+      REDLINE_URL: http://redline:8788
+      REDLINE_AGENT_REPO: /repos/app
+      REDLINE_AGENT_OPENCODE_SERVER: http://opencode:4096
+      REDLINE_AGENT_MODEL: deepseek/deepseek-flash
+    volumes:
+      - /mnt/user/appdata/redline/token:/data/token:ro
+      - /srv/repos:/repos
+      - /path/to/opencode:/usr/local/bin/opencode:ro
+```
+
+Three things that bite:
+
+- **Auth.** A shared OpenCode server with `OPENCODE_PASSWORD` refuses `opencode run --server`
+  without that variable; give the agent the same environment.
+- **Paths.** `opencode run` sends its working directory to the server, so `REDLINE_AGENT_REPO`
+  must exist *inside the OpenCode container*, not just in the agent.
+- **Two owners.** Once compose owns the `redline` container name, do not run
+  `install-unraid.sh` again; update with `docker compose pull && docker compose up -d`.
+
+The agent container only needs the network, the token and the OpenCode CLI; the OpenCode server
+does the actual editing. Because it is a separate service, updating OpenCode no longer stops the
+loop — the agent reconnects by service name on the next submission.

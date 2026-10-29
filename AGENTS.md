@@ -111,6 +111,10 @@ traefik.http.services.redline.loadbalancer.server.port=8788
 When `REDLINE_DOMAIN` is set the container publishes **no** port and runs with
 `--public-url https://$DOMAIN`. `REDLINE_PUBLISH_PORT=1` keeps a LAN port (don't, unless needed).
 
+On holly the container is owned by a Compose project (`/boot/config/plugins/compose.manager/projects/redline`)
+together with `redline-agent`; `install-unraid.sh` must not be run there. See `docs/DESKTOP.md` §
+"Compose deployment".
+
 Env knobs: `REDLINE_DOMAIN`, `REDLINE_IMAGE`, `REDLINE_PORT`, `REDLINE_TOKEN`, `REDLINE_DATA`,
 `REDLINE_PUBLISH_PORT`, `REDLINE_CHROME` (browser binary for capture).
 Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`, `REDLINE_HOST`.

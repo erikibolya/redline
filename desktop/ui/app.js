@@ -542,9 +542,11 @@ class Editor {
     status.className = `pill ${this.meta.status}`;
     const waiting = this.meta.status === "submitted";
     const button = $("#submit");
-    button.textContent = waiting
-      ? "STOP"
-      : this.meta.status === "open" ? "Submit review" : "Submit again";
+    if (waiting) {
+      button.innerHTML = '<span class="stop-square" aria-hidden="true"></span>STOP';
+    } else {
+      button.textContent = this.meta.status === "open" ? "Submit review" : "Submit again";
+    }
     button.classList.toggle("stop", waiting);
     const composer = $("#composer-text");
     if (composer) {

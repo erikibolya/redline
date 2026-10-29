@@ -586,13 +586,20 @@ const main = async () => {
   await page.keyboard.press("Enter");
   await page.keyboard.up("Control");
   await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
-  const locked = await page.evaluate(() => ({
-    overlay: !document.querySelector("#review-lock").hidden,
-    stop: document.querySelector("#submit").textContent.trim(),
-    composer: document.querySelector("#composer-text").disabled,
-  }));
-  check("submitting locks the canvas and turns Submit into STOP",
-    locked.overlay && locked.stop === "STOP" && locked.composer, JSON.stringify(locked));
+  const locked = await page.evaluate(() => {
+    const button = document.querySelector("#submit");
+    return {
+      overlay: !document.querySelector("#review-lock").hidden,
+      stop: button.textContent.trim(),
+      red: getComputedStyle(button).backgroundColor,
+      square: Boolean(button.querySelector(".stop-square")),
+      composer: document.querySelector("#composer-text").disabled,
+    };
+  });
+  check("submitting locks the canvas and turns Submit into a red STOP with a square",
+    locked.overlay && locked.stop === "STOP" && locked.composer
+      && locked.red === "rgb(220, 38, 38)" && locked.square,
+    JSON.stringify(locked));
 
   await page.waitForFunction(() => {
     const button = document.querySelector("#submit");

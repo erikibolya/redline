@@ -134,8 +134,12 @@ a:hover { text-decoration: underline; }
   border: 1px solid #334155; color: #e2e8f0; font-size: 13px;
 }
 .review-lock .lock-box span { color: #94a3b8; font-size: 11px; }
-.btn.stop { background: #dc2626; border-color: #b91c1c; color: #fff; }
-.btn.stop:hover { background: #ef4444; }
+#submit.btn.stop { background: #dc2626; border-color: #b91c1c; color: #fff; }
+#submit.btn.stop:hover { background: #ef4444; }
+.btn.stop .stop-square {
+  display: inline-block; width: 9px; height: 9px; margin-right: 6px;
+  background: currentColor; border-radius: 1px; vertical-align: 0;
+}
 .viewing-bar {
   position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 7;
   padding: 5px 12px; border-radius: 999px; cursor: pointer;

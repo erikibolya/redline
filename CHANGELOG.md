@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.17.0 — 2026-10-29
+
+- **Submitting locks the canvas**: a dark overlay blocks editing and the composer is disabled
+  while `submitted`; the primary button turns into a red **STOP**.
+- **STOP** calls `POST /api/sessions/<id>/cancel`, unlocks the canvas and keeps the annotations.
+  A round no agent has read yet is withdrawn from history; a round the agent has seen stays.
+  The bridge watches the session every 2 s while the agent runs and kills it on cancel.
+
+
+- **A round is archived when it is submitted**, not when the next one replaces it. History fills
+  up immediately, keeps the source screenshot (`history/<stamp>-source.png`) and numbers rounds
+  oldest = 1. Two submissions in the same second get unique stamps.
+- **History is a round viewer**: `Current` is always the way back, every round is clickable and
+  opens the source screenshot plus its annotations read-only. The separate ghost (`◫`), text diff
+  (`Δ`) and open-PNG (`↗`) buttons are gone, and so is the ghost chip.
+- **The conversation no longer shows the round screenshot**; the canvas and History own it.
+- **Drafts**: unsent annotations and the composer text survive switching sessions. A new agent
+  round clears the draft (the coordinates belong to the old image) and says so. On quit, the shell
+  asks before discarding unsaved drafts (the webview marks the window title with `•`).
+
+
 ## 0.15.0 — 2026-10-29
 
 - **Dev update channel in the desktop app.** Help/tray gains *Install latest dev build…* (the

@@ -87,6 +87,28 @@ async function drag(page, from, to, steps = 12) {
 
 const main = async () => {
   // A real screenshot size, so the fitted zoom is not 1:1 — coordinate mapping must survive it.
+  // Submitting locks the canvas now; tests that keep drawing must stop first. Ask the "agent"
+  // to read the submission so the round is kept instead of withdrawn.
+  const stopReview = async () => {
+    await api("/mcp", {
+      method: "POST",
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "get_feedback", arguments: { session_id: id } },
+      }),
+    });
+    // The submit button is briefly disabled ("Submitted ✓") right after a submit.
+    await page.waitForFunction(() => {
+      const button = document.querySelector("#submit");
+      return button && !button.disabled && button.textContent.trim() === "STOP";
+    }, { timeout: 5000 });
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.click("#submit");
+    await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
+  };
+
   const created = await api("/api/sessions", {
     method: "POST",
     body: JSON.stringify({ title: "e2e canvas", image_base64: makePng(), project: "E2E" }),
@@ -139,8 +161,6 @@ const main = async () => {
   await page.click("#new-cancel");
 
   await page.waitForSelector(".rail-project", { timeout: 5000 });
-  const ghostHidden = await page.$eval("#ghost-pill", (el) => el.hidden);
-  check("ghost chip stays hidden until a round is ghosted", ghostHidden);
   const projectHeader = await page.$eval(".rail-project .pname", (el) => el.textContent.trim());
   check("rail groups sessions by project", projectHeader === "E2E", `header=${projectHeader}`);
 
@@ -185,7 +205,10 @@ const main = async () => {
   );
 
   // ---- move it with the select tool
-  // Drawing focuses the note field, so hand the keyboard back to the canvas first.
+  // Drawing focuses the note field on the next frame; wait for it, then hand the keyboard back.
+  await page
+    .waitForFunction(() => document.activeElement?.id === "note-text", { timeout: 2000 })
+    .catch(() => {});
   await page.evaluate(() => document.activeElement?.blur());
   await page.keyboard.press("v");
   const centre = at(310, 230);
@@ -296,6 +319,8 @@ const main = async () => {
   await page.emulateTimezone(null);
   const composerEmpty = await page.$eval("#composer-text", (el) => el.value === "");
   check("composer clears after submit", composerEmpty);
+  // Those checks need the submitted state; now unlock and keep drawing.
+  await stopReview();
 
   // ---- multi-select with shift-click, then align left
   await page.keyboard.press("r");
@@ -335,19 +360,33 @@ const main = async () => {
   check("a second submission archives the first round", history.submissions.length >= 1,
     `${history.submissions.length} archived`);
 
-  // ---- ghost the previous round behind the current annotations
-  await page.click("#history-block > summary");
-  await page.waitForSelector("#history-list [data-ghost]", { timeout: 5000 });
-  await page.$eval("#history-list [data-ghost]", (button) => button.click());
-  await page.waitForFunction(() => (window.redline.ghosts || []).length > 0, { timeout: 5000 });
-  const ghost = await page.evaluate(() => ({
-    count: window.redline.ghosts.length,
-    pill: !document.querySelector("#ghost-pill").hidden,
+  // ---- history opens a previous round read-only, and Current brings the live canvas back
+  if (!(await page.$eval("#history-block", (el) => el.open))) {
+    await page.click("#history-block > summary");
+  }
+  await page.waitForFunction(
+    () => document.querySelectorAll("#history-list [data-round]").length > 0,
+    { timeout: 5000 },
+  );
+  const opened = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#history-list [data-round]")];
+    const target = rows.find((row) => row.dataset.round !== "current") || rows[0];
+    target?.click();
+    return Boolean(target);
+  });
+  check("history lists at least one round", opened);
+  await page.waitForFunction(() => Boolean(window.redline.viewing), { timeout: 5000 });
+  const viewing = await page.evaluate(() => ({
+    round: window.redline.viewing.round,
+    readonly: window.redline.annotations === window.redline.viewing.annotations,
+    bar: !document.querySelector("#viewing-bar").hidden,
   }));
-  check("ghost overlay shows the previous round", ghost.count >= 1 && ghost.pill, JSON.stringify(ghost));
-  await page.$eval("#ghost-pill", (button) => button.click());
-  const ghostCleared = await page.evaluate(() => window.redline.ghosts === null);
-  check("ghost overlay can be cleared", ghostCleared);
+  check("history opens a round read-only", viewing.round >= 1 && viewing.readonly && viewing.bar,
+    JSON.stringify(viewing));
+  await page.click("#viewing-bar");
+  await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
+  check("Current returns to the live canvas", true);
+  await stopReview();
 
   // ---- ellipse tool draws a real ellipse
   await page.keyboard.press("e");
@@ -400,7 +439,8 @@ const main = async () => {
 
   // ---- diff between the archived round and now
   const rounds = await api(`/api/sessions/${id}/history`);
-  const stamp = rounds.submissions[0]?.stamp;
+  // The newest entry is the live submission (every submit is a round now); compare the oldest.
+  const stamp = (rounds.submissions[rounds.submissions.length - 1] || rounds.submissions[0])?.stamp;
   if (stamp) {
     const diff = await api(`/api/sessions/${id}/history/${stamp}/diff`);
     check("diff endpoint compares rounds", typeof diff.from.annotations === "number"
@@ -476,9 +516,108 @@ const main = async () => {
     round.image);
   check("canvas reloads the new round (cache-busted)", round.src.includes(round.image),
     round.src);
-  check("agent round shows in the conversation with its picture",
-    round.text.includes("e2e next round") && round.picture, JSON.stringify(round).slice(0, 120));
+  check("agent round appears in the conversation, without a picture",
+    round.text.includes("e2e next round") && !round.picture, JSON.stringify(round).slice(0, 120));
   check("round fills the history", Number(round.history) >= 1, round.history);
+
+  // ---- the live row keeps its own count while another round is previewed
+  if (!(await page.$eval("#history-block", (el) => el.open))) {
+    await page.click("#history-block > summary");
+  }
+  await page.evaluate(() => window.redline.loadHistory());
+  await page.waitForFunction(
+    () => Boolean(document.querySelector('#history-list [data-round="current"]')),
+    { timeout: 5000 },
+  );
+  const liveBefore = await page.evaluate(() => window.redline.annotations.length);
+
+  await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#history-list [data-round]")];
+    (rows.find((row) => row.dataset.round !== "current") || rows[0]).click();
+  });
+  await page.waitForFunction(() => Boolean(window.redline.viewing), { timeout: 5000 });
+  // `viewRound` re-renders the list asynchronously; wait for the rebuild before reading it.
+  await page.waitForFunction(
+    () => Boolean(document.querySelector('#history-list [data-round="current"]')),
+    { timeout: 5000 },
+  );
+  const historyState = await page.evaluate(() => ({
+    current: document.querySelector('#history-list [data-round="current"]')?.textContent || "",
+    live: Boolean(document.querySelector("#history-list .history-row.live")),
+    selected: Boolean(document.querySelector("#history-list .history-row.selected")),
+  }));
+  check("Current keeps the live count while a round is previewed",
+    historyState.current.includes(`${liveBefore} annotation`), historyState.current.trim());
+  check("history marks the live and the selected row",
+    historyState.live && historyState.selected, JSON.stringify(historyState));
+  const borders = await page.evaluate(() => {
+    const row = document.querySelector("#history-list .history-row.selected");
+    const style = getComputedStyle(row);
+    return [style.borderTopColor, style.borderRightColor, style.borderBottomColor];
+  });
+  check("selected row is outlined on every side",
+    borders[0] === borders[1] && borders[1] === borders[2], borders.join(" / "));
+  await page.click("#viewing-bar");
+  await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
+
+  // ---- unsent annotations survive a session switch
+  await page.keyboard.press("r");
+  await drag(page, at(300, 520), at(420, 580));
+  const beforeSwitch = await page.evaluate(() => window.redline.annotations.length);
+  const other = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "draft target", image_base64: makePng() }),
+  });
+  await page.evaluate((otherId) => window.redline.openSession(otherId), other.meta.id);
+  await page.waitForFunction((otherId) => window.redline.sessionId === otherId, {}, other.meta.id);
+  await page.evaluate((self) => window.redline.openSession(self), id);
+  await page.waitForFunction(
+    (self) => window.redline.sessionId === self && window.redline.annotations.length > 0,
+    { timeout: 5000 },
+    id,
+  );
+  const afterSwitch = await page.evaluate(() => window.redline.annotations.length);
+  check("unsent annotations survive a session switch", afterSwitch === beforeSwitch,
+    `${beforeSwitch} → ${afterSwitch}`);
+
+  // ---- submitting locks the canvas; STOP takes the submission back
+  const beforeStop = await page.evaluate(() => window.redline.annotations.length);
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Control");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  // Let the "Submitted ✓" timeout fire: it used to overwrite STOP with "Submit again".
+  await new Promise((resolve) => setTimeout(resolve, 1700));
+  const locked = await page.evaluate(() => {
+    const button = document.querySelector("#submit");
+    return {
+      overlay: !document.querySelector("#review-lock").hidden,
+      stop: button.textContent.trim(),
+      red: getComputedStyle(button).backgroundColor,
+      square: Boolean(button.querySelector(".stop-square")),
+      composer: document.querySelector("#composer-text").disabled,
+    };
+  });
+  check("submitting locks the canvas and turns Submit into a red STOP with a square",
+    locked.overlay && locked.stop === "STOP" && locked.composer
+      && locked.red === "rgb(220, 38, 38)" && locked.square,
+    JSON.stringify(locked));
+
+  await page.waitForFunction(() => {
+    const button = document.querySelector("#submit");
+    return button && !button.disabled && button.textContent.trim() === "STOP";
+  }, { timeout: 5000 });
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
+  const unlocked = await page.evaluate(() => ({
+    overlay: !document.querySelector("#review-lock").hidden,
+    label: document.querySelector("#submit").textContent.trim(),
+    annotations: window.redline.annotations.length,
+  }));
+  check("STOP unlocks the canvas and keeps the annotations",
+    !unlocked.overlay && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
+    JSON.stringify(unlocked));
 
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });

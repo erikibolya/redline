@@ -193,6 +193,15 @@ pub struct HistoryEntry {
     pub stamp: String,
     pub annotations: usize,
     pub png: bool,
+    /// The round's source screenshot (`<stamp>-source.png`) is available for the read-only viewer.
+    #[serde(default)]
+    pub source: bool,
+    /// 1-based round number, oldest first.
+    #[serde(default)]
+    pub round: usize,
+    /// This entry is the submission the session is currently parked on.
+    #[serde(default)]
+    pub current: bool,
 }
 
 fn safe_stamp(stamp: &str) -> String {
@@ -207,25 +216,45 @@ fn safe_stamp(stamp: &str) -> String {
 
 /// Keep the submission we are about to overwrite. Without this, "Submit again" destroys the
 /// previous round and a re-review has nothing to diff against.
-fn archive_previous(dir: &std::path::Path, stamp: &str) -> Result<()> {
-    let annotations = dir.join("annotations.json");
-    let Ok(text) = fs::read_to_string(&annotations) else {
-        return Ok(());
-    };
-    let Ok(set) = serde_json::from_str::<AnnotationSet>(&text) else {
-        return Ok(());
-    };
-    if set.annotations.is_empty() {
-        return Ok(());
+/// Two submissions can land in the same second; the archive name must still be unique.
+fn unique_round_stamp(dir: &std::path::Path, at: &str) -> String {
+    let base = safe_stamp(at);
+    let history = dir.join("history");
+    let mut candidate = base.clone();
+    let mut counter = 1;
+    while history.join(format!("{candidate}.json")).exists() {
+        counter += 1;
+        candidate = format!("{base}-{counter}");
     }
+    candidate
+}
+
+/// Snapshot a submitted round into `history/` **at submit time**, so History fills up immediately
+/// and a round can be revisited read-only. Empty rounds are kept: a prompt without annotations is
+/// still a round.
+fn archive_round(
+    dir: &std::path::Path,
+    stamp: &str,
+    set: &AnnotationSet,
+    source: &str,
+) -> Result<()> {
     let history = dir.join("history");
     fs::create_dir_all(&history)?;
     let safe = safe_stamp(stamp);
-    write_atomic(&history.join(format!("{safe}.json")), text.as_bytes())?;
+    write_json(
+        &history.join(format!("{safe}.json")),
+        &serde_json::to_value(set)?,
+    )?;
     let png = dir.join("annotated.png");
     if png.is_file() {
         let bytes = fs::read(&png)?;
         write_atomic(&history.join(format!("{safe}.png")), &bytes)?;
+    }
+    // The source screenshot lets the viewer re-render the round crisply and read-only.
+    let source_path = dir.join(source);
+    if source_path.is_file() {
+        let bytes = fs::read(&source_path)?;
+        write_atomic(&history.join(format!("{safe}-source.png")), &bytes)?;
     }
     prune_history(&history, 20)?;
     Ok(())
@@ -250,6 +279,7 @@ fn prune_history(history: &std::path::Path, keep: usize) -> Result<()> {
         let oldest = stamps.remove(0);
         let _ = fs::remove_file(history.join(format!("{oldest}.json")));
         let _ = fs::remove_file(history.join(format!("{oldest}.png")));
+        let _ = fs::remove_file(history.join(format!("{oldest}-source.png")));
     }
     Ok(())
 }
@@ -528,6 +558,8 @@ impl Store {
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
+            cancelled_at: None,
+            round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -585,6 +617,31 @@ impl Store {
         ))
     }
 
+    /// Stop a submission. The canvas stays as it is; the agent is supposed to stop.
+    ///
+    /// If no agent has read the submission yet the round is withdrawn from history (the human
+    /// stopped it by mistake). Once an agent has seen it the round stays: it may have acted on it.
+    pub fn cancel(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        if meta.status != Status::Submitted {
+            return Err(Error::BadRequest("nothing to cancel".to_string()));
+        }
+        if meta.seen_by_agent_at.is_none() {
+            if let Some(stamp) = meta.round_stamp.take() {
+                let history = dir.join("history");
+                let _ = fs::remove_file(history.join(format!("{stamp}.json")));
+                let _ = fs::remove_file(history.join(format!("{stamp}.png")));
+                let _ = fs::remove_file(history.join(format!("{stamp}-source.png")));
+            }
+        }
+        meta.status = Status::Open;
+        meta.agent_state = None;
+        meta.cancelled_at = Some(now());
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
     /// Post a new round into an existing session: the agent's answer, optionally with a fresh
     /// screenshot. This is what keeps one task as one rail item instead of a new review per turn.
     ///
@@ -602,7 +659,6 @@ impl Store {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         let stamp = now();
-        archive_previous(&dir, meta.submitted_at.as_deref().unwrap_or(&stamp))?;
 
         let mut image_file = meta.image.clone();
         if let Some(bytes) = image {
@@ -649,10 +705,9 @@ impl Store {
     pub fn submit(&self, id: &str, submission: &Submission) -> Result<(Meta, AnnotationSet)> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
-        // Archive the round we are about to replace (no-op on the first submission).
-        archive_previous(&dir, meta.submitted_at.as_deref().unwrap_or(&now()))?;
-        let mut meta = self.require(id)?;
         let submitted_at = now();
+        let round_stamp = unique_round_stamp(&dir, &submitted_at);
+        meta.round_stamp = Some(round_stamp.clone());
         meta.status = Status::Submitted;
         meta.submitted_at = Some(submitted_at.clone());
         // A fresh round has not been seen by the agent yet.
@@ -681,7 +736,7 @@ impl Store {
                 height: submission.height,
             }),
             annotations: submission.annotations.clone(),
-            submitted_at: Some(submitted_at),
+            submitted_at: Some(submitted_at.clone()),
         };
 
         write_json(&dir.join("annotations.json"), &serde_json::to_value(&set)?)?;
@@ -700,6 +755,8 @@ impl Store {
             write_atomic(&dir.join("annotated.png"), &bytes)?;
         }
 
+        // The round exists as soon as it is submitted, not when the next one replaces it.
+        archive_round(&dir, &round_stamp, &set, &meta.image)?;
         Ok((meta, set))
     }
 
@@ -757,11 +814,26 @@ impl Store {
                 .unwrap_or(0);
             entries.push(HistoryEntry {
                 png: history.join(format!("{stamp}.png")).is_file(),
+                source: history.join(format!("{stamp}-source.png")).is_file(),
                 stamp,
                 annotations,
+                round: 0,
+                current: false,
             });
         }
         entries.sort_by(|a, b| b.stamp.cmp(&a.stamp));
+        let total = entries.len();
+        let meta = self.require(id)?;
+        let current = if meta.status == Status::Submitted {
+            meta.round_stamp.clone()
+        } else {
+            None
+        };
+        for (index, entry) in entries.iter_mut().enumerate() {
+            // Newest first, but numbered oldest = 1.
+            entry.round = total - index;
+            entry.current = current.as_deref() == Some(entry.stamp.as_str());
+        }
         Ok(entries)
     }
 

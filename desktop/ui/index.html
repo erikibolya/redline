@@ -24,8 +24,6 @@ try {
     <div class="header-actions">
       <span class="pill" id="session-status">open</span>
       <span class="pill agent" id="agent-state" hidden>working</span>
-      <button class="btn ghost-chip" id="ghost-pill" hidden
-              title="Clear the comparison">Ghost · <b id="ghost-stamp"></b> ✕</button>
       <button class="btn icon" data-help-open title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
       <button class="btn icon" data-theme-toggle title="Toggle theme">☀</button>
       <button class="btn icon" id="toggle-rail" title="Toggle sessions ( [ )" aria-label="Toggle sessions">☰</button>
@@ -45,7 +43,14 @@ try {
 
   <main class="stage tool-select" id="stage">
     <canvas id="canvas"></canvas>
+    <div class="review-lock" id="review-lock" hidden>
+      <div class="lock-box">
+        <b>Submitted — waiting for the agent.</b>
+        <span>STOP unlocks the canvas for another round.</span>
+      </div>
+    </div>
     <div class="stage-status" id="stage-status" hidden></div>
+    <div class="viewing-bar" id="viewing-bar" hidden></div>
 
     <div class="options">
       <button class="tool" data-tool="select" aria-pressed="true" title="Select / move (V)">

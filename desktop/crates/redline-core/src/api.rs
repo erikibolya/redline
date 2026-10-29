@@ -99,6 +99,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/api/sessions/{id}/reopen", post(reopen))
+        .route("/api/sessions/{id}/cancel", post(cancel))
         .route("/api/sessions/{id}/history", get(history))
         .route("/api/sessions/{id}/thread", get(agent_thread))
         .route("/api/sessions/{id}/events", get(agent_events))
@@ -514,6 +515,13 @@ async fn resolve(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     Ok(Json(json!({ "meta": state.store.resolve(&id)? })))
+}
+
+async fn cancel(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(json!({ "meta": state.store.cancel(&id)? })))
 }
 
 async fn reopen(

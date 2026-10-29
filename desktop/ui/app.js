@@ -370,8 +370,13 @@ class Editor {
     this.annotations = [];
     this.history = [];
     this.future = [];
-    this.ghosts = null;
-    this.ghostStamp = null;
+    this.drafts = new Map();
+    this.locked = false;
+    this.serverAnnotations = "[]";
+    this.viewing = null;
+    this.live = null;
+    this.historyEntries = [];
+    this.draftNotice = null;
     // The conversation poll fills these; until it lands, `renderHeader` must not trip over
     // an undefined list (a fresh load of a submitted session renders the header first).
     this.events = [];
@@ -452,6 +457,7 @@ class Editor {
 
   async openSession(id) {
     if (!id || id === this.sessionId) return;
+    this.saveDraft();
     history.pushState({ id }, "", `/s/${encodeURIComponent(id)}?`);
     this.sessionId = id;
     this.root.dataset.sessionId = id;
@@ -461,16 +467,23 @@ class Editor {
 
   async load(id) {
     $("#stage").classList.remove("hidden");
+    this.viewing = null;
+    this.live = null;
+    this.updateViewingBar();
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
-      this.annotations = (data.annotations && data.annotations.annotations) || [];
+      const server = (data.annotations && data.annotations.annotations) || [];
+      this.serverAnnotations = JSON.stringify(server);
+      const draft = this.drafts.get(id);
+      this.annotations = draft ? draft.annotations : server;
+      const composer = $("#composer-text");
+      if (composer) composer.value = draft ? draft.prompt || "" : "";
       this.history = [];
       this.future = [];
       this.seenCount = 0;
       this.convCount = 0;
       this.setNewBadge(0);
-      this.setGhost(null, []);
       this.selected.clear();
       this.renderInspector();
       this.renderHeader();
@@ -527,8 +540,22 @@ class Editor {
     const status = $("#session-status");
     status.textContent = this.meta.status;
     status.className = `pill ${this.meta.status}`;
-    const submitted = this.meta.status !== "open";
-    $("#submit").textContent = submitted ? "Submit again" : "Submit review";
+    const waiting = this.meta.status === "submitted";
+    const button = $("#submit");
+    if (waiting) {
+      button.innerHTML = '<span class="stop-square" aria-hidden="true"></span>STOP';
+    } else {
+      button.textContent = this.meta.status === "open" ? "Submit review" : "Submit again";
+    }
+    button.classList.toggle("stop", waiting);
+    const composer = $("#composer-text");
+    if (composer) {
+      composer.disabled = waiting;
+      composer.placeholder = waiting
+        ? "Waiting for the agent — press STOP to edit again"
+        : "What should change? Sent with the annotations…";
+    }
+    this.updateLock();
     const stageStatus = $("#stage-status");
     if (stageStatus) {
       const submitted = this.meta.status === "submitted";
@@ -547,7 +574,7 @@ class Editor {
       agent.textContent = state || "";
       agent.className = `pill agent ${state || ""}`;
     }
-    document.title = `${this.meta.title || this.meta.id} · RedLine`;
+    this.applyTitle();
     const idLabel = $("#session-id-status");
     if (idLabel) idLabel.textContent = this.meta.id;
   }
@@ -580,7 +607,6 @@ class Editor {
       });
     }
     $("#submit").addEventListener("click", () => this.submit());
-    $("#ghost-pill")?.addEventListener("click", () => this.setGhost(null, []));
     const convLog = $("#conv-log");
     if (convLog) {
       convLog.addEventListener("scroll", () => {
@@ -591,6 +617,7 @@ class Editor {
       });
       $("#conv-new")?.addEventListener("click", () => this.seenConversation());
     }
+    $("#viewing-bar")?.addEventListener("click", () => this.showCurrent());
     $("#toggle-rail").addEventListener("click", () => {
       const app = $("#app");
       app.classList.toggle("rail-hidden");
@@ -677,6 +704,7 @@ class Editor {
     addEventListener("popstate", () => {
       const id = location.pathname.split("/").filter(Boolean).pop();
       if (id && id !== this.sessionId) {
+        this.saveDraft();
         this.sessionId = id;
         this.rail.setSelected(id);
         this.load(id);
@@ -766,6 +794,7 @@ class Editor {
   }
 
   setTool(tool) {
+    if (this.viewing || this.locked) return;
     if (!TOOLS.includes(tool)) return;
     this.tool = tool;
     this.syncToolButtons();
@@ -855,12 +884,6 @@ class Editor {
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(this.image, 0, 0);
 
-    if (this.ghosts?.length) {
-      ctx.save();
-      ctx.globalAlpha = 0.35;
-      for (const annotation of this.ghosts) this.paint(ctx, annotation, false);
-      ctx.restore();
-    }
     this.annotations.forEach((annotation, index) => {
       this.paint(ctx, annotation, this.selected.has(index));
     });
@@ -1255,7 +1278,7 @@ class Editor {
     const pinch = { start: null, scale: 1 };
 
     stage.addEventListener("pointerdown", (event) => {
-      if (!this.image) return;
+      if (!this.image || this.viewing || this.locked) return;
       // The options bar and the inline text editor live inside the stage. Capturing the pointer
       // for marquee/pan on those would swallow their click events.
       if (event.target.closest(".options, .text-editor")) return;
@@ -1571,6 +1594,21 @@ class Editor {
 
   renderInspector() {
     const body = $("#ann-list");
+    if (this.viewing || this.locked) {
+      const editor = $("#note-editor");
+      if (editor) editor.classList.add("hidden");
+      $("#ann-count").textContent = String(this.annotations.length);
+      body.innerHTML = this.annotations.map((annotation, index) => {
+        const label = String(
+          annotation.note || annotation.text || `${annotation.type}`,
+        );
+        return `<div class="ann-row" style="cursor:default">
+          <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
+          <span class="label"><b>${escapeHtml(label)}</b><span>${escapeHtml(annotation.type)}</span></span>
+        </div>`;
+      }).join("") || `<div class="inspector-empty">No annotations in this round.</div>`;
+      return;
+    }
     const count = this.annotations.length;
     $("#ann-count").textContent = this.selected.size > 1
       ? `${this.selected.size}/${count}`
@@ -1651,102 +1689,169 @@ class Editor {
     this.render();
   }
 
-  setGhost(stamp, annotations) {
-    this.ghostStamp = stamp;
-    this.ghosts = stamp ? annotations : null;
-    const pill = $("#ghost-pill");
-    if (pill) {
-      pill.hidden = !stamp;
-      const label = $("#ghost-stamp");
-      if (label) label.textContent = stamp ? stampTime(stamp) : "";
-    }
-    this.render();
-  }
-
-  async toggleGhost(stamp) {
-    if (this.ghostStamp === stamp) {
-      this.setGhost(null, []);
-      return;
-    }
-    try {
-      const response = await fetch(`/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(`${stamp}.json`)}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const set = await response.json();
-      this.setGhost(stamp, Array.isArray(set.annotations) ? set.annotations : []);
-    } catch (error) {
-      console.warn("ghost failed", error);
-    }
-  }
-
   // ---------------------------------------------------------- history
 
   async loadHistory() {
     const list = $("#history-list");
     if (!list) return;
-    // `inspector-empty` centres and pads its text; on a populated list it just adds dead space.
     list.className = "inspector-empty";
     list.textContent = "Loading…";
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/history`);
       const rounds = data.submissions || [];
-      const counter = $("#history-count");
-      if (counter) counter.textContent = String(rounds.length);
-      if (!rounds.length) {
+      this.historyEntries = rounds;
+      const currentArchived = rounds.find((round) => round.current);
+      const rows = [];
+      // The live count belongs to the canvas, never to the round being previewed.
+      const liveCount = this.viewing
+        ? (this.live?.count ?? 0)
+        : (this.annotations || []).length;
+      // `Current` is the way back from a historical round; it is omitted when the newest
+      // archived round *is* the live one (labelled "Round N (current)" instead).
+      if (!currentArchived) {
+        rows.push(`<div class="ann-row history-row live${this.viewing ? "" : " selected"}"
+                        data-round="current" role="button" tabindex="0">
+          <span class="glyph">●</span>
+          <span class="label"><b>Current</b><span>${plural(liveCount, "annotation")} · live</span></span>
+        </div>`);
+      }
+      for (const round of rounds) {
+        const isLive = Boolean(round.current);
+        const selected = this.viewing
+          ? this.viewing.stamp === round.stamp
+          : isLive;
+        rows.push(`<div class="ann-row history-row${isLive ? " live" : ""}${selected ? " selected" : ""}"
+                        data-round="${escapeHtml(round.stamp)}" role="button" tabindex="0">
+          <span class="glyph">${round.round}</span>
+          <span class="label">
+            <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
+            <span>${escapeHtml(stampTime(round.stamp))} · ${plural(round.annotations, "annotation")}${
+              round.source ? " · image" : ""
+            }</span>
+          </span>
+        </div>`);
+      }
+      if (!rows.length) {
         list.className = "inspector-empty";
-        list.textContent = "No earlier submissions.";
+        list.textContent = "No rounds yet.";
         return;
       }
       list.className = "history-list";
-      list.innerHTML = rounds.map((round) => `
-        <div class="ann-row history-row" style="cursor:default">
-          <span class="glyph">↺</span>
-          <span class="label">
-            <b>${escapeHtml(stampTime(round.stamp))}</b>
-            <span>${plural(round.annotations, "annotation")}${round.png ? " · image" : ""}</span>
-          </span>
-          <button class="del" style="opacity:1" data-ghost="${escapeHtml(round.stamp)}"
-                  title="Show this round behind the current annotations">◫</button>
-          <button class="del" style="opacity:1" data-diff="${escapeHtml(round.stamp)}"
-                  title="What changed since this round">Δ</button>
-          ${round.png ? `<a class="del" style="opacity:1;text-decoration:none" target="_blank"
-              href="/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(round.stamp)}.png"
-              title="Open that round's screenshot">↗</a>` : ""}
-        </div>
-        <pre class="pre hidden" id="diff-${escapeHtml(round.stamp)}"></pre>`).join("");
-
-      $$("[data-diff]", list).forEach((button) =>
-        button.addEventListener("click", () => this.loadDiff(button.dataset.diff)));
-      $$("[data-ghost]", list).forEach((button) =>
-        button.addEventListener("click", () => this.toggleGhost(button.dataset.ghost)));
+      list.innerHTML = rows.join("");
+      const counter = $("#history-count");
+      if (counter) counter.textContent = String(rows.length);
+      $$("[data-round]", list).forEach((row) => {
+        const go = () => row.dataset.round === "current"
+          ? this.showCurrent()
+          : this.viewRound(row.dataset.round);
+        row.addEventListener("click", go);
+        row.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            go();
+          }
+        });
+      });
     } catch (error) {
       list.className = "inspector-empty";
       list.textContent = `Could not load history: ${error.message}`;
     }
   }
 
-  async loadDiff(stamp) {
-    const block = document.getElementById(`diff-${stamp}`);
-    if (!block) return;
-    if (!block.classList.contains("hidden")) {
-      block.classList.add("hidden");
-      return;
-    }
-    block.classList.remove("hidden");
-    block.textContent = "Comparing…";
+  /// A submitted round is history: show its source screenshot and archived annotations, read-only.
+  async viewRound(stamp) {
+    if (this.viewing?.stamp === stamp) return;
+    this.saveDraft();
     try {
-      const data = await api(
-        `/api/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(stamp)}/diff`,
+      const response = await fetch(
+        `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(`${stamp}.json`)}`,
       );
-      const lines = [];
-      for (const change of data.added) lines.push(`+ ${change.summary}`);
-      for (const change of data.removed) lines.push(`- ${change.summary}`);
-      for (const change of data.changed) lines.push(`~ ${change.summary} (edited)`);
-      block.textContent = lines.length
-        ? `${data.from.annotations} → ${data.to.annotations} annotations\n\n${lines.join("\n")}`
-        : "No changes since this round.";
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const set = await response.json();
+      const round = (this.historyEntries || []).find((entry) => entry.stamp === stamp);
+      const file = round?.source ? `${stamp}-source.png` : `${stamp}.png`;
+      const image = await this.loadImageFrom(
+        `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(file)}`,
+      );
+      if (!image) return;
+      if (!this.viewing) {
+        this.live = {
+          image: this.image,
+          annotations: this.annotations,
+          meta: this.meta,
+          count: this.annotations.length,
+        };
+      }
+      this.viewing = {
+        stamp,
+        round: round?.round || 0,
+        annotations: Array.isArray(set.annotations) ? set.annotations : [],
+      };
+      this.image = image;
+      this.annotations = this.viewing.annotations;
+      this.selected.clear();
+      this.updateViewingBar();
+      this.renderHeader();
+      this.renderInspector();
+      this.fit();
+      this.render();
+      this.loadHistory();
     } catch (error) {
-      block.textContent = `Could not compare: ${error.message}`;
+      console.warn("round view failed", error);
     }
+  }
+
+  async showCurrent() {
+    this.viewing = null;
+    this.live = null;
+    this.updateViewingBar();
+    try {
+      const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}`);
+      this.meta = data.meta;
+      this.serverAnnotations = JSON.stringify(
+        (data.annotations && data.annotations.annotations) || [],
+      );
+      this.annotations = (data.annotations && data.annotations.annotations) || [];
+      const draft = this.drafts.get(this.sessionId);
+      if (draft) {
+        this.annotations = draft.annotations;
+        const composer = $("#composer-text");
+        if (composer) composer.value = draft.prompt || "";
+      }
+      await this.loadImage(this.meta.image);
+      this.selected.clear();
+      this.renderHeader();
+      this.renderInspector();
+      this.fit();
+      this.render();
+      this.loadHistory();
+    } catch (error) {
+      console.warn("back to current failed", error);
+    }
+  }
+
+  updateLock() {
+    this.locked = this.meta?.status === "submitted" && !this.viewing;
+    const overlay = $("#review-lock");
+    if (overlay) overlay.hidden = !this.locked;
+  }
+
+  updateViewingBar() {
+    const bar = $("#viewing-bar");
+    if (!bar) return;
+    bar.hidden = !this.viewing;
+    if (this.viewing) {
+      bar.textContent = `Viewing round ${this.viewing.round || ""} — back to current`;
+    }
+  }
+
+  loadImageFrom(url) {
+    return new Promise((resolve) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => resolve(null);
+      image.src = url;
+    });
   }
 
   // ---------------------------------------------------------- conversation
@@ -1762,6 +1867,8 @@ class Editor {
   async loadConversation({ quiet = false } = {}) {
     const log = $("#conv-log");
     if (!log) return;
+    // A historical round is a viewer; the live poll must not overwrite it.
+    if (this.viewing) return;
     if (!quiet && !log.childElementCount) {
       log.innerHTML = `<div class="inspector-empty">Loading…</div>`;
     }
@@ -1812,12 +1919,7 @@ class Editor {
       items.push({ at: event.at || "", kind: "event", text: event.message || "", state: event.state });
     }
     for (const message of this.thread || []) {
-      items.push({
-        at: message.at || "",
-        kind: "agent",
-        text: message.message || "",
-        image: message.image || null,
-      });
+      items.push({ at: message.at || "", kind: "agent", text: message.message || "" });
     }
     items.sort((a, b) => String(a.at).localeCompare(String(b.at)));
 
@@ -1828,6 +1930,10 @@ class Editor {
     }
 
     const status = [];
+    if (this.draftNotice) {
+      status.push(`<div class="conv-wait"><b>Draft discarded.</b> The agent posted a new round, `
+        + `so the canvas starts fresh.</div>`);
+    }
     if (this.meta?.status === "submitted") {
       if (!this.meta.seen_by_agent_at) {
         status.push(`<div class="conv-wait"><b>Waiting for an agent.</b> Nobody has read this yet — `
@@ -1849,13 +1955,9 @@ class Editor {
           + `<time>${escapeHtml(when)}</time></div>`;
       }
       const who = item.kind === "human" ? "you" : "agent";
-      const picture = item.image
-        ? `<img class="conv-img" loading="lazy" alt=""
-             src="/sessions/${encodeURIComponent(this.sessionId)}/rounds/${encodeURIComponent(item.image)}" />`
-        : "";
       return `<div class="conv-msg ${item.kind}">
         <div class="conv-meta">${who}${when ? ` · ${escapeHtml(when)}` : ""}</div>
-        <div class="conv-text">${escapeHtml(item.text)}</div>${picture}
+        <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
     const html = rendered + status.join("");
@@ -1908,9 +2010,64 @@ class Editor {
     }
   }
 
+  /// STOP: take the submission back. The agent is expected to die (the bridge watches the
+  /// status); an unread round is withdrawn from history by the server.
+  async stop() {
+    if (this.meta?.status !== "submitted") return;
+    if (!confirm("Stop the agent and edit this review?")) return;
+    const button = $("#submit");
+    button.disabled = true;
+    button.textContent = "Stopping…";
+    try {
+      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/cancel`, {
+        method: "POST",
+      });
+      if (result?.meta) this.meta = result.meta;
+      button.disabled = false;
+      this.renderHeader();
+      this.renderInspector();
+      this.loadHistory();
+      this.loadConversation({ quiet: true });
+    } catch (error) {
+      button.disabled = false;
+      this.renderHeader();
+      alert(`Could not stop: ${error.message}`);
+    }
+  }
+
+  /// Unsaved canvas work must survive switching sessions; a submitted round must not.
+  saveDraft() {
+    const id = this.sessionId;
+    if (!id || this.viewing) return;
+    const composer = $("#composer-text");
+    const prompt = composer ? composer.value.trim() : "";
+    const changed = JSON.stringify(this.annotations) !== (this.serverAnnotations || "[]");
+    if (!changed && !prompt) {
+      this.drafts.delete(id);
+    } else {
+      this.drafts.set(id, {
+        annotations: JSON.parse(JSON.stringify(this.annotations)),
+        prompt,
+      });
+    }
+    this.syncDirty();
+  }
+
+  /// No Tauri globals in the webview (a remote server must not get them): the desktop shell reads
+  /// the dirty flag off the window title instead.
+  syncDirty() {
+    this.applyTitle();
+  }
+
+  applyTitle() {
+    const base = `${this.meta?.title || this.meta?.id || "RedLine"} · RedLine`;
+    document.title = (this.drafts.size ? "• " : "") + base;
+  }
+
   // ---------------------------------------------------------- submit
 
   async submit() {
+    if (this.meta?.status === "submitted") return this.stop();
     if (!this.image) return;
     const button = $("#submit");
     const label = button.textContent;
@@ -1941,6 +2098,9 @@ class Editor {
         body: JSON.stringify(payload),
       });
       if (result?.meta) this.meta = result.meta;
+      this.drafts.delete(this.sessionId);
+      this.syncDirty();
+      this.serverAnnotations = JSON.stringify(this.annotations);
       if (composer) composer.value = "";
       this.renderHeader();
       this.renderInspector();
@@ -1951,7 +2111,12 @@ class Editor {
       document.activeElement?.blur?.();
       await this.rail.load();
       button.textContent = "Submitted ✓";
-      setTimeout(() => { button.textContent = "Submit again"; button.disabled = false; }, 1400);
+      // Re-render instead of hardcoding the next label: the status is `submitted` now, so the
+      // button must become the red STOP with its square, not "Submit again".
+      setTimeout(() => {
+        button.disabled = false;
+        this.renderHeader();
+      }, 1400);
     } catch (error) {
       button.textContent = label;
       button.disabled = false;

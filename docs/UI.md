@@ -119,6 +119,33 @@ and `dayLabel` were already local; the conversation timeline, agent activity lin
 round labels now are too (history folder names are flattened UTC stamps, `stampTime` un-flattens
 and converts them).
 
+## Submitted lock and STOP (v0.17)
+
+- While `status == submitted` a dark overlay covers the canvas (`#review-lock`): pointer events are
+  swallowed, tools and the note field are disabled, and the composer textarea is disabled.
+- The composer's primary button becomes a red **STOP**; it asks *"Stop the agent and edit this
+  review?"* and calls `POST /api/sessions/<id>/cancel`. The canvas unlocks with the annotations
+  intact and the button returns to *Submit review*.
+- The server withdraws the round from history when no agent has read it yet; if
+  `seen_by_agent_at` is set the round stays. The agent bridge polls the session every 2 s during a
+  run and kills the child process when the status leaves `submitted`.
+
+## Round history, read-only viewer and drafts (v0.16)
+
+- A round exists the moment it is submitted (archived with its source screenshot), so History is
+  never empty after the first submit.
+- **History is navigation, not actions**: `Current` is always present; round rows open the
+  archived source screenshot + annotations **read-only**; the header bar
+  `Viewing round N — back to current` returns to the live canvas. Only `Current` is editable.
+- The ghost (`◫`), diff (`Δ`) and open-PNG (`↗`) buttons and the `Ghost · …` chip were removed;
+  the diff endpoint remains for agents.
+- The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History
+  own the pictures.
+- **Drafts** live in memory per session: unsent annotations and composer text survive switching
+  sessions. A new agent round discards the draft (wrong coordinates) and says so in the
+  conversation. The window title is prefixed with `•` while drafts exist, and the desktop shell
+  asks before quitting.
+
 ## Rounds: one task, one session (v0.14)
 
 An agent that answers with a new screenshot must post it **into the same review**, not create a

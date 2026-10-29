@@ -216,6 +216,13 @@ The rail lists projects (conversation areas), not a flat stream of requests.
   its default `REDLINE_AGENT_REPO` for them.
 - Each project header shows its name, the number of waiting submissions (green) and the total.
   Click to collapse; the state persists per browser.
+- **A running agent is visible in the rail.** A review the agent is currently working on carries a
+  spinner and a **working** badge instead of its annotation count, its dot pulses, and the project
+  header shows the same spinner and label (with a count when several reviews run at once) — even
+  while the project is collapsed. The rail re-reads `/api/sessions` every 8 s and redraws only when
+  the set of running reviews changes, so the received → working → replied transition appears
+  without a reload. `agent_state` comes from `progress`/`reply`; STOP clears it, and the rail only
+  treats a review as running while it is still `submitted`.
 - Filters and search still apply inside every project; day separators appear only in long lists.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
@@ -243,6 +250,11 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
   agent answers it settles to **Run finished**; a round with no activity shows no card. This is the
   interactive-run view an agent's own terminal chat shows, so the human does not have to read the
   step lines to know whether anything is still happening.
+- **"Working" means the round is still submitted.** The card and the header pill also show *last
+  step X ago*; a review that already went back to the human can never keep pulsing, even if a late
+  narration line arrives after `post_round` or `reply` (the server refuses to revive a finished
+  round, and the UI derives the state from `status` as well as `agent_state`). A spinner that never
+  stops is indistinguishable from a dead agent, so the age of the last step is always on screen.
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.

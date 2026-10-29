@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Bulk operations in the rail**: *Select* turns rows into checkboxes with a bar to resolve or
+  delete several sessions at once; Escape leaves the mode.
+- **Touch toolbar**: on coarse pointers the tools, chips and buttons grow to 40 px targets and the
+  rail's per-session actions stop being hover-only.
+- **Accessibility**: visible `:focus-visible` rings, accessible names on the canvas, composer,
+  session rows and history rows, and the conversation is an `aria-live` region.
+- **README rewritten** for 0.17 (desktop, server, agent bridge, the round loop, configuration).
+
+
 ## 0.17.0 — 2026-10-29
 
 - **Submitting locks the canvas**: a dark overlay blocks editing and the composer is disabled

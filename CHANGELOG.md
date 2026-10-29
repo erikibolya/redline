@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased — rounds, read-only history, drafts, submitted lock
+## 0.17.0 — 2026-10-29
 
 - **Submitting locks the canvas**: a dark overlay blocks editing and the composer is disabled
   while `submitted`; the primary button turns into a red **STOP**.

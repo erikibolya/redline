@@ -191,6 +191,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `index.html` as `inspector-empty` (22 px padding, centred text) and never lost the class when
   rows were injected, so a populated list still carried the empty state's dead space. Toggle the
   class with the content — a populated list needs its own layout class.
+- **A lock flag is not a lock.** The submitted lock set `Editor.locked` and guarded the canvas
+  pointer plus `setTool`, but Delete/arrow keys, undo/redo, the inspector's align/layer/group
+  buttons and the note field wrote anyway — the e2e only asserted `window.redline.locked`, so it
+  passed while the human could still edit a submitted round. Enforce a lock at the single
+  mutation choke point (`mutate`, and the few paths that bypass it), and test the *refusal*: draw,
+  delete, nudge and click the write tools, then assert nothing changed. A control that looks armed
+  but silently refuses clicks reads as a broken lock; disable it visibly.
 
 ## 8. Working rules
 

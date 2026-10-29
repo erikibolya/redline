@@ -132,10 +132,13 @@ and converts them).
 
 ## Submitted lock and STOP (v0.17)
 
-- While `status == submitted` the canvas is locked for editing: the annotation guards refuse edits,
-  tools and the note field are disabled, and the composer textarea is disabled. There is **no
-  dimming modal** — a single status pill in the middle of the stage says *"Agent is working — …"*
-  (or *"Waiting for the agent…"*), so the screenshot stays visible.
+- While `status == submitted` the canvas is locked for editing. Every mutation funnels through
+  `Editor.mutate` (plus `undo`/`redo` and `startText`), and those refuse while locked or while a
+  history round is being viewed — the canvas pointer guard alone was not enough. The drawing tool
+  buttons are `disabled` (dimmed), the inspector's align/layer/group bar and the note field are
+  hidden, and the composer textarea is disabled. There is **no dimming modal** — a single status
+  pill in the middle of the stage says *"Agent is working — …"* (or *"Waiting for the agent…"*),
+  so the screenshot stays visible. Zoom and scrolling still work: reading is always allowed.
 - The composer's primary button becomes a red **STOP**; it asks *"Stop the agent and edit this
   review?"* and calls `POST /api/sessions/<id>/cancel`. The canvas unlocks with the annotations
   intact and the button returns to *Submit review*.

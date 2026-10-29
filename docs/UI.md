@@ -140,10 +140,13 @@ and converts them).
 
 ## Submitted lock and STOP (v0.17)
 
-- While `status == submitted` the canvas is locked for editing: the annotation guards refuse edits,
-  tools and the note field are disabled, and the composer textarea is disabled. There is **no
-  dimming modal** — a single status pill in the middle of the stage says *"Agent is working — …"*
-  (or *"Waiting for the agent…"*), so the screenshot stays visible.
+- While `status == submitted` the canvas is locked for editing. Every mutation funnels through
+  `Editor.mutate` (plus `undo`/`redo` and `startText`), and those refuse while locked or while a
+  history round is being viewed — the canvas pointer guard alone was not enough. The drawing tool
+  buttons are `disabled` (dimmed), the inspector's align/layer/group bar and the note field are
+  hidden, and the composer textarea is disabled. There is **no dimming modal** — a single status
+  pill in the middle of the stage says *"Agent is working — …"* (or *"Waiting for the agent…"*),
+  so the screenshot stays visible. Zoom and scrolling still work: reading is always allowed.
 - The composer's primary button becomes a red **STOP**; it asks *"Stop the agent and edit this
   review?"* and calls `POST /api/sessions/<id>/cancel`. The canvas unlocks with the annotations
   intact and the button returns to *Submit review*.
@@ -221,10 +224,21 @@ The rail lists projects (conversation areas), not a flat stream of requests.
   its default `REDLINE_AGENT_REPO` for them.
 - Each project header shows its name, the number of waiting submissions (green) and the total.
   Click to collapse; the state persists per browser.
+- **A running agent is visible in the rail.** A review the agent is currently working on carries a
+  spinner and a **working** badge instead of its annotation count, its dot pulses, and the project
+  header shows the same spinner and label (with a count when several reviews run at once) — even
+  while the project is collapsed. The rail re-reads `/api/sessions` every 8 s and redraws only when
+  the set of running reviews changes, so the received → working → replied transition appears
+  without a reload. `agent_state` comes from `progress`/`reply`; STOP clears it, and the rail only
+  treats a review as running while it is still `submitted`.
 - Filters and search still apply inside every project; day separators appear only in long lists.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
   a name field and creates a label without a repo (the agent falls back to its default repo).
+- The dialog **remembers the project you last worked in**: opening a review, or choosing a project
+  for a new one, preselects it next time (Ctrl+V included) on the editor and the start page. It is
+  a browser preference (`redline:project` in localStorage), so it survives reloads and does not
+  follow you to another machine. A project missing from the picker falls back to the placeholder.
 
 ## Conversation and composer (v0.9)
 
@@ -244,6 +258,12 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
   agent answers it settles to **Run finished**; a round with no activity shows no card. This is the
   interactive-run view an agent's own terminal chat shows, so the human does not have to read the
   step lines to know whether anything is still happening.
+- **"Working" means the round is still submitted.** The run card also shows *last step X ago*, and
+  the header pill never claims `working` on a review that already went back to the human — even if
+  a late narration line arrives after `post_round` or `reply` (the server refuses to revive a
+  finished round, and the UI derives the state from `status` as well as `agent_state`). A spinner
+  that never stops is indistinguishable from a dead agent, so the age of the last step is always on
+  screen.
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.

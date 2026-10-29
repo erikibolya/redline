@@ -207,8 +207,10 @@ const main = async () => {
     picker.tag === "SELECT" && picker.values.includes("e2e") && picker.values.includes("inbox")
       && picker.values.includes("e2e-repo") && picker.repos.includes("e2e-repo")
       && picker.others.includes("e2e") && picker.values.includes("__new__")
-      && picker.placeholder === "" && picker.required && !picker.capture,
+      && picker.required && !picker.capture,
     JSON.stringify(picker));
+  check("new review preselects the project of the open review",
+    picker.placeholder === "e2e", picker.placeholder);
   check("the page URL field explains capture and metadata",
     picker.urlHint.includes("captures it"), picker.urlHint);
 
@@ -414,6 +416,64 @@ const main = async () => {
     runCard?.working && runCard.text.includes("Working")
       && runCard.text.includes("Used 2 tools: Edit and Shell"),
     runCard ? runCard.text : "no run summary");
+
+  // ---- the rail says which review and which project an agent is working on, without opening it
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const busyRail = await page.evaluate(() => {
+    const row = document.querySelector(".session.working");
+    return {
+      row: row ? row.textContent : "",
+      badge: Boolean(row?.querySelector(".badge.work .spin")),
+      project: Boolean(document.querySelector(".rail-project .pworking .spin")),
+    };
+  });
+  check("the rail marks the review the agent is working on",
+    busyRail.badge && busyRail.row.includes("working"), busyRail.row.trim());
+  check("the rail marks the whole project as busy", busyRail.project);
+
+  // A resolved/cancelled run must lose the indicator again; a spinner that never stops is worse
+  // than none, because it reads as an agent stuck on the task.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 8, method: "tools/call",
+      params: { name: "reply", arguments: { session_id: id, message: "Done for now" } },
+    }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const idleRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    project: Boolean(document.querySelector(".rail-project .pworking")),
+  }));
+  check("the working indicator clears when the agent replies",
+    !idleRail.row && !idleRail.project, JSON.stringify(idleRail));
+
+  // A late narration line must not re-arm the spinner: the answered round is finished, and the
+  // card says how long ago the last step was so the spinner is never the only evidence.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 9, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: id, message: "Last line after the answer", state: "step",
+      } },
+    }),
+  });
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const finishedCard = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return {
+      working: Boolean(card?.classList.contains("working")),
+      text: card?.textContent || "",
+      pill: document.querySelector("#agent-state")?.textContent || "",
+    };
+  });
+  check("a late step after the reply does not revive the working indicator",
+    !finishedCard.working && finishedCard.text.includes("Run finished")
+      && finishedCard.text.includes("last step"), finishedCard.text);
+  check("the header does not claim a working agent on an answered round",
+    !finishedCard.pill.includes("working"), finishedCard.pill);
+  if (process.env.E2E_SHOT) await page.screenshot({ path: process.env.E2E_SHOT });
 
   // Those checks need the submitted state; now unlock and keep drawing.
   await stopReview();
@@ -701,6 +761,31 @@ const main = async () => {
       && locked.red === "rgb(220, 38, 38)" && locked.square,
     JSON.stringify(locked));
 
+  // The lock must *refuse* edits, not merely report `locked`: the inspector's align/layer/group
+  // bar stayed armed after a submit, and Delete/arrow keys still rewrote the selected annotation.
+  await page.evaluate(() => window.redline.select(0));
+  const guarded = await page.evaluate(() => ({
+    before: JSON.stringify(window.redline.annotations),
+    tool: window.redline.tool,
+    toolsHidden: document.querySelector("#selection-tools").classList.contains("hidden"),
+    toolsDisabled: [...document.querySelectorAll(".options .tool[data-tool]")]
+      .every((button) => button.disabled),
+  }));
+  await page.keyboard.press("Delete");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("a");
+  await drag(page, { x: 400, y: 500 }, { x: 520, y: 560 });
+  const stillLocked = await page.evaluate(() => ({
+    after: JSON.stringify(window.redline.annotations),
+    tool: window.redline.tool,
+  }));
+  check("a locked review refuses drawing, deleting, nudging and the inspector write tools",
+    guarded.toolsHidden && guarded.toolsDisabled && stillLocked.after === guarded.before
+      && stillLocked.tool === guarded.tool,
+    JSON.stringify({ toolsHidden: guarded.toolsHidden, toolsDisabled: guarded.toolsDisabled,
+      changed: stillLocked.after !== guarded.before, tool: stillLocked.tool }));
+  await page.evaluate(() => window.redline.select(-1));
+
   await page.waitForFunction(() => {
     const button = document.querySelector("#submit");
     return button && !button.disabled && button.textContent.trim() === "STOP";
@@ -894,6 +979,18 @@ const main = async () => {
       && Math.abs(restored.conv - convDragged.conv) <= 2,
     `${restored.rail} / ${restored.inspector} / ${restored.conv}`);
 
+  // The pick survives a reload: the next review starts in the project the human works in.
+  await page.goto(`${BASE}/`);
+  await page.waitForSelector(".gallery .card", { timeout: 5000 });
+  await page.click("#new-review");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
+  const remembered = await page.$eval("#f-project", (el) => el.value);
+  check("a new review preselects the last used project after a reload",
+    remembered === "e2e-repo", `project=${remembered}`);
+  await page.click("#new-cancel");
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 
   await browser.close();

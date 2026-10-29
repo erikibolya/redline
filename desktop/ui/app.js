@@ -69,6 +69,12 @@ const uid = () =>
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
+/** An agent is working only while the round is submitted. A late narration line used to leave
+ *  `agent_state=working` on a review that had already been handed back, so the spinner ran
+ *  forever and the human could not tell a live agent from a dead one. */
+const agentWorking = (meta) => meta?.status === "submitted" && meta.agent_state === "working";
+
+
 /** "edit, shell and run" → "Edit, Shell and Run", the way a person lists tools. */
 function listNames(names) {
   const titled = names.map((name) => name.charAt(0).toUpperCase() + name.slice(1));
@@ -138,6 +144,15 @@ const prefs = {
   },
 };
 
+/** The project the human last worked in, so a new review starts there instead of at the placeholder. */
+const lastProject = {
+  get() { return prefs.get("project", ""); },
+  remember(slug) {
+    const value = (slug || "").trim();
+    if (value && value !== "__new__") prefs.set("project", value);
+  },
+};
+
 /** Sessions this browser has looked at, for the "new" dot. */
 const seen = {
   all() { return prefs.get("seen", {}); },
@@ -189,6 +204,14 @@ const Theme = {
 
 /* ------------------------------------------------------------------ rail */
 
+/// Which sessions an agent is running right now; the rail polls for this and redraws only when
+/// the set changes, so a live indicator does not rebuild the list every few seconds.
+const workingIds = (sessions) => (sessions || [])
+  .filter(agentWorking)
+  .map((session) => session.id)
+  .sort()
+  .join("\n");
+
 // "Active" is the default so finished sessions drop out of the way; "Done" is the archive.
 const FILTERS = [
   { id: "active", label: "Active", test: (s) => s.status !== "resolved" },
@@ -217,6 +240,7 @@ class Rail {
     this.filter = prefs.get("filter", "active");
     if (this.filter === "all") this.filter = "active"; // pre-v0.6 preference
     this.query = "";
+    this.agentTimer = null;
     this.wire();
   }
 
@@ -273,6 +297,26 @@ class Rail {
     this.sessions = sessions.sessions || [];
     this.projects = projects.projects || [];
     this.render();
+    this.watchAgentState();
+  }
+
+  /// The rail is the one screen that must say "an agent is busy here" without opening the review,
+  /// so it re-reads the session states even while the human stays on another page.
+  watchAgentState() {
+    clearInterval(this.agentTimer);
+    this.agentTimer = setInterval(() => this.refreshAgentState(), 8000);
+  }
+
+  async refreshAgentState() {
+    let sessions;
+    try {
+      sessions = (await api("/api/sessions")).sessions || [];
+    } catch {
+      return;
+    }
+    const before = workingIds(this.sessions);
+    this.sessions = sessions;
+    if (workingIds(sessions) !== before) this.render();
   }
 
   setSelected(id) {
@@ -357,11 +401,15 @@ class Rail {
       const label = project?.name || (slug === "inbox" ? "Inbox" : slug);
       const collapsed = this.collapsed.has(slug);
       const waiting = items.filter((session) => session.status === "submitted").length;
+      const working = items.filter(agentWorking).length;
       parts.push(`
         <div class="rail-project" data-project="${escapeHtml(slug)}" role="button" tabindex="0"
              aria-expanded="${!collapsed}" title="${collapsed ? "Expand" : "Collapse"} ${escapeHtml(label)}">
           <span class="caret">${collapsed ? "▸" : "▾"}</span>
           <span class="pname">${escapeHtml(label)}</span>
+          ${working ? `<span class="pworking" title="The agent is working on ${plural(working, "review")}">
+            <span class="spin" aria-hidden="true"></span>${working > 1 ? `<b>${working}</b>` : ""}working
+          </span>` : ""}
           ${waiting ? `<span class="pwait" title="${waiting} waiting for the agent">${waiting}</span>` : ""}
           <span class="pcount">${items.length}</span>
         </div>`);
@@ -379,14 +427,20 @@ class Rail {
         for (const session of dayItems) {
         const annotations = session.annotation_count || 0;
         const fresh = seen.isNew(session);
-        const badge = fresh
-          ? `<span class="badge new" title="new since you last looked">new</span>`
-          : annotations
-            ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
-            : "";
+        const working = agentWorking(session);
+        // An agent currently running outranks "new" and the annotation count: it is the one
+        // state that changes a few seconds later without the human touching anything.
+        const badge = working
+          ? `<span class="badge work" title="The agent is working on this review">
+            <span class="spin" aria-hidden="true"></span>working</span>`
+          : fresh
+            ? `<span class="badge new" title="new since you last looked">new</span>`
+            : annotations
+              ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
+              : "";
         const done = session.status === "resolved";
         parts.push(`
-          <div class="session ${escapeHtml(session.status)}${this.bulkMode ? " bulk" : ""}"
+          <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${this.bulkMode ? " bulk" : ""}"
                role="button" tabindex="0"
                data-id="${escapeHtml(session.id)}"
                aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}"
@@ -595,6 +649,7 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
+      lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
       this.serverAnnotations = JSON.stringify(server);
       const draft = this.drafts.get(id);
@@ -684,14 +739,22 @@ class Editor {
       stageStatus.hidden = !submitted;
       if (submitted) {
         const last = (this.events || [])[this.events.length - 1];
-        stageStatus.textContent = this.meta.agent_state === "working" && last
+        stageStatus.textContent = agentWorking(this.meta) && last
           ? `Agent is working — ${last.message}`
-          : "Waiting for the agent…";
+          : this.meta.agent_state === "replied"
+            // The answer can land before `resolve`; "waiting for the agent" would contradict
+            // the reply sitting in the conversation.
+            ? "The agent replied — read it in the conversation"
+            : "Waiting for the agent…";
       }
     }
     const agent = $("#agent-state");
     if (agent) {
-      const state = this.meta.agent_state;
+      // A stale "working" on a round that is over is not a state worth showing: the header would
+      // claim an agent is running on a review that is already back in the human's hands.
+      const state = this.meta.agent_state === "working" && !agentWorking(this.meta)
+        ? null
+        : this.meta.agent_state;
       agent.hidden = !state;
       agent.textContent = state || "";
       agent.className = `pill agent ${state || ""}`;
@@ -708,6 +771,7 @@ class Editor {
         this.noteSnapshot = JSON.stringify(this.annotations);
       });
       noteField.addEventListener("input", () => {
+        if (this.readOnly) return;
         const index = this.primary();
         if (index < 0) return;
         this.annotations[index].note = noteField.value;
@@ -1283,7 +1347,16 @@ class Editor {
     this.future.length = 0;
   }
 
+  /// Every annotation change goes through `mutate`, so the lock lives here as well as on the
+  /// pointer and tool guards: a submitted round is the agent's to read, not the human's to edit.
+  /// Keyboard Delete/arrow keys and the inspector's align/layer/group buttons used to slip past
+  /// the canvas guard and change annotations anyway.
+  get readOnly() {
+    return Boolean(this.locked || this.viewing);
+  }
+
   mutate(fn) {
+    if (this.readOnly) return;
     this.snapshot();
     fn();
     this.renderInspector();
@@ -1291,7 +1364,7 @@ class Editor {
   }
 
   undo() {
-    if (!this.history.length) return;
+    if (this.readOnly || !this.history.length) return;
     this.future.push(JSON.stringify(this.annotations));
     this.annotations = JSON.parse(this.history.pop());
     this.selected.clear();
@@ -1300,7 +1373,7 @@ class Editor {
   }
 
   redo() {
-    if (!this.future.length) return;
+    if (this.readOnly || !this.future.length) return;
     this.history.push(JSON.stringify(this.annotations));
     this.annotations = JSON.parse(this.future.pop());
     this.selected.clear();
@@ -1701,6 +1774,7 @@ class Editor {
   }
 
   startText(point, event, existingIndex = -1) {
+    if (this.readOnly) return;
     this.closeTextEditor();
     const rect = this.stage.getBoundingClientRect();
     const existing = existingIndex >= 0 ? this.annotations[existingIndex] : null;
@@ -1788,6 +1862,10 @@ class Editor {
     if (this.viewing || this.locked) {
       const editor = $("#note-editor");
       if (editor) editor.classList.add("hidden");
+      // The align/layer/group bar is a set of write buttons: leaving it armed after a submit was
+      // one of the ways the lock leaked, and an armed button that refuses clicks is worse.
+      const tools = $("#selection-tools");
+      if (tools) tools.classList.add("hidden");
       $("#ann-count").textContent = String(this.annotations.length);
       body.innerHTML = this.annotations.map((annotation, index) => {
         const label = String(
@@ -2022,11 +2100,20 @@ class Editor {
   }
 
   updateLock() {
-    this.locked = this.meta?.status === "submitted" && !this.viewing;
-    // No modal overlay: the stage status pill is the visible signal (tools stay usable for
-    // viewing/panning, the annotation guards refuse edits while `locked`).
+    const before = this.locked;
+    this.locked = Boolean(this.meta && this.meta.status === "submitted") && !this.viewing;
+    // No modal overlay: the stage status pill is the visible signal. The drawing tools are
+    // disabled as well — a button that looks armed but silently refuses every click reads as a
+    // broken lock, which is exactly how this was reported.
     const status = $("#stage-status");
     if (status) status.title = this.locked ? "STOP unlocks the canvas for another round." : "";
+    $$('.tool[data-tool]').forEach((button) => {
+      button.toggleAttribute("disabled", this.readOnly);
+    });
+    this.root.classList.toggle("locked", this.locked);
+    // The inspector was rendered before the meta arrived on a reload: re-render it, or a
+    // submitted round still shows its delete buttons and write toolbar.
+    if (before !== this.locked) this.renderInspector();
   }
 
   updateViewingBar() {
@@ -2123,17 +2210,22 @@ class Editor {
       ? `Used ${plural(steps, "tool")}: ${escapeHtml(listNames(tools))}`
       : `Used ${plural(steps, "tool")}`;
     const last = round[round.length - 1];
-    const working = this.meta?.agent_state === "working";
+    const working = agentWorking(this.meta);
+    const replied = this.meta?.agent_state === "replied";
     // Once the agent answers, the reply above is the signal; the card keeps the tally.
     const title = working
       ? "Working"
-      : this.meta?.agent_state === "replied"
+      : replied
         ? "Run finished"
         : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
+    // How long ago the last step was is the honest answer to "is it still working?": a spinner
+    // must never be the only evidence.
+    const age = relativeTime(last.at);
+    const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}`;
     return `<div class="conv-run${working ? " working" : ""}">`
       + `<span class="conv-run-mark" aria-hidden="true"></span><div>`
       + `<div class="conv-run-title">${title}</div>`
-      + `<div class="conv-run-sub">${used}</div></div></div>`;
+      + `<div class="conv-run-sub">${sub}</div></div></div>`;
   }
 
   renderConversation() {
@@ -2157,7 +2249,7 @@ class Editor {
     const activity = $("#conv-activity");
     if (activity) {
       const last = (this.events || [])[this.events.length - 1];
-      activity.textContent = this.meta?.agent_state === "working" && last ? `${last.message}…` : "";
+      activity.textContent = agentWorking(this.meta) && last ? `${last.message}…` : "";
     }
 
     const status = [];
@@ -2170,7 +2262,7 @@ class Editor {
         status.push(`<div class="conv-wait"><b>Waiting for an agent.</b> Nobody has read this yet — `
           + `submitted ${escapeHtml(relativeTime(this.meta.submitted_at))}. An agent must call `
           + `<code>get_feedback</code> or <code>wait_for_feedback</code>.</div>`);
-      } else if (this.meta.agent_state !== "working") {
+      } else if (!agentWorking(this.meta)) {
         status.push(`<div class="conv-wait quiet"><b>Agent received this.</b> `
           + `${escapeHtml(relativeTime(this.meta.seen_by_agent_at))}.</div>`);
       }
@@ -2444,8 +2536,9 @@ const NewReview = {
       }
       options.push('<option value="__new__">+ New project…</option>');
       select.innerHTML = options.join("");
-      select.value = [...select.options].some((option) => option.value === previous)
-        ? previous
+      const wanted = lastProject.get() || previous;
+      select.value = [...select.options].some((option) => option.value === wanted)
+        ? wanted
         : "";
       this.syncProjectInput();
     } catch { /* signed out; keep the placeholder and Inbox fallback */ }
@@ -2457,6 +2550,7 @@ const NewReview = {
     const creating = select.value === "__new__";
     input.hidden = !creating;
     if (creating) input.focus();
+    else lastProject.remember(select.value);
   },
   selectedProject() {
     const select = $("#f-project");
@@ -2550,6 +2644,7 @@ const NewReview = {
               project: project || undefined,
             }),
           });
+          lastProject.remember(body.meta.project);
           location.href = `/s/${encodeURIComponent(body.meta.id)}`;
         } catch (error) {
           $("#new-error").textContent = error.message;
@@ -2577,6 +2672,7 @@ const NewReview = {
             project: project || undefined,
           }),
         });
+        lastProject.remember(body.meta.project);
         location.href = `/s/${encodeURIComponent(body.meta.id)}`;
       } catch (error) {
         $("#new-error").textContent = error.message;

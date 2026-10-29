@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **New review picks a project from the server's list.** The free-text project field (and its
+  datalist, which only the editor had) is now a `<select>` fed by `GET /api/projects` on both the
+  editor and the start page, so projects created by agents are selectable without typing.
+  **+ New project…** reveals a name field; the project is created on first use.
+- **One URL field, explained.** "Page URL" and "Or screenshot a URL" were two boxes doing almost
+  the same thing. There is now one *Page URL*: metadata for an uploaded screenshot, or — when no
+  image is attached — the page the server captures. "What should be checked?" is now "What should
+  the agent check?" with a hint that the note becomes the first message.
 - **The conversation shows the agent's run at a glance.** A card under the step lines reads
   **Working** with a pulsing dot while `agent_state` is `working` and tallies the round:
   **Used 4 tools: Edit and Shell**, from the `tool` names sent with `progress`. It settles to

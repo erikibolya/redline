@@ -158,6 +158,30 @@ const main = async () => {
   });
   check("pasted image is previewed as a thumbnail",
     preview && !preview.hidden && preview.blob && preview.w === 320, JSON.stringify(preview));
+
+  const picker = await page.evaluate(() => {
+    const select = document.querySelector("#f-project");
+    return {
+      tag: select?.tagName,
+      values: [...(select?.options || [])].map((option) => option.value),
+      urlHint: document.querySelector("#url-hint")?.textContent.trim() || "",
+      capture: Boolean(document.querySelector("#f-capture")),
+    };
+  });
+  check("new review picks a project from a select",
+    picker.tag === "SELECT" && picker.values.includes("e2e") && picker.values.includes("inbox")
+      && picker.values.includes("__new__") && !picker.capture,
+    JSON.stringify(picker));
+  check("the page URL field explains capture and metadata",
+    picker.urlHint.includes("captures it"), picker.urlHint);
+
+  await page.select("#f-project", "__new__");
+  const freshProject = await page.evaluate(() => ({
+    visible: !document.querySelector("#f-project-new").hidden,
+    focused: document.activeElement === document.querySelector("#f-project-new"),
+  }));
+  check("choosing a new project reveals its name field",
+    freshProject.visible && freshProject.focused, JSON.stringify(freshProject));
   await page.click("#new-cancel");
 
   await page.waitForSelector(".rail-project", { timeout: 5000 });
@@ -734,6 +758,41 @@ const main = async () => {
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
   check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
+
+  await page.click("#new-review");
+  await page.waitForFunction(() => document.querySelectorAll("#f-project option").length > 1, { timeout: 5000 });
+  const listProject = await page.evaluate(() => ({
+    select: document.querySelector("#f-project")?.tagName,
+    options: [...document.querySelectorAll("#f-project option")].map((option) => option.value),
+  }));
+  check("start page new review has the same project select",
+    listProject.select === "SELECT" && listProject.options.includes("e2e"), JSON.stringify(listProject));
+
+  // Create through the picker: the project chosen in the select must be the one stored.
+  await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 120;
+    canvas.height = 80;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#16a34a";
+    ctx.fillRect(0, 0, 120, 80);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], "picked.png", { type: "image/png" }));
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: data });
+    window.dispatchEvent(event);
+  });
+  await page.waitForFunction(() => !document.querySelector("#drop-preview").hidden, { timeout: 5000 });
+  await page.$eval("#f-title", (el) => { el.value = "from the project picker"; });
+  await page.select("#f-project", "e2e");
+  await page.click("#new-submit");
+  await page.waitForFunction(() => location.pathname.startsWith("/s/"), { timeout: 15000 });
+  const pickedId = new URL(page.url()).pathname.split("/").pop();
+  const picked = await api(`/api/sessions/${pickedId}`);
+  check("creating from the start page files the review in the picked project",
+    picked.meta.project === "e2e" && picked.meta.title === "from the project picker",
+    `${picked.meta.project} · ${picked.meta.title}`);
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

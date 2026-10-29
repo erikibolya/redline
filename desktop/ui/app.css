@@ -504,11 +504,14 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .modal h2 { margin: 0 0 4px; font-size: 16px; }
 .modal .hint { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
 .modal label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 12px 0 4px; }
-.modal input[type="text"], .modal textarea {
+.modal input[type="text"], .modal textarea, .modal select {
   width: 100%; padding: 8px 10px; border-radius: var(--radius);
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
 }
 .modal textarea { min-height: 64px; resize: vertical; }
+.modal select { cursor: pointer; }
+.modal #f-project-new { margin-top: 8px; }
+.modal .field-hint { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .modal .drop {
   border: 2px dashed var(--border); border-radius: 10px; padding: 22px; text-align: center;
   color: var(--muted); cursor: pointer; background: var(--panel-2);

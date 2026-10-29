@@ -210,7 +210,9 @@ The rail lists projects (conversation areas), not a flat stream of requests.
 - Each project header shows its name, the number of waiting submissions (green) and the total.
   Click to collapse; the state persists per browser.
 - Filters and search still apply inside every project; day separators appear only in long lists.
-- The New review dialog has a project field with autocomplete from `GET /api/projects`.
+- The New review dialog picks the project from a **select** filled by `GET /api/projects`
+  (the same folders agents see through `list_projects`). **+ New project…** reveals a name field;
+  the project is created on first use.
 
 ## Conversation and composer (v0.9)
 
@@ -266,8 +268,9 @@ it makes the canvas feel instrumented.
 
 ## Capture from the UI (v0.4)
 
-*New review* takes a URL as well as a file: the server screenshots it (`POST /api/capture`, the
-same engine as the `capture_review` MCP tool) and opens the session. Requires the `:browser` image
+*New review* takes a URL as well as a file. **Page URL** is metadata for an uploaded screenshot;
+with no image attached the server screenshots that URL (`POST /api/capture`, the same engine as the
+`capture_review` MCP tool) and opens the session. Requires the `:browser` image
 or `REDLINE_CHROME`; otherwise the dialog shows the actionable error.
 
 ## Submission history (v0.4)

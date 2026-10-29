@@ -2,218 +2,124 @@
 
 **Mark the screenshot. The agent writes the fix.**
 
-A local, dependency-free visual review queue for human ↔ AI collaboration.
+RedLine is a local visual review loop for humans and AI agents. An agent shows you a screen; you
+draw on it and write what should change; the agent reads that as structured data and comes back
+with the next round — in the same review, with a new screenshot.
 
-The AI agent creates a **session** with a screenshot and context. You open it in a browser, draw
-rectangles, arrows, freehand marks and text notes, then click **Submit review**. The agent reads
-`annotations.json`, `annotated.png` and `review.md`, turns every note into a code change, and asks
-for confirmation with a follow-up session.
+No accounts, no cloud, no JS build step. The server is a single static binary; the UI is a few
+plain files served from it.
 
-This repository is intentionally separate from the product repository. It can be pushed to a
-personal GitHub account and has no company-specific code or paths.
-
-> **Desktop app (preview).** Installers live on the
-> [releases page](https://github.com/erikibolya/redline/releases): a tray application that embeds
-> this server plus an MCP endpoint, so agents connect directly and no terminal stays open. It runs
-> standalone on your desktop or as a thin client of a server next to your agents (Unraid/Docker).
-> See [`docs/DESKTOP.md`](docs/DESKTOP.md) and [`docs/LOCAL-AGENT.md`](docs/LOCAL-AGENT.md) (RedLine with no server at all).
->
-> Server image (Unraid/NAS/Docker): `docker pull ghcr.io/erikibolya/redline:latest` — bind
-> `/data`, publish `8788`, set `REDLINE_TOKEN`. The Windows app then connects to it from the tray.
-> Everything below describes v0.1, which still works.
-
-## Requirements
-
-- Python **3.10+** (stdlib only — no `pip install` needed); use `python3` on WSL/Linux and `python` on Windows
-- A modern browser
-- Optional: a shared checkout if the browser and agent run on different machines
+```
+agent ──creates a review──▶ you annotate ──submit──▶ agent works ──new round──▶ you again
+```
 
 ## Quick start
 
-```bash
-python3 redline.py serve --open          # http://127.0.0.1:8788
-```
+### Desktop app (no server)
 
-Create a session (normally the agent does this):
+1. Download the installer from [Releases](https://github.com/erikibolya/redline/releases).
+2. Launch it — the app embeds the server on `127.0.0.1:8788`; the tray icon is the app.
+3. Install [OpenCode](https://opencode.ai) and `opencode auth login`.
+4. Tray → **Choose agent repository…**, then **Start local agent**.
+5. Tray → **Copy MCP config** and paste it into your OpenCode MCP settings.
 
-```bash
-python3 redline.py open shot.png \
-  --title "Button / default" \
-  --url "http://localhost:5016/button" \
-  --note "Check hover, focus and disabled" \
-  --json
-```
+Everything (reviews, screenshots, history) stays on your machine, under `%APPDATA%\redline` (or
+the platform equivalent).
 
-The command prints the session id and review URL. Open the URL (the session list is at `/`) and
-annotate. Sessions live in `sessions/<id>/` and are gitignored.
-
-## Agent workflow
+### Server (Docker / NAS)
 
 ```bash
-# 1. create a review session from a screenshot
-python3 redline.py open review/14-button/default.png \
-  --title "Button / default" \
-  --url "http://localhost:5016/button" \
-  --note "Variants + hover/disabled" --json
-
-# 2. open the printed review_url in the browser / Review pane
-
-# 3. wait for the human to submit (blocks until submitted or timeout)
-python3 redline.py wait <id> --timeout 600 --json
-
-# 4. read the result
-python3 redline.py get <id> --json
+docker run -d --name redline --restart unless-stopped \
+  -p 8788:8788 -v /mnt/user/appdata/redline:/data \
+  ghcr.io/erikibolya/redline:browser
+docker logs redline | grep -i token   # the access token
 ```
 
-The result is deliberately redundant:
+Open `http://<host>:8788/?t=<token>`. Data lives in `/data`; the `:browser` image adds Chromium so
+reviews can be captured from a URL server-side. Traefik labels and a compose stack with the agent
+are in [`docs/DESKTOP.md`](docs/DESKTOP.md).
 
-| File | Purpose |
-|------|---------|
-| `annotations.json` | Machine-readable source of truth: annotation types, coordinates, colors, text notes. |
-| `annotated.png` | The screenshot with the drawn annotations burned in — visual reference. |
-| `review.md` | Human/agent-readable summary with page URL, request note and text notes. |
+### Connect an agent
 
-A session becomes `submitted` only when the human clicks **Submit review**. Re-submitting updates
-the files and timestamp.
-
-## Human workflow
-
-1. Open the review URL.
-2. Use **Rectangle**, **Arrow**, **Pen** or **Text**.
-   - Text: click a spot and type the note in the prompt.
-   - `Ctrl/Cmd+Z` removes the last annotation.
-3. Click **Submit review**. The page confirms the submission; the agent can now read it.
-4. You can add more notes and submit again; the agent sees the latest submission.
-
-## CLI reference
-
-```text
-python3 redline.py serve [--host 127.0.0.1] [--port 8788] [--sessions DIR] [--open]
-python3 redline.py open IMAGE [--title T] [--url URL] [--note TEXT] [--id ID]
-                             [--sessions DIR] [--host H] [--port P]
-                             [--json] [--open-browser]
-python3 redline.py list [--sessions DIR] [--json]
-python3 redline.py get ID [--sessions DIR] [--json]
-python3 redline.py wait ID [--sessions DIR] [--timeout 600] [--interval 2] [--json]
-python3 redline.py remove ID [--sessions DIR] [--yes]
-```
-
-- Default sessions directory: `./sessions` next to `redline.py`.
-- Default server: `127.0.0.1:8788`.
-- `open` creates the folder and copies the image; `--id` must be unique.
-- `wait` exits **2** on timeout; `get` exits **1** if the session does not exist.
-- `--json` makes CLI output machine-readable.
-
-## HTTP API
-
-The server is intentionally small. All responses are JSON except the static pages/images.
-
-| Method | Path | Purpose |
-|--------|------|---------|
-| `GET` | `/` | Session list page. |
-| `GET` | `/s/<id>` | Annotation editor for a session. |
-| `GET` | `/api/sessions` | `{ "sessions": [meta, …] }`, newest first. |
-| `GET` | `/api/sessions/<id>` | `{ "meta": …, "annotations": … }`. |
-| `GET` | `/sessions/<id>/image` | Original screenshot bytes. |
-| `GET` | `/sessions/<id>/annotated.png` | Last submitted annotated PNG. |
-| `POST` | `/api/sessions/<id>/annotations` | Submit annotations (JSON body, see below). |
-| `GET` | `/health` | `{ "ok": true }`. |
-
-Submit body:
+MCP over HTTP at `/mcp` (Bearer token):
 
 ```json
 {
-  "annotations": [ … ],
-  "width": 1440,
-  "height": 900,
-  "png": "data:image/png;base64,…"
+  "mcpServers": {
+    "redline": {
+      "type": "http",
+      "url": "http://127.0.0.1:8788/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
 }
 ```
 
-`png` is optional; when present the server writes `annotated.png`. `width`/`height` are the canvas
-dimensions and are stored in `meta.json`/`annotations.json`.
+Tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`,
+`list_projects`, `progress`, `reply`, `post_round`, `capture_round`, `resolve`.
 
-## Session format
+## The loop
 
-```text
-sessions/<id>/
-  meta.json          # id, title, url, note, status, created_at, submitted_at, image, dimensions
-  screenshot.png     # original screenshot (extension preserved)
-  annotations.json   # { session, image: {file,width,height}, annotations: […] }
-  annotated.png      # rendered annotations over the screenshot
-  review.md          # markdown summary for the agent
-```
+1. **An agent opens a review** — `review_screenshot` (an image) or `capture_review` (a URL).
+2. **You mark it up** — rectangles, ellipses, arrows, freehand; every mark carries a note
+   ("this button is too small") written in the panel, not on the canvas.
+3. **Submit** — the canvas locks, the agent is notified through its own runtime (MCP polling or
+   the webhook/bridge), and the conversation shows *received* → *working* with a live activity
+   feed → the reply.
+4. **The agent posts the next round** — `post_round` or `capture_round` replaces the canvas image
+   in the *same* review. One task is one session, not a pile of them.
+5. **Repeat or close** — History is a read-only viewer of every submitted round; drafts survive
+   switching between reviews; **STOP** takes a submission back and kills a running agent.
 
-Annotation objects (canvas pixels, origin top-left):
+## Features
 
-```json
-{ "type": "rect",  "start": {"x":10,"y":20}, "end": {"x":100,"y":60}, "color": "#e11d48", "width": 3 }
-{ "type": "arrow", "start": {"x":10,"y":20}, "end": {"x":100,"y":60}, "color": "#e11d48", "width": 3 }
-{ "type": "pen",   "points": [{"x":10,"y":20}], "color": "#e11d48", "width": 3 }
-{ "type": "text",  "x":10, "y":20, "text": "Move this up", "color": "#e11d48" }
-```
+| | |
+|---|---|
+| **Projects** | the rail groups reviews by project; the agent passes `project` and it is created on first use |
+| **Rounds** | every submit is archived with its source screenshot and annotations; the canvas switches between rounds |
+| **Notes, not text on the canvas** | numbers tie a shape on the canvas to a paragraph in the panel, `annotated.png` and `review.md` |
+| **Conversation** | request, prompt, agent activity (`progress`), replies and state (`received`/`working`/`replied`), polled every 5 s |
+| **Drafts** | unsent annotations and the composer survive switching sessions; quitting warns first |
+| **Capture** | server-side Chromium screenshots a URL (`:browser` image) |
+| **Auth** | one token; Bearer header, `?t=` link or HttpOnly cookie; cross-site requests refused |
+| **Desktop** | Tauri v2 tray app, auto-update with stable and dev channels |
 
-## Cross-machine setup (Windows browser + WSL/agent)
+## Configuration
 
-If the browser and agent do not share a host, point both at the same checkout or shared folder:
+| Variable | Default | Meaning |
+|---|---|---|
+| `REDLINE_PORT` | `8788` | listen port |
+| `REDLINE_DATA_DIR` | platform data dir | where sessions, token and config live |
+| `REDLINE_TOKEN` | generated in `/data/token` | access token |
+| `REDLINE_CHROME` | auto-detected | Chromium binary for capture |
+| `REDLINE_WEBHOOK_URL` | — | POSTed on every submission, to wake an agent |
+| `REDLINE_AGENT_REPO` | current dir | repository the agent bridge works in |
+| `REDLINE_AGENT_MODEL` | `deepseek/deepseek-flash` | OpenCode model for the bridge |
+| `REDLINE_AGENT_OPENCODE_SERVER` | — | dispatch into an already running OpenCode |
+
+CLI: `redline serve | open | list | get | wait | remove | token | mcp-config | health`.
+Unattended agent: `redline-agent` (see [`docs/LOCAL-AGENT.md`](docs/LOCAL-AGENT.md)).
+
+## Releases
+
+- **Stable**: `v*` tags on `main`, published as GitHub Releases.
+- **Dev**: every push to `dev` publishes a rolling prerelease; the desktop app can install it from
+  the tray and revert to the last stable version.
+
+## Development
 
 ```bash
-# agent side
-python3 redline.py open ... --sessions /mnt/user/Development/repos/redline/sessions
+# Rust (core, CLI, agent)
+docker run --rm -v "$PWD":/src -w /src/desktop rust:1-bookworm \
+  sh -c 'rustup component add rustfmt; cargo fmt --all; cargo test --workspace'
 
-# browser side (Windows)
-python redline.py serve --sessions Z:\repos\redline\sessions
+# Browser end-to-end (56 checks, real Chromium)
+docker build -q -f desktop/Dockerfile.browser -t redline:local .
+REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh
 ```
 
-The browser edits files in the shared folder; the agent reads them directly. The server does not
-need to be reachable from the agent in this mode.
+Docs: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/API.md`](docs/API.md),
+[`docs/UI.md`](docs/UI.md), [`docs/DESKTOP.md`](docs/DESKTOP.md),
+[`docs/LOCAL-AGENT.md`](docs/LOCAL-AGENT.md), [`PLAN.md`](PLAN.md).
 
-## Personal GitHub
-
-Published at **https://github.com/erikibolya/redline** (public, MIT). The remote is already set up:
-
-```bash
-git push origin main            # publish changes
-gh repo view --web              # open the repo in a browser
-```
-
-`gh` lives at `~/.local/bin/gh` and is authenticated over HTTPS, so `git push` needs no prompts.
-If credentials ever expire, run `gh auth login --web --git-protocol https` and enter the device
-code at https://github.com/login/device.
-
-## Testing
-
-```bash
-python3 -m unittest discover -s tests -t . -v
-```
-
-The tests cover session creation/listing, submission output and session-id validation.
-
-## Security & limitations
-
-- Binds `127.0.0.1` by default; no authentication. Do not expose publicly.
-- Single-user, file-based queue; concurrent submissions are last-write-wins.
-- Screenshots are copied into `sessions/`; keep them out of git (already ignored).
-- No zoom/pan, annotation selection, or inline text editing yet (see `PLAN.md`).
-- No screenshot capture yet: the agent must supply an image; a Playwright capture command is planned.
-- Annotated coordinates are canvas pixels; if the screenshot is scaled on screen, the editor maps
-  pointer coordinates back to the original canvas.
-
-## Repository layout
-
-```text
-redline.py                 # CLI + stdlib HTTP server + session store
-static/list.html          # session list
-static/index.html         # annotation editor
-tests/test_redline.py      # unit tests
-docs/ARCHITECTURE.md      # design and data flow
-docs/API.md               # endpoint + payload reference
-docs/WORKFLOW.md          # human/agent review protocol
-AGENTS.md                 # instructions for the next agent session
-PLAN.md                   # roadmap, decisions, known work
-sessions/                 # local sessions (gitignored)
-```
-
-## License
-
-MIT — see `LICENSE`.
+MIT licensed.

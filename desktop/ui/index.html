@@ -36,13 +36,22 @@ try {
       <button class="btn accent" id="new-review">+ New review</button>
       <input class="search" id="search" placeholder="Search sessions…" spellcheck="false" />
       <div class="chips" id="chips"></div>
+      <div class="rail-tools">
+        <button class="chip" id="bulk-mode" type="button" aria-pressed="false">Select</button>
+      </div>
       <button class="chip danger" id="purge-done" hidden title="Delete every session marked done">Delete done</button>
     </div>
     <div class="rail-body" id="rail-body"></div>
+    <div class="rail-bulk" id="rail-bulk" hidden>
+      <span id="bulk-label">0 selected</span>
+      <button class="btn small" id="bulk-resolve" type="button">Resolve</button>
+      <button class="btn small danger" id="bulk-delete" type="button">Delete</button>
+      <button class="btn small" id="bulk-cancel" type="button">Cancel</button>
+    </div>
   </aside>
 
   <main class="stage tool-select" id="stage">
-    <canvas id="canvas"></canvas>
+    <canvas id="canvas" role="img" aria-label="Review canvas"></canvas>
     <div class="review-lock" id="review-lock" hidden>
       <div class="lock-box">
         <b>Submitted — waiting for the agent.</b>
@@ -123,9 +132,9 @@ try {
         <span class="conv-activity" id="conv-activity"></span>
         <button class="conv-new" id="conv-new" hidden></button>
       </div>
-      <div class="conv-log" id="conv-log"></div>
+      <div class="conv-log" id="conv-log" aria-live="polite" aria-label="Conversation"></div>
       <div class="composer">
-        <textarea id="composer-text" rows="2"
+        <textarea id="composer-text" rows="2" aria-label="Prompt for the agent"
                   placeholder="What should change? Sent with the annotations…"></textarea>
         <div class="composer-row">
           <span class="composer-hint">Ctrl + Enter</span>

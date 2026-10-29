@@ -417,6 +417,64 @@ const main = async () => {
       && runCard.text.includes("Used 2 tools: Edit and Shell"),
     runCard ? runCard.text : "no run summary");
 
+  // ---- the rail says which review and which project an agent is working on, without opening it
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const busyRail = await page.evaluate(() => {
+    const row = document.querySelector(".session.working");
+    return {
+      row: row ? row.textContent : "",
+      badge: Boolean(row?.querySelector(".badge.work .spin")),
+      project: Boolean(document.querySelector(".rail-project .pworking .spin")),
+    };
+  });
+  check("the rail marks the review the agent is working on",
+    busyRail.badge && busyRail.row.includes("working"), busyRail.row.trim());
+  check("the rail marks the whole project as busy", busyRail.project);
+
+  // A resolved/cancelled run must lose the indicator again; a spinner that never stops is worse
+  // than none, because it reads as an agent stuck on the task.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 8, method: "tools/call",
+      params: { name: "reply", arguments: { session_id: id, message: "Done for now" } },
+    }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const idleRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    project: Boolean(document.querySelector(".rail-project .pworking")),
+  }));
+  check("the working indicator clears when the agent replies",
+    !idleRail.row && !idleRail.project, JSON.stringify(idleRail));
+
+  // A late narration line must not re-arm the spinner: the answered round is finished, and the
+  // card says how long ago the last step was so the spinner is never the only evidence.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 9, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: id, message: "Last line after the answer", state: "step",
+      } },
+    }),
+  });
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const finishedCard = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return {
+      working: Boolean(card?.classList.contains("working")),
+      text: card?.textContent || "",
+      pill: document.querySelector("#agent-state")?.textContent || "",
+    };
+  });
+  check("a late step after the reply does not revive the working indicator",
+    !finishedCard.working && finishedCard.text.includes("Run finished")
+      && finishedCard.text.includes("last step"), finishedCard.text);
+  check("the header does not claim a working agent on an answered round",
+    !finishedCard.pill.includes("working"), finishedCard.pill);
+  if (process.env.E2E_SHOT) await page.screenshot({ path: process.env.E2E_SHOT });
+
   // Those checks need the submitted state; now unlock and keep drawing.
   await stopReview();
 

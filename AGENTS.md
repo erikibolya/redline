@@ -208,6 +208,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   mutation choke point (`mutate`, and the few paths that bypass it), and test the *refusal*: draw,
   delete, nudge and click the write tools, then assert nothing changed. A control that looks armed
   but silently refuses clicks reads as a broken lock; disable it visibly.
+- **A spinner is a promise.** `progress` set `agent_state=working` unconditionally, so the agent's
+  final narration line — written after `post_round` had handed the review back — re-armed the
+  indicator. The card pulsed "Working" on a review the human already had, with a green Submit
+  button beside it, and stayed like that until the next submit. A state flag must be derived from
+  the round (`status == submitted`), not set by the last writer; the server refuses to revive a
+  finished round, the UI checks both fields, and the card always shows the age of the last step so
+  "is it really working?" has an answer that is not animation.
 
 ## 8. Working rules
 

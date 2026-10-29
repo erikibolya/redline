@@ -577,7 +577,7 @@ fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let message = string_arg(args, "message").ok_or("message is required")?;
     let state = string_arg(args, "state").unwrap_or_else(|| "step".to_string());
     let tool = string_arg(args, "tool");
-    ctx.store.require(&id).map_err(|err| err.to_string())?;
+    let meta = ctx.store.require(&id).map_err(|err| err.to_string())?;
     let mut event = json!({
         "at": crate::store::now(),
         "state": state,
@@ -589,9 +589,17 @@ fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     ctx.store
         .append_agent_event(&id, &event)
         .map_err(|err| err.to_string())?;
-    ctx.store
-        .set_agent_state(&id, "working", true)
-        .map_err(|err| err.to_string())?;
+    // The narration is always kept, but it may not re-arm the "working" indicator on a round that
+    // is over: `post_round` hands the review back (open) and `reply` answers it (replied). The
+    // agent's last line often arrives after that, and it used to flip the state back to working,
+    // leaving a spinner running on a review the human already had back.
+    let finished =
+        meta.status != Status::Submitted || meta.agent_state.as_deref() == Some("replied");
+    if !finished {
+        ctx.store
+            .set_agent_state(&id, "working", true)
+            .map_err(|err| err.to_string())?;
+    }
     Ok(json!({ "session_id": id, "recorded": true }))
 }
 

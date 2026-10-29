@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **A finished round can no longer keep saying "working".** The agent's last narration line often
+  arrives *after* `post_round` (review handed back) or `reply` (answer posted); `progress` used to
+  set `agent_state=working` unconditionally, so the review kept pulsing a spinner with a green
+  **Submit review** button and the human could not tell a live agent from a dead one. The server
+  now only marks a round working while it is still submitted, the UI derives the state from
+  `status` as well, and the run card shows how long ago the last step was ("Used 1 tool · last
+  step 6m ago"). The narration event itself is still recorded.
+
+- **The rail shows which review and which project an agent is working on.** While an agent runs a
+  round the review row carries a spinner and a **working** badge (in place of the annotation
+  count), its dot pulses, and its project header shows the same spinner and label — with a count
+  when more than one review runs at once — even when the project is collapsed. The rail polls the
+  session list every 8 s and redraws only when the set of running reviews changes; the indicator
+  clears as soon as the agent replies or the human presses STOP. The browser e2e asserts both the
+  appearance and the removal.
+
 - **A new review starts in the project you were just working in.** Opening a review (or picking a
   project in the dialog) records it in the browser, and the next **Ctrl+V** or **New review** opens
   with that project already selected instead of the placeholder — on the editor and on the start

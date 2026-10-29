@@ -168,15 +168,17 @@ try {
     <input type="file" id="file" accept="image/*" hidden />
     <label for="f-title">Title</label>
     <input id="f-title" type="text" placeholder="Button / default" />
-    <label for="f-project">Project (optional)</label>
-    <input id="f-project" type="text" list="project-names" placeholder="Inbox" />
-    <datalist id="project-names"></datalist>
+    <label for="f-project">Project</label>
+    <select id="f-project">
+      <option value="inbox">Inbox</option>
+    </select>
+    <input id="f-project-new" type="text" placeholder="New project name" aria-label="New project name" hidden />
     <label for="f-url">Page URL (optional)</label>
-    <input id="f-url" type="text" placeholder="http://localhost:5016/button" />
-    <label for="f-capture">Or screenshot a URL (optional)</label>
-    <input id="f-capture" type="text" placeholder="http://localhost:5016/button" spellcheck="false" />
-    <label for="f-note">What should be checked? (optional)</label>
-    <textarea id="f-note" placeholder="Spacing looks off, check hover state"></textarea>
+    <input id="f-url" type="text" placeholder="http://localhost:5016/button" spellcheck="false" aria-describedby="url-hint" />
+    <p class="field-hint" id="url-hint">The page in the screenshot. If you add no image, RedLine opens this URL and captures it.</p>
+    <label for="f-note">What should the agent check? (optional)</label>
+    <textarea id="f-note" placeholder="e.g. spacing looks off, check the hover state" aria-describedby="note-hint"></textarea>
+    <p class="field-hint" id="note-hint">This becomes the first message the agent reads.</p>
     <div class="error" id="new-error"></div>
     <div class="row">
       <button type="button" class="btn" id="new-cancel">Cancel</button>

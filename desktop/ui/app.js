@@ -2276,18 +2276,45 @@ const NewReview = {
     overlay.hidden = false;
     const error = $("#new-error");
     if (error) error.textContent = "";
+    const fresh = $("#f-project-new");
+    if (fresh) { fresh.value = ""; fresh.hidden = true; }
+    const project = $("#f-project");
+    if (project?.value === "__new__") project.value = "inbox";
     this.fillProjects();
     $("#f-title").focus();
   },
+  /// The server owns the project list, so anything an agent created is selectable here.
   async fillProjects() {
-    const list = $("#project-names");
-    if (!list) return;
+    const select = $("#f-project");
+    if (!select) return;
+    const previous = select.value;
     try {
       const { projects } = await api("/api/projects");
-      list.innerHTML = (projects || [])
-        .map((project) => `<option value="${escapeHtml(project.name)}"></option>`)
-        .join("");
-    } catch { /* signed out */ }
+      const items = projects || [];
+      const options = items.length
+        ? items.map((project) => `<option value="${escapeHtml(project.slug)}">${escapeHtml(project.name)}</option>`).join("")
+        : '<option value="inbox">Inbox</option>';
+      select.innerHTML = options + '<option value="__new__">+ New project…</option>';
+      const inbox = items.find((project) => project.slug === "inbox");
+      select.value = items.some((project) => project.slug === previous)
+        ? previous
+        : inbox?.slug || items[0]?.slug || "inbox";
+      this.syncProjectInput();
+    } catch { /* signed out; keep the Inbox fallback */ }
+  },
+  syncProjectInput() {
+    const select = $("#f-project");
+    const input = $("#f-project-new");
+    if (!select || !input) return;
+    const creating = select.value === "__new__";
+    input.hidden = !creating;
+    if (creating) input.focus();
+  },
+  selectedProject() {
+    const select = $("#f-project");
+    if (!select) return "";
+    if (select.value === "__new__") return ($("#f-project-new")?.value || "").trim();
+    return select.value.trim();
   },
   close() { const overlay = $("#overlay"); if (overlay) overlay.hidden = true; },
   wire() {
@@ -2345,28 +2372,34 @@ const NewReview = {
       take(event.dataTransfer.files[0]);
     });
     $("#new-cancel").addEventListener("click", () => NewReview.close());
+    $("#f-project")?.addEventListener("change", () => NewReview.syncProjectInput());
     $("#new-form").addEventListener("submit", async (event) => {
       event.preventDefault();
-      const captureUrl = ($("#f-capture")?.value || "").trim();
-      if (!picked && !captureUrl) {
-        $("#new-error").textContent = "Choose a screenshot, or give a URL to capture.";
+      const pageUrl = ($("#f-url")?.value || "").trim();
+      if (!picked && !pageUrl) {
+        $("#new-error").textContent = "Add a screenshot, or paste a page URL to capture.";
+        return;
+      }
+      const project = NewReview.selectedProject();
+      if ($("#f-project")?.value === "__new__" && !project) {
+        $("#new-error").textContent = "Name the new project, or pick an existing one.";
         return;
       }
       const submit = $("#new-submit");
       submit.disabled = true;
-      if (captureUrl) {
+      if (!picked) {
         $("#new-error").textContent = "Capturing… (a few seconds)";
         try {
           const body = await api("/api/capture", {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({
-              url: captureUrl,
-              title: $("#f-title").value.trim() || captureUrl,
+              url: pageUrl,
+              title: $("#f-title").value.trim() || pageUrl,
               note: $("#f-note").value.trim(),
               viewport: "1440x900",
               agent: "human",
-              project: $("#f-project")?.value.trim() || undefined,
+              project: project || undefined,
             }),
           });
           location.href = `/s/${encodeURIComponent(body.meta.id)}`;
@@ -2389,11 +2422,11 @@ const NewReview = {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             title: $("#f-title").value.trim() || picked.name,
-            url: $("#f-url").value.trim(),
+            url: pageUrl,
             note: $("#f-note").value.trim(),
             image_base64: dataUrl,
             agent: "human",
-            project: $("#f-project")?.value.trim() || undefined,
+            project: project || undefined,
           }),
         });
         location.href = `/s/${encodeURIComponent(body.meta.id)}`;

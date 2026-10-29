@@ -4,83 +4,113 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>RedLine — connect</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css" />
 <style>
-  :root { color-scheme: dark; }
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #0f172a; color: #e2e8f0;
-         font: 14px/1.5 system-ui, sans-serif; padding: 24px; }
-  .card { width: min(560px, 100%); background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 28px 30px; box-shadow: 0 20px 50px rgba(0,0,0,.35); }
-  .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-  .dot { width: 26px; height: 26px; border-radius: 7px; background: #0f172a; border: 1px solid #334155; display: grid; place-items: center; }
-  .dot span { display: block; width: 16px; height: 3px; border-radius: 2px; background: #e11d48; box-shadow: 0 6px 0 #f8fafc; }
-  h1 { font-size: 19px; margin: 0; }
-  .lead { color: #94a3b8; margin: 8px 0 22px; }
-  label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #94a3b8; margin-bottom: 6px; }
-  input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: #e2e8f0; font: inherit; }
-  input:focus { outline: 2px solid #0ea5e9; outline-offset: 1px; }
-  .field { margin-bottom: 16px; }
-  .hint { font-size: 12px; color: #64748b; margin-top: 6px; }
-  .actions { display: flex; gap: 10px; align-items: center; margin-top: 22px; }
-  button { border: 0; border-radius: 8px; padding: 9px 16px; font: inherit; cursor: pointer; }
-  button[type="submit"] { background: #0ea5e9; color: #fff; font-weight: 600; }
-  button[type="submit"]:hover { background: #0284c7; }
-  button.link { background: none; color: #94a3b8; padding: 0; text-decoration: underline; }
-  button.link:hover { color: #e2e8f0; }
-  button:disabled { opacity: .6; cursor: default; }
-  .status { margin-top: 16px; font-size: 13px; min-height: 20px; }
-  .status.error { color: #fb7185; }
-  .status.ok { color: #4ade80; }
-  .banner { background: #422006; border: 1px solid #a16207; color: #fde68a; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 18px; }
-  .divider { border-top: 1px solid #334155; margin: 22px 0 16px; }
-  .muted { color: #64748b; font-size: 12px; }
-  code { background: #0f172a; padding: 1px 5px; border-radius: 4px; }
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    padding: 24px; background: var(--bg); color: var(--text); font-family: var(--font);
+  }
+  .setup { width: min(580px, 100%); }
+  .setup-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .setup-head .back { margin-left: auto; color: var(--muted); font-size: 12px; text-decoration: none; }
+  .setup-head .back:hover { color: var(--text); }
+  .setup-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px 26px; box-shadow: 0 20px 50px rgba(0, 0, 0, .28);
+  }
+  .setup-card h1 { font-size: 18px; margin: 0 0 4px; }
+  .setup-card .lead { color: var(--muted); font-size: 13px; margin: 0 0 20px; }
+  .setup-card label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 6px; }
+  .setup-card input {
+    width: 100%; padding: 9px 11px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  .setup-card input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .setup-card .field { margin-bottom: 14px; }
+  .setup-card .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .setup-actions { display: flex; gap: 8px; align-items: center; margin: 20px 0 0; flex-wrap: wrap; }
+  .setup-foot { color: var(--muted); font-size: 12px; margin: 14px 4px 0; }
+  .setup-status { min-height: 20px; margin-top: 12px; font-size: 13px; }
+  .setup-status.error { color: var(--danger); }
+  .setup-status.ok { color: var(--ok); }
+  .setup-banner {
+    background: rgba(161, 98, 7, .16); border: 1px solid #a16207; color: #fde68a;
+    border-radius: var(--radius); padding: 10px 12px; font-size: 13px; margin-bottom: 16px;
+  }
+  .setup-current { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border-soft); color: var(--muted); font-size: 12px; }
+  .setup-current b { color: var(--text); font-weight: 500; }
+  code { background: var(--panel-2); border: 1px solid var(--border-soft); padding: 1px 5px; border-radius: 4px; }
 </style>
 </head>
-<body>
-<form class="card" id="form" autocomplete="off">
-  <div class="brand"><div class="dot"><span></span></div><h1>Connect RedLine</h1></div>
-  <p class="lead">RedLine can run on this computer, or use the server where your agents and repositories live
-    (Unraid, NAS, WSL). Reviews created there stay available when this machine is off.</p>
-
-  <div id="banner" class="banner" hidden></div>
-
-  <div class="field">
-    <label for="url">Server address</label>
-    <input id="url" name="url" placeholder="http://holly:8788" spellcheck="false" />
-    <div class="hint">The address printed by the container: <code>http://&lt;host&gt;:8788</code></div>
+<body data-page="setup">
+<main class="setup">
+  <div class="setup-head">
+    <div class="brand"><span class="brand-mark"><i></i></span> RedLine</div>
+    <a class="back" id="back" href="/">← Back to sessions</a>
   </div>
 
-  <div class="field">
-    <label for="token">Access token</label>
-    <input id="token" name="token" placeholder="token from the server logs" spellcheck="false" />
-    <div class="hint">Run <code>docker logs redline | grep -i token</code> on the server to see it.</div>
-  </div>
+  <section class="setup-card">
+    <h1>Connect to a server</h1>
+    <p class="lead">RedLine runs on this computer by default. Use a server when the agents and
+      repositories live on another machine (Unraid, NAS, WSL) and reviews must stay available while
+      this computer is off.</p>
 
-  <div class="actions">
-    <button type="submit" id="save">Save and connect</button>
-    <button type="button" class="link" id="local">Use this computer instead</button>
-  </div>
-  <div id="status" class="status"></div>
+    <div id="banner" class="setup-banner" hidden></div>
 
-  <div class="divider"></div>
-  <p class="hint">
-    <b>Local agent.</b> In standalone mode this app can also run an agent on this computer:
-    tray menu → <i>Choose agent repository…</i>, then <i>Start local agent</i>. It needs
-    <code>opencode</code> on your PATH; the model defaults to <code>deepseek/deepseek-flash</code>
-    and can be changed in <code>agent.json</code> beside the app's config.
-  </p>
-  <p class="muted" id="current"></p>
-</form>
+    <form id="form" autocomplete="off">
+      <div class="field">
+        <label for="url">Server address</label>
+        <input id="url" name="url" placeholder="http://holly:8788" spellcheck="false" />
+        <p class="hint">The address printed by the container: <code>http://&lt;host&gt;:8788</code></p>
+      </div>
+
+      <div class="field">
+        <label for="token">Access token</label>
+        <input id="token" name="token" placeholder="token from the server" spellcheck="false" />
+        <p class="hint">On the server: <code>docker logs redline | grep -i token</code>.
+          The token is also in the app's start page under “Connect an agent”.</p>
+      </div>
+
+      <div class="setup-actions">
+        <button class="btn accent" type="submit" id="save">Save and connect</button>
+        <button class="btn" type="button" id="local">Use this computer</button>
+      </div>
+
+      <p class="hint" style="margin-top:10px">No server? “Use this computer” keeps everything local —
+        no token needed.</p>
+      <div id="status" class="setup-status"></div>
+    </form>
+
+    <p class="setup-current" id="current"></p>
+  </section>
+
+  <p class="setup-foot"><b>Local agent:</b> tray → <i>Choose agent repository…</i> → <i>Start local
+    agent</i>. Needs <code>opencode</code> on PATH; the model can be set in <code>agent.json</code>.</p>
+</main>
+
 <script>
 const params = new URLSearchParams(location.search);
 const localToken = params.get("t") || "";
 const statusBox = document.getElementById("status");
 const banner = document.getElementById("banner");
 const saveButton = document.getElementById("save");
+const back = document.getElementById("back");
 
+back.href = localToken ? `/?t=${encodeURIComponent(localToken)}` : "/";
 if (params.get("unreachable")) {
   banner.hidden = false;
-  banner.textContent = "The server you were connected to did not answer. Check that it is running, then try again.";
+  banner.textContent = "The server you were connected to did not answer. Check that it is running, or switch back to this computer.";
+}
+
+function setStatus(text, kind) {
+  statusBox.textContent = text;
+  statusBox.className = "setup-status" + (kind ? " " + kind : "");
 }
 
 async function loadStatus() {
@@ -88,20 +118,16 @@ async function loadStatus() {
     const response = await fetch(`/api/setup?t=${encodeURIComponent(localToken)}`);
     if (!response.ok) return;
     const state = await response.json();
-    document.getElementById("current").textContent = state.mode === "remote"
-      ? `Currently connected to ${state.remote_url}. Sessions: ${state.sessions_dir}`
-      : `Currently standalone — this computer is the server. Sessions: ${state.sessions_dir}`;
-    if (state.mode === "remote" && state.remote_url) {
-      document.getElementById("url").value = state.remote_url;
+    const current = document.getElementById("current");
+    if (state.mode === "remote") {
+      current.innerHTML = `Currently connected to <b>${state.remote_url}</b>.`;
+      if (state.remote_url) document.getElementById("url").value = state.remote_url;
+    } else {
+      current.innerHTML = "Standalone — this computer is the server.";
     }
   } catch (error) {
-    /* old server without setup endpoints */
+    /* older server without the setup endpoints */
   }
-}
-
-function setStatus(text, kind) {
-  statusBox.textContent = text;
-  statusBox.className = "status" + (kind ? " " + kind : "");
 }
 
 document.getElementById("form").addEventListener("submit", async (event) => {
@@ -129,7 +155,7 @@ document.getElementById("form").addEventListener("submit", async (event) => {
     setStatus("Connected — opening your reviews…", "ok");
     location.replace(data.open_url);
   } catch (error) {
-    setStatus("Could not reach redline: " + error.message, "error");
+    setStatus("Could not reach RedLine: " + error.message, "error");
     saveButton.disabled = false;
   }
 });

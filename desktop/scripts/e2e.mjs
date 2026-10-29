@@ -683,6 +683,20 @@ const main = async () => {
     a11y.canvas && a11y.canvasLabel && a11y.composer && a11y.live === "polite" && a11y.labels,
     JSON.stringify(a11y));
 
+  // ---- the connect wizard uses the app shell and always offers a way back
+  await page.goto(`${BASE}/setup?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  const setup = await page.evaluate(() => ({
+    back: document.querySelector("#back")?.getAttribute("href") || "",
+    primary: document.querySelector("#save")?.className || "",
+    secondary: document.querySelector("#local")?.className || "",
+    card: getComputedStyle(document.querySelector(".setup-card")).borderRadius,
+    css: getComputedStyle(document.body).backgroundColor,
+  }));
+  check("setup page has a way back and app-styled buttons",
+    setup.back.startsWith("/") && setup.primary.includes("accent")
+      && setup.secondary.includes("btn") && setup.card !== "0px",
+    JSON.stringify(setup));
+
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);

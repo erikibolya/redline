@@ -26,7 +26,7 @@ so an agent can keep working on a draft branch without shipping half a feature.
 
 ## Rules
 
-- **Ready means done.** The PR is created by `feature-ready.sh` when the feature is finished. If
+- **Ready means done.** The PR is created by `feature-ready` when the feature is finished. If
   you open a PR manually earlier, keep it a draft; auto-merge ignores drafts.
 - **Never push or merge into `dev` directly.** Branch protection rejects it, and the bot path is
   the one that runs the checks.
@@ -37,7 +37,7 @@ so an agent can keep working on a draft branch without shipping half a feature.
 
 ## Required checks
 
-The `dev` branch requires all four jobs from `desktop.yml`:
+Both `dev` and `main` require all four jobs from `desktop.yml`:
 
 - `core + cli (ubuntu-latest)`
 - `core + cli (windows-latest)`
@@ -46,6 +46,26 @@ The `dev` branch requires all four jobs from `desktop.yml`:
 
 The E2E runs against a real Chromium and the server built from the PR, so a UI change that only
 passes unit tests cannot land.
+
+## Releases
+
+`main` is protected by the same rule: releases are a PR from `dev` to `main`, never a direct push.
+Auto-merge is deliberately disabled for `main` (the workflow only targets `dev`); a human merges
+the release PR after the checks and an explicit yes, then tags `vX.Y.Z`.
+
+## Other repositories
+
+The mechanism is not RedLine-specific:
+
+- `feature-ready` is installed globally at `/mnt/user/appdata/agent-tools/bin/feature-ready`. It
+  uses `dev` when it exists, otherwise the repository's default branch, creates/marks the PR ready
+  and enables GitHub auto-merge when the target is protected with required checks.
+- Each repository still needs its own branch protection: the check names differ because every
+  project has different CI. Once the target is protected with at least one required check,
+  `feature-ready` works without any repository-specific script or workflow.
+- The `auto-merge.yml` GitHub workflow is optional for repositories where a human (rather than
+  `feature-ready`) marks PRs ready. The command uses GitHub's native auto-merge directly, so it
+  works in a repo that has no workflow file at all.
 
 ## Why not auto-merge every branch push?
 

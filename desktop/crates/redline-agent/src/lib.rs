@@ -710,7 +710,7 @@ mod tests {
         });
         assert_eq!(
             project_repo(&config, &projects, &json!({ "project": "other" })).unwrap(),
-            root.join("other")
+            std::fs::canonicalize(root.join("other")).unwrap()
         );
         assert_eq!(
             project_repo(&config, &projects, &json!({ "project": "legacy" })).unwrap(),
@@ -728,7 +728,7 @@ mod tests {
         config.repo_root = root.clone();
         assert_eq!(
             resolve_repo(&config, "redline").unwrap(),
-            root.join("redline")
+            std::fs::canonicalize(root.join("redline")).unwrap()
         );
         assert!(resolve_repo(&config, "../escape").is_err());
         std::fs::remove_dir_all(&root).unwrap();

@@ -166,6 +166,10 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - **The start page printed the token** (`/api/config` returns it verbatim). Any screenshot of `/`
   leaked it — including one made by redline's own capture. Mask secrets at render time, keep the
   copy button working.
+- **A filename is not a preview.** The New review drop zone said `image.png — 285 KB` for a pasted
+  screenshot, so there was no way to tell *which* screen you had on the clipboard. Attach the
+  picture itself (`objectURL`, revoked on replace); the name and size become a caption. Cap the
+  height and let the modal scroll — a taller preview must not push *Create review* off-screen.
 - **Never slice a clock out of an ISO stamp.** The inspector did `iso.slice(11, 16)`, which is UTC:
   a review submitted at 13:03 in Prague was shown to every reader as 12:03. Parse (`new Date`) and
   format with the browser's locale — `clockTime()` / `stampTime()` in `app.js`. Capture screenshots

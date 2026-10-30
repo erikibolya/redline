@@ -1579,6 +1579,9 @@ async fn list_servers(State(state): State<AppState>) -> Result<Json<Value>, Erro
         "active": active,
         "local_url": state.base_url,
         "active_name": servers.iter().find(|profile| profile.id == active).map(|profile| profile.name.clone()),
+        // The local Servers page's "Back to sessions" must return to the *active* origin, not
+        // to this local server: the local server has no reviews and no agent presence.
+        "active_url": active_open_url(&state, &servers, &active),
     })))
 }
 
@@ -1664,6 +1667,7 @@ async fn setup_status(State(state): State<AppState>) -> Json<Value> {
         "active_name": current.map(|profile| profile.name.clone()),
         "servers": servers.len(),
         "local_url": state.base_url,
+        "active_url": active_open_url(&state, &servers, &active),
         "sessions_dir": state.store.root().display().to_string(),
     }))
 }

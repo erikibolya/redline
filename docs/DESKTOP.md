@@ -179,7 +179,9 @@ Profiles live in `%LOCALAPPDATA%\redline\config.json`:
 `active: "local"` selects *This computer*. The old `remote_url`/`token` file is migrated as the
 first profile on read. The local server keeps running in every mode — that is what serves the
 Servers page and the wizard — but in remote mode the window (and every review) comes from the
-selected server.
+selected server. **Back to sessions** on either local page follows the active profile
+(`active_url` from `/api/servers` / `/api/setup`), so it returns to the remote origin; it must
+never fall back to the local server, which has no sessions and no agent presence.
 
 **3. Agents on holly** use `http://127.0.0.1:8788/mcp` — loopback inside the container network,
 never exposed to the LAN:

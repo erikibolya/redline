@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Back to sessions returns to the active server, not to the local one.** The Servers and Setup
+  pages are served by the desktop app's local server; their "Back to sessions" link was always
+  `href="/"`, so with a remote profile active it opened the local dashboard, which has no
+  sessions and reported "No agent connected". `/api/servers` and `/api/setup` now expose
+  `active_url` (the active profile's origin + token, or the local origin), and both pages point
+  the link there. The Rust test asserts the remote and local cases; the e2e stubs the profile
+  endpoints and checks the link on both pages.
 - **Connect an agent is a dialog, shown only when it is needed.** The dashboard embedded the MCP
   JSON forever, even after the bridge was already polling, so the most prominent block on `/` was
   setup the human had finished. The header chip now opens a **Connect an agent** dialog (masked

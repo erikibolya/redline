@@ -148,6 +148,9 @@ function row(server, local) {
 async function render() {
   try {
     const data = await json("/api/servers");
+    // The active server may be remote; the local `/` has no sessions and no agents. Follow the
+    // same origin the desktop app would open for the active profile.
+    if (data.active_url) back.href = data.active_url;
     const local = { active: data.active === "local", url: data.local_url };
     const rows = [row(local, true)];
     for (const server of data.servers || []) rows.push(row(server, false));

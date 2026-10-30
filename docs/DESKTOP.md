@@ -480,20 +480,8 @@ services:
     # no build: block
 ```
 
-Then pick one host-side updater:
-
-**User Scripts (no extra container).** Create a script with this body and set a custom schedule
-`*/10 * * * *`:
-
-```bash
-#!/bin/bash
-set -euo pipefail
-cd /boot/config/plugins/compose.manager/projects/redline-dev
-docker compose pull -q redline-dev
-docker compose up -d --no-build redline-dev
-```
-
-**Watchtower (fully automatic, needs the Docker socket).**
+Two host-side updaters work; holly uses **Watchtower**. The container only watches services that
+carry the label, so it can never touch production:
 
 ```yaml
 services:
@@ -501,12 +489,55 @@ services:
     image: ghcr.io/erikibolya/redline:browser-dev
     labels:
       com.centurylinklabs.watchtower.enable: "true"
+
   watchtower:
-    image: containrrr/watchtower:1.7.1
+    # The maintained fork (github.com/nicholas-fedor/watchtower) has the HTTP API and Swagger UI.
+    image: nickfedor/watchtower:latest
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-    command: --label-enable --interval 300 --cleanup
+    environment:
+      WATCHTOWER_HTTP_API_ENDPOINTS: swagger,containers,history,metrics,images,health,check
+      WATCHTOWER_HTTP_API_TOKEN: /run/secrets/http_api_token   # mount the token here
+      WATCHTOWER_CLEANUP: "true"
+    command: --label-enable --interval 300
+```
+
+**Do not enable the `update` endpoint.** In this fork, enabling it switches the periodic scheduler
+off ("HTTP API enabled and periodic updates disabled"), so the host would stop following the tag.
+The `check` endpoint is a read-only digest check and keeps the schedule.
+
+Expose the UI with a Traefik **file-provider** router rather than container labels (the Docker
+provider in the Traefik build on holly ignores middlewares on this container). Put it next to the
+other dynamic files, e.g. `/mnt/user/ProgramDataSSD/Traefik/data/dynamic/watchtower.yaml`:
+
+```yaml
+http:
+  routers:
+    watchtower:
+      rule: "Host(`watchtower.example`)"
+      entryPoints: [websecure]
+      service: watchtower
+      middlewares: [watchtower-auth, watchtower-root, watchtower-token]
+      tls:
+        certResolver: cloudflare
+  middlewares:
+    watchtower-auth:
+      basicAuth:
+        users: ["admin:<apr1 hash>"]
+    watchtower-root:
+      redirectRegex:
+        regex: "^https?://watchtower\\.example/?$"
+        replacement: "https://watchtower.example/swagger/index.html"
+    # basicAuth strips the client Authorization header; inject the API token after it.
+    watchtower-token:
+      headers:
+        customRequestHeaders:
+          Authorization: "Bearer <http-api-token>"
+  services:
+    watchtower:
+      loadBalancer:
+        servers: [{ url: "http://watchtower:8080" }]
 ```
 
 Only containers with the label are watched. If the GHCR package is private, the host must be
@@ -516,6 +547,18 @@ interrupts a review in flight; that is expected on the dev server. Verify the de
 
 ```bash
 docker inspect redline-dev --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
+docker logs redline-dev-watchtower --tail 20
+```
+
+**User Scripts alternative (no extra container).** Create a script with this body and schedule
+`*/10 * * * *`:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+cd /boot/config/plugins/compose.manager/projects/redline-dev
+docker compose pull -q redline-dev
+docker compose up -d --no-build redline-dev
 ```
 
 The desktop app's menu (RedLine/Help and the tray):

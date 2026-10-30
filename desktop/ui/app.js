@@ -2076,11 +2076,16 @@ class Editor {
       return;
     }
     body.innerHTML = this.annotations.map((annotation, index) => {
+      // A pen has `points`, not `start`/`end`. Reaching for `start.x` here threw before the
+      // inspector list (and, because `mutate` renders the inspector first, the canvas badge)
+      // could be built; the live stroke hid the failure. Every shape type gets an explicit label.
       const label = annotation.type === "text"
         ? escapeHtml(annotation.text || "")
-        : annotation.type === "rect" || annotation.type === "ellipse"
+        : annotation.type === "rect" || annotation.type === "ellipse" || annotation.type === "arrow"
           ? `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)} → ${Math.round(annotation.end.x)}, ${Math.round(annotation.end.y)}`
-          : `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)}`;
+          : annotation.type === "pen"
+            ? `freehand · ${annotation.points?.length || 0} points`
+            : `${Math.round(annotation.start?.x ?? 0)}, ${Math.round(annotation.start?.y ?? 0)}`;
       const note = String(annotation.note || "").trim();
       const meta = note ? escapeHtml(note) : annotation.type;
       return `

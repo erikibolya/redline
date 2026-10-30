@@ -68,7 +68,7 @@ desktop/
   install-unraid.sh       idempotent install/upgrade of the container
   docker-compose.example.yml
 docs/                     DESKTOP.md (ADR), UI.md (UI plan/status), API.md, ARCHITECTURE.md,
-                          WORKFLOW.md, PLAN.md at the root
+                          WORKFLOW.md, TESTING.md (tool matrix + release gate), PLAN.md at the root
 static/, redline.py       v0.1 Python implementation, frozen; do not add features to it
 ```
 
@@ -79,9 +79,10 @@ static/, redline.py       v0.1 Python implementation, frozen; do not add feature
 docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm \
   sh -c 'rustup component add rustfmt; cargo fmt --all; cargo test --workspace'
 
-# Browser end-to-end (32 checks: drawing, zoom mapping, move, groups, align, history, diff, rail actions)
+# Browser end-to-end (draws every tool; see docs/TESTING.md and PLAN.md for the current count)
 docker build -q -f desktop/Dockerfile.browser -t redline:local .
 REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per check
+# Release gate: docs/TESTING.md — tool matrix, feature protocol and the checklist.
 
 # Ship a feature (dev is protected; never push it directly)
 git push origin feat/my-feature
@@ -226,6 +227,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   mutation choke point (`mutate`, and the few paths that bypass it), and test the *refusal*: draw,
   delete, nudge and click the write tools, then assert nothing changed. A control that looks armed
   but silently refuses clicks reads as a broken lock; disable it visibly.
+- **A tool button is not the tool.** The e2e clicked the pen button and asserted the tool was
+  selected, so the freehand badge/row regression survived: `renderInspector` read
+  `annotation.start.x`, but a pen is `{type:"pen", points:[…]}`. The `TypeError` aborted `mutate`
+  before `render()`, leaving the live stroke visible with no number and no inspector row. Draw
+  with every tool, assert the annotation, its inspector row/number and its badge pixel, then
+  submit it. `docs/TESTING.md` § "The tool matrix" makes this non-negotiable.
 - **A spinner is a promise.** `progress` set `agent_state=working` unconditionally, so the agent's
   final narration line — written after `post_round` had handed the review back — re-armed the
   indicator. The card pulsed "Working" on a review the human already had, with a green Submit
@@ -264,7 +271,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - Keep the UI dependency-free (vanilla JS/CSS, served from the binary).
 - Keep the API additive; breaking changes need a migration note in `CHANGELOG.md`.
 - Update `docs/UI.md` (UI), `docs/DESKTOP.md` (desktop/deploy), `PLAN.md` when behaviour changes.
-- Run Rust tests **and** the browser e2e before tagging.
+- **Every bug fix starts with a failing test.** Reproduce the bug, add the smallest automated
+  test that fails on the old code, fix the root cause, then run the full suite. Keep the test as
+  the regression fence.
+- **Every feature ships with automated coverage of its user path** — click the control, assert the
+  visible result and the persisted state. New drawing tools must be added to the tool matrix in
+  `docs/TESTING.md` and actually drawn in the e2e; clicking the button is not a test.
+- Run Rust tests **and** the browser e2e before tagging, against the release image, and walk the
+  release checklist in `docs/TESTING.md`. If a check is missing, add it before tagging.
 
 ## 9. Common recipes
 

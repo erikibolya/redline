@@ -724,11 +724,25 @@ const main = async () => {
   let history = { submissions: [] };
   for (let attempt = 0; attempt < 24; attempt += 1) {
     history = await api(`/api/sessions/${id}/history`);
-    if (history.submissions.length) break;
+    // Two submissions so far, so two rounds: waiting for both keeps the baseline honest.
+    if (history.submissions.length >= 2) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  check("a second submission archives the first round", history.submissions.length >= 1,
+  check("a second submission archives the first round", history.submissions.length === 2,
     `${history.submissions.length} archived`);
+
+  // ---- STOP then *Submit again* without touching the canvas is the same round, not a new one
+  // (2026-10-30: one task's History showed the identical round twice).
+  const beforeRepeat = history.submissions.length;
+  await stopReview();
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Control");
+  // The page only learns `submitted` once the submit response landed, i.e. after the archive.
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  const repeated = (await api(`/api/sessions/${id}/history`)).submissions.length;
+  check("an unchanged resubmission does not add a history round",
+    repeated === beforeRepeat, `${beforeRepeat} → ${repeated}`);
 
   // ---- history opens a previous round read-only, and Current brings the live canvas back
   if (!(await page.$eval("#history-block", (el) => el.open))) {
@@ -741,13 +755,20 @@ const main = async () => {
     () => document.querySelectorAll("#history-list [data-round]").length > 0,
     { timeout: 5000 },
   );
+  const rowsForRounds = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list [data-round]")]
+      .filter((row) => row.dataset.round !== "current").length);
+  check("history draws one row per round", rowsForRounds === repeated,
+    `${rowsForRounds} rows, ${repeated} rounds`);
   const opened = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#history-list [data-round]")];
-    const target = rows.find((row) => row.dataset.round !== "current") || rows[0];
+    // The newest round is still the canvas: clicking it returns to the live view, so open an
+    // earlier round to test the read-only viewer.
+    const target = rows.find((row) => row.dataset.round !== "current" && row.dataset.live !== "1");
     target?.click();
     return Boolean(target);
   });
-  check("history lists at least one round", opened);
+  check("history lists an earlier round to open", opened);
   await page.waitForFunction(() => Boolean(window.redline.viewing), { timeout: 5000 });
   const viewing = await page.evaluate(() => ({
     round: window.redline.viewing.round,
@@ -760,6 +781,24 @@ const main = async () => {
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
   check("Current returns to the live canvas", true);
   await stopReview();
+
+  // After STOP the canvas still shows the newest round, so that round is the current one:
+  // one row labelled "Round N (current)", not "Round N" plus a second live "Current" row
+  // (2026-10-30).
+  await page.evaluate(() => window.redline.loadHistory());
+  await page.waitForFunction(
+    () => document.querySelectorAll("#history-list [data-round]").length > 0,
+    { timeout: 5000 },
+  );
+  const stoppedHistory = await page.evaluate(() => ({
+    rows: document.querySelectorAll("#history-list [data-round]").length,
+    current: Boolean(document.querySelector('#history-list [data-round="current"]')),
+    live: document.querySelector("#history-list .history-row.live")?.textContent || "",
+  }));
+  check("the round on the canvas is not also listed as a separate Current",
+    stoppedHistory.rows === repeated && !stoppedHistory.current
+      && stoppedHistory.live.includes("current"),
+    JSON.stringify(stoppedHistory));
 
   // ---- ellipse tool draws a real ellipse
   await page.keyboard.press("e");

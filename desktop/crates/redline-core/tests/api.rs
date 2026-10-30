@@ -789,6 +789,190 @@ async fn resubmitting_archives_the_previous_round() {
 }
 
 #[tokio::test]
+async fn resubmitting_an_unchanged_round_does_not_duplicate_history() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "same round", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let payload = json!({
+        "annotations": [{"id": "r1", "type": "rect", "start": {"x": 2, "y": 2}, "end": {"x": 8, "y": 8}}],
+        "note": "hover state is wrong",
+        "png": format!("data:image/png;base64,{PNG_B64}"),
+    });
+    let submit = || {
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            payload.clone(),
+        )
+    };
+    let history = |h: &Harness| {
+        let request = Request::builder()
+            .uri(format!("/api/sessions/{id}/history"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let app = h.app.clone();
+        async move {
+            let (_, _, body) = send(&app, request).await;
+            body["submissions"].as_array().cloned().unwrap_or_default()
+        }
+    };
+
+    send(&h.app, submit()).await;
+    // The agent read the round, then the human pressed STOP (the round stays: the agent may have
+    // acted on it) and submitted again without touching the canvas — the 2026-10-30 duplicate.
+    send(
+        &h.app,
+        authed(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "get_feedback", "arguments": { "session_id": id } }
+            }),
+        ),
+    )
+    .await;
+    let (status, _, _) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/cancel"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history(&h).await.len(), 1, "STOP keeps the read round");
+
+    let (status, _, _) = send(&h.app, submit()).await;
+    assert_eq!(status, StatusCode::OK);
+    let rounds = history(&h).await;
+    assert_eq!(
+        rounds.len(),
+        1,
+        "the same round submitted again is still one round: {rounds:?}"
+    );
+    assert_eq!(rounds[0]["round"], 1);
+    assert_eq!(rounds[0]["current"], true);
+    assert_eq!(rounds[0]["annotations"], 1);
+
+    // A round that actually changed still gets its own row.
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({
+                "annotations": [
+                    {"id": "r1", "type": "rect", "start": {"x": 2, "y": 2}, "end": {"x": 8, "y": 8}},
+                    {"id": "r2", "type": "rect", "start": {"x": 20, "y": 20}, "end": {"x": 30, "y": 30}}
+                ],
+                "png": format!("data:image/png;base64,{PNG_B64}"),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(history(&h).await.len(), 2);
+}
+
+#[tokio::test]
+async fn the_round_on_the_canvas_is_not_listed_as_a_second_current() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "resolved round", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({
+                "annotations": [{"type": "rect", "start": {"x": 0, "y": 0}, "end": {"x": 4, "y": 4}}],
+                "png": format!("data:image/png;base64,{PNG_B64}"),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let history = |h: &Harness| {
+        let request = Request::builder()
+            .uri(format!("/api/sessions/{id}/history"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let app = h.app.clone();
+        async move {
+            let (_, _, body) = send(&app, request).await;
+            body["submissions"].as_array().cloned().unwrap_or_default()
+        }
+    };
+
+    // The agent resolves the review. The canvas still shows the round it just read, so History
+    // used to list it twice: as "Round 1" and as a separate live "Current" row (2026-10-30).
+    let (status, _, _) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/resolve"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rounds = history(&h).await;
+    assert_eq!(rounds.len(), 1, "one submission is one round: {rounds:?}");
+    assert_eq!(
+        rounds[0]["current"], true,
+        "the canvas still shows this round; the UI must not add a second Current row: {rounds:?}"
+    );
+
+    // Reopening only changes the queue state, not what the canvas shows.
+    let (status, _, _) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rounds = history(&h).await;
+    assert_eq!(rounds.len(), 1);
+    assert_eq!(rounds[0]["current"], true, "{rounds:?}");
+
+    // An agent round replaces the canvas picture, so the archived submission is no longer what
+    // the human sees and the live Current row is needed again.
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "post_round", "arguments": {
+                    "session_id": id, "note": "new picture", "image_base64": PNG_B64
+                }}
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rounds = history(&h).await;
+    assert_eq!(rounds.len(), 1);
+    assert_eq!(
+        rounds[0]["current"], false,
+        "the new picture is not in History, so the canvas and the round differ: {rounds:?}"
+    );
+}
+
+#[tokio::test]
 async fn capture_without_a_browser_is_an_actionable_error() {
     let h = harness();
     let (status, _, body) = send(

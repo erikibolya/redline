@@ -260,6 +260,17 @@ fn archive_round(
     Ok(())
 }
 
+/// Whether two archived rounds carry the same picture. Two rounds without a picture are the same
+/// picture (an annotations-only round).
+fn same_picture(history: &Path, a: &str, b: &str) -> bool {
+    let file = |stamp: &str| history.join(format!("{stamp}.png"));
+    match (fs::read(file(a)), fs::read(file(b))) {
+        (Ok(a), Ok(b)) => a == b,
+        (Err(_), Err(_)) => true,
+        _ => false,
+    }
+}
+
 fn prune_history(history: &std::path::Path, keep: usize) -> Result<()> {
     let mut stamps: Vec<String> = fs::read_dir(history)?
         .filter_map(|entry| entry.ok())
@@ -950,7 +961,9 @@ impl Store {
         if !history.exists() {
             return Ok(Vec::new());
         }
-        let mut entries = Vec::new();
+        // Each row carries the round's marks and picture, so a run of copies can be collapsed
+        // below and the round still on the canvas can be recognised.
+        let mut entries: Vec<(HistoryEntry, Value, Option<String>)> = Vec::new();
         for entry in fs::read_dir(&history)? {
             let path = entry?.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -963,34 +976,57 @@ impl Store {
             else {
                 continue;
             };
-            let annotations = fs::read_to_string(&path)
+            let set = fs::read_to_string(&path)
                 .ok()
-                .and_then(|text| serde_json::from_str::<AnnotationSet>(&text).ok())
-                .map(|set| set.annotations.len())
-                .unwrap_or(0);
-            entries.push(HistoryEntry {
-                png: history.join(format!("{stamp}.png")).is_file(),
-                source: history.join(format!("{stamp}-source.png")).is_file(),
-                stamp,
-                annotations,
-                round: 0,
-                current: false,
-            });
+                .and_then(|text| serde_json::from_str::<AnnotationSet>(&text).ok());
+            let marks = set
+                .as_ref()
+                .map(|set| json!(&set.annotations))
+                .unwrap_or(Value::Null);
+            let picture = set
+                .as_ref()
+                .and_then(|set| set.image.as_ref())
+                .and_then(|image| image.file.clone());
+            entries.push((
+                HistoryEntry {
+                    png: history.join(format!("{stamp}.png")).is_file(),
+                    source: history.join(format!("{stamp}-source.png")).is_file(),
+                    stamp,
+                    annotations: set.map(|set| set.annotations.len()).unwrap_or(0),
+                    round: 0,
+                    current: false,
+                },
+                marks,
+                picture,
+            ));
         }
-        entries.sort_by(|a, b| b.stamp.cmp(&a.stamp));
+        entries.sort_by(|a, b| b.0.stamp.cmp(&a.0.stamp));
+        // One round is one row. STOP then *Submit again* without touching the canvas archived the
+        // same annotations and the same picture a second time, so History read as "this one task
+        // ran twice" (2026-10-30). Copies are indistinguishable by definition, so keep the newest
+        // of a run; `dedup_by` drops the older one.
+        entries.dedup_by(|older, newer| {
+            older.1 == newer.1 && same_picture(&history, &older.0.stamp, &newer.0.stamp)
+        });
         let total = entries.len();
         let meta = self.require(id)?;
-        let current = if meta.status == Status::Submitted {
-            meta.round_stamp.clone()
-        } else {
-            None
-        };
-        for (index, entry) in entries.iter_mut().enumerate() {
+        // The round the canvas still shows must appear once. A submission is archived at submit
+        // time and the canvas keeps it after resolve or reopen, so History listed the same round
+        // as "Round N" *and* "Current" (2026-10-30). Status alone cannot tell — an agent round
+        // replaces the picture while the session is open — so compare the saved marks and picture
+        // with the newest row.
+        let live = self.annotations(id)?;
+        let live_marks = json!(&live.annotations);
+        let current = entries.first().and_then(|(entry, marks, picture)| {
+            (*marks == live_marks && *picture == Some(meta.image.clone()))
+                .then(|| entry.stamp.clone())
+        });
+        for (index, (entry, _, _)) in entries.iter_mut().enumerate() {
             // Newest first, but numbered oldest = 1.
             entry.round = total - index;
             entry.current = current.as_deref() == Some(entry.stamp.as_str());
         }
-        Ok(entries)
+        Ok(entries.into_iter().map(|(entry, _, _)| entry).collect())
     }
 
     pub fn history_file(&self, id: &str, name: &str) -> Result<PathBuf> {

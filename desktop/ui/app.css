@@ -725,6 +725,10 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .history-row {
   padding: 4px 6px; gap: 6px; border-radius: 6px;
   background: var(--panel-2); border-color: var(--border);
+  /* A history row is two lines (title + timestamp), so centring the glyph across the row left it
+     floating between them. The marker belongs to the title line: start the row at the top and
+     lift the glyph by half the difference between the title's line box and the glyph. */
+  align-items: flex-start;
 }
 /* History rows are 4px apart and each owns all four corners. The generic `.ann-row + .ann-row`
    divider squares the top corners for a stacked list, which left every round below the first
@@ -734,7 +738,15 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   border-top-left-radius: 6px; border-top-right-radius: 6px;
 }
 .history-row:hover { background: var(--panel-3); }
-.history-row .glyph { width: 18px; height: 18px; border-radius: 4px; font-size: 10px; }
+.history-row .glyph {
+  width: 18px; height: 18px; border-radius: 4px; font-size: 10px;
+  /* The title line is 11px × the body's 1.45 line-height; lift the 18px glyph by half the
+     difference so its centre meets the centre of "Current"/"Round N", not of the whole row. */
+  margin-top: calc((1.45 * 11px - 18px) / 2);
+  /* A centred em box is not a centred digit: digits have no descender, so the numeral sat ~2px
+     high in the square. Pad the top to put the ink in the middle of the box. */
+  padding-top: 2px;
+}
 .history-row .label b { font-size: 11px; }
 .history-row .label span { font-size: 10px; }
 .history-row .del { padding: 2px; font-size: 11px; line-height: 1; }

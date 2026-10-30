@@ -1428,6 +1428,40 @@ const main = async () => {
   check("every history row keeps all four rounded corners",
     radii.length > 1 && radii.every((corners) => corners.every((radius) => radius === corners[0])),
     JSON.stringify(radii));
+  // A history row is two lines (title + timestamp). The glyph column marks the title, so it has
+  // to line up with "Round N", not float in the middle of the card; and the digit inside its
+  // square has to be optically centred (its ink has no descender, so a centred em box sits high).
+  const glyphLook = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list .history-row")].map((row) => {
+      const glyphEl = row.querySelector(".glyph");
+      const glyph = glyphEl.getBoundingClientRect();
+      const title = row.querySelector(".label b");
+      const titleBox = title.getBoundingClientRect();
+      const style = getComputedStyle(glyphEl);
+      const range = document.createRange();
+      range.selectNodeContents(glyphEl);
+      const text = range.getBoundingClientRect();
+      const ctx = document.createElement("canvas").getContext("2d");
+      ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const metrics = ctx.measureText(glyphEl.textContent.trim());
+      const baseline = text.top + metrics.fontBoundingBoxAscent;
+      const inkCentre = baseline - (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+      return {
+        title: title.textContent,
+        marker: glyphEl.textContent.trim(),
+        line: +(((glyph.top + glyph.bottom) - (titleBox.top + titleBox.bottom)) / 2).toFixed(2),
+        ink: +(inkCentre - (glyph.top + glyph.bottom) / 2).toFixed(2),
+        size: glyph.height,
+      };
+    }),
+  );
+  check("every history glyph is centred on the title line, not on the card",
+    glyphLook.length > 1 && glyphLook.every((row) => Math.abs(row.line) <= 1),
+    JSON.stringify(glyphLook));
+  const numbered = glyphLook.filter((row) => /^\d+$/.test(row.marker));
+  check("the round number is centred inside its square",
+    numbered.length > 0 && numbered.every((row) => Math.abs(row.ink) <= 1),
+    JSON.stringify(glyphLook));
   await page.click("#viewing-bar");
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
   // `showCurrent` reloads the list; the stale rows still contain `current`, so wait for the

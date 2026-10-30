@@ -266,6 +266,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   other round with only the glyph green. Colour the smallest marker that has to stand out, and keep
   selection (which round you are viewing) a separate signal.
 
+- **A centred icon is not an aligned icon.** A history row is two lines (title + timestamp) and
+  `.ann-row` centres its glyph on the whole row, so the round number and the live bullet floated
+  *between* "Round N" and the date instead of sitting beside the title (two annotations on the same
+  column). Align the glyph to the title's line box, not to the card. And a centred *em box* is not a
+  centred digit: digits have no descender, so the numeral sat ~2 px high inside its square — pad the
+  top and assert the ink centre, not just the element's centre.
+
 - **A grid column resize is not a canvas resize.** Moving `--rail` or `--inspector` reflows the
   layout, but the `<canvas>` bitmap keeps its old pixel size until `resize()` runs — so the stage
   is measured again on every pointermove of a divider drag. Sizes belong in CSS variables plus

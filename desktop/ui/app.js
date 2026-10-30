@@ -3127,11 +3127,15 @@ const NewReview = {
 
 /* ------------------------------------------------------------------ list page */
 
-/// The start page is a gallery: the last few reviews with their screenshots.
+/// The start page is a gallery: the last few reviews with their screenshots. A decided review
+/// (confirmed or cancelled) is finished work, not something to resume, so it does not belong
+/// here — the rail's All/Done filters are where history lives.
 function renderGallery(rail) {
   const box = $("#gallery");
   if (!box) return;
-  const sessions = (rail.sessions || []).slice(0, 12);
+  const sessions = (rail.sessions || [])
+    .filter((session) => featureState(session) === "pending")
+    .slice(0, 12);
   if (!sessions.length) {
     box.hidden = true;
     return;
@@ -3140,7 +3144,8 @@ function renderGallery(rail) {
   box.hidden = false;
   box.innerHTML = sessions.map((session) => {
     const project = names.get(session.project || "inbox") || (session.project || "Inbox");
-    return `<a class="card" href="/s/${encodeURIComponent(session.id)}">
+    return `<a class="card" data-session="${escapeHtml(session.id)}"
+      href="/s/${encodeURIComponent(session.id)}">
       <img src="/sessions/${encodeURIComponent(session.id)}/image" loading="lazy" alt="" />
       <div class="card-body">
         <b>${escapeHtml(session.title || session.id)}</b>
@@ -3153,6 +3158,10 @@ function renderGallery(rail) {
 }
 
 async function bootList() {
+  const refresh = async () => {
+    await rail.load();
+    renderGallery(rail);
+  };
   const rail = new Rail({
     body: $("#rail-body"),
     chips: $("#chips"),
@@ -3164,7 +3173,7 @@ async function bootList() {
         const session = rail.sessions.find((s) => s.id === id);
         const title = session?.title || id;
         const result = await featureAction(action, id, title, featureState(session || {}));
-        if (result) await rail.load();
+        if (result) await refresh();
       } catch (error) {
         alert(`Could not ${action}: ${error.message}`);
       }
@@ -3173,7 +3182,7 @@ async function bootList() {
       for (const id of ids) {
         await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
       }
-      await rail.load();
+      await refresh();
     },
     onBulk: async (action, ids) => {
       if (action === "confirm") {
@@ -3201,7 +3210,7 @@ async function bootList() {
         alert(`Could not ${action}: ${error.message}`);
       }
       rail.exitBulk();
-      await rail.load();
+      await refresh();
     },
   });
   await rail.load();

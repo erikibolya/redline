@@ -1585,6 +1585,21 @@ const main = async () => {
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
   check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
 
+  // A decided feature is finished work, not a review to resume: the gallery must not keep it.
+  const galleryState = await page.evaluate(() => ({
+    ids: [...document.querySelectorAll("#gallery .card")].map((card) => card.dataset.session),
+  }));
+  const allSessions = (await api("/api/sessions")).sessions || [];
+  const decided = (session) => session.feature_state === "confirmed"
+    || session.feature_state === "cancelled"
+    || Boolean(session.feature_confirmed_at || session.feature_cancelled_at);
+  const pendingIds = allSessions.filter((session) => !decided(session)).map((session) => session.id);
+  const decidedIds = allSessions.filter(decided).map((session) => session.id);
+  check("gallery hides confirmed and cancelled reviews",
+    decidedIds.length > 0 && galleryState.ids.every((id) => pendingIds.includes(id))
+      && !galleryState.ids.some((id) => decidedIds.includes(id)),
+    JSON.stringify({ cards: galleryState.ids.length, pending: pendingIds.length, decided: decidedIds.length }));
+
   await page.click("#new-review");
   await page.waitForFunction(
     () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),

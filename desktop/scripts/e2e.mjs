@@ -1018,13 +1018,16 @@ const main = async () => {
   const setup = await page.evaluate(() => ({
     back: document.querySelector("#back")?.getAttribute("href") || "",
     primary: document.querySelector("#save")?.className || "",
-    secondary: document.querySelector("#local")?.className || "",
+    secondary: document.querySelector("#back-servers")?.className || "",
+    secondaryHref: document.querySelector("#back-servers")?.getAttribute("href") || "",
+    localSwitch: Boolean(document.querySelector("#local")),
     card: getComputedStyle(document.querySelector(".setup-card")).borderRadius,
     css: getComputedStyle(document.body).backgroundColor,
   }));
-  check("setup page has a way back and app-styled buttons",
+  check("setup page goes back to the server list and has no duplicate standalone switch",
     setup.back.startsWith("/") && setup.primary.includes("accent")
-      && setup.secondary.includes("btn") && setup.card !== "0px",
+      && setup.secondary.includes("btn") && setup.secondaryHref.includes("/servers")
+      && !setup.localSwitch && setup.card !== "0px",
     JSON.stringify(setup));
 
   await page.goto(`${BASE}/servers?t=${TOKEN}`, { waitUntil: "networkidle2" });

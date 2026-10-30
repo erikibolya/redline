@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Adding a server lives on the Servers page only.** The app menu and the tray no longer carry
+  **Add a server…**; **Servers…** stays and its **Add server** button opens the same wizard. The
+  wizard's **Use this computer** button is gone (the *This computer* row in the list is always
+  present and cannot be removed) and is replaced by **Back**, which returns to the server list.
 - **Each session is one feature.** The rail's ✓ now asks for confirmation and records
   `feature_confirmed_at`; the ✕ is **Cancel feature** and records `feature_cancelled_at` instead
   of deleting the review. Both close the session (`resolved`), keep the screenshot/annotations,

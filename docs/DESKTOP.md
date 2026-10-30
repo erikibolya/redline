@@ -157,11 +157,12 @@ start). The container is preferred only because updates are a `docker pull`; the
 
 **2. Point the Windows app at it — in the app, not in a file.**
 
-Tray → **Add a server…**, give it a name (for example *Production*), paste the address and token,
-**Save and connect**. The app probes the server with those credentials before saving anything, so
-a wrong token is an error message instead of a broken next launch. **Servers…** lists every
-profile with its URL, state and version; *Use* switches the window without signing out of the
-other servers.
+Tray or menu bar → **Servers…** → **Add server**, give it a name (for example *Production*),
+paste the address and token, **Save and connect**. The app probes the server with those
+credentials before saving anything, so a wrong token is an error message instead of a broken next
+launch. **Servers…** lists every profile with its URL, state and version; *Use* switches the window
+without signing out of the other servers. The local *This computer* row is always present and
+cannot be removed, so the wizard needs no separate "use this computer" action.
 
 Profiles live in `%LOCALAPPDATA%\redline\config.json`:
 

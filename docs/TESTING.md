@@ -50,7 +50,8 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `waiting` transitions, `next` skipping locked branches.
 - `redline-agent` tests: a worktree is created on the declared branch and reused; two claims run
   in two separate worktrees (the bridge integration test starts a real server and a fake
-  `opencode`); the prompt carries the branch.
+  `opencode`); the prompt carries the branch; a tag that shares the base branch's name (`dev`)
+  neither breaks the worktree nor moves its base off that branch.
 - Browser e2e: the Agent settings dialog saves global + per-project values, and the rail shows the
   session's branch next to the relative time.
 

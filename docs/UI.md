@@ -390,6 +390,12 @@ One round is one row. *STOP* then *Submit again* without touching the canvas re-
 annotations and the picture already archived, so the list collapses such a run of identical copies
 to its newest entry instead of showing the same round twice (2026-10-30).
 
+The same rule applies to the live canvas: a round that is still what the canvas shows (after
+*Submit*, and also after the agent resolves or the review is reopened) is marked `current` and
+labelled **Round N (current)**. It is not listed a second time as a *Current* row; *Current* only
+appears when the canvas differs from every archived round (the agent posted a new picture, or the
+human is drawing the next round). Clicking the live round returns to the canvas.
+
 ## Layers, groups, text size (v0.5)
 
 - Paint order is array order. With a selection the inspector offers **bring to front / forward /

@@ -961,8 +961,9 @@ impl Store {
         if !history.exists() {
             return Ok(Vec::new());
         }
-        // Each row carries the round's marks, so a run of copies can be collapsed below.
-        let mut entries: Vec<(HistoryEntry, Value)> = Vec::new();
+        // Each row carries the round's marks and picture, so a run of copies can be collapsed
+        // below and the round still on the canvas can be recognised.
+        let mut entries: Vec<(HistoryEntry, Value, Option<String>)> = Vec::new();
         for entry in fs::read_dir(&history)? {
             let path = entry?.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -982,6 +983,10 @@ impl Store {
                 .as_ref()
                 .map(|set| json!(&set.annotations))
                 .unwrap_or(Value::Null);
+            let picture = set
+                .as_ref()
+                .and_then(|set| set.image.as_ref())
+                .and_then(|image| image.file.clone());
             entries.push((
                 HistoryEntry {
                     png: history.join(format!("{stamp}.png")).is_file(),
@@ -992,6 +997,7 @@ impl Store {
                     current: false,
                 },
                 marks,
+                picture,
             ));
         }
         entries.sort_by(|a, b| b.0.stamp.cmp(&a.0.stamp));
@@ -1004,17 +1010,23 @@ impl Store {
         });
         let total = entries.len();
         let meta = self.require(id)?;
-        let current = if meta.status == Status::Submitted {
-            meta.round_stamp.clone()
-        } else {
-            None
-        };
-        for (index, (entry, _)) in entries.iter_mut().enumerate() {
+        // The round the canvas still shows must appear once. A submission is archived at submit
+        // time and the canvas keeps it after resolve or reopen, so History listed the same round
+        // as "Round N" *and* "Current" (2026-10-30). Status alone cannot tell — an agent round
+        // replaces the picture while the session is open — so compare the saved marks and picture
+        // with the newest row.
+        let live = self.annotations(id)?;
+        let live_marks = json!(&live.annotations);
+        let current = entries.first().and_then(|(entry, marks, picture)| {
+            (*marks == live_marks && *picture == Some(meta.image.clone()))
+                .then(|| entry.stamp.clone())
+        });
+        for (index, (entry, _, _)) in entries.iter_mut().enumerate() {
             // Newest first, but numbered oldest = 1.
             entry.round = total - index;
             entry.current = current.as_deref() == Some(entry.stamp.as_str());
         }
-        Ok(entries.into_iter().map(|(entry, _)| entry).collect())
+        Ok(entries.into_iter().map(|(entry, _, _)| entry).collect())
     }
 
     pub fn history_file(&self, id: &str, name: &str) -> Result<PathBuf> {

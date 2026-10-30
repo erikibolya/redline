@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The round on the canvas is listed once.** After the agent resolved a review, History showed the
+  last submission twice: as *Round N* and again as the live *Current* row, so a session with one
+  round looked like two (2026-10-30). `GET /api/sessions/<id>/history` now marks a round `current`
+  whenever the saved annotations and picture are still what the canvas shows (submitted, resolved,
+  or reopened), and the editor omits the extra *Current* row. Clicking that row returns to the live
+  canvas instead of opening a read-only copy. Regression test:
+  `the_round_on_the_canvas_is_not_listed_as_a_second_current` plus the *round on the canvas* e2e
+  check.
 - **One task is one round in History.** Pressing *STOP* and then *Submit again* without touching
   the canvas archived the same annotations and the same picture a second time, so a single review
   showed up as two identical rounds with nothing to diff (2026-10-30). `GET

@@ -2294,7 +2294,7 @@ class Editor {
           ? this.viewing.stamp === round.stamp
           : isLive;
         rows.push(`<div class="ann-row history-row${isLive ? " live" : ""}${selected ? " selected" : ""}"
-                        data-round="${escapeHtml(round.stamp)}" role="button" tabindex="0">
+                        data-round="${escapeHtml(round.stamp)}" data-live="${isLive ? "1" : "0"}" role="button" tabindex="0">
           <span class="glyph">${round.round}</span>
           <span class="label">
             <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
@@ -2314,7 +2314,9 @@ class Editor {
       const counter = $("#history-count");
       if (counter) counter.textContent = String(rows.length);
       $$("[data-round]", list).forEach((row) => {
-        const go = () => row.dataset.round === "current"
+        // A round the canvas still shows is the live canvas itself; clicking it must not open a
+        // read-only copy of what is already on screen.
+        const go = () => row.dataset.round === "current" || row.dataset.live === "1"
           ? this.showCurrent()
           : this.viewRound(row.dataset.round);
         row.addEventListener("click", go);

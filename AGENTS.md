@@ -286,6 +286,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   at the one place the list is built (`Store::history`), so already-duplicated sessions heal too,
   and let a round that really changed keep its own row. Test the collapsed count *and* the changed
   one.
+- **A current round is not also a history row.** After the agent resolved a review, History showed
+  the last submission twice — as *Round N* and again as the live *Current* row — because `current`
+  was derived from `status == submitted`, while the canvas keeps the round after resolve/reopen
+  (2026-10-30). Derive "current" from what the canvas actually shows (saved annotations + picture
+  equal the newest archived row), let *Current* appear only when the canvas differs from every
+  round, and test the resolved case *and* the agent-posted-picture case that still needs it.
 
 ## 8. Working rules
 

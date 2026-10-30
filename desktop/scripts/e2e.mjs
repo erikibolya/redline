@@ -762,11 +762,13 @@ const main = async () => {
     `${rowsForRounds} rows, ${repeated} rounds`);
   const opened = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#history-list [data-round]")];
-    const target = rows.find((row) => row.dataset.round !== "current") || rows[0];
+    // The newest round is still the canvas: clicking it returns to the live view, so open an
+    // earlier round to test the read-only viewer.
+    const target = rows.find((row) => row.dataset.round !== "current" && row.dataset.live !== "1");
     target?.click();
     return Boolean(target);
   });
-  check("history lists at least one round", opened);
+  check("history lists an earlier round to open", opened);
   await page.waitForFunction(() => Boolean(window.redline.viewing), { timeout: 5000 });
   const viewing = await page.evaluate(() => ({
     round: window.redline.viewing.round,
@@ -779,6 +781,24 @@ const main = async () => {
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
   check("Current returns to the live canvas", true);
   await stopReview();
+
+  // After STOP the canvas still shows the newest round, so that round is the current one:
+  // one row labelled "Round N (current)", not "Round N" plus a second live "Current" row
+  // (2026-10-30).
+  await page.evaluate(() => window.redline.loadHistory());
+  await page.waitForFunction(
+    () => document.querySelectorAll("#history-list [data-round]").length > 0,
+    { timeout: 5000 },
+  );
+  const stoppedHistory = await page.evaluate(() => ({
+    rows: document.querySelectorAll("#history-list [data-round]").length,
+    current: Boolean(document.querySelector('#history-list [data-round="current"]')),
+    live: document.querySelector("#history-list .history-row.live")?.textContent || "",
+  }));
+  check("the round on the canvas is not also listed as a separate Current",
+    stoppedHistory.rows === repeated && !stoppedHistory.current
+      && stoppedHistory.live.includes("current"),
+    JSON.stringify(stoppedHistory));
 
   // ---- ellipse tool draws a real ellipse
   await page.keyboard.press("e");

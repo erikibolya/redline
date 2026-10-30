@@ -777,6 +777,57 @@ const main = async () => {
   }));
   check("history opens a round read-only", viewing.round >= 1 && viewing.readonly && viewing.bar,
     JSON.stringify(viewing));
+
+  // ---- a historical round is a viewer, not a dead image: it pans, scrolls and zooms
+  const viewer = await page.evaluate(() => ({
+    view: { ...window.redline.view },
+    annotations: JSON.stringify(window.redline.annotations),
+    cursor: getComputedStyle(document.querySelector("#stage canvas")).cursor,
+    box: (() => {
+      const rect = document.querySelector("#stage").getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    })(),
+  }));
+  check("history viewer shows a pan cursor", viewer.cursor === "grab", viewer.cursor);
+  const panX = viewer.box.x + viewer.box.width / 2;
+  const panY = viewer.box.y + viewer.box.height / 2;
+  await drag(page, { x: panX, y: panY }, { x: panX + 70, y: panY + 45 });
+  const panned = await page.evaluate(() => ({ ...window.redline.view }));
+  check(
+    "history viewer pans with a left-drag",
+    Math.abs(panned.x - viewer.view.x - 70) <= 1 && Math.abs(panned.y - viewer.view.y - 45) <= 1,
+    `${viewer.view.x},${viewer.view.y} -> ${panned.x},${panned.y}`,
+  );
+  await page.mouse.wheel({ deltaY: 120 });
+  const scrolled = await page.evaluate(() => ({ ...window.redline.view }));
+  check("history viewer scrolls with the wheel", Math.abs(scrolled.y - panned.y + 120) <= 1,
+    `${panned.y} -> ${scrolled.y}`);
+  const scaleBefore = scrolled.scale;
+  await page.keyboard.down("Control");
+  await page.mouse.wheel({ deltaY: -120 });
+  await page.keyboard.up("Control");
+  const zoomed = await page.evaluate(() => window.redline.view.scale);
+  check("history viewer zooms with ctrl+wheel", zoomed > scaleBefore, `${scaleBefore} -> ${zoomed}`);
+  const untouched = await page.evaluate(() => JSON.stringify(window.redline.annotations));
+  check("panning a history round does not edit it", untouched === viewer.annotations);
+
+  // A mouse click leaves focus on the history row; space+drag must still pan the canvas.
+  const focusedRow = await page.evaluate(() => {
+    const row = document.querySelector("#history-list .history-row.selected");
+    row?.focus();
+    return document.activeElement === row;
+  });
+  const spaceBefore = await page.evaluate(() => ({ ...window.redline.view }));
+  await page.mouse.move(panX, panY);
+  await page.keyboard.down("Space");
+  await drag(page, { x: panX, y: panY }, { x: panX - 40, y: panY - 30 });
+  await page.keyboard.up("Space");
+  const spacePanned = await page.evaluate(() => ({ ...window.redline.view }));
+  check("history viewer pans with space+drag while a history row is focused",
+    focusedRow && Math.abs(spacePanned.x - spaceBefore.x + 40) <= 1
+      && Math.abs(spacePanned.y - spaceBefore.y + 30) <= 1,
+    `${spaceBefore.x},${spaceBefore.y} -> ${spacePanned.x},${spacePanned.y}`);
+
   await page.click("#viewing-bar");
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
   check("Current returns to the live canvas", true);

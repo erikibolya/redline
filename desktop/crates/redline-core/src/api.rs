@@ -137,7 +137,10 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{id}/rounds/{name}", get(round_image))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
         .route("/mcp", post(mcp_post))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
+        // The rail polls `/api/sessions`; a browser must never answer a decision with yesterday's
+        // list. API/session responses are live data, not documents, so no-store is correct.
+        .layer(middleware::from_fn(no_store));
 
     Router::new()
         .route("/health", get(health))
@@ -190,6 +193,17 @@ async fn require_token(State(state): State<AppState>, request: Request, next: Ne
         )
             .into_response(),
     }
+}
+
+/// Protected data (API JSON, images, history) is produced from mutable state and must not be
+/// replayed by the browser cache. Images are cache-busted by `?v=<filename>`, so `no-store` costs
+/// no correctness there either.
+async fn no_store(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// The human-facing entry point: `GET /s/<id>?t=<token>` trades the token for a cookie so the

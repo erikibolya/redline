@@ -1,7 +1,9 @@
 # HTTP API & data reference
 
 Base URL: `http://127.0.0.1:8788` by default. All API responses are JSON; static pages are HTML;
-session images are served with the original content type.
+session images are served with the original content type. Authenticated data (everything under
+`/api/*` plus session images/history) is sent with `Cache-Control: no-store`: a rail poll or a
+dashboard load must never replay a list from before a feature was confirmed, cancelled or deleted.
 
 ## Endpoints
 

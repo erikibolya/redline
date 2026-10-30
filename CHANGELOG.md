@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Finishing the open review returns to the dashboard, and filters do not leave a ghost selected.**
+  Confirming, cancelling or deleting the review currently on screen left the human staring at the
+  same canvas (or a deleted session); a filter or search that no longer contained the open review
+  still kept it selected. `railAction` and the bulk confirm/delete now navigate to `/` when the
+  current session gets a decision, and `Rail.onViewChange` uses the editor's fresh `meta` plus the
+  chosen filter/search to leave a review the view no longer shows. The dashboard refreshes a
+  back-forward-cache restore, and all authenticated API/session responses carry
+  `Cache-Control: no-store` so a gallery cannot be built from a list fetched before the decision.
+  The e2e covers confirm, cancel, delete-of-open, and a filter that hides the open review.
 - **Every popup is a fixed frame with a close X.** The Agent settings form scrolled as one block:
   the title and the Save/Cancel buttons left the screen when the project list grew, and there was
   no way to dismiss it except Cancel. The settings, New review, Keyboard and feature/branch

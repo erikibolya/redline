@@ -171,6 +171,11 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   Delete files… removes them permanently. A decided feature gets **Reopen** instead of Cancel in
   the same menu. The row itself never deletes on a single click.
 - **↺ Reopen** clears both feature stamps and returns the session to `open`.
+- **A decision closes the screen that showed the review.** Confirming, cancelling or deleting the
+  review that is currently open navigates back to `/` with no selection; a decision on another
+  row leaves the editor where it is. This is the same rule as a filter or search that no longer
+  contains the open review: the rail deselects it and the dashboard appears instead of a review
+  the chosen view says is gone.
 - **Bulk Select** now offers **Confirm** (one dialog for the selection), **Delete** and **Close**;
   single-session delete is also one dialog away from the row's ✕.
 - **Delete cancelled** in the rail head purges only features with `feature_cancelled_at`;

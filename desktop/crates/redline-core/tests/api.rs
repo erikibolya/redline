@@ -172,6 +172,32 @@ async fn health_is_public_but_sessions_are_not() {
 }
 
 #[tokio::test]
+async fn api_responses_are_not_cached() {
+    let h = harness();
+    let request = Request::builder()
+        .uri("/api/sessions")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers
+            .get("cache-control")
+            .and_then(|value| value.to_str().ok()),
+        Some("no-store"),
+        "the rail list must never be replayed from the browser cache"
+    );
+
+    let (status, headers, _) = send(&h.app, get("/health")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        headers.get("cache-control").is_none(),
+        "/health is not mutable API data"
+    );
+}
+
+#[tokio::test]
 async fn create_submit_and_read_back_round_trip() {
     let h = harness();
 

@@ -565,7 +565,7 @@ const FILTERS = [
 ];
 
 class Rail {
-  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk }) {
+  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk, onViewChange }) {
     this.body = body;
     this.chips = chips;
     this.search = search;
@@ -575,6 +575,7 @@ class Rail {
     this.onAction = onAction;
     this.onPurge = onPurge;
     this.onBulk = onBulk;
+    this.onViewChange = onViewChange;
     this.bulkMode = false;
     this.selection = new Set();
     this.sessions = [];
@@ -618,8 +619,15 @@ class Rail {
         this.query = this.search.value;
         prefs.set("query", this.query);
         this.render();
+        this.viewChanged();
       });
     }
+  }
+
+  /// The visible list changed by a human action (filter or search), not by an initial load.
+  /// The editor uses it to leave a review that the chosen view no longer contains.
+  viewChanged() {
+    this.onViewChange?.();
   }
 
   toggleBulk(force) {
@@ -676,15 +684,19 @@ class Rail {
   }
 
   visible() {
+    return this.sessions.filter((session) => this.matches(session));
+  }
+
+  /// Does one session belong to the current filter and search? Kept separate from `visible` so
+  /// the editor can test its live `meta` instead of a rail row that may be a poll behind.
+  matches(session) {
     const active = FILTERS.find((f) => f.id === this.filter) || FILTERS[0];
+    if (!active.test(session)) return false;
     const query = this.query.trim().toLowerCase();
-    return this.sessions.filter((session) => {
-      if (!active.test(session)) return false;
-      if (unfiltered(query)) return true;
-      return [session.title, session.note, session.id, session.url]
-        .filter(Boolean)
-        .some((field) => field.toLowerCase().includes(query));
-    });
+    if (unfiltered(query)) return true;
+    return [session.title, session.note, session.id, session.url]
+      .filter(Boolean)
+      .some((field) => field.toLowerCase().includes(query));
   }
 
   renderChips() {
@@ -710,6 +722,7 @@ class Rail {
         this.filter = chip.dataset.filter;
         prefs.set("filter", this.filter);
         this.render();
+        this.viewChanged();
       }),
     );
   }
@@ -961,11 +974,13 @@ class Editor {
           alert(`Could not ${action}: ${error.message}`);
         }
         this.rail.exitBulk();
-        await this.rail.load();
-        if (action === "delete" && ids.includes(this.sessionId)) {
+        // Confirming (or deleting) the review that is open finishes the work on screen; there is
+        // no review left to look at, so go back to the dashboard instead of an empty canvas.
+        if (ids.includes(this.sessionId) && (action === "delete" || action === "confirm")) {
           location.href = "/";
           return;
         }
+        await this.rail.load();
         if (ids.includes(this.sessionId)) {
           try {
             const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}`);
@@ -976,6 +991,7 @@ class Editor {
           }
         }
       },
+      onViewChange: () => this.leaveIfFiltered(),
     });
     this.bindChrome();
     this.bindPanels();
@@ -998,11 +1014,15 @@ class Editor {
       const title = session?.title || id;
       const result = await featureAction(action, id, title, featureState(session || {}));
       if (!result) return;
+      const finished = result.deleted
+        || Boolean(result.meta?.feature_confirmed_at)
+        || Boolean(result.meta?.feature_cancelled_at);
+      if (id === this.sessionId && finished) {
+        // The decision closed the review on screen; the dashboard is the next useful place.
+        location.href = "/";
+        return;
+      }
       if (result.deleted) {
-        if (id === this.sessionId) {
-          location.href = "/";
-          return;
-        }
         await this.rail.load();
         return;
       }
@@ -1014,6 +1034,19 @@ class Editor {
     } catch (error) {
       alert(`Could not ${action}: ${error.message}`);
     }
+  }
+
+  /// A filter or search may hide the review that is open. Keeping it on the canvas would leave a
+  /// selected review that the chosen view says is gone, so return to the dashboard instead. The
+  /// editor's `meta` is fresher than the rail's poll, so test the merged record; a session the
+  /// rail has never loaded is simply new, not filtered out.
+  leaveIfFiltered() {
+    if (!this.sessionId || !this.rail) return;
+    const entry = this.rail.sessions.find((session) => session.id === this.sessionId);
+    if (!entry) return;
+    const session = { ...entry, ...(this.meta || {}), id: this.sessionId };
+    if (this.rail.matches(session)) return;
+    location.href = "/";
   }
 
   async purgeSessions(ids) {
@@ -3254,6 +3287,11 @@ async function bootList() {
   });
   await rail.load();
   renderGallery(rail);
+  // A dashboard restored from the back-forward cache keeps the DOM it had when the human left it,
+  // including gallery cards for reviews that have since been confirmed or cancelled. Refresh it.
+  addEventListener("pageshow", (event) => {
+    if (event.persisted) refresh();
+  });
   NewReview.wire();
   $("#new-review").addEventListener("click", () => NewReview.open());
   const count = $("#sessions-count");

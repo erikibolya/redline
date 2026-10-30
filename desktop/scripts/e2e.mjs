@@ -1052,24 +1052,35 @@ const main = async () => {
     if (status === "resolved" && meta.meta.feature_confirmed_at) break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  // `railAction` reloads the rail after the POST, but the click resolves before that await does;
-  // poll the rail's own data instead of reading it a frame too early. The card itself is checked
-  // in the Done filter below — a resolved session leaves the default Active view.
-  let confirmedState = "";
-  for (let attempt = 0; attempt < 30 && confirmedState !== "confirmed"; attempt += 1) {
-    confirmedState = await page.evaluate(() => {
-      const entry = window.redline.rail.sessions.find((session) => session.id === window.redline.sessionId);
-      return entry?.feature_state || "";
-    });
-    if (confirmedState !== "confirmed") await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+  // A decision on the review that is open finishes it: back to the dashboard, no selection.
+  await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
+  await page.waitForFunction((sessionId) => !document.querySelector(`#gallery .card[data-session="${sessionId}"]`),
+    { timeout: 5000 }, id);
+  const confirmDashboard = await page.evaluate((sessionId) => ({
+    selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+    card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),
+  }), id);
+  check("rail 'confirm' on the open review returns to the dashboard",
+    status === "resolved" && !confirmDashboard.selected && !confirmDashboard.card,
+    JSON.stringify({ status, ...confirmDashboard }));
+
+  // Reopen it from the Done filter to check the decision and the reopen path.
+  await clickChip("Done");
+  await page.waitForSelector(row, { timeout: 5000 });
+  await page.$eval(row, (el) => el.click());
+  await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
+    { timeout: 10000 }, id);
+  await page.waitForFunction(() => Boolean(window.redline?.meta?.feature_confirmed_at),
+    { timeout: 10000 });
   const confirmed = await page.evaluate(() => ({
     stamped: Boolean(window.redline.meta?.feature_confirmed_at),
-    row: Boolean(document.querySelector('.session[aria-current="true"]')),
+    selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+    filter: window.redline.rail.filter,
   }));
-  check("rail 'confirm' closes the feature and records the decision",
-    status === "resolved" && confirmed.stamped && confirmedState === "confirmed" && !confirmed.row,
-    JSON.stringify({ status, ...confirmed, state: confirmedState }));
+  check("the confirmed feature opens from Done with its decision stamped",
+    confirmed.stamped && confirmed.selected && confirmed.filter === "resolved",
+    JSON.stringify(confirmed));
 
   // "All" is the only view that keeps a finished session alongside active work.
   await clickChip("All");
@@ -1156,8 +1167,29 @@ const main = async () => {
       && !cancelled.feature_confirmed_at,
     JSON.stringify({ status: cancelled.status, cancelled: cancelled.feature_cancelled_at }));
 
+  await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
+  let cancelDashboard = {};
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    cancelDashboard = await page.evaluate((sessionId) => ({
+      selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+      card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),
+      cards: [...document.querySelectorAll("#gallery .card")].map((card) => card.dataset.session),
+    }), id);
+    if (!cancelDashboard.card) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("rail 'cancel' on the open review returns to the dashboard",
+    Boolean(cancelled.feature_cancelled_at) && !cancelDashboard.selected && !cancelDashboard.card,
+    JSON.stringify({ cancelled: cancelled.feature_cancelled_at, ...cancelDashboard }));
+
   await clickChip("Done");
   await page.waitForSelector(row, { timeout: 5000 });
+  await page.$eval(row, (el) => el.click());
+  await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
+    { timeout: 10000 }, id);
+  await page.waitForFunction(() => Boolean(window.redline?.meta?.feature_cancelled_at),
+    { timeout: 10000 });
   await page.hover(row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   let reopenedCancel = {};
@@ -1173,6 +1205,23 @@ const main = async () => {
     JSON.stringify({ status: reopenedCancel.status }));
   await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
+
+  // ---- a filter that hides the open review sends the human back to the dashboard
+  await clickChip("Submitted");
+  await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="active"]', { timeout: 10000 });
+  const filteredOut = await page.evaluate(() => ({
+    selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+    filter: JSON.parse(localStorage.getItem("redline:filter") || '"active"'),
+  }));
+  check("a filter that hides the open review returns to the dashboard",
+    !filteredOut.selected && filteredOut.filter === "submitted", JSON.stringify(filteredOut));
+  await clickChip("Active");
+  await page.waitForSelector(row, { timeout: 5000 });
+  await page.$eval(row, (el) => el.click());
+  await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
+    { timeout: 10000 }, id);
+  await page.waitForFunction(() => Boolean(window.redline?.image), { timeout: 15000 });
 
   const annotated = await fetch(`${BASE}/sessions/${id}/annotated.png`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
@@ -1928,6 +1977,33 @@ const main = async () => {
     .$eval('.session[aria-current="true"] .sub .branch', (el) => el.textContent.trim())
     .catch(() => "");
   check("the rail shows that feature branch", railBranch === newBranch, `${railBranch} vs ${newBranch}`);
+
+  // ---- deleting the review that is open also returns to the dashboard
+  const openDelete = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "delete the open review", image_base64: makePng() }),
+  });
+  const openDeleteId = openDelete.meta.id;
+  await page.goto(`${BASE}/s/${openDeleteId}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
+  const openDeleteRow = `.session[data-id="${openDeleteId}"]`;
+  await page.hover(openDeleteRow);
+  await page.click(`${openDeleteRow} [data-act="menu"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.click('#feature-actions [data-action="delete"]');
+  await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await page.waitForSelector("#gallery", { timeout: 10000 });
+  const deletedOpen = await fetch(`${BASE}/api/sessions/${openDeleteId}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  const deleteDashboard = await page.evaluate((sessionId) => ({
+    selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+    card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),
+  }), openDeleteId);
+  check("deleting the open review returns to the dashboard",
+    deletedOpen.status === 404 && !deleteDashboard.selected && !deleteDashboard.card,
+    JSON.stringify({ status: deletedOpen.status, ...deleteDashboard }));
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

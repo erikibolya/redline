@@ -28,6 +28,13 @@ pub struct Meta {
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_at: Option<String>,
+    /// When the human confirmed the feature is complete (v0.21). This is the signal agents map
+    /// to their own workflow — RedLine itself never opens a PR or merges anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_confirmed_at: Option<String>,
+    /// When the human cancelled the feature without shipping it (v0.21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_cancelled_at: Option<String>,
     /// The prompt the human wrote when submitting a round (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -47,6 +54,10 @@ pub struct Meta {
     /// Project slug this session belongs to (v0.10). Missing on disk means the Inbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// Feature branch the agent is working on (v0.22). Set at session creation or on the first
+    /// claim; the fallback is `session/<id>`. RedLine uses it as the branch-lock key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
 }
 
 /// A conversation area: one agent + one piece of work, holding its sessions and history.
@@ -60,6 +71,9 @@ pub struct Project {
     /// `None` for legacy label-only projects.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo: Option<String>,
+    /// Per-project concurrent-run override (v0.22). `None` inherits the server default (1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_parallel: Option<u32>,
     #[serde(default)]
     pub created_at: String,
 }
@@ -79,6 +93,31 @@ impl Status {
             Status::Submitted => "submitted",
             Status::Resolved => "resolved",
         }
+    }
+}
+
+impl Meta {
+    /// The human's feature decision: `confirmed`, `cancelled`, or `pending` when they have not
+    /// decided yet. A `resolved` status alone (the agent finished a round) is not a decision.
+    pub fn feature_state(&self) -> &'static str {
+        if self.feature_confirmed_at.is_some() {
+            "confirmed"
+        } else if self.feature_cancelled_at.is_some() {
+            "cancelled"
+        } else {
+            "pending"
+        }
+    }
+
+    /// Key used to serialize work on one feature branch. Agents normally set `branch`; the
+    /// fallback keeps legacy and ad-hoc sessions from running twice in the same worktree.
+    pub fn work_key(&self) -> String {
+        self.branch
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("session/{}", self.id))
     }
 }
 
@@ -213,4 +252,8 @@ pub struct NewSession {
     /// Project name or slug (v0.10). Created on first use; omitted means the Inbox.
     #[serde(default)]
     pub project: Option<String>,
+    /// Feature branch the agent is working on (v0.22). Optional; the bridge falls back to
+    /// `session/<id>` when it claims the work.
+    #[serde(default)]
+    pub branch: Option<String>,
 }

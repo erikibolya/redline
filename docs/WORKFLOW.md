@@ -40,6 +40,16 @@ Open the printed `review_url` in the browser or the Review pane. The server must
 python3 redline.py serve --open
 ```
 
+With the current agents, pass `branch` to `review_screenshot` or `POST /api/sessions`. RedLine
+uses it as the branch-lock key; if omitted, the first claim falls back to `session/<id>`. The
+defaults are 2 concurrent runs globally and 1 per project; waiting for the human frees the run
+slot but keeps the branch locked.
+
+The bridge runs up to four claim workers (`REDLINE_AGENT_WORKERS`, default 4). Each claim gets a
+separate git worktree on its branch; the agent commits and pushes there. One branch has one owner,
+so two rounds of the same feature never edit the same worktree at once. A resolved round releases
+the claim and removes a clean worktree; a dirty one is left for inspection.
+
 ## 3. Annotate
 
 - **Rectangle** — mark a region that needs a change.
@@ -76,20 +86,28 @@ Files:
 The agent turns every text note into a checklist item, uses shapes to locate the UI, fixes the
 code, and records the change. Never edit the human's annotation files.
 
-## 6. Confirm
+## 6. Confirm the feature
 
-Capture the fixed page and create a follow-up session (or resubmit in the same one if the context is
-unchanged). Use the follow-up title to distinguish it:
+Each session is one feature (v0.21+). When the human is satisfied, they click the rail's
+**✓ Confirm feature** and accept the dialog. RedLine records `feature_confirmed_at`, sets
+`status=resolved` and closes the review; it never touches git.
 
-```
-title: "Button / hover + disabled — confirmation"
-```
+The agent reads the decision as `feature_state == "confirmed"` from MCP (`get_feedback`,
+`wait_for_feedback` or `list_reviews`) and applies its own workflow. In this repository that is:
+keep the work on a feature branch, open a PR into `dev`, wait for the required checks and merge;
+the dev build is the testable result.
 
-After sign-off, remove obsolete sessions:
+- **✕** opens a feature-actions dialog: **Cancel feature** closes the review without merging and
+  keeps the screenshot/annotations; **Delete files…** removes them permanently.
+- **↺ Reopen** clears either decision and returns the session to the queue. A decided feature also
+  gets **Reopen** in the ✕ menu.
+- A new submission or agent round clears the decision, so more work makes the feature pending.
+- `resolve` only closes an agent round; it is **not** the human's feature confirmation.
+- Data deletion is separate: the ✕ menu's **Delete files…**, bulk **Delete**, or **Delete
+  cancelled** (only cancelled features; confirmed features stay as the log).
 
-```bash
-python3 redline.py remove <id> --yes
-```
+For a fixed-state follow-up, post a new round into the same session (the old flow created a second
+session; v0.14 keeps one task per session instead).
 
 ## Au.Net component reviews
 

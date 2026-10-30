@@ -82,6 +82,7 @@ pub fn tool_definitions() -> Value {
                     "url": { "type": "string", "description": "Page URL the screenshot came from." },
                     "note": { "type": "string", "description": "What the human should look at." },
                     "project": { "type": "string", "description": "Project name or slug; created on first use. Default: Inbox." },
+                    "branch": { "type": "string", "description": "Feature branch this review belongs to. RedLine uses it as the branch-lock key." },
                     "wait_seconds": { "type": "number", "description": "Block up to this long for a submission (default 0)." }
                 },
                 "required": ["title"],
@@ -101,6 +102,7 @@ pub fn tool_definitions() -> Value {
                     "title": { "type": "string", "description": "What is being reviewed." },
                     "note": { "type": "string", "description": "What the human should look at." },
                     "project": { "type": "string", "description": "Project name or slug; created on first use. Default: Inbox." },
+                    "branch": { "type": "string", "description": "Feature branch this review belongs to. RedLine uses it as the branch-lock key." },
                     "viewport": { "type": "string", "description": "e.g. 1440x900 (default)." },
                     "wait_seconds": { "type": "number", "description": "Block up to this long for a submission." }
                 },
@@ -109,7 +111,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "get_feedback",
-            "description": "Read the human's annotations, review.md and annotated screenshot for a session. Non-blocking.",
+            "description": "Read the human's annotations, review.md and annotated screenshot for a session. Non-blocking. feature_state is pending until the human confirms or cancels the feature.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "session_id": { "type": "string" } },
@@ -118,7 +120,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "wait_for_feedback",
-            "description": "Block until the human submits the review (or the timeout elapses), then return the feedback.",
+            "description": "Block until the human submits the review, confirms/cancels the feature, or the timeout elapses, then return the feedback (including feature_state).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -130,7 +132,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "list_reviews",
-            "description": "List review sessions, newest first, optionally filtered by status or project.",
+            "description": "List review sessions, newest first, optionally filtered by status or project. Each item includes feature_state (pending, confirmed, cancelled).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -201,7 +203,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "resolve",
-            "description": "Mark a session resolved once its annotations have been implemented.",
+            "description": "Mark a session resolved once its annotations have been implemented. This closes the review round; it is not the human's feature confirmation (feature_state stays pending).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -300,6 +302,13 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
             args.get("project").and_then(Value::as_str),
         )
         .map_err(|err| err.to_string())?;
+    let meta = if let Some(branch) = string_arg(args, "branch") {
+        ctx.store
+            .set_branch(&meta.id, Some(&branch))
+            .map_err(|err| err.to_string())?
+    } else {
+        meta
+    };
 
     let wait = args
         .get("wait_seconds")
@@ -359,6 +368,13 @@ async fn capture_review(ctx: &McpContext<'_>, args: &Value) -> Result<Value, Str
             args.get("project").and_then(Value::as_str),
         )
         .map_err(|err| err.to_string())?;
+    let meta = if let Some(branch) = string_arg(args, "branch") {
+        ctx.store
+            .set_branch(&meta.id, Some(&branch))
+            .map_err(|err| err.to_string())?
+    } else {
+        meta
+    };
 
     let wait = args
         .get("wait_seconds")
@@ -468,6 +484,9 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
                 "session_id": meta.id,
                 "title": meta.title,
                 "status": meta.status.as_str(),
+                "feature_state": meta.feature_state(),
+                "feature_confirmed_at": meta.feature_confirmed_at,
+                "feature_cancelled_at": meta.feature_cancelled_at,
                 "created_at": meta.created_at,
                 "submitted_at": meta.submitted_at,
                 "project": meta.project,
@@ -590,11 +609,11 @@ fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
         .append_agent_event(&id, &event)
         .map_err(|err| err.to_string())?;
     // The narration is always kept, but it may not re-arm the "working" indicator on a round that
-    // is over: `post_round` hands the review back (open) and `reply` answers it (replied). The
-    // agent's last line often arrives after that, and it used to flip the state back to working,
-    // leaving a spinner running on a review the human already had back.
-    let finished =
-        meta.status != Status::Submitted || meta.agent_state.as_deref() == Some("replied");
+    // is over: `post_round` hands the review back (open) and `resolve` closes it. `reply` is *not*
+    // a finish signal — the agent often answers early and keeps working for minutes — so a later
+    // `progress` is evidence that the run resumed and must show as working again while the round
+    // is still submitted (2026-10-30).
+    let finished = meta.status != Status::Submitted;
     if !finished {
         ctx.store
             .set_agent_state(&id, "working", true)
@@ -656,6 +675,9 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
     json!({
         "session_id": meta.id,
         "status": meta.status.as_str(),
+        "feature_state": meta.feature_state(),
+        "feature_confirmed_at": meta.feature_confirmed_at,
+        "feature_cancelled_at": meta.feature_cancelled_at,
         "title": meta.title,
         "url": meta.url,
         "note": meta.note,

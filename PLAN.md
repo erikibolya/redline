@@ -98,22 +98,31 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
 - No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
 - Repo routing is single-agent: all agents watch the same queue; a claim/filter router is next.
+- **Feature confirmation is a signal, not a git action.** RedLine records `feature_state`; each
+  agent maps `confirmed` to its own workflow (this repo: feature branch → PR → required checks →
+  merge into `dev`). There is no server-side GitHub token.
 - No server-side pagination; the rail renders everything it gets.
 - Text notes have a fixed font family, one size per note.
-- The rail's per-session actions appear on hover, so they are invisible to touch users.
 
 ## Testing plan
 
-- `cargo test --workspace` — 58 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
-  capture error paths, history archival, diff semantics, path/config helpers, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 60 checks in real Chromium: tool clicks, coordinate mapping at 46 %
-  zoom, drag, undo, inline text (diacritics), submit, multi-select, align, grouping, z-order, text
-  size, history, diff, rail resolve/reopen.
-- CI runs both on every push; releases are cut from tags only after green.
+- `cargo test --workspace` — 81 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+  capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
+  settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
+  helpers, CLI end-to-end.
+- `desktop/scripts/e2e.sh` — 114 checks in real Chromium: every drawing tool is actually drawn
+  (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
+  pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
+  undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the
+  replied-but-still-running state, feature confirm/cancel/delete menus, row delete, cancelled-only
+  purge, the All filter, agent settings/branch display, rail reopen and bulk confirm.
+- CI runs both on every push; releases are cut from tags only after green. The tool matrix,
+  feature/bug protocol and release checklist live in `docs/TESTING.md`.
 
 ## Definition of done
 
 - Works on Windows and WSL/Linux with no extra dependencies.
-- Rust tests and the browser E2E are green; the e2e covers the interaction you changed.
+- Rust tests and the browser E2E are green; the e2e covers the interaction you changed and the
+  release checklist in `docs/TESTING.md` is complete.
 - Documented in `AGENTS.md`/`docs/` + `CHANGELOG.md`; API changes are additive or have a note.
 - Tagged, released, and deployed to holly with the version verified in `docker exec redline /redline --version`.

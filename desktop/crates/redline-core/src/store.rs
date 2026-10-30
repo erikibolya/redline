@@ -299,6 +299,15 @@ impl Store {
         &self.root
     }
 
+    /// Parent of `sessions/`: server-level state such as agent settings and claims lives here.
+    pub fn data_dir(&self) -> PathBuf {
+        self.root
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.root.clone())
+    }
+
     pub fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.root)?;
         Ok(())
@@ -352,9 +361,31 @@ impl Store {
             name: name.to_string(),
             agent: None,
             repo: None,
+            max_parallel: None,
             created_at: now(),
         };
         write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
+        Ok(project)
+    }
+
+    /// Set or clear a project's concurrent-run override (v0.22).
+    pub fn set_project_max_parallel(
+        &self,
+        slug: &str,
+        max_parallel: Option<u32>,
+    ) -> Result<crate::model::Project> {
+        let slug = slugify(slug);
+        let mut project = self
+            .project(&slug)?
+            .ok_or_else(|| Error::NotFound(slug.clone()))?;
+        project.max_parallel = max_parallel;
+        write_json(
+            &self
+                .projects_root()
+                .join(&project.slug)
+                .join("project.json"),
+            &serde_json::to_value(&project)?,
+        )?;
         Ok(project)
     }
 
@@ -411,6 +442,7 @@ impl Store {
             name: name.to_string(),
             agent: Some(agent.to_string()),
             repo: Some(repo.to_string()),
+            max_parallel: None,
             created_at: now(),
         };
         write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
@@ -438,6 +470,7 @@ impl Store {
                 name: "Inbox".to_string(),
                 agent: None,
                 repo: None,
+                max_parallel: None,
                 created_at: String::new(),
             });
         }
@@ -531,6 +564,29 @@ impl Store {
         Ok(meta)
     }
 
+    /// Set or clear the feature branch shown in the rail and used as the branch-lock key.
+    pub fn set_branch(&self, id: &str, branch: Option<&str>) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let branch = branch
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if let Some(value) = branch.as_deref() {
+            if value.len() > 200 {
+                return Err(Error::BadRequest("branch is too long".to_string()));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(Error::BadRequest(
+                    "branch must not contain control characters".to_string(),
+                ));
+            }
+        }
+        meta.branch = branch;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
     /// Append one line to `agent-events.jsonl` (the activity feed the human watches).
     pub fn append_agent_event(&self, id: &str, event: &serde_json::Value) -> Result<()> {
         use std::io::Write as _;
@@ -616,12 +672,15 @@ impl Store {
             image_height: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
+            feature_confirmed_at: None,
+            feature_cancelled_at: None,
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
+            branch: None,
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         write_json(
@@ -748,6 +807,9 @@ impl Store {
         meta.status = Status::Open;
         meta.submitted_at = None;
         meta.resolved_at = None;
+        // New work after a decision makes the feature pending again.
+        meta.feature_confirmed_at = None;
+        meta.feature_cancelled_at = None;
         meta.agent_state = Some("replied".to_string());
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
 
@@ -771,9 +833,11 @@ impl Store {
         meta.round_stamp = Some(round_stamp.clone());
         meta.status = Status::Submitted;
         meta.submitted_at = Some(submitted_at.clone());
-        // A fresh round has not been seen by the agent yet.
+        // A fresh round has not been seen by the agent yet, and it reopens a decided feature.
         meta.seen_by_agent_at = None;
         meta.agent_state = None;
+        meta.feature_confirmed_at = None;
+        meta.feature_cancelled_at = None;
         if let Some(prompt) = submission.note.as_deref() {
             let prompt = prompt.trim();
             if !prompt.is_empty() {
@@ -831,12 +895,43 @@ impl Store {
         Ok(meta)
     }
 
-    /// Undo `resolve`: back to the open queue.
+    /// Undo `resolve` and any feature decision: back to the open queue.
     pub fn reopen(&self, id: &str) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         meta.status = Status::Open;
         meta.resolved_at = None;
+        meta.feature_confirmed_at = None;
+        meta.feature_cancelled_at = None;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The human says the feature is complete. RedLine only records the decision and closes the
+    /// review; the agent maps `feature_state == "confirmed"` to its own workflow (open a PR,
+    /// merge it, deploy — whatever the project uses).
+    pub fn confirm_feature(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let stamp = now();
+        meta.status = Status::Resolved;
+        meta.resolved_at.get_or_insert_with(|| stamp.clone());
+        meta.feature_confirmed_at = Some(stamp);
+        meta.feature_cancelled_at = None;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The human abandons the feature. Nothing is merged and the review files are kept; the
+    /// agent can see `feature_state == "cancelled"`. `reopen` undoes it.
+    pub fn cancel_feature(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let stamp = now();
+        meta.status = Status::Resolved;
+        meta.resolved_at.get_or_insert_with(|| stamp.clone());
+        meta.feature_cancelled_at = Some(stamp);
+        meta.feature_confirmed_at = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }

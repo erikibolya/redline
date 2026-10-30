@@ -111,7 +111,12 @@ const main = async () => {
 
   const created = await api("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ title: "e2e canvas", image_base64: makePng(), project: "E2E" }),
+    body: JSON.stringify({
+      title: "e2e canvas",
+      image_base64: makePng(),
+      project: "E2E",
+      branch: "feat/e2e-canvas",
+    }),
   });
   const id = created.meta.id;
 
@@ -156,6 +161,94 @@ const main = async () => {
     y: window.redline.view.y,
   }));
   check("editor booted with an image", true, `scale ${view.scale.toFixed(3)}`);
+
+  // ---- the header is a row of labelled icons; status lives in the toast and the rail card
+  const chrome = await page.evaluate(() => {
+    const header = document.querySelector(".header");
+    const buttons = [...header.querySelectorAll(".header-actions .btn.icon")];
+    const gear = document.querySelector("[data-agent-settings] svg");
+    const gearStyle = gear ? getComputedStyle(gear) : null;
+    return {
+      pills: header.querySelectorAll(".pill").length,
+      stale: Boolean(document.querySelector("#session-status, #agent-state")),
+      count: buttons.length,
+      svg: buttons.every((button) => Boolean(button.querySelector("svg"))),
+      labelled: buttons.every((button) =>
+        Boolean((button.title || "").trim() && (button.getAttribute("aria-label") || "").trim())),
+      separator: Boolean(header.querySelector(".header-sep")),
+      gear: gearStyle ? { fill: gearStyle.fill, stroke: gearStyle.stroke } : null,
+      gearPath: gear ? gear.getAttribute("viewBox") : "",
+      panelMarks: ["#toggle-rail", "#toggle-inspector"].every((selector) => {
+        const mark = document.querySelector(`${selector} svg .panel`);
+        return mark && getComputedStyle(mark).fill !== "none";
+      }),
+    };
+  });
+  check("the header carries no status pills — the toast and the rail card say it",
+    chrome.pills === 0 && !chrome.stale, JSON.stringify(chrome));
+  check("every header action is a labelled SVG icon",
+    chrome.count === 5 && chrome.svg && chrome.labelled && chrome.separator
+      && chrome.panelMarks, JSON.stringify(chrome));
+  check("agent settings is a solid gear, not a text glyph",
+    chrome.gear && chrome.gear.fill !== "none" && chrome.gear.stroke === "none"
+      && chrome.gearPath === "0 0 24 24",
+    JSON.stringify(chrome.gear));
+
+  // The two panel toggles click, flip their pressed state, and the canvas bitmap follows the grid.
+  const panelToggles = await page.evaluate(() => {
+    const app = document.querySelector("#app");
+    const rail = document.querySelector("#toggle-rail");
+    const inspector = document.querySelector("#toggle-inspector");
+    const bitmap = () => document.querySelector("#canvas").width;
+    const before = bitmap();
+    rail.click();
+    const hidden = {
+      rail: app.classList.contains("rail-hidden"),
+      pressed: rail.getAttribute("aria-pressed"),
+      title: rail.title,
+      bitmap: bitmap(),
+    };
+    rail.click();
+    const backRail = { pressed: rail.getAttribute("aria-pressed"), bitmap: bitmap() };
+    inspector.click();
+    const hidInspector = app.classList.contains("inspector-hidden");
+    const inspectorPressed = inspector.getAttribute("aria-pressed");
+    inspector.click();
+    return {
+      before, hidden, backRail, hidInspector, inspectorPressed,
+      restored: !app.classList.contains("inspector-hidden") && !app.classList.contains("rail-hidden"),
+      pressedBack: inspector.getAttribute("aria-pressed"),
+    };
+  });
+  check("the panel icons hide their panel, resize the canvas and say which state is on",
+    panelToggles.hidden.rail && panelToggles.hidden.pressed === "false" && panelToggles.hidden.title.startsWith("Show")
+      && panelToggles.hidden.bitmap > panelToggles.before
+      && panelToggles.backRail.pressed === "true" && panelToggles.backRail.bitmap === panelToggles.before
+      && panelToggles.hidInspector && panelToggles.inspectorPressed === "false" && panelToggles.restored
+      && panelToggles.pressedBack === "true",
+    JSON.stringify(panelToggles));
+
+  // The theme button swaps a moon/sun SVG instead of an emoji glyph.
+  const themeIcons = await page.evaluate(() => {
+    const button = document.querySelector("[data-theme-toggle]");
+    const read = () => ({
+      theme: document.documentElement.dataset.theme,
+      svg: Boolean(button.querySelector("svg")),
+      title: button.title,
+      text: button.textContent.trim(),
+    });
+    const first = read();
+    button.click();
+    const second = read();
+    button.click();
+    return { first, second, back: read() };
+  });
+  check("the theme toggle swaps sun and moon SVGs, not glyphs",
+    themeIcons.first.svg && themeIcons.second.svg && themeIcons.first.title !== themeIcons.second.title
+      && themeIcons.first.text === "" && themeIcons.second.text === ""
+      && themeIcons.first.theme !== themeIcons.second.theme
+      && themeIcons.back.theme === themeIcons.first.theme,
+    JSON.stringify(themeIcons));
 
   // Ctrl+V in the page fills the New review dialog from the clipboard.
   await page.evaluate(async () => {
@@ -227,11 +320,87 @@ const main = async () => {
   const projectHeader = await page.$eval(".rail-project .pname", (el) => el.textContent.trim());
   check("rail groups sessions by project", projectHeader === "E2E", `header=${projectHeader}`);
 
+  const branch = await page
+    .$eval('.session[aria-current="true"] .sub .branch', (el) => el.textContent.trim())
+    .catch(() => "");
+  check("the rail shows the feature branch next to the time", branch === "feat/e2e-canvas", branch);
+
+  // ---- agent concurrency settings are server-side and editable from the UI
+  await page.click("[data-agent-settings]");
+  await page.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+  const settingsBefore = await page.evaluate(() => ({
+    global: document.querySelector("#agent-max-parallel").value,
+    project: document.querySelector("#agent-project-max-parallel").value,
+    lease: document.querySelector("#agent-lease-seconds").value,
+    hasE2E: Boolean(document.querySelector('#agent-project-list input[data-project="e2e"]')),
+  }));
+  check("agent settings open with the server defaults",
+    settingsBefore.global === "2" && settingsBefore.project === "1"
+      && settingsBefore.lease === "120" && settingsBefore.hasE2E,
+    JSON.stringify(settingsBefore));
+  await page.$eval("#agent-max-parallel", (input) => { input.value = "3"; });
+  await page.$eval("#agent-project-max-parallel", (input) => { input.value = "2"; });
+  await page.$eval('#agent-project-list input[data-project="e2e"]', (input) => { input.value = "2"; });
+  await page.click("#agent-settings-save");
+  await page.waitForFunction(
+    () => !document.querySelector("#agent-settings-dialog")?.open,
+    { timeout: 10000 },
+  );
+  const savedSettings = await api("/api/agent/settings");
+  const e2eProject = (savedSettings.projects || []).find((project) => project.slug === "e2e");
+  check("agent settings save globally and per project",
+    savedSettings.max_parallel === 3 && savedSettings.project_max_parallel === 2
+      && e2eProject?.max_parallel === 2 && e2eProject?.effective_max_parallel === 2,
+    JSON.stringify({
+      max: savedSettings.max_parallel,
+      project: savedSettings.project_max_parallel,
+      e2e: e2eProject,
+    }));
+
   const canvas = await page.$eval("#canvas", (el) => {
     const rect = el.getBoundingClientRect();
     return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
   });
   const at = (dx, dy) => ({ x: canvas.x + dx, y: canvas.y + dy });
+
+  /** Open a fresh session so a tool test cannot inherit another tool's annotations. */
+  const freshSession = async (title) => {
+    const made = await api("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({ title, image_base64: makePng(), project: "E2E" }),
+    });
+    const sessionId = made.meta.id;
+    await page.evaluate((id) => window.redline.openSession(id), sessionId);
+    await page.waitForFunction(
+      (id) => window.redline.sessionId === id
+        && Boolean(window.redline.image) && window.redline.view.fitted,
+      { timeout: 10000 },
+      sessionId,
+    );
+    return sessionId;
+  };
+
+  /** The row, number, label and painted badge for the last annotation in a fresh session. */
+  const readLastAnnotation = async () => page.evaluate(() => {
+    const editor = window.redline;
+    const index = editor.annotations.length - 1;
+    const annotation = editor.annotations[index];
+    const row = document.querySelector(`#ann-list .ann-row[data-index="${index}"]`);
+    const anchor = annotation?.start || annotation?.points?.[0] || { x: 0, y: 0 };
+    const inset = 2 / editor.view.scale;
+    const radius = 12 / editor.view.scale;
+    const x = Math.round((editor.view.x + (anchor.x + inset + radius * 0.7) * editor.view.scale) * editor.dpr);
+    const y = Math.round((editor.view.y + (anchor.y + inset) * editor.view.scale) * editor.dpr);
+    const pixel = document.querySelector("#canvas").getContext("2d").getImageData(x, y, 1, 1).data;
+    return {
+      type: annotation?.type,
+      count: editor.annotations.length,
+      rows: document.querySelectorAll("#ann-list .ann-row").length,
+      number: row?.querySelector(".ann-num")?.textContent.trim() || "",
+      label: row?.querySelector(".label b")?.textContent.trim() || "",
+      pixel: [pixel[0], pixel[1], pixel[2], pixel[3]],
+    };
+  });
 
   // ---- tools must respond to clicks (they sit inside the stage, which captures pointers)
   for (const tool of ["rect", "ellipse", "arrow", "pen", "select"]) {
@@ -317,7 +486,8 @@ const main = async () => {
   await page.keyboard.press("Enter");
   await page.keyboard.up("Control");
   await page.waitForFunction(
-    () => document.querySelector("#session-status")?.textContent === "submitted",
+    () => document.querySelector("#submit")?.textContent.includes("STOP")
+      && window.redline.meta?.status === "submitted",
     { timeout: 15000 },
   );
 
@@ -339,6 +509,25 @@ const main = async () => {
   const waiting = await page.evaluate(() => document.querySelector(".conv-wait")?.textContent || "");
   check("submission says it is waiting for an agent", waiting.includes("Waiting for an agent"),
     waiting.slice(0, 60));
+
+  // ---- the rail says the same thing. A submitted round is the agent's ball; it used to read
+  // "new" (unread by the human), which said nothing about who was expected to act next.
+  // `submit()` updates the header before its rail reload finishes; wait for the rail itself
+  // rather than re-rendering the previous session list.
+  await page.evaluate(() => window.redline.rail.load());
+  const queuedRail = await page.evaluate(() => {
+    const row = document.querySelector('.session[aria-current="true"]');
+    return {
+      badge: row?.querySelector(".badge.waiting")?.textContent.trim() || "",
+      unread: Boolean(row?.querySelector(".badge.new")),
+      pwait: Boolean(document.querySelector(".rail-project .pwait")),
+      counts: document.querySelectorAll(".rail-project .pcount").length,
+    };
+  });
+  check("the rail says a submitted round is waiting for an agent",
+    queuedRail.badge === "waiting for agent" && !queuedRail.unread, JSON.stringify(queuedRail));
+  check("the project header keeps one count, not a waiting count beside it",
+    !queuedRail.pwait && queuedRail.counts > 0, JSON.stringify(queuedRail));
 
   // ---- the status toast sits in the middle of the stage, clear of the toolbar
   const toastBox = await page.evaluate(() => {
@@ -363,7 +552,7 @@ const main = async () => {
     toastBox && toastBox.offCentre <= 2 && toastBox.offMiddle <= 2,
     toastBox ? `off centre ${Math.round(toastBox.offCentre)} · off middle ${Math.round(toastBox.offMiddle)}` : "no toast");
   const noModal = await page.evaluate(() => !document.querySelector("#review-lock"));
-  check("the submitted lock is a status pill, not a dimming modal", noModal);
+  check("the submitted lock is a status toast, not a dimming modal", noModal);
 
   // ---- a fresh load of a submitted session must not die before the event poll lands
   await page.reload({ waitUntil: "networkidle0" });
@@ -444,35 +633,60 @@ const main = async () => {
   const idleRail = await page.evaluate(() => ({
     row: Boolean(document.querySelector(".session.working")),
     project: Boolean(document.querySelector(".rail-project .pworking")),
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim() || "",
   }));
   check("the working indicator clears when the agent replies",
     !idleRail.row && !idleRail.project, JSON.stringify(idleRail));
+  check("the rail says replied, not waiting for agent, on an answered open round",
+    idleRail.badge === "replied", idleRail.badge);
 
-  // A late narration line must not re-arm the spinner: the answered round is finished, and the
-  // card says how long ago the last step was so the spinner is never the only evidence.
+  // `reply` is a message, not the finish line: the round is still submitted and STOP is still
+  // armed, so the card must not claim "Run finished". It says the agent answered and the run has
+  // not finished, with the age of the last step so an idle agent is distinguishable from a busy one.
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const repliedCard = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return {
+      working: Boolean(card?.classList.contains("working")),
+      pending: Boolean(card?.classList.contains("pending")),
+      text: card?.textContent || "",
+      status: document.querySelector("#stage-status")?.textContent || "",
+      stop: document.querySelector("#submit")?.textContent || "",
+    };
+  });
+  check("an answered round that is still submitted does not claim to be finished",
+    !repliedCard.working && repliedCard.pending
+      && repliedCard.text.includes("Agent replied") && !repliedCard.text.includes("Run finished")
+      && repliedCard.text.includes("last step") && repliedCard.stop.includes("STOP"),
+    `${repliedCard.text}${repliedCard.stop}`);
+  check("the status line does not claim a working agent on an answered round",
+    !repliedCard.status.includes("Agent is working") && repliedCard.status.includes("replied"),
+    repliedCard.status);
+
+  // The run can resume after the reply (it did, for minutes); a new progress line is evidence
+  // that the agent is working again, so the indicator comes back while the round is submitted.
   await api("/mcp", {
     method: "POST",
     body: JSON.stringify({
       jsonrpc: "2.0", id: 9, method: "tools/call",
       params: { name: "progress", arguments: {
-        session_id: id, message: "Last line after the answer", state: "step",
+        session_id: id, message: "Resumed after the answer", state: "tool", tool: "shell",
       } },
     }),
   });
   await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
-  const finishedCard = await page.evaluate(() => {
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const resumedCard = await page.evaluate(() => {
     const card = document.querySelector("#conv-log .conv-run");
     return {
       working: Boolean(card?.classList.contains("working")),
       text: card?.textContent || "",
-      pill: document.querySelector("#agent-state")?.textContent || "",
+      rail: Boolean(document.querySelector(".session.working")),
     };
   });
-  check("a late step after the reply does not revive the working indicator",
-    !finishedCard.working && finishedCard.text.includes("Run finished")
-      && finishedCard.text.includes("last step"), finishedCard.text);
-  check("the header does not claim a working agent on an answered round",
-    !finishedCard.pill.includes("working"), finishedCard.pill);
+  check("a step after the reply revives the working indicator while the round is open",
+    resumedCard.working && resumedCard.text.includes("Working") && resumedCard.rail,
+    `${resumedCard.text} · rail ${resumedCard.rail}`);
   if (process.env.E2E_SHOT) await page.screenshot({ path: process.env.E2E_SHOT });
 
   // Those checks need the submitted state; now unlock and keep drawing.
@@ -520,6 +734,9 @@ const main = async () => {
   if (!(await page.$eval("#history-block", (el) => el.open))) {
     await page.click("#history-block > summary");
   }
+  // The block may already have been open from an earlier step, in which case toggling it does
+  // not fetch; load explicitly instead of racing the submit's background refresh.
+  await page.evaluate(() => window.redline.loadHistory());
   await page.waitForFunction(
     () => document.querySelectorAll("#history-list [data-round]").length > 0,
     { timeout: 5000 },
@@ -604,35 +821,162 @@ const main = async () => {
     check("diff noticed the new annotations", diff.added.length > 0, `${diff.added.length} added`);
   }
 
-  // ---- rail actions: mark done, then reopen
+  // ---- rail actions: confirm, reopen, cancel, reopen
   const row = `.session[data-id="${id}"]`;
+  const clickChip = (label) => page.evaluate((text) => {
+    const chip = Array.from(document.querySelectorAll(".chip"))
+      .find((element) => element.textContent.trim().startsWith(text));
+    chip?.click();
+  }, label);
+
   await page.hover(row);
-  await page.click(`${row} [data-act="resolve"]`);
+  await page.click(`${row} [data-act="confirm"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  const confirmDialog = await page.evaluate(() => {
+    const accept = document.querySelector('#feature-actions [data-action="confirm"]');
+    return {
+      title: document.querySelector("#feature-dialog-title").textContent,
+      body: document.querySelector("#feature-dialog-body").textContent,
+      accept: accept?.textContent.trim() || "",
+      primary: Boolean(accept?.classList.contains("primary")),
+      count: document.querySelectorAll("#feature-actions button").length,
+    };
+  });
+  check("confirming a feature asks for agreement first",
+    confirmDialog.title === "Confirm this feature?"
+      && confirmDialog.accept === "Confirm feature"
+      && confirmDialog.body.includes("pull request")
+      && confirmDialog.primary && confirmDialog.count === 2,
+    JSON.stringify(confirmDialog));
+  await page.click('#feature-actions [data-action="confirm"]');
   let status = "";
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const meta = await api(`/api/sessions/${id}`);
     status = meta.meta.status;
-    if (status === "resolved") break;
+    if (status === "resolved" && meta.meta.feature_confirmed_at) break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  check("rail 'mark done' resolves the session", status === "resolved", status);
+  // `railAction` reloads the rail after the POST, but the click resolves before that await does;
+  // poll the rail's own data instead of reading it a frame too early. The card itself is checked
+  // in the Done filter below — a resolved session leaves the default Active view.
+  let confirmedState = "";
+  for (let attempt = 0; attempt < 30 && confirmedState !== "confirmed"; attempt += 1) {
+    confirmedState = await page.evaluate(() => {
+      const entry = window.redline.rail.sessions.find((session) => session.id === window.redline.sessionId);
+      return entry?.feature_state || "";
+    });
+    if (confirmedState !== "confirmed") await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const confirmed = await page.evaluate(() => ({
+    stamped: Boolean(window.redline.meta?.feature_confirmed_at),
+    row: Boolean(document.querySelector('.session[aria-current="true"]')),
+  }));
+  check("rail 'confirm' closes the feature and records the decision",
+    status === "resolved" && confirmed.stamped && confirmedState === "confirmed" && !confirmed.row,
+    JSON.stringify({ status, ...confirmed, state: confirmedState }));
 
-  // Resolved sessions leave the default 'Active' view, so reopen them from the 'Done' filter.
-  await page.evaluate(() => {
-    const chip = Array.from(document.querySelectorAll(".chip"))
-      .find((element) => element.textContent.trim().startsWith("Done"));
-    chip?.click();
+  // "All" is the only view that keeps a finished session alongside active work.
+  await clickChip("All");
+  await page.waitForSelector(row, { timeout: 5000 });
+  const allFilter = await page.evaluate(() => ({
+    filter: window.redline.rail.filter,
+    visible: Boolean(document.querySelector('.session[aria-current="true"]')),
+    mine: Boolean(document.querySelector('.chip[data-filter="mine"]')),
+  }));
+  check("the All filter shows every session and the Mine chip is gone",
+    allFilter.filter === "all" && allFilter.visible && !allFilter.mine,
+    JSON.stringify(allFilter));
+
+  // Resolved sessions leave the default 'Active' view, so check the badge and reopen them from
+  // the 'Done' filter.
+  await clickChip("Done");
+  await page.waitForSelector(row, { timeout: 5000 });
+  const confirmedRow = await page.evaluate((sessionId) => ({
+    badge: document.querySelector(`.session[data-id="${sessionId}"] .badge`)?.textContent || "",
+    row: Boolean(document.querySelector(`.session[data-id="${sessionId}"] [data-act="reopen"]`)),
+  }), id);
+  check("a confirmed feature shows a badge and a reopen action",
+    confirmedRow.badge.includes("confirmed") && confirmedRow.row, JSON.stringify(confirmedRow));
+  await page.hover(row);
+  await page.click(`${row} [data-act="menu"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  const decidedMenu = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll("#feature-actions button")];
+    return {
+      actions: buttons.map((button) => button.textContent.trim()),
+      deleteDanger: Boolean(buttons.find((button) => button.dataset.action === "delete")
+        ?.classList.contains("danger")),
+    };
   });
+  check("a confirmed feature's menu offers reopen and delete",
+    decidedMenu.actions.join("|") === "Keep working|Reopen|Delete files…"
+      && decidedMenu.deleteDanger, JSON.stringify(decidedMenu));
+  await page.click('#feature-actions [data-action="keep"]');
+  await page.hover(row);
+  await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
+  let reopened = {};
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const meta = await api(`/api/sessions/${id}`);
+    reopened = meta.meta;
+    if (reopened.status === "open") break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("rail 'reopen' clears the confirmation and puts it back in the queue",
+    reopened.status === "open" && !reopened.feature_confirmed_at
+      && !reopened.feature_cancelled_at,
+    JSON.stringify({ status: reopened.status, confirmed: reopened.feature_confirmed_at }));
+
+  await clickChip("Active");
+  await page.waitForSelector(row, { timeout: 5000 });
+  await page.hover(row);
+  await page.click(`${row} [data-act="menu"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  const featureMenu = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll("#feature-actions button")];
+    return {
+      title: document.querySelector("#feature-dialog-title").textContent,
+      body: document.querySelector("#feature-dialog-body").textContent,
+      actions: buttons.map((button) => button.textContent.trim()),
+      deleteDanger: Boolean(buttons.find((button) => button.dataset.action === "delete")
+        ?.classList.contains("danger")),
+    };
+  });
+  check("the row menu offers cancel and delete without deleting instantly",
+    featureMenu.title === "What should happen to this feature?"
+      && featureMenu.actions.join("|") === "Keep working|Cancel feature|Delete files…"
+      && featureMenu.body.includes("keeps the screenshot")
+      && featureMenu.deleteDanger,
+    JSON.stringify(featureMenu));
+  await page.click('#feature-actions [data-action="cancel-feature"]');
+  let cancelled = {};
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const meta = await api(`/api/sessions/${id}`);
+    cancelled = meta.meta;
+    if (cancelled.feature_cancelled_at) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("rail 'cancel' records the cancelled feature without deleting the review",
+    cancelled.status === "resolved" && Boolean(cancelled.feature_cancelled_at)
+      && !cancelled.feature_confirmed_at,
+    JSON.stringify({ status: cancelled.status, cancelled: cancelled.feature_cancelled_at }));
+
+  await clickChip("Done");
   await page.waitForSelector(row, { timeout: 5000 });
   await page.hover(row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
+  let reopenedCancel = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const meta = await api(`/api/sessions/${id}`);
-    status = meta.meta.status;
-    if (status !== "resolved") break;
+    reopenedCancel = meta.meta;
+    if (reopenedCancel.status === "open") break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  check("rail 'reopen' puts it back in the queue", status !== "resolved", status);
+  check("reopening a cancelled feature clears both decisions",
+    reopenedCancel.status === "open" && !reopenedCancel.feature_cancelled_at
+      && !reopenedCancel.feature_confirmed_at,
+    JSON.stringify({ status: reopenedCancel.status }));
+  await clickChip("Active");
+  await page.waitForSelector(row, { timeout: 5000 });
 
   const annotated = await fetch(`${BASE}/sessions/${id}/annotated.png`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
@@ -877,7 +1221,100 @@ const main = async () => {
     touch.width === "40px" && touch.height === "40px" && touch.opacity === "1",
     JSON.stringify(touch));
 
-  // ---- bulk resolve from the rail
+  // ---- every tool has to work end to end, not just select its button. The pen regression:
+  // `renderInspector` labelled shapes from `annotation.start`, but a pen has `points`; the
+  // TypeError aborted `mutate` before `render()`, so the live stroke stayed visible with no
+  // badge and no inspector row. Clicking the tool alone never caught it.
+  const penSession = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "pen regression", image_base64: makePng(), project: "E2E" }),
+  });
+  const penId = penSession.meta.id;
+  await page.evaluate((sessionId) => window.redline.openSession(sessionId), penId);
+  await page.waitForFunction(
+    (sessionId) => window.redline.sessionId === sessionId
+      && Boolean(window.redline.image) && window.redline.view.fitted,
+    { timeout: 10000 },
+    penId,
+  );
+  await page.click('.tool[data-tool="pen"]');
+  await drag(page, at(300, 200), at(520, 340), 20);
+  const pen = await page.evaluate(() => {
+    const editor = window.redline;
+    const index = editor.annotations.length - 1;
+    const annotation = editor.annotations[index];
+    const row = document.querySelector(`#ann-list .ann-row[data-index="${index}"]`);
+    const first = annotation?.points?.[0] || { x: 0, y: 0 };
+    const inset = 2 / editor.view.scale;
+    const radius = 12 / editor.view.scale;
+    const x = Math.round((editor.view.x + (first.x + inset + radius * 0.7) * editor.view.scale) * editor.dpr);
+    const y = Math.round((editor.view.y + (first.y + inset) * editor.view.scale) * editor.dpr);
+    const pixel = document.querySelector("#canvas").getContext("2d").getImageData(x, y, 1, 1).data;
+    return {
+      type: annotation?.type,
+      points: annotation?.points?.length || 0,
+      count: editor.annotations.length,
+      rows: document.querySelectorAll("#ann-list .ann-row").length,
+      number: row?.querySelector(".ann-num")?.textContent.trim() || "",
+      label: row?.querySelector(".label b")?.textContent.trim() || "",
+      pixel: [pixel[0], pixel[1], pixel[2], pixel[3]],
+    };
+  });
+  check("a freehand stroke is numbered and listed like every other annotation",
+    pen.type === "pen" && pen.points > 1 && pen.count === 1
+      && pen.rows === 1 && pen.number === "1" && pen.label.includes("freehand"),
+    JSON.stringify(pen));
+  check("the freehand badge is painted on the canvas",
+    pen.pixel[0] > 150 && pen.pixel[0] > pen.pixel[1] * 2 && pen.pixel[0] > pen.pixel[2] * 1.5,
+    JSON.stringify(pen.pixel));
+
+  // The pen has its own move path (`translateAnnotation` shifts `points`) and bounds/hit test.
+  const penBefore = await page.evaluate(() => window.redline.annotations[0].points[0]);
+  await page.keyboard.press("v");
+  await drag(page, at(400, 264), at(430, 284));
+  const penMoved = await page.evaluate(() => ({
+    point: window.redline.annotations[0].points[0],
+    scale: window.redline.view.scale,
+  }));
+  const penDx = (penMoved.point.x - penBefore.x) * penMoved.scale;
+  const penDy = (penMoved.point.y - penBefore.y) * penMoved.scale;
+  check("dragging a freehand stroke moves its points",
+    Math.abs(penDx - 30) < 4 && Math.abs(penDy - 20) < 4,
+    `moved ${penDx.toFixed(1)},${penDy.toFixed(1)} screen px`);
+  await page.keyboard.down("Control");
+  await page.keyboard.press("z");
+  await page.keyboard.up("Control");
+  const penRestored = await page.evaluate(() => window.redline.annotations[0].points[0]);
+  check("undo restores a freehand stroke",
+    penRestored.x === penBefore.x && penRestored.y === penBefore.y,
+    JSON.stringify({ before: penBefore, after: penRestored }));
+
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  const penStored = await api(`/api/sessions/${penId}`);
+  const storedPen = penStored.annotations.annotations.find((annotation) => annotation.type === "pen");
+  check("a submitted freehand stroke keeps its points on the server",
+    Boolean(storedPen) && storedPen.points.length > 1,
+    JSON.stringify(storedPen || null));
+
+  // The same full path for the other shape tools: draw, number, list, badge.
+  for (const tool of ["ellipse", "arrow"]) {
+    await freshSession(`tool: ${tool}`);
+    await page.click(`.tool[data-tool="${tool}"]`);
+    await drag(page, at(300, 200), at(460, 320), 12);
+    const report = await readLastAnnotation();
+    check(`${tool} stroke is numbered, listed and badged`,
+      report.type === tool && report.count === 1 && report.rows === 1
+        && report.number === "1" && report.label.includes("→")
+        && report.pixel[0] > 150 && report.pixel[0] > report.pixel[1] * 2
+        && report.pixel[0] > report.pixel[2] * 1.5,
+      JSON.stringify(report));
+  }
+
+  // Text notes are inspector notes / legacy history since v0.8; there is no canvas text tool
+  // left to test here. The rectangle's note is covered above.
+
+  // ---- bulk confirm from the rail
   // The rail may still be filtered to Done from the reopen test; new sessions are active.
   await page.evaluate(() => {
     const chip = [...document.querySelectorAll(".chip")]
@@ -905,12 +1342,69 @@ const main = async () => {
   }, extra);
   const bulkSelected = await page.evaluate(() => window.redline.rail.selection.size);
   check("bulk mode selects sessions without opening them", bulkSelected === 2, `${bulkSelected}`);
-  await page.click("#bulk-resolve");
+  await page.click("#bulk-confirm");
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  await page.click('#feature-actions [data-action="confirm"]');
   await page.waitForFunction(() => window.redline.rail.bulkMode === false, { timeout: 10000 });
   const bulkStatuses = [];
-  for (const id of extra) bulkStatuses.push((await api(`/api/sessions/${id}`)).meta.status);
-  check("bulk resolve marks every selected session done",
-    bulkStatuses.every((status) => status === "resolved"), bulkStatuses.join(","));
+  const bulkConfirmed = [];
+  for (const id of extra) {
+    const meta = (await api(`/api/sessions/${id}`)).meta;
+    bulkStatuses.push(meta.status);
+    bulkConfirmed.push(Boolean(meta.feature_confirmed_at));
+  }
+  check("bulk confirm marks every selected feature confirmed",
+    bulkStatuses.every((status) => status === "resolved")
+      && bulkConfirmed.every(Boolean), JSON.stringify({ bulkStatuses, bulkConfirmed }));
+
+  // ---- deleting from the row is one explicit dialog away
+  const doomed = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "delete me", image_base64: makePng() }),
+  });
+  const doomedId = doomed.meta.id;
+  const doomedRow = `.session[data-id="${doomedId}"]`;
+  await page.evaluate(() => window.redline.rail.load());
+  await page.waitForSelector(doomedRow, { timeout: 5000 });
+  await page.hover(doomedRow);
+  await page.click(`${doomedRow} [data-act="menu"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  await page.click('#feature-actions [data-action="delete"]');
+  await page.waitForFunction(
+    (sessionId) => !document.querySelector(`.session[data-id="${sessionId}"]`),
+    { timeout: 10000 },
+    doomedId,
+  );
+  const afterDelete = await api("/api/sessions");
+  check("deleting from the row removes the session and its files",
+    !afterDelete.sessions.some((session) => session.id === doomedId), doomedId);
+
+  // ---- "Delete cancelled" is scoped to cancelled features; confirmed ones are the log
+  const cancelMe = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "cancel me", image_base64: makePng() }),
+  });
+  const cancelMeId = cancelMe.meta.id;
+  await api(`/api/sessions/${cancelMeId}/cancel-feature`, { method: "POST" });
+  await page.evaluate(() => window.redline.rail.load());
+  const purge = await page.evaluate(() => ({
+    hidden: document.querySelector("#purge-cancelled")?.hidden,
+    label: document.querySelector("#purge-cancelled")?.textContent.trim() || "",
+  }));
+  check("Delete cancelled appears for a cancelled feature",
+    purge.hidden === false && purge.label.includes("Delete cancelled"),
+    JSON.stringify(purge));
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.click("#purge-cancelled");
+  await page.waitForFunction(
+    () => document.querySelector("#purge-cancelled")?.hidden !== false,
+    { timeout: 10000 },
+  );
+  const afterPurge = await api("/api/sessions");
+  const remaining = new Set(afterPurge.sessions.map((session) => session.id));
+  check("Delete cancelled removes only cancelled features",
+    !remaining.has(cancelMeId) && extra.every((id) => remaining.has(id)),
+    JSON.stringify({ cancelMeId, extras: extra.map((id) => remaining.has(id)) }));
 
   // ---- accessible names and a live region
   const a11y = await page.evaluate(() => ({
@@ -929,13 +1423,16 @@ const main = async () => {
   const setup = await page.evaluate(() => ({
     back: document.querySelector("#back")?.getAttribute("href") || "",
     primary: document.querySelector("#save")?.className || "",
-    secondary: document.querySelector("#local")?.className || "",
+    secondary: document.querySelector("#back-servers")?.className || "",
+    secondaryHref: document.querySelector("#back-servers")?.getAttribute("href") || "",
+    localSwitch: Boolean(document.querySelector("#local")),
     card: getComputedStyle(document.querySelector(".setup-card")).borderRadius,
     css: getComputedStyle(document.body).backgroundColor,
   }));
-  check("setup page has a way back and app-styled buttons",
+  check("setup page goes back to the server list and has no duplicate standalone switch",
     setup.back.startsWith("/") && setup.primary.includes("accent")
-      && setup.secondary.includes("btn") && setup.card !== "0px",
+      && setup.secondary.includes("btn") && setup.secondaryHref.includes("/servers")
+      && !setup.localSwitch && setup.card !== "0px",
     JSON.stringify(setup));
 
   await page.goto(`${BASE}/servers?t=${TOKEN}`, { waitUntil: "networkidle2" });
@@ -950,6 +1447,48 @@ const main = async () => {
   check("servers page is local-only and explains headless mode",
     serversPage.title === "Servers" && serversPage.text.includes("desktop app"),
     JSON.stringify(serversPage));
+
+  // Headless mode has no profiles, so render the page's own row markup and measure the
+  // destructive button in both themes: an outline must not inherit the filled `.btn.danger`
+  // background, or the red label disappears into a red button.
+  const removeButton = await page.evaluate(() => {
+    const host = document.getElementById("list");
+    host.innerHTML = row({ id: "e2e-alpha", name: "Alpha", url: "https://alpha.example", active: false }, false)
+      + row({ id: "e2e-beta", name: "Beta", url: "https://beta.example", active: true }, false);
+    const button = host.querySelector("[data-remove]");
+    if (!button) return null;
+    const rgb = (value) => value.match(/[\d.]+/g).map(Number).slice(0, 3);
+    const luminance = ([r, g, b]) => {
+      const channel = (c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    };
+    const sample = () => {
+      const style = getComputedStyle(button);
+      const card = getComputedStyle(document.querySelector(".servers-card")).backgroundColor;
+      const [light, dark] = [luminance(rgb(style.color)), luminance(rgb(card))].sort((a, b) => b - a);
+      return {
+        color: style.color,
+        background: style.backgroundColor,
+        contrast: Number(((light + 0.05) / (dark + 0.05)).toFixed(2)),
+      };
+    };
+    const theme = document.documentElement.dataset.theme || "light";
+    document.documentElement.dataset.theme = "dark";
+    const dark = sample();
+    document.documentElement.dataset.theme = "light";
+    const light = sample();
+    document.documentElement.dataset.theme = theme;
+    return { text: button.textContent.trim(), dark, light };
+  });
+  check("servers page Remove button is an outline with a readable label in both themes",
+    Boolean(removeButton) && removeButton.text === "Remove"
+      && removeButton.dark.background === "rgba(0, 0, 0, 0)"
+      && removeButton.light.background === "rgba(0, 0, 0, 0)"
+      && removeButton.dark.contrast >= 4.5 && removeButton.light.contrast >= 4.5,
+    JSON.stringify(removeButton));
 
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });

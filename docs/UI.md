@@ -14,7 +14,7 @@ options, right inspector, status bar. We borrow the layout, not the feature set.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ header:   redline · <session title>            [status]      [Submit review] │
+│ header:   redline · <session title>          ⚙ ⌨ ☀ │ ▤ ▥   [review actions]   │
 ├──────────────┬───────────────────────────────────────────────┬───────────────┤
 │ left rail    │  options bar (floating, top-centre)           │ right panel   │
 │ 264px        │  [V][R][A][P][T]   colour   width   zoom      │ 300px         │
@@ -36,6 +36,23 @@ Columns collapse: `[` toggles the left rail, `]` the right panel. Both states pe
 `localStorage`. The canvas always fills what is left — no fixed page width, no centred 1000 px
 column.
 
+### The header is icons, not badges (unreleased)
+
+- The header's right side is one row of inline-SVG icon buttons with a tooltip and an `aria-label`
+  each: **agent settings** (a solid gear), **keyboard shortcuts** (a keyboard, not a `?`), the
+  **theme** toggle (sun/moon, showing the theme it switches to), then a hairline, then the two
+  **panel** toggles (a frame with the left or right column marked). The `☰`/`⌥`/`?`/`⚙` text
+  glyphs depended on the platform's emoji font and read as decoration; a gear that renders as an
+  outline at 17 px does not say "settings".
+- The panel toggles carry `aria-pressed` and a title that names the next action (*Hide sessions* /
+  *Show sessions*), and a hidden panel's icon is muted.
+- **The status pills are gone.** `#session-status` and `#agent-state` put `submitted`/`replied`/
+  `working` in the header as GitHub-style chips, which competed with the review title and
+  duplicated state that is already on screen: the rail card's badge says *working* / *replied* /
+  *waiting for agent* / *confirmed* / *cancelled*, the stage toast says what the agent is doing,
+  and the composer/STOP button says whose turn it is. The e2e asserts the header has no `.pill`
+  and that those states still render in the toast and the rail card.
+
 The three vertical/horizontal borders are **draggable**: the rail's right edge, the
 inspector's left edge, and the line above the conversation. Each is a 9 px transparent strip over
 the hairline that highlights in the accent colour on hover or focus; drag it (or focus it and use
@@ -51,10 +68,14 @@ inside changes width (`?` is narrower than `☀`), the button must not.
 
 - **+ New review** at the top (drop a screenshot anywhere in the window also works).
 - Search field (title, note, id).
-- Filter chips with counts: `All 7` · `Open 5` · `Submitted 2` · `Mine` (created by a human).
-- Each row: agent-provided **title**, note excerpt, relative time (`2h ago`), status dot, and a
-  badge: annotation count for submitted sessions, a **new** dot for anything created or submitted
-  since this browser last looked (tracked per session in `localStorage`).
+- Filter chips with counts: `All` · `Active` (default) · `Open` · `Submitted` · `Done`. `All`
+  keeps finished sessions visible; `Active` hides `resolved`. The old `Mine` chip is gone.
+- Each row: agent-provided **title**, note excerpt, relative time (`2h ago`), the feature
+  **branch** when known (accent monospace), status dot, and a badge that says who has the ball:
+  **working** while the agent runs, **waiting for agent** for a
+  submitted round nobody has picked up, **confirmed** / **cancelled** after a feature decision,
+  otherwise a **new** marker for anything this browser has not looked at (tracked per session in
+  `localStorage`) or the annotation count.
 - Selected row is highlighted; clicking loads that session into the canvas without a page reload.
 - Groups by day (`Today`, `Yesterday`, older) when more than ~15 sessions.
 
@@ -73,10 +94,13 @@ inside changes width (`?` is narrower than `☀`), the button must not.
 |-----|------|-------|
 | `V` | Select | click to select, drag to move, `Delete` to remove, arrows nudge 1 px (shift 10) |
 | `R` | Rectangle | drag; shift = square |
+| `E` | Ellipse | drag |
 | `A` | Arrow | drag |
 | `P` | Pen | freehand |
-| `T` | Text | click, type inline at that point (no `prompt()`), `Enter` commits, `Esc` cancels |
+| — | Text | gone since v0.8: notes live in the inspector; legacy text annotations are read-only |
 
+- Every shape is numbered on the canvas and in the inspector; freehand rows read
+  `freehand · N points`. A pen stores `points`, not `start`/`end`.
 - `Ctrl/Cmd+Z` undo, `Ctrl/Cmd+Shift+Z` redo (full history, not just "remove last").
 - `Esc` cancels the in-progress shape or clears selection.
 - `Ctrl/Cmd+Enter` submits the review.
@@ -127,13 +151,49 @@ and `dayLabel` were already local; the conversation timeline, agent activity lin
 round labels now are too (history folder names are flattened UTC stamps, `stampTime` un-flattens
 and converts them).
 
+## Feature confirmation (v0.21)
+
+Each session is one feature. The rail's row actions carry the human's decision; agents map
+`confirmed` to their own workflow (open a PR, merge into the integration branch) and treat
+`cancelled` as "do not ship".
+
+- **✓ Confirm feature** opens a dialog that explains the consequence and only then calls
+  `POST /api/sessions/<id>/confirm-feature`. The session becomes `resolved` and keeps
+  `feature_confirmed_at`; the rail shows a green `confirmed` badge and dot.
+- **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
+  **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
+  with `feature_cancelled_at`, nothing is merged and the screenshot/annotations stay in **Done**.
+  Delete files… removes them permanently. A decided feature gets **Reopen** instead of Cancel in
+  the same menu. The row itself never deletes on a single click.
+- **↺ Reopen** clears both feature stamps and returns the session to `open`.
+- **Bulk Select** now offers **Confirm** (one dialog for the selection), **Delete** and **Close**;
+  single-session delete is also one dialog away from the row's ✕.
+- **Delete cancelled** in the rail head purges only features with `feature_cancelled_at`;
+  confirmed features stay as the feature log. It is hidden when no feature is cancelled.
+- The decision is additive server state (`feature_confirmed_at` / `feature_cancelled_at`); a new
+  submission or agent round clears it, so a feature that gets more work is pending again.
+
+## Agent settings and branches (v0.22)
+
+- The header gear opens **Agent settings**: global max concurrent runs (default 2), default
+  per-project limit (default 1), claim lease, per-project overrides, and live claims.
+- Settings live on the server (`/data/agent-settings.json`) and are shared by the desktop and web
+  UI. Changing them applies to new claims; the bridge's worker count is
+  `REDLINE_AGENT_WORKERS` (default 4), and the server's limits are the real cap.
+- A session can carry a `branch`. The rail shows it after the relative time in accent monospace
+  (`2h ago · feat/parallel-runs`); a missing branch falls back to `session/<id>` when an agent
+  claims the work.
+- A running claim consumes a slot; a claim waiting for the human frees the slot but keeps the
+  branch lock. One branch has one owner. The bridge runs up to four claim workers
+  (`REDLINE_AGENT_WORKERS`), each in its own git worktree; the server enforces the limits.
+
 ## Touch, bulk and accessibility (unreleased)
 
 - **Touch**: `body.touch` (set from `pointer: coarse` / `maxTouchPoints`) raises every tool, chip
-  and button to at least 40 px and makes the rail's resolve/delete actions always visible — no
+  and button to at least 40 px and makes the rail's feature actions always visible — no
   hover-only affordances.
 - **Bulk**: the rail's *Select* mode turns rows into toggles (`aria-pressed`) with a bottom bar:
-  *Resolve*, *Delete*, *Cancel*; Escape exits. The actions reuse the single-session endpoints.
+  *Confirm*, *Delete*, *Close*; Escape exits. The actions reuse the single-session endpoints.
 - **Accessibility**: `:focus-visible` rings on every interactive element; `role="img"` + label on
   the canvas; `aria-label` on the composer, session rows and history rows; the conversation log is
   `aria-live="polite"`.
@@ -147,7 +207,7 @@ and converts them).
   hidden, and the composer textarea is disabled. The annotation list becomes a flat read-only list
   (`.ann-row.readonly`: no cursor affordance, no delete button) whose rows are separated by a
   full-width hairline — a `border-top` on a rounded row paints only the segment between the two
-  rounded corners, which reads as a broken frame. There is **no modal** — a single status pill in
+  rounded corners, which reads as a broken frame. There is **no modal** — a single status toast in
   the middle of the stage says *"Agent is working — …"* (or *"Waiting for the agent…"*) above a
   light scrim. While locked, wheel, zoom buttons, keyboard zoom and pan are frozen; STOP removes
   the scrim and restores the view. Reading other panels is still allowed.
@@ -186,7 +246,7 @@ new one.
   conversation scrolled where the reader is.
 - The round appears in the conversation with a thumbnail (`/sessions/<id>/rounds/<file>`), next to
   the agent's note. History keeps the archived annotated rounds.
-- A small pill at the top of the stage says "Waiting for the agent…" (or the latest activity)
+- A small toast at the top of the stage says "Waiting for the agent…" (or the latest activity)
   while `submitted`; it is `pointer-events: none`, so annotating is never blocked.
 
 ## Waiting states and the webhook (v0.12)
@@ -194,8 +254,8 @@ new one.
 - After Submit, the conversation says what is happening: **Waiting for an agent** (nobody has read
   it yet, with the age of the submission and the two MCP calls that would read it), **Agent
   received this** (with the time), the live activity line while `working`, and the reply itself.
-- The canvas pill repeats that line while `submitted`. It sits **under** the tool bar — the tools
-  are at the top of the stage and the pill must never cover them — and ignores the pointer.
+- The canvas toast repeats that line while `submitted`. It sits **under** the tool bar — the tools
+  are at the top of the stage and the toast must never cover them — and ignores the pointer.
 - `REDLINE_WEBHOOK_URL=http://host:port/path` makes the server POST a small JSON body
   (`event`, `session_id`, `title`, `project`, `prompt`, `annotations`, `review_url`) when the human
   submits. It is a plain HTTP POST with a 5 s timeout, fire-and-forget: a dead endpoint never
@@ -226,15 +286,18 @@ The rail lists projects (conversation areas), not a flat stream of requests.
 - Sessions created without a project live flat and are shown as **Inbox** — there is no migration,
   the label is added on read. **Inbox** and legacy label-only projects still work; the agent uses
   its default `REDLINE_AGENT_REPO` for them.
-- Each project header shows its name, the number of waiting submissions (green) and the total.
-  Click to collapse; the state persists per browser.
+- Each project header shows its name and the total number of sessions — one count, not a waiting
+  count beside the total (the per-row badge says which rounds are waiting). Click to collapse; the
+  state persists per browser.
 - **A running agent is visible in the rail.** A review the agent is currently working on carries a
   spinner and a **working** badge instead of its annotation count, its dot pulses, and the project
   header shows the same spinner and label (with a count when several reviews run at once) — even
   while the project is collapsed. The rail re-reads `/api/sessions` every 8 s and redraws only when
   the set of running reviews changes, so the received → working → replied transition appears
   without a reload. `agent_state` comes from `progress`/`reply`; STOP clears it, and the rail only
-  treats a review as running while it is still `submitted`.
+  treats a review as running while it is still `submitted`. A submitted round the agent has
+  answered but not resolved reads **replied** (amber) instead of **waiting for agent**, because
+  the agent already picked it up and may still be working.
 - Filters and search still apply inside every project; day separators appear only in long lists.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
@@ -253,21 +316,27 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
   `meta.prompt` and appears in the timeline as a "you" bubble.
 - **Timeline**: the agent's request (grey), your prompt (blue), activity events (small lines with
   a dot and a time) and agent replies (green), merged and sorted by timestamp.
-- **Agent state** pill in the header: `received` (the agent read the submission), `working` (it is
-  doing something, with the latest activity line beside the conversation title) and `replied`.
-  `seen_by_agent_at` records the first read.
+- **Agent state** in the stage toast and the rail card: `received` (the agent read the
+  submission), `working` (it is doing something, with the latest activity line beside the
+  conversation title) and `replied`. `seen_by_agent_at` records the first read.
 - **Run summary** at the tail of the conversation (v0.19): a card that reads **Working** with a
   pulsing dot while `agent_state` is `working`, and **Used N tools: Edit and Shell** — the distinct
-  `tool` names the agent reported through `progress`, counted for the current round only. When the
-  agent answers it settles to **Run finished**; a round with no activity shows no card. This is the
+  `tool` names the agent reported through `progress`, counted for the current round only. **Run
+  finished** appears only when the round has left the agent's hands (a new round was posted or the
+  review was resolved); a round with no activity shows no card. A `reply` does **not** finish the
+  run: the agent can answer and keep working for minutes, so while the review is still `submitted`
+  the card reads **Agent replied — waiting for it to finish** in amber, keeps the age of the last
+  step, and turns back into **Working** as soon as the next `progress` line arrives. This is the
   interactive-run view an agent's own terminal chat shows, so the human does not have to read the
-  step lines to know whether anything is still happening.
+  step lines to know whether anything is still happening — and STOP, which is still armed, never
+  contradicts the card.
 - **"Working" means the round is still submitted.** The run card also shows *last step X ago*, and
-  the header pill never claims `working` on a review that already went back to the human — even if
-  a late narration line arrives after `post_round` or `reply` (the server refuses to revive a
-  finished round, and the UI derives the state from `status` as well as `agent_state`). A spinner
-  that never stops is indistinguishable from a dead agent, so the age of the last step is always on
-  screen.
+  the stage toast never claims `working` on a review that already went back to the human — even if
+  a late narration line arrives after `post_round` (the server refuses to revive a finished round,
+  and the UI derives the state from `status` as well as `agent_state`). A spinner that never stops
+  is indistinguishable from a dead agent, so the age of the last step is always on screen. The
+  exception is a `reply` on a still-submitted round: that is not a finished round, and a later
+  `progress` is proof the run resumed, so it may set `working` again.
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.

@@ -51,11 +51,10 @@
 [data-theme="light"] .options { background: rgba(255, 255, 255, .95); box-shadow: 0 8px 24px rgba(30, 41, 59, .12); }
 [data-theme="light"] .brand-mark { background: #fff; }
 [data-theme="light"] .brand-mark i { box-shadow: 0 5px 0 var(--text); }
-[data-theme="light"] .pill.open { background: #e0f2fe; color: #075985; border-color: #bae6fd; }
-[data-theme="light"] .pill.submitted { background: #dcfce7; color: #166534; border-color: #bbf7d0; }
 [data-theme="light"] .session[aria-current="true"] { background: var(--panel-3); }
 [data-theme="light"] .pre { color: #334155; }
 [data-theme="light"] .text-editor { background: #fff; color: var(--text); }
+[data-theme="light"] .conv-run.pending .conv-run-title { color: #b45309; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -135,20 +134,11 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 }
 .header .title b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .header .title span { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.header-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-
-.pill {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 3px 9px; border-radius: 999px; font-size: 11px;
-  background: var(--panel-3); color: var(--muted); border: 1px solid var(--border);
-  white-space: nowrap;
-}
-.pill.open { color: #93c5fd; border-color: #1e3a5f; background: #12233a; }
-.pill.submitted { color: #86efac; border-color: #14532d; background: #10231a; }
-.pill.resolved { color: #c4b5fd; border-color: #4c1d95; background: #1c142f; }
+.header-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+/* A hairline between the app tools and the two panel toggles: they act on the layout, not the
+   review, and used to read as one row of mystery glyphs. */
+.header-sep { width: 1px; height: 20px; margin: 0 4px; background: var(--border); }
 [hidden] { display: none !important; }
-.pill[hidden] { display: none; }
-.pill.agent { color: #fbbf24; border-color: #78350f; background: #231a08; }
 #submit.btn.stop { background: #dc2626; border-color: #b91c1c; color: #fff; }
 #submit.btn.stop:hover { background: #ef4444; }
 .btn.stop .stop-square {
@@ -161,8 +151,86 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: #1c142f; border: 1px solid #4c1d95; color: #c4b5fd; font-size: 11px;
 }
 .viewing-bar:hover { background: #241a3d; }
-.pill.agent.working { color: #93c5fd; border-color: #1e3a5f; background: #12233a; }
-.pill.agent.replied { color: #86efac; border-color: #14532d; background: #10231a; }
+
+/* A feature decision is consequential, so it gets a real dialog instead of a native confirm. */
+.feature-dialog {
+  padding: 0; width: min(440px, calc(100vw - 32px));
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+.feature-dialog::backdrop {
+  background: rgba(3, 7, 12, .6);
+  backdrop-filter: blur(2px);
+}
+.feature-card { display: flex; flex-direction: column; gap: 10px; padding: 22px; }
+.feature-card h2 { margin: 0; font-size: 16px; }
+.feature-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.feature-actions {
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+  margin-top: 8px; flex-wrap: wrap;
+}
+
+.settings-dialog {
+  padding: 0; width: min(580px, calc(100vw - 32px));
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+.settings-dialog::backdrop {
+  background: rgba(3, 7, 12, .6);
+  backdrop-filter: blur(2px);
+}
+.settings-form {
+  display: flex; flex-direction: column; gap: 14px; padding: 22px;
+  max-height: min(86vh, 760px); overflow: auto;
+}
+.settings-head h2 { margin: 0 0 4px; font-size: 16px; }
+.settings-head p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.settings-row label { font-size: 12px; font-weight: 600; }
+.settings-form input[type="number"] {
+  width: 92px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel-2); color: var(--text); font: inherit;
+}
+.settings-form input[type="number"]:focus { border-color: var(--accent); }
+.settings-projects {
+  margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+}
+.settings-projects legend {
+  padding: 0 6px; color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.settings-project {
+  display: flex; align-items: center; gap: 10px; padding: 7px 0;
+  border-top: 1px solid var(--border-soft);
+}
+.settings-project:first-child { border-top: none; }
+.settings-project .name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px;
+}
+.settings-project .repo {
+  display: block; color: var(--muted); font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.settings-project input { flex: none; }
+.settings-status {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 11.5px; color: var(--muted);
+}
+.settings-status b { color: var(--text); }
+.settings-claim {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  gap: 8px; padding: 4px 0; border-top: 1px solid var(--border-soft); font-size: 10.5px;
+}
+.settings-claim span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-empty { padding: 6px 0; color: var(--muted); font-size: 11px; }
+.settings-error { margin: 0; color: #fda4af; font-size: 12px; }
+.settings-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* ---------------------------------------------------------------- buttons */
 /* Keyboard users must always see where focus is. */
@@ -179,6 +247,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .btn:active { transform: translateY(1px); }
 .btn.primary { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
 .btn.primary:hover { background: #15803d; }
+.btn.danger { background: #dc2626; border-color: #b91c1c; color: #fff; font-weight: 600; }
+.btn.danger:hover { background: #ef4444; }
 .btn.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.ghost { background: transparent; }
 /* Icon buttons are a fixed square whatever the glyph inside ("?" is narrower than "☀"). */
@@ -186,6 +256,18 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   width: 32px; height: 32px; padding: 0; flex: none;
   justify-content: center; line-height: 1;
 }
+/* Inline SVGs, so every icon is the same weight and none depends on an emoji font. Filled ones
+   (the gear) opt out of the stroke. */
+.btn.icon svg {
+  width: 17px; height: 17px; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.btn.icon svg.fill { fill: currentColor; stroke: none; }
+/* The marked column inside a panel icon, so the two toggles name the panel they hide. */
+.btn.icon svg .panel { fill: currentColor; stroke: none; opacity: .4; }
+/* Panel toggles say whether the panel is on: a muted glyph means it is hidden. */
+.btn.icon[aria-pressed="false"] { color: var(--muted); background: transparent; }
 .btn:disabled { opacity: .5; cursor: default; transform: none; }
 .btn kbd { font: inherit; opacity: .6; }
 
@@ -236,10 +318,6 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   margin-left: auto; color: var(--muted); font-weight: 500; font-size: 11px;
   background: var(--panel-3); border: 1px solid var(--border); border-radius: 999px; padding: 0 7px;
 }
-.rail-project .pwait {
-  color: #86efac; background: #10231a; border: 1px solid #14532d;
-  border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600;
-}
 .rail-project .pworking {
   display: inline-flex; align-items: center; gap: 4px;
   color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent);
@@ -265,9 +343,15 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .session .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; flex: none; background: #3b82f6; }
 .session.submitted .dot { background: var(--ok); }
 .session.resolved .dot { background: #8b5cf6; }
+.session.feature-confirmed .dot { background: #22c55e; }
+.session.feature-cancelled .dot { background: #64748b; }
 .session .body { min-width: 0; flex: 1; }
 .session .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session .sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session .sub .branch {
+  color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+}
 .session .row-actions { display: none; gap: 2px; align-items: center; }
 .session:hover .row-actions, .session:focus-within .row-actions { display: flex; }
 .session .act {
@@ -276,7 +360,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   color: var(--muted); font-size: 11px; line-height: 1;
 }
 .session .act:hover { color: var(--text); background: var(--panel-3); border-color: var(--border); }
-.session .act[data-act="delete"]:hover { color: #fda4af; border-color: #7f1d1d; background: #2a1115; }
+.session .act[data-act="menu"]:hover { color: #fda4af; border-color: #7f1d1d; background: #2a1115; }
 .chip.danger { border-color: #7f1d1d; color: #fda4af; }
 .chip.danger:hover { background: #2a1115; color: #fecdd3; }
 .session .badge {
@@ -285,10 +369,26 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: var(--panel-3); color: var(--muted); border: 1px solid var(--border);
 }
 .session .badge.new { background: var(--accent); border-color: var(--accent); color: #fff; }
+.session .badge.confirmed { background: #10231a; border-color: #14532d; color: #86efac; }
+.session .badge.cancelled { background: #2a1115; border-color: #7f1d1d; color: #fca5a5; }
 .session .badge.work {
   display: inline-flex; align-items: center; gap: 5px; padding: 0 8px;
   background: var(--panel-2); border-color: var(--accent); color: var(--accent);
   font-size: 10px;
+}
+/* Submitted, not picked up: words rather than a count, so "who has the ball" is readable. */
+.session .badge.waiting {
+  padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+  background: var(--panel-2); border-color: var(--border); color: var(--muted);
+}
+/* The agent answered but has not handed the round back: still the agent's ball, phrased as
+   "replied" instead of the "waiting for agent" lie (it already read and answered). */
+.session .badge.replied {
+  padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+  background: #231a08; border-color: #78350f; color: #fbbf24;
+}
+[data-theme="light"] .session .badge.replied {
+  background: #fef3c7; border-color: #fde68a; color: #92400e;
 }
 .session.working .dot { background: var(--accent); animation: conv-pulse 1.4s ease-in-out infinite; }
 .rail-empty { padding: 24px 12px; text-align: center; color: var(--muted); }
@@ -527,6 +627,11 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .conv-run.working { border-color: rgba(47, 129, 247, .35); background: rgba(47, 129, 247, .07); }
 .conv-run.working .conv-run-title { color: var(--accent); }
 .conv-run.working .conv-run-mark { background: var(--accent); animation: conv-pulse 1.4s ease-in-out infinite; }
+/* The agent answered but the round is still submitted: not finished, and not provably working
+   either. Amber (the agent-state colour) plus the age of the last step says "open, not done". */
+.conv-run.pending { border-color: rgba(251, 191, 36, .35); background: rgba(251, 191, 36, .06); }
+.conv-run.pending .conv-run-title { color: #fbbf24; }
+.conv-run.pending .conv-run-mark { background: #fbbf24; }
 @keyframes conv-pulse {
   0%, 100% { opacity: .25; transform: scale(.8); }
   50% { opacity: 1; transform: scale(1.15); }

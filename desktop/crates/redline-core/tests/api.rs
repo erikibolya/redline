@@ -65,6 +65,90 @@ fn authed(method: &str, uri: &str, body: Value) -> Request<Body> {
         .unwrap()
 }
 
+async fn submitted_session(h: &Harness, project: &str, branch: &str) -> String {
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({
+                "title": format!("{project} {branch}"),
+                "image_base64": PNG_B64,
+                "project": project,
+                "branch": branch,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["meta"]["branch"], branch);
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, submitted) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({
+                "annotations": [
+                    {"type": "text", "x": 1, "y": 2, "text": "review", "color": "#e11d48"}
+                ],
+                "png": format!("data:image/png;base64,{PNG_B64}"),
+                "width": 1,
+                "height": 1
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    assert_eq!(submitted["meta"]["status"], "submitted");
+    id
+}
+
+async fn claim(h: &Harness, id: &str, agent: &str) -> (StatusCode, axum::http::HeaderMap, Value) {
+    send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/claims",
+            json!({ "session_id": id, "agent_id": agent }),
+        ),
+    )
+    .await
+}
+
+async fn claim_state(
+    h: &Harness,
+    id: &str,
+    agent: &str,
+    state: &str,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/agent/claims/{id}/state"),
+            json!({ "agent_id": agent, "state": state }),
+        ),
+    )
+    .await
+}
+
+async fn release_claim(
+    h: &Harness,
+    id: &str,
+    agent: &str,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/agent/claims/{id}/release"),
+            json!({ "agent_id": agent }),
+        ),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn health_is_public_but_sessions_are_not() {
     let h = harness();
@@ -335,6 +419,236 @@ async fn sessions_can_be_resolved_and_reopened() {
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(body["meta"]["status"], "open");
     assert_eq!(body["meta"]["resolved_at"], serde_json::Value::Null);
+}
+
+#[tokio::test]
+async fn features_can_be_confirmed_cancelled_and_reopened() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "feature", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/confirm-feature"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["meta"]["status"], "resolved");
+    assert!(body["meta"]["feature_confirmed_at"].is_string());
+    assert_eq!(body["meta"]["feature_cancelled_at"], Value::Null);
+
+    let request = Request::builder()
+        .uri("/api/sessions")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, listed) = send(&h.app, request).await;
+    let item = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .unwrap();
+    assert_eq!(item["feature_state"], "confirmed");
+
+    let (_, _, body) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
+    )
+    .await;
+    assert_eq!(body["meta"]["status"], "open");
+    assert_eq!(body["meta"]["feature_confirmed_at"], Value::Null);
+    assert_eq!(body["meta"]["feature_cancelled_at"], Value::Null);
+
+    let (_, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/cancel-feature"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(body["meta"]["status"], "resolved");
+    assert!(body["meta"]["feature_cancelled_at"].is_string());
+    assert_eq!(body["meta"]["feature_confirmed_at"], Value::Null);
+
+    let (_, _, body) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
+    )
+    .await;
+    assert_eq!(body["meta"]["feature_cancelled_at"], Value::Null);
+}
+
+#[tokio::test]
+async fn agent_settings_and_branch_are_exposed_and_editable() {
+    let h = harness();
+    let request = Request::builder()
+        .uri("/api/agent/settings")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["max_parallel"], 2);
+    assert_eq!(body["project_max_parallel"], 1);
+    assert_eq!(body["lease_seconds"], 120);
+
+    let (status, _, _) = send(
+        &h.app,
+        authed("POST", "/api/projects", json!({"name": "p1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let id = submitted_session(&h, "p1", "feat/branch").await;
+    let request = Request::builder()
+        .uri("/api/sessions")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, listed) = send(&h.app, request).await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(row["branch"], "feat/branch");
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/agent/settings",
+            json!({
+                "max_parallel": 3,
+                "project_max_parallel": 2,
+                "lease_seconds": 60,
+                "projects": { "p1": 2 }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["max_parallel"], 3);
+    assert_eq!(body["project_max_parallel"], 2);
+    assert_eq!(body["lease_seconds"], 60);
+    let project = body["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|project| project["slug"] == "p1")
+        .unwrap();
+    assert_eq!(project["max_parallel"], 2);
+    assert_eq!(project["effective_max_parallel"], 2);
+}
+
+#[tokio::test]
+async fn agent_claims_enforce_limits_and_waiting_releases_the_slot() {
+    let h = harness();
+    let a = submitted_session(&h, "p1", "feat/a").await;
+    let b = submitted_session(&h, "p1", "feat/b").await;
+    let c = submitted_session(&h, "p2", "feat/c").await;
+    let d = submitted_session(&h, "p3", "feat/d").await;
+    let e = submitted_session(&h, "p1", "feat/a").await;
+
+    let (status, _, body) = claim(&h, &a, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["claim"]["state"], "running");
+
+    let (status, _, body) = claim(&h, &b, "agent").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, _, body) = claim(&h, &c, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = claim(&h, &d, "agent").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // A is waiting for the human: it keeps feat/a but frees the project/global run slot.
+    let (status, _, body) = claim_state(&h, &a, "agent", "waiting").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["claim"]["state"], "waiting");
+    let (status, _, body) = claim(&h, &b, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = claim(&h, &e, "agent").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (status, _, _) = release_claim(&h, &b, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = release_claim(&h, &c, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = claim(&h, &d, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn agent_next_claims_across_branches_and_skips_locked_ones() {
+    let h = harness();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/agent/settings",
+            json!({"max_parallel": 2, "project_max_parallel": 2}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let a = submitted_session(&h, "p1", "feat/x").await;
+    let b = submitted_session(&h, "p2", "feat/x").await;
+    let c = submitted_session(&h, "p2", "feat/y").await;
+
+    // a owns feat/x; b shares it and must be skipped, so next returns the independent c.
+    let (status, _, body) = claim(&h, &a, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, next) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["session"]["id"], c);
+
+    // Resolve and release c; a still owns feat/x, so b must remain blocked even with a free slot.
+    let (status, _, body) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{c}/resolve"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = release_claim(&h, &c, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{blocked}");
+    assert!(blocked["session"].is_null(), "{blocked}");
+
+    let (status, _, _) = release_claim(&h, &a, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, fourth) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fourth}");
+    let fourth_id = fourth["session"]["id"].as_str().unwrap_or_default();
+    assert!(fourth_id == a || fourth_id == b, "{fourth}");
 }
 
 #[tokio::test]
@@ -1219,12 +1533,16 @@ async fn posting_a_round_stays_in_the_same_session() {
     assert_eq!(thread["messages"][0]["image"], image);
 }
 
-/// A spinner is a promise. The agent's last narration line often lands *after* `post_round` or
-/// `reply`; `progress` used to set `agent_state=working` unconditionally, so a review that had
-/// already been handed back kept pulsing "Working" — the human could not tell a live agent from a
-/// dead one (2026-10-29). The event is still recorded; the state is not revived.
+/// A spinner is a promise. The agent's last narration line often lands *after* `post_round`;
+/// `progress` used to set `agent_state=working` unconditionally, so a review that had already been
+/// handed back kept pulsing "Working" — the human could not tell a live agent from a dead one
+/// (2026-10-29). The event is still recorded; the state is not revived once the round is over.
+///
+/// `reply` is not the end of the run, though: an agent can answer early and keep working for
+/// minutes. Calling the reply "Run finished" while STOP was still armed confused a human
+/// (2026-10-30), so a later `progress` must revive "working" while the review is still submitted.
 #[tokio::test]
-async fn progress_never_revives_a_finished_round() {
+async fn progress_never_revives_a_finished_round_but_does_revive_an_open_one() {
     let h = harness();
     let (_, _, created) = send(
         &h.app,
@@ -1296,16 +1614,21 @@ async fn progress_never_revives_a_finished_round() {
         ("submitted".to_string(), "working".to_string())
     );
 
-    // After the answer: still submitted, but the run is over.
+    // The agent answers without finishing the run; the round is still submitted.
     call("reply", json!({"session_id": id, "message": "Done"})).await;
+    assert_eq!(
+        state(&h).await,
+        ("submitted".to_string(), "replied".to_string())
+    );
     call(
         "progress",
-        json!({"session_id": id, "message": "One last line", "state": "step"}),
+        json!({"session_id": id, "message": "One more step", "state": "tool", "tool": "shell"}),
     )
     .await;
     assert_eq!(
         state(&h).await,
-        ("submitted".to_string(), "replied".to_string())
+        ("submitted".to_string(), "working".to_string()),
+        "a progress after reply proves the run is still going"
     );
 
     // After a follow-up round: the review is back with the human.
@@ -1336,7 +1659,7 @@ async fn progress_never_revives_a_finished_round() {
         .collect();
     assert_eq!(
         messages,
-        ["Reading the review", "One last line", "Merged and pushed"],
+        ["Reading the review", "One more step", "Merged and pushed"],
         "{events}"
     );
 }

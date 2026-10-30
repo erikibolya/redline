@@ -1,5 +1,76 @@
 # Changelog
 
+## Unreleased
+
+- **The header is icons, and the status pills are gone.** `submitted`/`replied`/`working` sat in
+  the header as GitHub-style pills and competed with the review title, although the rail card, the
+  stage toast and the composer/STOP button already say whose turn it is; they are removed. Agent
+  settings is now a solid gear instead of a `⚙` glyph, keyboard shortcuts is a keyboard instead of
+  `?`, the theme button is a sun/moon SVG, and the two panel toggles are left/right frame icons
+  with `aria-pressed` and a *Hide/Show* title, separated from the app tools by a hairline. Every
+  icon is inline SVG, so none of it depends on the platform's emoji font. The e2e clicks both panel
+  toggles, asserts the canvas bitmap follows the grid, swaps the theme icon, and checks the header
+  has no `.pill` while the state still renders in the toast and the rail card.
+
+- **The dev server follows the dev build.** Every push to `dev` now publishes
+  `ghcr.io/erikibolya/redline:browser-dev` (plus a sha tag) from the same workflow as the Windows
+  dev build. The `redline-dev` stack can pull that tag instead of building from the working tree,
+  and a User Script or scoped Watchtower updates it every few minutes. The image includes
+  Chromium, so capture works on dev too.
+- **Agent concurrency control (foundation).** Sessions carry an optional `branch` declared by the
+  agent (fallback `session/<id>`), the rail shows it after the relative time, and the server has
+  branch ownership leases plus global/per-project run limits — defaults 2 global and 1 per
+  project, editable in the new **Agent settings** dialog. A waiting claim keeps the branch lock
+  but frees the execution slot. The bridge runs parallel claim workers against this API.
+- **The agent bridge runs reviews in parallel.** `redline-agent` now runs up to four claim workers
+  (`REDLINE_AGENT_WORKERS`, default 4) against `/api/agent/next`; each claim gets its own git
+  worktree on the declared branch, heartbeats its lease, moves to `waiting` when the human has the
+  ball (freeing the run slot but keeping the branch), and releases/removes a clean worktree when
+  the round is resolved. The server's global/per-project limits and the one-owner-per-branch rule
+  still apply; a dirty worktree is left for inspection.
+- **Freehand strokes are numbered and listed again.** `renderInspector` read
+  `annotation.start.x` for every non-text shape, but a pen stores `points`; the resulting
+  `TypeError` aborted `mutate` before `render()`, so the live stroke stayed on screen with no
+  badge and no inspector row (and could only be removed with Ctrl+Z). Shapes now get explicit
+  labels per type, and the e2e draws a pen, asserts its row/number and badge pixel, submits it
+  and checks the points in the server JSON.
+- **Regression gate.** `docs/TESTING.md` defines the tool matrix, the bug-fix protocol (failing
+  test first), the feature protocol and the release checklist. The e2e now draws every drawing
+  tool (rectangle, ellipse, arrow, pen) instead of only clicking its button.
+- **A reply is not the finish line.** The run card treated `agent_state=replied` as the end of the
+  run, so it said **Run finished** while the review was still submitted, the canvas was frozen and
+  the red STOP button was armed — and then the agent kept working for minutes. `reply` now only
+  marks an answer: while the round is still submitted the card reads **Agent replied — waiting for
+  it to finish** (amber, with the age of the last step), a later `progress` line turns it back into
+  **Working**, and **Run finished** is reserved for a round that was handed back (`post_round`) or
+  resolved. The server no longer freezes `working` after a reply on an open round; the browser e2e
+  covers the answered-but-still-running state and the resume.
+- **The rail says who has the ball.** A submitted round that no agent has picked up used to carry
+  the **new** badge (which only meant "this browser has not looked at it yet"), so a review
+  sitting in the queue read as the human's turn. It now reads **waiting for agent**; `new` is
+  reserved for rounds that are back in the human's hands, and `working` still wins while an agent
+  runs; a submitted round the agent has answered but not resolved now reads **replied**. The
+  project header keeps a single count instead of a green waiting count beside the same total. The
+  browser e2e asserts the badge and the missing header count.
+- **The Servers page Remove button is readable again.** `.server-actions .btn.danger` kept the
+  filled `.btn.danger` background and only overrode the label to `--danger`, so *Remove* was red
+  text on a red button. It is now an outline in both themes (label contrast 9.2:1 dark, 6.3:1
+  light), and the e2e measures that contrast instead of trusting the stylesheet.
+- **Adding a server lives on the Servers page only.** The app menu and the tray no longer carry
+  **Add a server…**; **Servers…** stays and its **Add server** button opens the same wizard. The
+  wizard's **Use this computer** button is gone (the *This computer* row in the list is always
+  present and cannot be removed) and is replaced by **Back**, which returns to the server list.
+- **Each session is one feature.** The rail's ✓ now asks for confirmation and records
+  `feature_confirmed_at`. The ✕ opens a feature-actions dialog: **Cancel feature** records
+  `feature_cancelled_at` and keeps the screenshot/annotations, while **Delete files…** removes
+  them permanently. A decided feature offers **Reopen** in the same menu. Both decisions close
+  the session (`resolved`) and ↺ Reopen undoes them. Agents read the decision as `feature_state`
+  (`pending`/`confirmed`/`cancelled`) from `GET /api/sessions`, MCP `get_feedback`,
+  `wait_for_feedback` and `list_reviews`; RedLine itself never touches git. A new submission or
+  agent round makes the feature pending again. Bulk mode gained **Confirm**; multi-delete stays
+  in bulk **Delete**, and **Delete cancelled** purges only cancelled features; confirmed features
+  stay as the log.
+
 ## 0.20.0 — 2026-10-30
 
 - **A locked canvas also freezes the view.** While a submitted review waits for the agent, the

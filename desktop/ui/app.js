@@ -180,9 +180,244 @@ async function api(path, options = {}) {
   return body;
 }
 
+/* ---------------------------------------------------------- feature confirmation */
+
+/**
+ * A native `confirm()` cannot explain what "the feature is done" means to an agent, and it
+ * looks different on every platform. This is a small `<dialog>` built on first use, shared by
+ * the editor and the sessions page. It returns the chosen action value, or null when dismissed.
+ */
+function askFeature({ title, body, actions }) {
+  return new Promise((resolve) => {
+    let dialog = $("#feature-dialog");
+    if (!dialog) {
+      document.body.insertAdjacentHTML("beforeend", `
+        <dialog class="feature-dialog" id="feature-dialog"
+                aria-labelledby="feature-dialog-title" aria-describedby="feature-dialog-body">
+          <form method="dialog" class="feature-card">
+            <h2 id="feature-dialog-title"></h2>
+            <p id="feature-dialog-body"></p>
+            <div class="feature-actions" id="feature-actions"></div>
+          </form>
+        </dialog>`);
+      dialog = $("#feature-dialog");
+    }
+    // A second action while the dialog is open is a double click; the first decision wins.
+    if (dialog.open) {
+      resolve(null);
+      return;
+    }
+    $("#feature-dialog-title").textContent = title;
+    $("#feature-dialog-body").textContent = body;
+    const container = $("#feature-actions");
+    container.innerHTML = "";
+    for (const action of actions) {
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.value = action.value;
+      button.dataset.action = action.value;
+      button.className = `btn${action.kind ? ` ${action.kind}` : ""}`;
+      button.textContent = action.label;
+      container.appendChild(button);
+    }
+    dialog.returnValue = "keep";
+    dialog.onclose = () => {
+      const choice = dialog.returnValue;
+      resolve(choice && choice !== "keep" ? choice : null);
+    };
+    dialog.showModal();
+  });
+}
+
+/**
+ * Confirm, cancel, reopen or delete a feature. Returns the server response, `{deleted: true}`,
+ * or `null` when the human dismissed the dialog.
+ */
+async function featureAction(action, id, title, state = "pending") {
+  const path = `/api/sessions/${encodeURIComponent(id)}`;
+  if (action === "confirm") {
+    const choice = await askFeature({
+      title: "Confirm this feature?",
+      body: `“${title}” will be marked as confirmed and closed. Your agent may now open a pull request and merge it into the integration branch.`,
+      actions: [
+        { value: "keep", label: "Keep working" },
+        { value: "confirm", label: "Confirm feature", kind: "primary" },
+      ],
+    });
+    if (choice !== "confirm") return null;
+    return api(`${path}/confirm-feature`, { method: "POST" });
+  }
+  if (action === "menu") {
+    const decided = state !== "pending";
+    const choice = await askFeature({
+      title: "What should happen to this feature?",
+      body: decided
+        ? `“${title}” is ${state}. Reopen returns it to the queue; Delete files removes the screenshot and annotations permanently.`
+        : `“${title}” has no decision yet. Cancel feature closes it without merging and keeps the screenshot and annotations; Delete files removes them permanently.`,
+      actions: decided
+        ? [
+            { value: "keep", label: "Keep working" },
+            { value: "reopen", label: "Reopen" },
+            { value: "delete", label: "Delete files…", kind: "danger" },
+          ]
+        : [
+            { value: "keep", label: "Keep working" },
+            { value: "cancel-feature", label: "Cancel feature" },
+            { value: "delete", label: "Delete files…", kind: "danger" },
+          ],
+    });
+    if (choice === "reopen") return api(`${path}/reopen`, { method: "POST" });
+    if (choice === "cancel-feature") return api(`${path}/cancel-feature`, { method: "POST" });
+    if (choice === "delete") {
+      await api(path, { method: "DELETE" });
+      return { deleted: true };
+    }
+    return null;
+  }
+  if (action === "reopen") {
+    return api(`${path}/reopen`, { method: "POST" });
+  }
+  return null;
+}
+
+const featureState = (session) => session.feature_state
+  || (session.feature_confirmed_at ? "confirmed"
+    : session.feature_cancelled_at ? "cancelled" : "pending");
+
+/* ---------------------------------------------------------------- agent settings */
+
+/**
+ * Global and per-project run limits. The server is authoritative; this is only the editor for
+ * `/api/agent/settings`. A branch always has one owner; waiting for the human frees a run slot.
+ */
+const AgentSettings = {
+  dialog: null,
+
+  ensure() {
+    if (this.dialog) return this.dialog;
+    document.body.insertAdjacentHTML("beforeend", `
+      <dialog class="settings-dialog" id="agent-settings-dialog"
+              aria-labelledby="agent-settings-title">
+        <form class="settings-form" id="agent-settings-form">
+          <div class="settings-head">
+            <h2 id="agent-settings-title">Agent settings</h2>
+            <p>How many reviews may run at the same time. One feature branch always has one owner;
+              waiting for the human does not take a run slot.</p>
+          </div>
+          <div class="settings-row">
+            <label for="agent-max-parallel">Max concurrent runs</label>
+            <input type="number" id="agent-max-parallel" min="1" max="32" required />
+          </div>
+          <div class="settings-row">
+            <label for="agent-project-max-parallel">Default per-project limit</label>
+            <input type="number" id="agent-project-max-parallel" min="1" max="32" required />
+          </div>
+          <div class="settings-row">
+            <label for="agent-lease-seconds">Claim lease (seconds)</label>
+            <input type="number" id="agent-lease-seconds" min="30" max="3600" required />
+          </div>
+          <fieldset class="settings-projects">
+            <legend>Per project</legend>
+            <div id="agent-project-list"></div>
+          </fieldset>
+          <div class="settings-status" id="agent-settings-status"></div>
+          <p class="settings-error" id="agent-settings-error" hidden></p>
+          <div class="settings-actions">
+            <button type="button" class="btn" id="agent-settings-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="agent-settings-save">Save</button>
+          </div>
+        </form>
+      </dialog>`);
+    this.dialog = $("#agent-settings-dialog");
+    $("#agent-settings-cancel").addEventListener("click", () => this.dialog.close());
+    $("#agent-settings-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      this.save();
+    });
+    return this.dialog;
+  },
+
+  async open() {
+    const dialog = this.ensure();
+    if (dialog.open) return;
+    const error = $("#agent-settings-error");
+    error.hidden = true;
+    try {
+      const data = await api("/api/agent/settings");
+      $("#agent-max-parallel").value = String(data.max_parallel);
+      $("#agent-project-max-parallel").value = String(data.project_max_parallel);
+      $("#agent-lease-seconds").value = String(data.lease_seconds);
+      const projects = data.projects || [];
+      $("#agent-project-list").innerHTML = projects.length
+        ? projects.map((project) => `
+          <label class="settings-project">
+            <span class="name">${escapeHtml(project.name)}
+              <span class="repo">${escapeHtml(project.repo || "")}</span></span>
+            <input type="number" min="1" max="32" data-project="${escapeHtml(project.slug)}"
+                   value="${project.max_parallel ?? ""}"
+                   placeholder="Default (${project.effective_max_parallel})" />
+          </label>`).join("")
+        : `<div class="settings-empty">No repository-backed projects yet.</div>`;
+      const claims = data.claims || [];
+      $("#agent-settings-status").innerHTML =
+        `<b>${data.running}/${data.max_parallel}</b> running · ${data.waiting} waiting`
+        + (claims.length
+          ? claims.map((claim) => `
+            <div class="settings-claim" title="${escapeHtml(claim.session_id)}">
+              <span>${escapeHtml(claim.session_id)}</span>
+              <span>${escapeHtml(claim.work_key)}</span>
+              <span>${escapeHtml(claim.state)} · ${escapeHtml(claim.agent_id)}</span>
+            </div>`).join("")
+          : `<div class="settings-empty">No active claims.</div>`);
+    } catch (requestError) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+    }
+    dialog.showModal();
+    $("#agent-max-parallel").focus();
+  },
+
+  async save() {
+    const error = $("#agent-settings-error");
+    error.hidden = true;
+    const projects = {};
+    $$("#agent-project-list input[data-project]").forEach((input) => {
+      projects[input.dataset.project] = input.value.trim() === "" ? null : Number(input.value);
+    });
+    const body = {
+      max_parallel: Number($("#agent-max-parallel").value),
+      project_max_parallel: Number($("#agent-project-max-parallel").value),
+      lease_seconds: Number($("#agent-lease-seconds").value),
+      projects,
+    };
+    const save = $("#agent-settings-save");
+    save.disabled = true;
+    try {
+      await api("/api/agent/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      this.dialog.close();
+    } catch (requestError) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+    } finally {
+      save.disabled = false;
+    }
+  },
+};
+
 const unfiltered = (query) => !query;
 
 /* ------------------------------------------------------------------ theme */
+
+/// The toggle shows the theme it switches *to*, as an inline SVG: a glyph swap is not a promise
+/// that the sun means "light now" on someone else's emoji font.
+const THEME_ICONS = {
+  light: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>',
+  dark: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4"/></svg>',
+};
 
 const Theme = {
   current() {
@@ -193,8 +428,10 @@ const Theme = {
     document.documentElement.dataset.theme = theme;
     prefs.set("theme", theme);
     $$("[data-theme-toggle]").forEach((button) => {
-      button.textContent = theme === "light" ? "☾" : "☀";
-      button.title = theme === "light" ? "Dark theme" : "Light theme";
+      // Dark theme offers the sun, light theme offers the moon.
+      button.innerHTML = THEME_ICONS[theme === "light" ? "light" : "dark"];
+      button.title = theme === "light" ? "Switch to dark theme" : "Switch to light theme";
+      button.setAttribute("aria-label", button.title);
     });
   },
   toggle() {
@@ -212,13 +449,14 @@ const workingIds = (sessions) => (sessions || [])
   .sort()
   .join("\n");
 
-// "Active" is the default so finished sessions drop out of the way; "Done" is the archive.
+// "Active" is the default so finished sessions drop out of the way; "All" is the archive view
+// and "Done" is the resolved-only view.
 const FILTERS = [
+  { id: "all", label: "All", test: () => true },
   { id: "active", label: "Active", test: (s) => s.status !== "resolved" },
   { id: "open", label: "Open", test: (s) => s.status === "open" },
   { id: "submitted", label: "Submitted", test: (s) => s.status === "submitted" },
   { id: "resolved", label: "Done", test: (s) => s.status === "resolved" },
-  { id: "mine", label: "Mine", test: (s) => s.agent === "human" },
 ];
 
 class Rail {
@@ -238,7 +476,12 @@ class Rail {
     this.projects = [];
     this.collapsed = new Set(prefs.get("collapsedProjects", []));
     this.filter = prefs.get("filter", "active");
-    if (this.filter === "all") this.filter = "active"; // pre-v0.6 preference
+    // Drop preferences for removed filters (the old "mine") instead of rendering an unpressed
+    // chip row with no matching view.
+    if (!FILTERS.some((filter) => filter.id === this.filter)) {
+      this.filter = "active";
+      prefs.set("filter", this.filter);
+    }
     this.query = "";
     this.agentTimer = null;
     this.wire();
@@ -247,16 +490,18 @@ class Rail {
   wire() {
     if (this.purge) {
       this.purge.addEventListener("click", () => {
-        const ids = this.sessions.filter((session) => session.status === "resolved").map((s) => s.id);
+        const ids = this.sessions
+          .filter((session) => featureState(session) === "cancelled")
+          .map((session) => session.id);
         if (!ids.length) return;
-        if (confirm(`Delete ${ids.length} finished session(s)? Their files go too.`)) {
+        if (confirm(`Delete ${ids.length} cancelled session(s)? Their files go too.`)) {
           this.onPurge?.(ids);
         }
       });
     }
     $("#bulk-mode")?.addEventListener("click", () => this.toggleBulk());
-    $("#bulk-cancel")?.addEventListener("click", () => this.exitBulk());
-    $("#bulk-resolve")?.addEventListener("click", () => this.applyBulk("resolve"));
+    $("#bulk-close")?.addEventListener("click", () => this.exitBulk());
+    $("#bulk-confirm")?.addEventListener("click", () => this.applyBulk("confirm"));
     $("#bulk-delete")?.addEventListener("click", () => this.applyBulk("delete"));
     addEventListener("keydown", (event) => {
       if (event.key === "Escape" && this.bulkMode) this.exitBulk();
@@ -343,9 +588,10 @@ class Rail {
       FILTERS.map((filter) => [filter.id, this.sessions.filter(filter.test).length]),
     );
     if (this.purge) {
-      const done = this.sessions.filter((session) => session.status === "resolved").length;
-      this.purge.hidden = done === 0;
-      this.purge.textContent = `Delete done (${done})`;
+      const cancelled = this.sessions
+        .filter((session) => featureState(session) === "cancelled").length;
+      this.purge.hidden = cancelled === 0;
+      this.purge.textContent = `Delete cancelled (${cancelled})`;
     }
     this.chips.innerHTML = FILTERS.map(
       (filter) => `
@@ -400,7 +646,6 @@ class Rail {
       const project = known.get(slug);
       const label = project?.name || (slug === "inbox" ? "Inbox" : slug);
       const collapsed = this.collapsed.has(slug);
-      const waiting = items.filter((session) => session.status === "submitted").length;
       const working = items.filter(agentWorking).length;
       parts.push(`
         <div class="rail-project" data-project="${escapeHtml(slug)}" role="button" tabindex="0"
@@ -410,7 +655,6 @@ class Rail {
           ${working ? `<span class="pworking" title="The agent is working on ${plural(working, "review")}">
             <span class="spin" aria-hidden="true"></span>${working > 1 ? `<b>${working}</b>` : ""}working
           </span>` : ""}
-          ${waiting ? `<span class="pwait" title="${waiting} waiting for the agent">${waiting}</span>` : ""}
           <span class="pcount">${items.length}</span>
         </div>`);
       if (collapsed) continue;
@@ -428,22 +672,42 @@ class Rail {
         const annotations = session.annotation_count || 0;
         const fresh = seen.isNew(session);
         const working = agentWorking(session);
+        const feature = featureState(session);
+        const decided = feature !== "pending";
+        // A submitted round belongs to the agent, so its badge says who has the ball: a round
+        // nobody has picked up yet used to read "new" (unread by the human), which is a lie
+        // about the state. Only a review that is back in the human's hands can be "new".
+        const queued = session.status === "submitted";
         // An agent currently running outranks "new" and the annotation count: it is the one
-        // state that changes a few seconds later without the human touching anything.
+        // state that changes a few seconds later without the human touching anything. A feature
+        // decision is the human's answer to the session, so it outranks the unread marker.
         const badge = working
           ? `<span class="badge work" title="The agent is working on this review">
             <span class="spin" aria-hidden="true"></span>working</span>`
-          : fresh
-            ? `<span class="badge new" title="new since you last looked">new</span>`
-            : annotations
-              ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
-              : "";
-        const done = session.status === "resolved";
+          : feature === "confirmed"
+            ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
+            : feature === "cancelled"
+              ? `<span class="badge cancelled" title="Feature cancelled by the human">cancelled</span>`
+              : queued && session.agent_state === "replied"
+                ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
+                : queued
+                  ? `<span class="badge waiting" title="Waiting for an agent — nobody has picked this round up yet">waiting for agent</span>`
+                  : fresh
+                  ? `<span class="badge new" title="new since you last looked">new</span>`
+                  : annotations
+                    ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
+                    : "";
         parts.push(`
-          <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${this.bulkMode ? " bulk" : ""}"
+          <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${
+            decided ? ` feature-${feature}` : ""
+          }${this.bulkMode ? " bulk" : ""}"
                role="button" tabindex="0"
                data-id="${escapeHtml(session.id)}"
-               aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}"
+               aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}${
+                 decided ? `, feature ${feature}` : ""
+               }${session.branch ? `, branch ${escapeHtml(session.branch)}` : ""}${
+                 queued && !working ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
+               }"
                aria-current="${session.id === this.selectedId}"
                ${this.bulkMode ? `aria-pressed="${this.selection.has(session.id)}"` : ""}>
             ${this.bulkMode
@@ -452,13 +716,17 @@ class Rail {
             <div class="body">
               <div class="name">${escapeHtml(session.title || session.id)}</div>
               <div class="sub">${escapeHtml(relativeTime(session.submitted_at || session.created_at))}${
-                session.note ? " · " + escapeHtml(session.note) : ""
-              }</div>
+                session.branch
+                  ? ` · <span class="branch" title="${escapeHtml(session.branch)}">${escapeHtml(session.branch)}</span>`
+                  : ""
+              }${session.note ? " · " + escapeHtml(session.note) : ""}</div>
             </div>
             <span class="row-actions">
-              <button class="act" data-act="${done ? "reopen" : "resolve"}"
-                      title="${done ? "Reopen" : "Mark done"}">${done ? "↺" : "✓"}</button>
-              <button class="act" data-act="delete" title="Delete">✕</button>
+              ${decided
+                ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
+                : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>`}
+              <button class="act" data-act="menu"
+                      title="${decided ? "Feature actions (reopen or delete)" : "Feature actions (cancel or delete)"}">✕</button>
             </span>
             ${badge}
           </div>`);
@@ -556,12 +824,23 @@ class Editor {
       body: $("#rail-body"),
       chips: $("#chips"),
       search: $("#search"),
-      purge: $("#purge-done"),
+      purge: $("#purge-cancelled"),
       selectedId: this.sessionId,
       onSelect: (id) => this.openSession(id),
       onAction: (action, id) => this.railAction(action, id),
       onPurge: (ids) => this.purgeSessions(ids),
       onBulk: async (action, ids) => {
+        if (action === "confirm") {
+          const choice = await askFeature({
+            title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
+            body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
+            actions: [
+              { value: "keep", label: "Keep working" },
+              { value: "confirm", label: "Confirm features", kind: "primary" },
+            ],
+          });
+          if (choice !== "confirm") return;
+        }
         if (action === "delete"
           && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
         try {
@@ -569,7 +848,7 @@ class Editor {
             if (action === "delete") {
               await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
             } else {
-              await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+              await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, { method: "POST" });
             }
           }
         } catch (error) {
@@ -577,7 +856,19 @@ class Editor {
         }
         this.rail.exitBulk();
         await this.rail.load();
-        if (action === "delete" && ids.includes(this.sessionId)) location.href = "/";
+        if (action === "delete" && ids.includes(this.sessionId)) {
+          location.href = "/";
+          return;
+        }
+        if (ids.includes(this.sessionId)) {
+          try {
+            const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}`);
+            this.meta = data.meta;
+            this.renderHeader();
+          } catch {
+            // The rail already reloaded; the header catches up on the next poll.
+          }
+        }
       },
     });
     this.bindChrome();
@@ -594,21 +885,24 @@ class Editor {
     await this.load(this.sessionId);
   }
 
-  /** Mark done / reopen / delete, straight from the rail. */
+  /** Confirm, cancel, reopen or delete a feature, straight from the rail. */
   async railAction(action, id) {
     try {
-      if (action === "resolve") {
-        await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
-      } else if (action === "reopen") {
-        await api(`/api/sessions/${encodeURIComponent(id)}/reopen`, { method: "POST" });
-      } else if (action === "delete") {
-        const title = this.rail.sessions.find((s) => s.id === id)?.title || id;
-        if (!confirm(`Delete “${title}”? The screenshot and annotations are removed.`)) return;
-        await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const session = this.rail.sessions.find((s) => s.id === id);
+      const title = session?.title || id;
+      const result = await featureAction(action, id, title, featureState(session || {}));
+      if (!result) return;
+      if (result.deleted) {
         if (id === this.sessionId) {
           location.href = "/";
           return;
         }
+        await this.rail.load();
+        return;
+      }
+      if (id === this.sessionId && result.meta) {
+        this.meta = result.meta;
+        this.renderHeader();
       }
       await this.rail.load();
     } catch (error) {
@@ -714,9 +1008,6 @@ class Editor {
       ? `${this.meta.image_width}×${this.meta.image_height}` : null,
       this.meta.url || null].filter(Boolean);
     $("#session-sub").textContent = bits.join(" · ");
-    const status = $("#session-status");
-    status.textContent = this.meta.status;
-    status.className = `pill ${this.meta.status}`;
     const waiting = this.meta.status === "submitted";
     const button = $("#submit");
     if (waiting) {
@@ -747,17 +1038,6 @@ class Editor {
             ? "The agent replied — read it in the conversation"
             : "Waiting for the agent…";
       }
-    }
-    const agent = $("#agent-state");
-    if (agent) {
-      // A stale "working" on a round that is over is not a state worth showing: the header would
-      // claim an agent is running on a review that is already back in the human's hands.
-      const state = this.meta.agent_state === "working" && !agentWorking(this.meta)
-        ? null
-        : this.meta.agent_state;
-      agent.hidden = !state;
-      agent.textContent = state || "";
-      agent.className = `pill agent ${state || ""}`;
     }
     this.applyTitle();
     const idLabel = $("#session-id-status");
@@ -804,16 +1084,33 @@ class Editor {
       $("#conv-new")?.addEventListener("click", () => this.seenConversation());
     }
     $("#viewing-bar")?.addEventListener("click", () => this.showCurrent());
+    const syncPanels = () => {
+      const app = $("#app");
+      const rail = $("#toggle-rail");
+      const inspector = $("#toggle-inspector");
+      const railHidden = app.classList.contains("rail-hidden");
+      const inspectorHidden = app.classList.contains("inspector-hidden");
+      if (rail) {
+        rail.setAttribute("aria-pressed", String(!railHidden));
+        rail.title = `${railHidden ? "Show" : "Hide"} sessions ( [ )`;
+      }
+      if (inspector) {
+        inspector.setAttribute("aria-pressed", String(!inspectorHidden));
+        inspector.title = `${inspectorHidden ? "Show" : "Hide"} inspector ( ] )`;
+      }
+    };
     $("#toggle-rail").addEventListener("click", () => {
       const app = $("#app");
       app.classList.toggle("rail-hidden");
       prefs.set("railHidden", app.classList.contains("rail-hidden"));
+      syncPanels();
       this.resize();
     });
     $("#toggle-inspector").addEventListener("click", () => {
       const app = $("#app");
       app.classList.toggle("inspector-hidden");
       prefs.set("inspectorHidden", app.classList.contains("inspector-hidden"));
+      syncPanels();
       this.resize();
     });
     const historyBlock = $("#history-block");
@@ -831,6 +1128,7 @@ class Editor {
 
     if (prefs.get("railHidden", false)) $("#app").classList.add("rail-hidden");
     if (prefs.get("inspectorHidden", false)) $("#app").classList.add("inspector-hidden");
+    syncPanels();
 
     $$(".tool").forEach((button) =>
       button.addEventListener("click", () => this.setTool(button.dataset.tool)),
@@ -1913,11 +2211,16 @@ class Editor {
       return;
     }
     body.innerHTML = this.annotations.map((annotation, index) => {
+      // A pen has `points`, not `start`/`end`. Reaching for `start.x` here threw before the
+      // inspector list (and, because `mutate` renders the inspector first, the canvas badge)
+      // could be built; the live stroke hid the failure. Every shape type gets an explicit label.
       const label = annotation.type === "text"
         ? escapeHtml(annotation.text || "")
-        : annotation.type === "rect" || annotation.type === "ellipse"
+        : annotation.type === "rect" || annotation.type === "ellipse" || annotation.type === "arrow"
           ? `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)} → ${Math.round(annotation.end.x)}, ${Math.round(annotation.end.y)}`
-          : `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)}`;
+          : annotation.type === "pen"
+            ? `freehand · ${annotation.points?.length || 0} points`
+            : `${Math.round(annotation.start?.x ?? 0)}, ${Math.round(annotation.start?.y ?? 0)}`;
       const note = String(annotation.note || "").trim();
       const meta = note ? escapeHtml(note) : annotation.type;
       return `
@@ -2228,17 +2531,23 @@ class Editor {
     const last = round[round.length - 1];
     const working = agentWorking(this.meta);
     const replied = this.meta?.agent_state === "replied";
-    // Once the agent answers, the reply above is the signal; the card keeps the tally.
+    // `reply` is a message, not the end of the run: the agent often answers and then keeps
+    // working for minutes. Only a round that left the agent's hands (a new round or `resolve`)
+    // is finished, so "Run finished" must never appear while STOP is still armed (2026-10-30).
+    const submitted = this.meta?.status === "submitted";
     const title = working
       ? "Working"
-      : replied
-        ? "Run finished"
-        : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
+      : replied && submitted
+        ? "Agent replied — waiting for it to finish"
+        : replied
+          ? "Run finished"
+          : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
     // How long ago the last step was is the honest answer to "is it still working?": a spinner
     // must never be the only evidence.
     const age = relativeTime(last.at);
     const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}`;
-    return `<div class="conv-run${working ? " working" : ""}">`
+    const state = working ? " working" : replied && submitted ? " pending" : "";
+    return `<div class="conv-run${state}">`
       + `<span class="conv-run-mark" aria-hidden="true"></span><div>`
       + `<div class="conv-run-title">${title}</div>`
       + `<div class="conv-run-sub">${sub}</div></div></div>`;
@@ -2718,7 +3027,9 @@ function renderGallery(rail) {
       <img src="/sessions/${encodeURIComponent(session.id)}/image" loading="lazy" alt="" />
       <div class="card-body">
         <b>${escapeHtml(session.title || session.id)}</b>
-        <span>${escapeHtml(project)} · ${escapeHtml(relativeTime(session.submitted_at || session.created_at))} · ${escapeHtml(session.status)}</span>
+        <span>${escapeHtml(project)} · ${escapeHtml(relativeTime(session.submitted_at || session.created_at))} · ${escapeHtml(
+          featureState(session) === "pending" ? session.status : featureState(session),
+        )}${session.branch ? ` · ${escapeHtml(session.branch)}` : ""}</span>
       </div>
     </a>`;
   }).join("");
@@ -2729,19 +3040,14 @@ async function bootList() {
     body: $("#rail-body"),
     chips: $("#chips"),
     search: $("#search"),
-    purge: $("#purge-done"),
+    purge: $("#purge-cancelled"),
     onSelect: (id) => { location.href = `/s/${encodeURIComponent(id)}`; },
     onAction: async (action, id) => {
       try {
-        if (action === "resolve") {
-          await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
-        } else if (action === "reopen") {
-          await api(`/api/sessions/${encodeURIComponent(id)}/reopen`, { method: "POST" });
-        } else if (action === "delete") {
-          if (!confirm("Delete this session? The screenshot and annotations are removed.")) return;
-          await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-        }
-        await rail.load();
+        const session = rail.sessions.find((s) => s.id === id);
+        const title = session?.title || id;
+        const result = await featureAction(action, id, title, featureState(session || {}));
+        if (result) await rail.load();
       } catch (error) {
         alert(`Could not ${action}: ${error.message}`);
       }
@@ -2753,6 +3059,17 @@ async function bootList() {
       await rail.load();
     },
     onBulk: async (action, ids) => {
+      if (action === "confirm") {
+        const choice = await askFeature({
+          title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
+          body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
+          actions: [
+            { value: "keep", label: "Keep working" },
+            { value: "confirm", label: "Confirm features", kind: "primary" },
+          ],
+        });
+        if (choice !== "confirm") return;
+      }
       if (action === "delete"
         && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
       try {
@@ -2760,7 +3077,7 @@ async function bootList() {
           if (action === "delete") {
             await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
           } else {
-            await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+            await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, { method: "POST" });
           }
         }
       } catch (error) {
@@ -2809,6 +3126,8 @@ document.addEventListener("DOMContentLoaded", () => {
   Theme.apply(Theme.current());
   $$("[data-theme-toggle]").forEach((button) =>
     button.addEventListener("click", () => Theme.toggle()));
+  $$("[data-agent-settings]").forEach((button) =>
+    button.addEventListener("click", () => AgentSettings.open()));
   Help.wire();
   addEventListener("keydown", (event) => {
     if (event.key === "?" && document.body.dataset.page !== "editor") {

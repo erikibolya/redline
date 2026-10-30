@@ -78,9 +78,13 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   "title": "Button / default",
   "url": "http://localhost:5016/button",
   "note": "Check hover and disabled",
-  "status": "open | submitted",
+  "status": "open | submitted | resolved",
   "created_at": "2026-10-28T11:11:13+00:00",
   "submitted_at": null,
+  "resolved_at": null,
+  "feature_confirmed_at": null,
+  "feature_cancelled_at": null,
+  "branch": "feat/button-hover",
   "image": "screenshot.png",
   "image_width": 1440,
   "image_height": 900
@@ -102,6 +106,21 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
 
 `review.md` is generated from meta + annotations. Text notes include their coordinates; rectangles
 include start/end/color/width; other shapes point to the JSON.
+
+### Agent concurrency state
+
+Next to `sessions/` the data directory holds `agent-settings.json` (global max, default
+per-project max, lease) and `agent-claims.json` (one claim per active session). Defaults are 2
+global runs, 1 per project and a 120 s lease. A claim is `running` or `waiting`; `waiting` keeps
+the branch lock but does not consume an execution slot.
+
+The server is the authority. The bridge asks `POST /api/agent/next`, heartbeats, and marks
+`waiting` when the human has the ball. The branch key is `meta.branch`, falling back to
+`session/<id>`; RedLine never touches git. `redline-agent` runs `REDLINE_AGENT_WORKERS` claim
+workers (default 4), each with its own worktree under
+`<repo_root>/.redline-worktrees/<repo>-<hash>/<branch>-<hash>`, and running heartbeats every
+`lease/3`. A resolved round releases the claim and removes a clean worktree; a dirty one is left
+for inspection. The OpenCode server must see the worktree path just like the repository itself.
 
 ## HTTP server
 

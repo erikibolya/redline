@@ -149,6 +149,33 @@ fn submission_writes_all_four_artifacts() {
 }
 
 #[test]
+fn a_new_round_clears_the_feature_decision() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "shot.png", "Feature", "", "", None, None, None)
+        .unwrap();
+    store.confirm_feature(&meta.id).unwrap();
+
+    let submission = Submission {
+        note: None,
+        annotations: Vec::new(),
+        png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
+        width: None,
+        height: None,
+    };
+    let (meta, _) = store.submit(&meta.id, &submission).unwrap();
+    assert_eq!(meta.status, Status::Submitted);
+    assert_eq!(meta.feature_state(), "pending");
+
+    store.cancel_feature(&meta.id).unwrap();
+    let meta = store
+        .post_round(&meta.id, None, "", "new round", None, None)
+        .unwrap();
+    assert_eq!(meta.status, Status::Open);
+    assert_eq!(meta.feature_state(), "pending");
+}
+
+#[test]
 fn list_is_newest_first_and_remove_is_permanent() {
     let (_dir, store) = store();
     let a = store

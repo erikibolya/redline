@@ -68,7 +68,7 @@ desktop/
   install-unraid.sh       idempotent install/upgrade of the container
   docker-compose.example.yml
 docs/                     DESKTOP.md (ADR), UI.md (UI plan/status), API.md, ARCHITECTURE.md,
-                          WORKFLOW.md, PLAN.md at the root
+                          WORKFLOW.md, TESTING.md (tool matrix + release gate), PLAN.md at the root
 static/, redline.py       v0.1 Python implementation, frozen; do not add features to it
 ```
 
@@ -79,9 +79,10 @@ static/, redline.py       v0.1 Python implementation, frozen; do not add feature
 docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm \
   sh -c 'rustup component add rustfmt; cargo fmt --all; cargo test --workspace'
 
-# Browser end-to-end (32 checks: drawing, zoom mapping, move, groups, align, history, diff, rail actions)
+# Browser end-to-end (draws every tool; see docs/TESTING.md and PLAN.md for the current count)
 docker build -q -f desktop/Dockerfile.browser -t redline:local .
 REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per check
+# Release gate: docs/TESTING.md — tool matrix, feature protocol and the checklist.
 
 # Ship a feature (dev is protected; never push it directly)
 git push origin feat/my-feature
@@ -147,6 +148,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - Agent state: `get_feedback` stamps `seen_by_agent_at` and sets `agent_state=received`;
   `progress` appends to `agent-events.jsonl` and sets `working`; `reply` sets `replied`.
   The editor polls meta + thread + events every 5 s and renders them as a conversation.
+- Agent concurrency (v0.22): `/data/agent-settings.json` + `/data/agent-claims.json`; defaults
+  global 2, per-project 1, lease 120 s. A claim is `running` or `waiting`; waiting keeps the
+  branch lock but frees the run slot. The branch key is `meta.branch` (fallback `session/<id>`);
+  the bridge runs `REDLINE_AGENT_WORKERS` (default 4) claim workers, each in its own worktree under
+  `<repo_root>/.redline-worktrees/`, with heartbeats and one owner per branch. The OpenCode
+  server must see the worktree path just like the repo itself.
 - UI: no framework, no build step. `app.js` holds the shell (rail, canvas engine, inspector);
   `app.css` the design tokens incl. light theme. Served from the binary at `/static/*`.
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform
@@ -190,7 +197,8 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   unless you capture from a browser started with `TZ=Europe/Prague`.
 - **Switching a server is not logging out.** The desktop app keeps every profile and token in
   `config.json`; `/servers` only changes `active` and navigates to the chosen server. Cookies are
-  per origin, so the other servers stay signed in. "Use this computer" must also preserve profiles.
+  per origin, so the other servers stay signed in. Switching back to *This computer* must also
+  preserve profiles.
 - **A project is not a repository.** RedLine projects began as labels; a label does not tell the
   agent where to work. Repo projects now store a **relative** key (`redline`, `ActiUnit/Au.Net`)
   plus an agent id. Never store an absolute mount path: the OpenCode server, the agent container
@@ -225,6 +233,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   mutation choke point (`mutate`, and the few paths that bypass it), and test the *refusal*: draw,
   delete, nudge and click the write tools, then assert nothing changed. A control that looks armed
   but silently refuses clicks reads as a broken lock; disable it visibly.
+- **A tool button is not the tool.** The e2e clicked the pen button and asserted the tool was
+  selected, so the freehand badge/row regression survived: `renderInspector` read
+  `annotation.start.x`, but a pen is `{type:"pen", points:[…]}`. The `TypeError` aborted `mutate`
+  before `render()`, leaving the live stroke visible with no number and no inspector row. Draw
+  with every tool, assert the annotation, its inspector row/number and its badge pixel, then
+  submit it. `docs/TESTING.md` § "The tool matrix" makes this non-negotiable.
 - **A spinner is a promise.** `progress` set `agent_state=working` unconditionally, so the agent's
   final narration line — written after `post_round` had handed the review back — re-armed the
   indicator. The card pulsed "Working" on a review the human already had, with a green Submit
@@ -232,6 +246,22 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   the round (`status == submitted`), not set by the last writer; the server refuses to revive a
   finished round, the UI checks both fields, and the card always shows the age of the last step so
   "is it really working?" has an answer that is not animation.
+- **A reply is not the finish line.** The inverse trap: `reply` set `agent_state=replied`, the card
+  called that "Run finished", yet the review was still `submitted`, the canvas was locked and the
+  red STOP button was armed — and the agent kept working for minutes before resolving (2026-10-30).
+  Only a round that left the agent's hands (`post_round` → open, or `resolve`) is finished; while
+  submitted, say the agent replied and the run has not finished, and let a later `progress` (real
+  evidence the process is alive) turn the indicator back to "Working". Never print "finished" and
+  "STOP" in the same breath.
+- **A delete button is not a cancel button, and a UI badge is not a signal.** The rail's ✕ removed
+  the review folder, so "cancel this feature" had no non-destructive action; the ✓ only set
+  `resolved`, which told an agent nothing about shipping. Feature decisions now have their own
+  additive stamps (`feature_confirmed_at` / `feature_cancelled_at`) exposed as `feature_state` in
+  `GET /api/sessions`, `get_feedback`, `wait_for_feedback` and `list_reviews`; the ✓/✕ open
+  explicit dialogs, ✕ offers Keep working / Cancel feature / Delete files… (Reopen + Delete once
+  decided), and RedLine never touches git — the agent owns the PR/merge workflow. Cancel keeps
+  the files and Delete is a deliberate extra choice, not a reflex click; make every human
+  decision readable by the agent, not just visible in the UI.
 
 ## 8. Working rules
 
@@ -247,7 +277,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - Keep the UI dependency-free (vanilla JS/CSS, served from the binary).
 - Keep the API additive; breaking changes need a migration note in `CHANGELOG.md`.
 - Update `docs/UI.md` (UI), `docs/DESKTOP.md` (desktop/deploy), `PLAN.md` when behaviour changes.
-- Run Rust tests **and** the browser e2e before tagging.
+- **Every bug fix starts with a failing test.** Reproduce the bug, add the smallest automated
+  test that fails on the old code, fix the root cause, then run the full suite. Keep the test as
+  the regression fence.
+- **Every feature ships with automated coverage of its user path** — click the control, assert the
+  visible result and the persisted state. New drawing tools must be added to the tool matrix in
+  `docs/TESTING.md` and actually drawn in the e2e; clicking the button is not a test.
+- Run Rust tests **and** the browser e2e before tagging, against the release image, and walk the
+  release checklist in `docs/TESTING.md`. If a check is missing, add it before tagging.
 
 ## 9. Common recipes
 

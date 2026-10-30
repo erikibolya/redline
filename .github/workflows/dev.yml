@@ -13,6 +13,10 @@ on:
       - ".github/workflows/dev.yml"
   workflow_dispatch:
 
+concurrency:
+  group: dev-build
+  cancel-in-progress: true
+
 env:
   # Dev builds must sort *above* the current stable line, otherwise the updater refuses them.
   # Bump this when a new stable minor is released.
@@ -24,6 +28,11 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      # Dev builds only need to be installable; full LTO adds minutes and is not useful for
+      # a throwaway test build. Stable releases keep the production optimisations.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v4
 
@@ -106,3 +115,35 @@ jobs:
           gh release upload dev
           desktop/target/release/redline.exe
           desktop/target/release/redline-agent.exe --clobber
+
+  # The dev server on holly runs this tag. It is the browser image (server + Chromium) so the
+  # capture endpoint works; the moving tag is what the host-side updater pulls.
+  container:
+    name: browser dev image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: desktop/Dockerfile.browser
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:browser-dev
+            ghcr.io/${{ github.repository }}:browser-dev-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.version=${{ env.DEV_BASE_VERSION }}-dev.${{ github.run_number }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: |
+            type=registry,ref=ghcr.io/${{ github.repository }}:browser
+            type=gha
+          cache-to: type=gha,mode=max

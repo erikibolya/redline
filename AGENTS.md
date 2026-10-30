@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.19.0.** Live in production on holly:
+**Current release: v0.21.0.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -20,6 +20,7 @@ JSON + Markdown + an annotated PNG.
 | Container | `redline`, image `ghcr.io/erikibolya/redline:browser`, no published port |
 | Data | `/mnt/user/appdata/redline` → `/data` (sessions in `/data/sessions`) |
 | Token | `/mnt/user/appdata/redline/token` (also printed by `docker logs redline | grep -i token`) |
+| Dev server | `https://dev.redline.ibolya.cz`, stack `redline-dev`, data `/mnt/user/appdata/redline-dev` |
 | Repo | `https://github.com/erikibolya/redline` (public, MIT), branch `main` |
 
 The Windows desktop app (`desktop/app`) is a Tauri v2 shell: tray + menu bar + a webview pointed at
@@ -123,6 +124,14 @@ On holly the container is owned by a Compose project (`/boot/config/plugins/comp
 together with `redline-agent`; `install-unraid.sh` must not be run there. See `docs/DESKTOP.md` §
 "Compose deployment".
 
+The dev server is its own stack (`/boot/config/plugins/compose.manager/projects/redline-dev`):
+it follows `ghcr.io/erikibolya/redline:browser-dev` (published by every dev workflow run) and a
+label-scoped Watchtower (`redline-dev-watchtower`, 5-minute interval) recreates it. The Watchtower
+Swagger UI is `https://watchtower.ibolya.cz` (basic auth; credentials in
+`/mnt/user/appdata/watchtower/credentials.txt`), routed by the Traefik file provider
+`/mnt/user/ProgramDataSSD/Traefik/data/dynamic/watchtower.yaml`. Do not enable Watchtower's
+`update` endpoint there: it disables the periodic scheduler.
+
 Env knobs: `REDLINE_DOMAIN`, `REDLINE_IMAGE`, `REDLINE_PORT`, `REDLINE_TOKEN`, `REDLINE_DATA`,
 `REDLINE_PUBLISH_PORT`, `REDLINE_CHROME` (browser binary for capture).
 Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`, `REDLINE_HOST`.
@@ -148,7 +157,7 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - Agent state: `get_feedback` stamps `seen_by_agent_at` and sets `agent_state=received`;
   `progress` appends to `agent-events.jsonl` and sets `working`; `reply` sets `replied`.
   The editor polls meta + thread + events every 5 s and renders them as a conversation.
-- Agent concurrency (v0.22): `/data/agent-settings.json` + `/data/agent-claims.json`; defaults
+- Agent concurrency (v0.21.0): `/data/agent-settings.json` + `/data/agent-claims.json`; defaults
   global 2, per-project 1, lease 120 s. A claim is `running` or `waiting`; waiting keeps the
   branch lock but frees the run slot. The branch key is `meta.branch` (fallback `session/<id>`);
   the bridge runs `REDLINE_AGENT_WORKERS` (default 4) claim workers, each in its own worktree under

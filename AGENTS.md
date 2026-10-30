@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.21.0.** Live in production on holly:
+**Current release: v0.22.0.** Live in production on holly:
 
 | Thing | Value |
 |---|---|

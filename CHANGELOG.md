@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+_(nothing yet)_
+
+## 0.22.0 — 2026-10-31
+
 - **Confirmed and cancelled badges are tinted, not black pills.** The dark rail painted
   `confirmed` as `#10231a` and `cancelled` as `#2a1115`, which read as a black background with
   coloured text. They now use translucent green/red tints with matching borders in dark mode and

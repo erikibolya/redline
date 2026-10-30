@@ -162,6 +162,94 @@ const main = async () => {
   }));
   check("editor booted with an image", true, `scale ${view.scale.toFixed(3)}`);
 
+  // ---- the header is a row of labelled icons; status lives in the toast and the rail card
+  const chrome = await page.evaluate(() => {
+    const header = document.querySelector(".header");
+    const buttons = [...header.querySelectorAll(".header-actions .btn.icon")];
+    const gear = document.querySelector("[data-agent-settings] svg");
+    const gearStyle = gear ? getComputedStyle(gear) : null;
+    return {
+      pills: header.querySelectorAll(".pill").length,
+      stale: Boolean(document.querySelector("#session-status, #agent-state")),
+      count: buttons.length,
+      svg: buttons.every((button) => Boolean(button.querySelector("svg"))),
+      labelled: buttons.every((button) =>
+        Boolean((button.title || "").trim() && (button.getAttribute("aria-label") || "").trim())),
+      separator: Boolean(header.querySelector(".header-sep")),
+      gear: gearStyle ? { fill: gearStyle.fill, stroke: gearStyle.stroke } : null,
+      gearPath: gear ? gear.getAttribute("viewBox") : "",
+      panelMarks: ["#toggle-rail", "#toggle-inspector"].every((selector) => {
+        const mark = document.querySelector(`${selector} svg .panel`);
+        return mark && getComputedStyle(mark).fill !== "none";
+      }),
+    };
+  });
+  check("the header carries no status pills — the toast and the rail card say it",
+    chrome.pills === 0 && !chrome.stale, JSON.stringify(chrome));
+  check("every header action is a labelled SVG icon",
+    chrome.count === 5 && chrome.svg && chrome.labelled && chrome.separator
+      && chrome.panelMarks, JSON.stringify(chrome));
+  check("agent settings is a solid gear, not a text glyph",
+    chrome.gear && chrome.gear.fill !== "none" && chrome.gear.stroke === "none"
+      && chrome.gearPath === "0 0 24 24",
+    JSON.stringify(chrome.gear));
+
+  // The two panel toggles click, flip their pressed state, and the canvas bitmap follows the grid.
+  const panelToggles = await page.evaluate(() => {
+    const app = document.querySelector("#app");
+    const rail = document.querySelector("#toggle-rail");
+    const inspector = document.querySelector("#toggle-inspector");
+    const bitmap = () => document.querySelector("#canvas").width;
+    const before = bitmap();
+    rail.click();
+    const hidden = {
+      rail: app.classList.contains("rail-hidden"),
+      pressed: rail.getAttribute("aria-pressed"),
+      title: rail.title,
+      bitmap: bitmap(),
+    };
+    rail.click();
+    const backRail = { pressed: rail.getAttribute("aria-pressed"), bitmap: bitmap() };
+    inspector.click();
+    const hidInspector = app.classList.contains("inspector-hidden");
+    const inspectorPressed = inspector.getAttribute("aria-pressed");
+    inspector.click();
+    return {
+      before, hidden, backRail, hidInspector, inspectorPressed,
+      restored: !app.classList.contains("inspector-hidden") && !app.classList.contains("rail-hidden"),
+      pressedBack: inspector.getAttribute("aria-pressed"),
+    };
+  });
+  check("the panel icons hide their panel, resize the canvas and say which state is on",
+    panelToggles.hidden.rail && panelToggles.hidden.pressed === "false" && panelToggles.hidden.title.startsWith("Show")
+      && panelToggles.hidden.bitmap > panelToggles.before
+      && panelToggles.backRail.pressed === "true" && panelToggles.backRail.bitmap === panelToggles.before
+      && panelToggles.hidInspector && panelToggles.inspectorPressed === "false" && panelToggles.restored
+      && panelToggles.pressedBack === "true",
+    JSON.stringify(panelToggles));
+
+  // The theme button swaps a moon/sun SVG instead of an emoji glyph.
+  const themeIcons = await page.evaluate(() => {
+    const button = document.querySelector("[data-theme-toggle]");
+    const read = () => ({
+      theme: document.documentElement.dataset.theme,
+      svg: Boolean(button.querySelector("svg")),
+      title: button.title,
+      text: button.textContent.trim(),
+    });
+    const first = read();
+    button.click();
+    const second = read();
+    button.click();
+    return { first, second, back: read() };
+  });
+  check("the theme toggle swaps sun and moon SVGs, not glyphs",
+    themeIcons.first.svg && themeIcons.second.svg && themeIcons.first.title !== themeIcons.second.title
+      && themeIcons.first.text === "" && themeIcons.second.text === ""
+      && themeIcons.first.theme !== themeIcons.second.theme
+      && themeIcons.back.theme === themeIcons.first.theme,
+    JSON.stringify(themeIcons));
+
   // Ctrl+V in the page fills the New review dialog from the clipboard.
   await page.evaluate(async () => {
     const canvas = document.createElement("canvas");
@@ -398,7 +486,8 @@ const main = async () => {
   await page.keyboard.press("Enter");
   await page.keyboard.up("Control");
   await page.waitForFunction(
-    () => document.querySelector("#session-status")?.textContent === "submitted",
+    () => document.querySelector("#submit")?.textContent.includes("STOP")
+      && window.redline.meta?.status === "submitted",
     { timeout: 15000 },
   );
 
@@ -463,7 +552,7 @@ const main = async () => {
     toastBox && toastBox.offCentre <= 2 && toastBox.offMiddle <= 2,
     toastBox ? `off centre ${Math.round(toastBox.offCentre)} · off middle ${Math.round(toastBox.offMiddle)}` : "no toast");
   const noModal = await page.evaluate(() => !document.querySelector("#review-lock"));
-  check("the submitted lock is a status pill, not a dimming modal", noModal);
+  check("the submitted lock is a status toast, not a dimming modal", noModal);
 
   // ---- a fresh load of a submitted session must not die before the event poll lands
   await page.reload({ waitUntil: "networkidle0" });
@@ -561,7 +650,7 @@ const main = async () => {
       working: Boolean(card?.classList.contains("working")),
       pending: Boolean(card?.classList.contains("pending")),
       text: card?.textContent || "",
-      pill: document.querySelector("#agent-state")?.textContent || "",
+      status: document.querySelector("#stage-status")?.textContent || "",
       stop: document.querySelector("#submit")?.textContent || "",
     };
   });
@@ -570,8 +659,9 @@ const main = async () => {
       && repliedCard.text.includes("Agent replied") && !repliedCard.text.includes("Run finished")
       && repliedCard.text.includes("last step") && repliedCard.stop.includes("STOP"),
     `${repliedCard.text}${repliedCard.stop}`);
-  check("the header does not claim a working agent on an answered round",
-    !repliedCard.pill.includes("working"), repliedCard.pill);
+  check("the status line does not claim a working agent on an answered round",
+    !repliedCard.status.includes("Agent is working") && repliedCard.status.includes("replied"),
+    repliedCard.status);
 
   // The run can resume after the reply (it did, for minutes); a new progress line is evidence
   // that the agent is working again, so the indicator comes back while the round is submitted.
@@ -766,13 +856,24 @@ const main = async () => {
     if (status === "resolved" && meta.meta.feature_confirmed_at) break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
+  // `railAction` reloads the rail after the POST, but the click resolves before that await does;
+  // poll the rail's own data instead of reading it a frame too early. The card itself is checked
+  // in the Done filter below — a resolved session leaves the default Active view.
+  let confirmedState = "";
+  for (let attempt = 0; attempt < 30 && confirmedState !== "confirmed"; attempt += 1) {
+    confirmedState = await page.evaluate(() => {
+      const entry = window.redline.rail.sessions.find((session) => session.id === window.redline.sessionId);
+      return entry?.feature_state || "";
+    });
+    if (confirmedState !== "confirmed") await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   const confirmed = await page.evaluate(() => ({
     stamped: Boolean(window.redline.meta?.feature_confirmed_at),
-    pill: document.querySelector("#session-status")?.textContent || "",
+    row: Boolean(document.querySelector('.session[aria-current="true"]')),
   }));
   check("rail 'confirm' closes the feature and records the decision",
-    status === "resolved" && confirmed.stamped && confirmed.pill === "confirmed",
-    JSON.stringify({ status, ...confirmed }));
+    status === "resolved" && confirmed.stamped && confirmedState === "confirmed" && !confirmed.row,
+    JSON.stringify({ status, ...confirmed, state: confirmedState }));
 
   // "All" is the only view that keeps a finished session alongside active work.
   await clickChip("All");

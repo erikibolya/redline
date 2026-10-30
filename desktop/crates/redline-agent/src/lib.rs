@@ -365,6 +365,25 @@ fn worktree_path(config: &AgentConfig, repo: &Path, work_key: &str) -> PathBuf {
         .join(worktree_name(work_key))
 }
 
+/// Pick the commit the feature branch starts from. Candidates are fully qualified on purpose: a
+/// short name such as `dev` is ambiguous once a tag with the same name exists, and git then either
+/// refuses it ("fatal: ambiguous object name") or silently picks the tag instead of the branch.
+fn worktree_base(repo: &Path) -> &'static str {
+    const CANDIDATES: [&str; 4] = [
+        "refs/heads/dev",
+        "refs/heads/main",
+        "refs/remotes/origin/dev",
+        "refs/remotes/origin/main",
+    ];
+    CANDIDATES
+        .into_iter()
+        .find(|candidate| {
+            let peeled = format!("{candidate}^{{commit}}");
+            git_ok(repo, &["rev-parse", "--verify", "--quiet", &peeled])
+        })
+        .unwrap_or("HEAD")
+}
+
 /// Create (or reuse) a git worktree for the claimed branch. A non-git legacy repo runs in place.
 fn ensure_worktree(config: &AgentConfig, repo: &Path, work_key: &str) -> Result<PathBuf, String> {
     if !git_ok(repo, &["rev-parse", "--is-inside-work-tree"]) {
@@ -393,10 +412,7 @@ fn ensure_worktree(config: &AgentConfig, repo: &Path, work_key: &str) -> Result<
         .ok_or_else(|| format!("worktree path is not UTF-8: {}", path.display()))?;
     let branch_ref = format!("refs/heads/{work_key}");
     let branch_exists = git_ok(repo, &["show-ref", "--verify", "--quiet", &branch_ref]);
-    let base = ["dev", "main", "origin/dev", "origin/main"]
-        .into_iter()
-        .find(|candidate| git_ok(repo, &["rev-parse", "--verify", candidate]))
-        .unwrap_or("HEAD");
+    let base = worktree_base(repo);
     let output = if branch_exists {
         git(repo, &["worktree", "add", path_arg, work_key])?
     } else {
@@ -1037,6 +1053,68 @@ mod tests {
             .output()
             .unwrap();
         assert!(branch.status.success());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Run git in `repo` the way the bridge does, failing the test with git's own stderr.
+    fn git_in(repo: &Path, args: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args([
+                "-c",
+                "user.name=RedLine Test",
+                "-c",
+                "user.email=test@example.com",
+            ])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn commit_of(repo: &Path) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repo)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    /// A tag that shares its name with the base branch (`dev` exists as a tag in this repo) must not
+    /// hijack the feature branch: git cannot resolve the short name and points at the wrong commit.
+    #[test]
+    fn a_tag_named_like_the_base_branch_does_not_hijack_the_worktree() {
+        if !git_available() {
+            eprintln!("git not installed; skipping worktree test");
+            return;
+        }
+        let root = temp_root("ambiguous-base");
+        let repo = init_repo(&root);
+        git_in(&repo, &["checkout", "-q", "-b", "dev"]);
+        std::fs::write(repo.join("dev.txt"), "dev\n").unwrap();
+        git_in(&repo, &["add", "."]);
+        git_in(&repo, &["commit", "-qm", "dev work"]);
+        let dev_tip = commit_of(&repo);
+        git_in(&repo, &["tag", "dev", "HEAD~1"]);
+        git_in(&repo, &["checkout", "-q", "--detach", "HEAD~1"]);
+
+        let mut config = AgentConfig::new("http://127.0.0.1:8788", "t", &repo);
+        config.repo_root = root.clone();
+        let path = ensure_worktree(&config, &repo, "feat/ambiguous")
+            .expect("an extra tag named dev must not break the worktree");
+        assert_eq!(
+            commit_of(&path),
+            dev_tip,
+            "the feature must start from dev's tip, not from the tag that shares its name"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

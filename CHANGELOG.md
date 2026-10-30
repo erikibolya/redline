@@ -2,7 +2,14 @@
 
 ## Unreleased
 
-_(nothing yet)_
+- **A tag named like the base branch no longer kills the run.** The bridge picked the worktree's
+  start point with a short ref (`dev`, `main`, `origin/dev`, …). This repository also has a tag
+  `dev`, so `git worktree add` answered `warning: refname 'dev' is ambiguous` and
+  `fatal: ambiguous object name: 'dev'`, and the review died with *I cannot start this review*
+  before the agent ever ran. The candidates are now fully qualified (`refs/heads/dev`,
+  `refs/remotes/origin/dev`, …) and peeled to a commit, which also removes the silent variant: a
+  successful resolution that picked the tag's commit instead of the branch tip. A regression test
+  creates a tag with the branch's name and asserts the worktree starts at the branch tip.
 
 ## 0.21.0 — 2026-10-30
 

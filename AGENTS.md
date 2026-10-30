@@ -214,6 +214,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   and the Windows app can see the same repo through different roots. Resolve keys under
   `REDLINE_AGENT_REPO_ROOT`, canonicalize and refuse escapes/missing paths — a silent fallback to
   the default repo is worse than a visible error.
+- **A branch name is not a ref name.** The bridge chose the worktree's start point with a short
+  ref (`dev`, `main`, `origin/dev`, …). This repository also carries a tag `dev`, so git answered
+  `warning: refname 'dev' is ambiguous` and then `fatal: ambiguous object name: 'dev'`, and the
+  review never started (*I cannot start this review*). The same lookup also just **picks the tag**
+  when it succeeds, so a feature can silently start from the wrong commit. Resolve bases by full
+  refname (`refs/heads/dev`, `refs/remotes/origin/dev`) and peel to `^{commit}`; keep the short
+  name only where git demands a branch name (`worktree add <path> <branch>`). Tags are not
+  branches: a stray `dev` tag in a repo must never change where work starts.
 - **The OpenCode project API is experimental.** `/api/project` is useful for display names and
   active projects, but discovery must still scan the repo root for `.git`; dedupe the same repo
   seen through two mounts (`/mnt/user/...` and `/mnt/c/...`).

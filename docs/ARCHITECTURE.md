@@ -121,6 +121,10 @@ workers (default 4), each with its own worktree under
 `<repo_root>/.redline-worktrees/<repo>-<hash>/<branch>-<hash>`, and running heartbeats every
 `lease/3`. A resolved round releases the claim and removes a clean worktree; a dirty one is left
 for inspection. The OpenCode server must see the worktree path just like the repository itself.
+The feature branch starts from `refs/heads/dev`, then `refs/heads/main`, then their `origin/`
+twins, and finally `HEAD`; the candidates are **fully qualified refs**, because a short name such
+as `dev` becomes ambiguous as soon as a tag of that name exists (and git then either refuses it or
+silently branches off the tag).
 
 ## HTTP server
 

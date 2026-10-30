@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **One New review button, in the rail, always accent blue.** The dashboard put it in the header
+  as a green (`primary`) button while the editor put it at the top of the left rail in blue; the
+  primary action moved and changed meaning on navigation. The dashboard now uses the same
+  `.btn.accent` rail button as the editor, and the header keeps only icon actions. The e2e asserts
+  it is inside `.rail`, absent from `.header-actions`, and that its computed background matches
+  `.btn.accent` on both pages.
 - **The session rail is one panel on every page.** The dashboard rendered the rail at the CSS
   default 272 px and had no divider, while the editor restored `redline:railWidth` — switching
   from `/` to a review jumped the whole layout sideways. The divider and the shared

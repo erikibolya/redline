@@ -68,7 +68,9 @@ inside changes width (`?` is narrower than `☀`), the button must not.
 
 ## Left rail — sessions as folders
 
-- **+ New review** at the top (drop a screenshot anywhere in the window also works).
+- **+ New review** at the top (drop a screenshot anywhere in the window also works). It is the
+  same accent-blue button in the same place on the dashboard and in a review; the header carries
+  icons only, so the primary action never moves or changes colour between pages.
 - Search field (title, note, id).
 - Filter chips with counts: `All` · `Active` (default) · `Open` · `Submitted` · `Done`. `All`
   keeps finished sessions visible; `Active` hides `resolved`. The old `Mine` chip is gone.

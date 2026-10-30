@@ -162,6 +162,26 @@ const main = async () => {
   }));
   check("editor booted with an image", true, `scale ${view.scale.toFixed(3)}`);
 
+  // The primary action lives in the rail on both pages, not in the header of one of them.
+  const editorNewReview = await page.evaluate(() => {
+    const button = document.querySelector("#new-review");
+    const probe = document.createElement("button");
+    probe.className = "btn accent";
+    document.body.appendChild(probe);
+    const accent = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return {
+      inRail: Boolean(button?.closest(".rail")),
+      inHeader: Boolean(button?.closest(".header-actions")),
+      background: button ? getComputedStyle(button).backgroundColor : "",
+      accent,
+    };
+  });
+  check("editor new review is the same blue rail button",
+    editorNewReview.inRail && !editorNewReview.inHeader
+      && editorNewReview.background === editorNewReview.accent,
+    JSON.stringify(editorNewReview));
+
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
   const chrome = await page.evaluate(() => {
     const header = document.querySelector(".header");
@@ -1599,6 +1619,28 @@ const main = async () => {
     decidedIds.length > 0 && galleryState.ids.every((id) => pendingIds.includes(id))
       && !galleryState.ids.some((id) => decidedIds.includes(id)),
     JSON.stringify({ cards: galleryState.ids.length, pending: pendingIds.length, decided: decidedIds.length }));
+
+  // One primary action, one place: the left rail, in the accent blue — not a green header button
+  // that moves to the rail as soon as a review is open.
+  const newReview = await page.evaluate(() => {
+    const button = document.querySelector("#new-review");
+    const probe = document.createElement("button");
+    probe.className = "btn accent";
+    document.body.appendChild(probe);
+    const accent = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return {
+      inRail: Boolean(button?.closest(".rail")),
+      inHeader: Boolean(button?.closest(".header-actions")),
+      classes: button?.className || "",
+      background: button ? getComputedStyle(button).backgroundColor : "",
+      accent,
+    };
+  });
+  check("dashboard new review is the blue button in the left rail",
+    newReview.inRail && !newReview.inHeader && newReview.classes.includes("accent")
+      && newReview.background === newReview.accent,
+    JSON.stringify(newReview));
 
   await page.click("#new-review");
   await page.waitForFunction(

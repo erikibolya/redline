@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.0 — 2026-10-30
 
 - **A locked canvas also freezes the view.** While a submitted review waits for the agent, the
   wheel, zoom buttons, keyboard zoom and pan no longer move the screenshot, and a light scrim

@@ -1,8 +1,11 @@
 name: dev build
 
-# Rolling dev channel: every push to `dev` publishes a prerelease under the moving `dev` tag.
+# Rolling dev channel: every push to `dev` publishes a prerelease under the moving `dev-build`
+# tag. The tag must not share its name with the `dev` branch: git resolves the short name to the
+# tag, so `git log dev` and `git merge dev` in a clone would silently use the tag's commit, and
+# `git worktree add … dev` fails with "ambiguous object name".
 # The desktop app's "Install latest dev build…" reads
-#   https://github.com/<owner>/<repo>/releases/download/dev/latest.json
+#   https://github.com/<owner>/<repo>/releases/download/dev-build/latest.json
 # and "Revert to last stable version…" reads the normal `latest` release.
 
 on:
@@ -67,8 +70,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: desktop/app
-          tagName: dev
-          releaseName: "RedLine dev"
+          tagName: dev-build
+          releaseName: "RedLine dev build"
           releaseDraft: false
           prerelease: true
           includeUpdaterJson: false
@@ -94,7 +97,7 @@ jobs:
             throw "updater signature not found at $sigPath"
           }
           $signature = (Get-Content $sigPath -Raw).Trim()
-          $url = "https://github.com/$env:REPO/releases/download/dev/redline_${version}_x64-setup.exe"
+          $url = "https://github.com/$env:REPO/releases/download/dev-build/redline_${version}_x64-setup.exe"
           $notes = "Dev build $version from ``dev`` at ${{ github.sha }}."
           $data = @{
             version = $version
@@ -106,13 +109,13 @@ jobs:
             }
           }
           $data | ConvertTo-Json -Depth 6 | Set-Content latest.json -Encoding utf8
-          gh release upload dev latest.json --repo $env:REPO --clobber
+          gh release upload dev-build latest.json --repo $env:REPO --clobber
 
       - name: Attach the CLI and the agent
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
-          gh release upload dev
+          gh release upload dev-build
           desktop/target/release/redline.exe
           desktop/target/release/redline-agent.exe --clobber
 

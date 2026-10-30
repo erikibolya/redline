@@ -566,7 +566,7 @@ The desktop app's menu (RedLine/Help and the tray):
 | Item | Manifest | Behaviour |
 |---|---|---|
 | **Check for updates…** | `releases/latest/download/latest.json` | stable channel, upgrades only |
-| **Install latest dev build…** | `releases/download/dev/latest.json` | dev channel, upgrades only |
+| **Install latest dev build…** | `releases/download/dev-build/latest.json` | dev channel, upgrades only |
 | **Revert to last stable version…** | `releases/latest/download/latest.json` | same manifest, but the updater's `version_comparator` accepts an older version, so a downgrade actually installs |
 
 Both installers are signed with the same updater key, so the dev channel needs no extra secret.

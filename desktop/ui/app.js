@@ -180,6 +180,82 @@ async function api(path, options = {}) {
   return body;
 }
 
+/* ---------------------------------------------------------- feature confirmation */
+
+/**
+ * A native `confirm()` cannot explain what "the feature is done" means to an agent, and it
+ * looks different on every platform. This is a small `<dialog>` built on first use, shared by
+ * the editor and the sessions page. It resolves true only when the explicit action is chosen.
+ */
+function askFeature({ title, body, accept, danger = false }) {
+  return new Promise((resolve) => {
+    let dialog = $("#feature-dialog");
+    if (!dialog) {
+      document.body.insertAdjacentHTML("beforeend", `
+        <dialog class="feature-dialog" id="feature-dialog"
+                aria-labelledby="feature-dialog-title" aria-describedby="feature-dialog-body">
+          <form method="dialog" class="feature-card">
+            <h2 id="feature-dialog-title"></h2>
+            <p id="feature-dialog-body"></p>
+            <div class="feature-actions">
+              <button class="btn" value="cancel">Keep working</button>
+              <button class="btn" id="feature-accept" value="confirm"></button>
+            </div>
+          </form>
+        </dialog>`);
+      dialog = $("#feature-dialog");
+    }
+    // A second action while the dialog is open is a double click; the first decision wins.
+    if (dialog.open) {
+      resolve(false);
+      return;
+    }
+    $("#feature-dialog-title").textContent = title;
+    $("#feature-dialog-body").textContent = body;
+    const acceptButton = $("#feature-accept");
+    acceptButton.textContent = accept;
+    acceptButton.className = `btn ${danger ? "danger" : "primary"}`;
+    dialog.returnValue = "cancel";
+    dialog.onclose = () => resolve(dialog.returnValue === "confirm");
+    dialog.showModal();
+  });
+}
+
+/**
+ * Confirm, cancel or reopen a feature. Returns the server response on success and `null` when
+ * the human dismissed the dialog, so the caller can reload the rail without stealing focus.
+ */
+async function featureAction(action, id, title) {
+  const path = `/api/sessions/${encodeURIComponent(id)}`;
+  if (action === "confirm") {
+    const ok = await askFeature({
+      title: "Confirm this feature?",
+      body: `“${title}” will be marked as confirmed and closed. Your agent may now open a pull request and merge it into the integration branch.`,
+      accept: "Confirm feature",
+    });
+    if (!ok) return null;
+    return api(`${path}/confirm-feature`, { method: "POST" });
+  }
+  if (action === "cancel-feature") {
+    const ok = await askFeature({
+      title: "Cancel this feature?",
+      body: `“${title}” will be marked as cancelled. Nothing will be merged; the screenshot and annotations stay in Done and you can reopen it later.`,
+      accept: "Cancel feature",
+      danger: true,
+    });
+    if (!ok) return null;
+    return api(`${path}/cancel-feature`, { method: "POST" });
+  }
+  if (action === "reopen") {
+    return api(`${path}/reopen`, { method: "POST" });
+  }
+  return null;
+}
+
+const featureState = (session) => session.feature_state
+  || (session.feature_confirmed_at ? "confirmed"
+    : session.feature_cancelled_at ? "cancelled" : "pending");
+
 const unfiltered = (query) => !query;
 
 /* ------------------------------------------------------------------ theme */
@@ -255,8 +331,8 @@ class Rail {
       });
     }
     $("#bulk-mode")?.addEventListener("click", () => this.toggleBulk());
-    $("#bulk-cancel")?.addEventListener("click", () => this.exitBulk());
-    $("#bulk-resolve")?.addEventListener("click", () => this.applyBulk("resolve"));
+    $("#bulk-close")?.addEventListener("click", () => this.exitBulk());
+    $("#bulk-confirm")?.addEventListener("click", () => this.applyBulk("confirm"));
     $("#bulk-delete")?.addEventListener("click", () => this.applyBulk("delete"));
     addEventListener("keydown", (event) => {
       if (event.key === "Escape" && this.bulkMode) this.exitBulk();
@@ -428,22 +504,32 @@ class Rail {
         const annotations = session.annotation_count || 0;
         const fresh = seen.isNew(session);
         const working = agentWorking(session);
+        const feature = featureState(session);
+        const decided = feature !== "pending";
         // An agent currently running outranks "new" and the annotation count: it is the one
-        // state that changes a few seconds later without the human touching anything.
+        // state that changes a few seconds later without the human touching anything. A feature
+        // decision is the human's answer to the session, so it outranks the unread marker.
         const badge = working
           ? `<span class="badge work" title="The agent is working on this review">
             <span class="spin" aria-hidden="true"></span>working</span>`
-          : fresh
-            ? `<span class="badge new" title="new since you last looked">new</span>`
-            : annotations
-              ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
-              : "";
-        const done = session.status === "resolved";
+          : feature === "confirmed"
+            ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
+            : feature === "cancelled"
+              ? `<span class="badge cancelled" title="Feature cancelled by the human">cancelled</span>`
+              : fresh
+                ? `<span class="badge new" title="new since you last looked">new</span>`
+                : annotations
+                  ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
+                  : "";
         parts.push(`
-          <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${this.bulkMode ? " bulk" : ""}"
+          <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${
+            decided ? ` feature-${feature}` : ""
+          }${this.bulkMode ? " bulk" : ""}"
                role="button" tabindex="0"
                data-id="${escapeHtml(session.id)}"
-               aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}"
+               aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}${
+                 decided ? `, feature ${feature}` : ""
+               }"
                aria-current="${session.id === this.selectedId}"
                ${this.bulkMode ? `aria-pressed="${this.selection.has(session.id)}"` : ""}>
             ${this.bulkMode
@@ -456,9 +542,10 @@ class Rail {
               }</div>
             </div>
             <span class="row-actions">
-              <button class="act" data-act="${done ? "reopen" : "resolve"}"
-                      title="${done ? "Reopen" : "Mark done"}">${done ? "↺" : "✓"}</button>
-              <button class="act" data-act="delete" title="Delete">✕</button>
+              ${decided
+                ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
+                : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>
+                   <button class="act" data-act="cancel-feature" title="Cancel feature">✕</button>`}
             </span>
             ${badge}
           </div>`);
@@ -562,6 +649,14 @@ class Editor {
       onAction: (action, id) => this.railAction(action, id),
       onPurge: (ids) => this.purgeSessions(ids),
       onBulk: async (action, ids) => {
+        if (action === "confirm") {
+          const ok = await askFeature({
+            title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
+            body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
+            accept: "Confirm features",
+          });
+          if (!ok) return;
+        }
         if (action === "delete"
           && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
         try {
@@ -569,7 +664,7 @@ class Editor {
             if (action === "delete") {
               await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
             } else {
-              await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+              await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, { method: "POST" });
             }
           }
         } catch (error) {
@@ -577,7 +672,19 @@ class Editor {
         }
         this.rail.exitBulk();
         await this.rail.load();
-        if (action === "delete" && ids.includes(this.sessionId)) location.href = "/";
+        if (action === "delete" && ids.includes(this.sessionId)) {
+          location.href = "/";
+          return;
+        }
+        if (ids.includes(this.sessionId)) {
+          try {
+            const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}`);
+            this.meta = data.meta;
+            this.renderHeader();
+          } catch {
+            // The rail already reloaded; the header catches up on the next poll.
+          }
+        }
       },
     });
     this.bindChrome();
@@ -594,21 +701,15 @@ class Editor {
     await this.load(this.sessionId);
   }
 
-  /** Mark done / reopen / delete, straight from the rail. */
+  /** Confirm, cancel or reopen a feature, straight from the rail. */
   async railAction(action, id) {
     try {
-      if (action === "resolve") {
-        await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
-      } else if (action === "reopen") {
-        await api(`/api/sessions/${encodeURIComponent(id)}/reopen`, { method: "POST" });
-      } else if (action === "delete") {
-        const title = this.rail.sessions.find((s) => s.id === id)?.title || id;
-        if (!confirm(`Delete “${title}”? The screenshot and annotations are removed.`)) return;
-        await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-        if (id === this.sessionId) {
-          location.href = "/";
-          return;
-        }
+      const title = this.rail.sessions.find((s) => s.id === id)?.title || id;
+      const result = await featureAction(action, id, title);
+      if (!result) return;
+      if (id === this.sessionId && result.meta) {
+        this.meta = result.meta;
+        this.renderHeader();
       }
       await this.rail.load();
     } catch (error) {
@@ -715,8 +816,14 @@ class Editor {
       this.meta.url || null].filter(Boolean);
     $("#session-sub").textContent = bits.join(" · ");
     const status = $("#session-status");
-    status.textContent = this.meta.status;
-    status.className = `pill ${this.meta.status}`;
+    const feature = featureState(this.meta);
+    status.textContent = feature === "pending" ? this.meta.status : feature;
+    status.className = `pill ${feature === "pending" ? this.meta.status : feature}`;
+    status.title = feature === "confirmed"
+      ? "Feature confirmed — the agent may open a pull request"
+      : feature === "cancelled"
+        ? "Feature cancelled — nothing will be merged"
+        : "";
     const waiting = this.meta.status === "submitted";
     const button = $("#submit");
     if (waiting) {
@@ -2718,7 +2825,9 @@ function renderGallery(rail) {
       <img src="/sessions/${encodeURIComponent(session.id)}/image" loading="lazy" alt="" />
       <div class="card-body">
         <b>${escapeHtml(session.title || session.id)}</b>
-        <span>${escapeHtml(project)} · ${escapeHtml(relativeTime(session.submitted_at || session.created_at))} · ${escapeHtml(session.status)}</span>
+        <span>${escapeHtml(project)} · ${escapeHtml(relativeTime(session.submitted_at || session.created_at))} · ${escapeHtml(
+          featureState(session) === "pending" ? session.status : featureState(session),
+        )}</span>
       </div>
     </a>`;
   }).join("");
@@ -2733,15 +2842,9 @@ async function bootList() {
     onSelect: (id) => { location.href = `/s/${encodeURIComponent(id)}`; },
     onAction: async (action, id) => {
       try {
-        if (action === "resolve") {
-          await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
-        } else if (action === "reopen") {
-          await api(`/api/sessions/${encodeURIComponent(id)}/reopen`, { method: "POST" });
-        } else if (action === "delete") {
-          if (!confirm("Delete this session? The screenshot and annotations are removed.")) return;
-          await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
-        }
-        await rail.load();
+        const title = rail.sessions.find((s) => s.id === id)?.title || id;
+        const result = await featureAction(action, id, title);
+        if (result) await rail.load();
       } catch (error) {
         alert(`Could not ${action}: ${error.message}`);
       }
@@ -2753,6 +2856,14 @@ async function bootList() {
       await rail.load();
     },
     onBulk: async (action, ids) => {
+      if (action === "confirm") {
+        const ok = await askFeature({
+          title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
+          body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
+          accept: "Confirm features",
+        });
+        if (!ok) return;
+      }
       if (action === "delete"
         && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
       try {
@@ -2760,7 +2871,7 @@ async function bootList() {
           if (action === "delete") {
             await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
           } else {
-            await api(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+            await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, { method: "POST" });
           }
         }
       } catch (error) {

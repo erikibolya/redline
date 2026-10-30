@@ -154,6 +154,7 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
 
     let feedback = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
     assert_eq!(feedback["status"], "submitted");
+    assert_eq!(feedback["feature_state"], "pending");
     assert_eq!(feedback["annotations"][0]["text"], "Tighten this");
     assert!(feedback["markdown"]
         .as_str()
@@ -163,6 +164,14 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
         feedback["annotated_png"],
         format!("redline://session/{id}/annotated.png")
     );
+
+    // The human's feature decision reaches the agent through the same payload.
+    store.confirm_feature(&id).unwrap();
+    let confirmed = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
+    assert_eq!(confirmed["status"], "resolved");
+    assert_eq!(confirmed["feature_state"], "confirmed");
+    assert!(confirmed["feature_confirmed_at"].is_string());
+    assert_eq!(confirmed["feature_cancelled_at"], Value::Null);
 
     // Resources let an image-capable agent look at the redlines.
     let context = McpContext {

@@ -127,13 +127,32 @@ and `dayLabel` were already local; the conversation timeline, agent activity lin
 round labels now are too (history folder names are flattened UTC stamps, `stampTime` un-flattens
 and converts them).
 
+## Feature confirmation (v0.21)
+
+Each session is one feature. The rail's row actions carry the human's decision; agents map
+`confirmed` to their own workflow (open a PR, merge into the integration branch) and treat
+`cancelled` as "do not ship".
+
+- **✓ Confirm feature** opens a dialog that explains the consequence and only then calls
+  `POST /api/sessions/<id>/confirm-feature`. The session becomes `resolved` and keeps
+  `feature_confirmed_at`; the rail shows a green `confirmed` badge and dot, and the header pill
+  says `confirmed`.
+- **✕ Cancel feature** replaced the old delete button. It asks first and calls
+  `POST /api/sessions/<id>/cancel-feature`: the review closes with `feature_cancelled_at`, nothing
+  is merged and the screenshot/annotations stay in **Done**. Deleting data is still possible with
+  bulk **Delete** or **Delete done**.
+- **↺ Reopen** clears both feature stamps and returns the session to `open`.
+- **Bulk Select** now offers **Confirm** (one dialog for the selection), **Delete** and **Close**.
+- The decision is additive server state (`feature_confirmed_at` / `feature_cancelled_at`); a new
+  submission or agent round clears it, so a feature that gets more work is pending again.
+
 ## Touch, bulk and accessibility (unreleased)
 
 - **Touch**: `body.touch` (set from `pointer: coarse` / `maxTouchPoints`) raises every tool, chip
-  and button to at least 40 px and makes the rail's resolve/delete actions always visible — no
+  and button to at least 40 px and makes the rail's feature actions always visible — no
   hover-only affordances.
 - **Bulk**: the rail's *Select* mode turns rows into toggles (`aria-pressed`) with a bottom bar:
-  *Resolve*, *Delete*, *Cancel*; Escape exits. The actions reuse the single-session endpoints.
+  *Confirm*, *Delete*, *Close*; Escape exits. The actions reuse the single-session endpoints.
 - **Accessibility**: `:focus-visible` rings on every interactive element; `role="img"` + label on
   the canvas; `aria-label` on the composer, session rows and history rows; the conversation log is
   `aria-live="polite"`.

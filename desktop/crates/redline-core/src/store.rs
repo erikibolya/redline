@@ -616,6 +616,8 @@ impl Store {
             image_height: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
+            feature_confirmed_at: None,
+            feature_cancelled_at: None,
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
@@ -748,6 +750,9 @@ impl Store {
         meta.status = Status::Open;
         meta.submitted_at = None;
         meta.resolved_at = None;
+        // New work after a decision makes the feature pending again.
+        meta.feature_confirmed_at = None;
+        meta.feature_cancelled_at = None;
         meta.agent_state = Some("replied".to_string());
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
 
@@ -771,9 +776,11 @@ impl Store {
         meta.round_stamp = Some(round_stamp.clone());
         meta.status = Status::Submitted;
         meta.submitted_at = Some(submitted_at.clone());
-        // A fresh round has not been seen by the agent yet.
+        // A fresh round has not been seen by the agent yet, and it reopens a decided feature.
         meta.seen_by_agent_at = None;
         meta.agent_state = None;
+        meta.feature_confirmed_at = None;
+        meta.feature_cancelled_at = None;
         if let Some(prompt) = submission.note.as_deref() {
             let prompt = prompt.trim();
             if !prompt.is_empty() {
@@ -831,12 +838,43 @@ impl Store {
         Ok(meta)
     }
 
-    /// Undo `resolve`: back to the open queue.
+    /// Undo `resolve` and any feature decision: back to the open queue.
     pub fn reopen(&self, id: &str) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         meta.status = Status::Open;
         meta.resolved_at = None;
+        meta.feature_confirmed_at = None;
+        meta.feature_cancelled_at = None;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The human says the feature is complete. RedLine only records the decision and closes the
+    /// review; the agent maps `feature_state == "confirmed"` to its own workflow (open a PR,
+    /// merge it, deploy — whatever the project uses).
+    pub fn confirm_feature(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let stamp = now();
+        meta.status = Status::Resolved;
+        meta.resolved_at.get_or_insert_with(|| stamp.clone());
+        meta.feature_confirmed_at = Some(stamp);
+        meta.feature_cancelled_at = None;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The human abandons the feature. Nothing is merged and the review files are kept; the
+    /// agent can see `feature_state == "cancelled"`. `reopen` undoes it.
+    pub fn cancel_feature(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let stamp = now();
+        meta.status = Status::Resolved;
+        meta.resolved_at.get_or_insert_with(|| stamp.clone());
+        meta.feature_cancelled_at = Some(stamp);
+        meta.feature_confirmed_at = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }

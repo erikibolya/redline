@@ -76,20 +76,26 @@ Files:
 The agent turns every text note into a checklist item, uses shapes to locate the UI, fixes the
 code, and records the change. Never edit the human's annotation files.
 
-## 6. Confirm
+## 6. Confirm the feature
 
-Capture the fixed page and create a follow-up session (or resubmit in the same one if the context is
-unchanged). Use the follow-up title to distinguish it:
+Each session is one feature (v0.21+). When the human is satisfied, they click the rail's
+**✓ Confirm feature** and accept the dialog. RedLine records `feature_confirmed_at`, sets
+`status=resolved` and closes the review; it never touches git.
 
-```
-title: "Button / hover + disabled — confirmation"
-```
+The agent reads the decision as `feature_state == "confirmed"` from MCP (`get_feedback`,
+`wait_for_feedback` or `list_reviews`) and applies its own workflow. In this repository that is:
+keep the work on a feature branch, open a PR into `dev`, wait for the required checks and merge;
+the dev build is the testable result.
 
-After sign-off, remove obsolete sessions:
+- **✕ Cancel feature** closes the review without merging and keeps the screenshot/annotations.
+- **↺ Reopen** clears either decision and returns the session to the queue.
+- A new submission or agent round clears the decision, so more work makes the feature pending.
+- `resolve` only closes an agent round; it is **not** the human's feature confirmation.
+- Data deletion is separate: bulk **Delete** or **Delete done**. The ✕ row action no longer
+  deletes files.
 
-```bash
-python3 redline.py remove <id> --yes
-```
+For a fixed-state follow-up, post a new round into the same session (the old flow created a second
+session; v0.14 keeps one task per session instead).
 
 ## Au.Net component reviews
 

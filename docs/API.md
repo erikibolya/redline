@@ -24,6 +24,9 @@ Editor page (HTML). The page reads the id from the path and calls the JSON API b
       "url": "http://localhost:5016/button",
       "note": "Check hover",
       "status": "open",
+      "feature_state": "pending",
+      "feature_confirmed_at": null,
+      "feature_cancelled_at": null,
       "created_at": "2026-10-28T11:11:13+00:00",
       "submitted_at": null,
       "image": "screenshot.png"
@@ -32,7 +35,9 @@ Editor page (HTML). The page reads the id from the path and calls the JSON API b
 }
 ```
 
-Newest first by `created_at`.
+Newest first by `created_at`. `feature_state` is derived: `confirmed` when
+`feature_confirmed_at` is set, `cancelled` when `feature_cancelled_at` is set, otherwise
+`pending`.
 
 ### `GET /api/sessions/<id>`
 
@@ -50,6 +55,25 @@ Newest first by `created_at`.
 ```
 
 `annotations` is the last submitted payload (or `{session, annotations: []}` before submission).
+The `meta` object carries `feature_confirmed_at` / `feature_cancelled_at` when the human decided.
+
+### `POST /api/sessions/<id>/confirm-feature`
+
+The human says the feature is complete. Sets `status=resolved`, `resolved_at` (if unset) and
+`feature_confirmed_at`, clears `feature_cancelled_at`. RedLine does not touch git; agents read
+`feature_state == "confirmed"` and apply their own workflow (for this repo: open a PR into `dev`).
+
+### `POST /api/sessions/<id>/cancel-feature`
+
+The human abandons the feature. Sets `status=resolved`, `resolved_at` (if unset) and
+`feature_cancelled_at`, clears `feature_confirmed_at`. Nothing is merged and the review files are
+kept.
+
+### `POST /api/sessions/<id>/reopen`
+
+Undo: `status=open`, clears `resolved_at`, `feature_confirmed_at` and `feature_cancelled_at`.
+A new submission or agent round also clears both feature stamps, so more work makes the feature
+`pending` again.
 
 ### `GET /sessions/<id>/image`
 
@@ -208,8 +232,12 @@ See `docs/ARCHITECTURE.md` § Storage schema. Fields:
 | `title` | Human label (component / state). |
 | `url` | Page under review. |
 | `note` | Agent's request to the human. |
-| `status` | `open` or `submitted`. |
+| `status` | `open`, `submitted` or `resolved`. |
 | `created_at` / `submitted_at` | UTC ISO-8601 timestamps. |
+| `resolved_at` | Present after resolve/confirm/cancel. |
+| `feature_confirmed_at` | The human confirmed the feature; agents map this to their own workflow. |
+| `feature_cancelled_at` | The human cancelled the feature; nothing should be merged. |
+| `feature_state` | Derived in `GET /api/sessions`: `pending`, `confirmed` or `cancelled`. |
 | `image` | Screenshot filename inside the session. |
 | `image_width` / `image_height` | Present after submission; canvas dimensions. |
 

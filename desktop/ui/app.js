@@ -217,10 +217,17 @@ function askFeature({ title, body, actions }) {
       document.body.insertAdjacentHTML("beforeend", `
         <dialog class="feature-dialog" id="feature-dialog"
                 aria-labelledby="feature-dialog-title" aria-describedby="feature-dialog-body">
-          <form method="dialog" class="feature-card">
-            <h2 id="feature-dialog-title"></h2>
-            <p id="feature-dialog-body"></p>
-            <div class="feature-actions" id="feature-actions"></div>
+          <form method="dialog" class="feature-card dialog-frame">
+            <div class="dialog-head">
+              <div><h2 id="feature-dialog-title"></h2></div>
+              <button type="submit" value="keep" class="btn icon dialog-close" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            <div class="dialog-body stack">
+              <p id="feature-dialog-body"></p>
+            </div>
+            <div class="dialog-foot feature-actions" id="feature-actions"></div>
           </form>
         </dialog>`);
       dialog = $("#feature-dialog");
@@ -263,12 +270,19 @@ function askBranch(current, submitted = false) {
     if (!dialog) {
       document.body.insertAdjacentHTML("beforeend", `
         <dialog class="feature-dialog" id="branch-dialog" aria-labelledby="branch-dialog-title">
-          <form method="dialog" class="feature-card">
-            <h2 id="branch-dialog-title">Feature branch</h2>
-            <p id="branch-dialog-body"></p>
-            <input id="branch-input" type="text" spellcheck="false" autocomplete="off"
-                   aria-label="Feature branch" />
-            <div class="feature-actions" id="branch-actions"></div>
+          <form method="dialog" class="feature-card dialog-frame">
+            <div class="dialog-head">
+              <div><h2 id="branch-dialog-title">Feature branch</h2></div>
+              <button type="submit" value="keep" class="btn icon dialog-close" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            <div class="dialog-body stack">
+              <p id="branch-dialog-body"></p>
+              <input id="branch-input" type="text" spellcheck="false" autocomplete="off"
+                     aria-label="Feature branch" />
+            </div>
+            <div class="dialog-foot feature-actions" id="branch-actions"></div>
           </form>
         </dialog>`);
       dialog = $("#branch-dialog");
@@ -381,37 +395,45 @@ const AgentSettings = {
     document.body.insertAdjacentHTML("beforeend", `
       <dialog class="settings-dialog" id="agent-settings-dialog"
               aria-labelledby="agent-settings-title">
-        <form class="settings-form" id="agent-settings-form">
-          <div class="settings-head">
-            <h2 id="agent-settings-title">Agent settings</h2>
-            <p>How many reviews may run at the same time. One feature branch always has one owner;
-              waiting for the human does not take a run slot.</p>
+        <form class="settings-form dialog-frame" id="agent-settings-form">
+          <div class="dialog-head settings-head">
+            <div>
+              <h2 id="agent-settings-title">Agent settings</h2>
+              <p>How many reviews may run at the same time. One feature branch always has one owner;
+                waiting for the human does not take a run slot.</p>
+            </div>
+            <button type="button" class="btn icon dialog-close" id="agent-settings-close" aria-label="Close">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
           </div>
-          <div class="settings-row">
-            <label for="agent-max-parallel">Max concurrent runs</label>
-            <input type="number" id="agent-max-parallel" min="1" max="32" required />
+          <div class="dialog-body settings-body">
+            <div class="settings-row">
+              <label for="agent-max-parallel">Max concurrent runs</label>
+              <input type="number" id="agent-max-parallel" min="1" max="32" required />
+            </div>
+            <div class="settings-row">
+              <label for="agent-project-max-parallel">Default per-project limit</label>
+              <input type="number" id="agent-project-max-parallel" min="1" max="32" required />
+            </div>
+            <div class="settings-row">
+              <label for="agent-lease-seconds">Claim lease (seconds)</label>
+              <input type="number" id="agent-lease-seconds" min="30" max="3600" required />
+            </div>
+            <fieldset class="settings-projects">
+              <legend>Per project</legend>
+              <div id="agent-project-list"></div>
+            </fieldset>
+            <div class="settings-status" id="agent-settings-status"></div>
+            <p class="settings-error" id="agent-settings-error" hidden></p>
           </div>
-          <div class="settings-row">
-            <label for="agent-project-max-parallel">Default per-project limit</label>
-            <input type="number" id="agent-project-max-parallel" min="1" max="32" required />
-          </div>
-          <div class="settings-row">
-            <label for="agent-lease-seconds">Claim lease (seconds)</label>
-            <input type="number" id="agent-lease-seconds" min="30" max="3600" required />
-          </div>
-          <fieldset class="settings-projects">
-            <legend>Per project</legend>
-            <div id="agent-project-list"></div>
-          </fieldset>
-          <div class="settings-status" id="agent-settings-status"></div>
-          <p class="settings-error" id="agent-settings-error" hidden></p>
-          <div class="settings-actions">
+          <div class="dialog-foot settings-actions">
             <button type="button" class="btn" id="agent-settings-cancel">Cancel</button>
             <button type="submit" class="btn primary" id="agent-settings-save">Save</button>
           </div>
         </form>
       </dialog>`);
     this.dialog = $("#agent-settings-dialog");
+    $("#agent-settings-close").addEventListener("click", () => this.dialog.close());
     $("#agent-settings-cancel").addEventListener("click", () => this.dialog.close());
     $("#agent-settings-form").addEventListener("submit", (event) => {
       event.preventDefault();
@@ -3067,6 +3089,7 @@ const NewReview = {
       take(event.dataTransfer.files[0]);
     });
     $("#new-cancel").addEventListener("click", () => NewReview.close());
+    $("#new-close")?.addEventListener("click", () => NewReview.close());
     $("#f-title")?.addEventListener("input", () => NewReview.suggestBranch());
     $("#f-project")?.addEventListener("change", () => NewReview.syncProjectInput());
     $("#new-form").addEventListener("submit", async (event) => {

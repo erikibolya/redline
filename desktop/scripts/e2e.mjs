@@ -348,6 +348,75 @@ const main = async () => {
   // ---- agent concurrency settings are server-side and editable from the UI
   await page.click("[data-agent-settings]");
   await page.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+
+  // Every popup is a fixed frame: X top-right, head and foot pinned, only the middle scrolls.
+  const settingsShell = await page.evaluate(() => {
+    const dialog = document.querySelector("#agent-settings-dialog");
+    const head = dialog.querySelector(".dialog-head");
+    const body = dialog.querySelector(".dialog-body");
+    const foot = dialog.querySelector(".dialog-foot");
+    const close = dialog.querySelector("#agent-settings-close");
+    const dialogBox = dialog.getBoundingClientRect();
+    const closeBox = close.getBoundingClientRect();
+    return {
+      head: Boolean(head), body: Boolean(body), foot: Boolean(foot),
+      topRight: closeBox.left > dialogBox.left + dialogBox.width / 2
+        && closeBox.top < dialogBox.top + 60,
+      bodyScrolls: getComputedStyle(body).overflowY === "auto",
+      footButtons: foot.querySelectorAll("button").length,
+    };
+  });
+  check("settings dialog has a top-right X, a fixed head and a fixed foot",
+    settingsShell.head && settingsShell.body && settingsShell.foot
+      && settingsShell.topRight && settingsShell.bodyScrolls && settingsShell.footButtons === 2,
+    JSON.stringify(settingsShell));
+
+  await page.click("#agent-settings-close");
+  await page.waitForFunction(
+    () => !document.querySelector("#agent-settings-dialog")?.open,
+    { timeout: 5000 },
+  );
+  check("settings close X closes without saving", true);
+
+  // A short viewport on its own page: resizing the editor page would re-fit the canvas under the
+  // coordinate tests that follow.
+  const scrollPage = await browser.newPage();
+  await scrollPage.setViewport({ width: 1440, height: 380 });
+  await scrollPage.goto(`${BASE}/s/${id}`, { waitUntil: "networkidle2" });
+  await scrollPage.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
+  await scrollPage.click("[data-agent-settings]");
+  await scrollPage.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+  const settingsScroll = await scrollPage.evaluate(() => {
+    const dialog = document.querySelector("#agent-settings-dialog");
+    const head = dialog.querySelector(".dialog-head");
+    const body = dialog.querySelector(".dialog-body");
+    const foot = dialog.querySelector(".dialog-foot");
+    const before = {
+      headTop: Math.round(head.getBoundingClientRect().top),
+      footBottom: Math.round(foot.getBoundingClientRect().bottom),
+      clientHeight: body.clientHeight,
+      scrollHeight: body.scrollHeight,
+      scrollTop: body.scrollTop,
+    };
+    body.scrollTop = body.scrollHeight;
+    const after = {
+      headTop: Math.round(head.getBoundingClientRect().top),
+      footBottom: Math.round(foot.getBoundingClientRect().bottom),
+      scrollTop: body.scrollTop,
+    };
+    return { before, after };
+  });
+  check("settings dialog keeps head and foot fixed while only its body scrolls",
+    settingsScroll.before.scrollHeight > settingsScroll.before.clientHeight
+      && settingsScroll.after.scrollTop > 0
+      && settingsScroll.before.headTop === settingsScroll.after.headTop
+      && settingsScroll.before.footBottom === settingsScroll.after.footBottom,
+    JSON.stringify(settingsScroll));
+  await scrollPage.close();
+
+  await page.click("[data-agent-settings]");
+  await page.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+
   const settingsBefore = await page.evaluate(() => ({
     global: document.querySelector("#agent-max-parallel").value,
     project: document.querySelector("#agent-project-max-parallel").value,
@@ -958,6 +1027,23 @@ const main = async () => {
       && confirmDialog.body.includes("pull request")
       && confirmDialog.primary && confirmDialog.count === 2,
     JSON.stringify(confirmDialog));
+  const featureClose = await page.evaluate(() => {
+    const button = document.querySelector("#feature-dialog .dialog-close");
+    return Boolean(button) && button.getAttribute("aria-label") === "Close";
+  });
+  check("feature dialog has a close X", featureClose);
+  await page.click("#feature-dialog .dialog-close");
+  await page.waitForFunction(
+    () => !document.querySelector("#feature-dialog")?.open,
+    { timeout: 5000 },
+  );
+  const afterFeatureClose = await api(`/api/sessions/${id}`);
+  check("closing the feature dialog leaves the feature pending",
+    !afterFeatureClose.meta.feature_confirmed_at,
+    String(afterFeatureClose.meta.feature_confirmed_at || "none"));
+  await page.hover(row);
+  await page.click(`${row} [data-act="confirm"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   await page.click('#feature-actions [data-action="confirm"]');
   let status = "";
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -1642,6 +1728,39 @@ const main = async () => {
       && newReview.background === newReview.accent,
     JSON.stringify(newReview));
 
+  await page.click("#new-review");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
+  const newShell = await page.evaluate(() => {
+    const form = document.querySelector("#new-form");
+    return {
+      head: Boolean(form.querySelector(".dialog-head")),
+      body: Boolean(form.querySelector(".dialog-body")),
+      foot: Boolean(form.querySelector(".dialog-foot")),
+      close: Boolean(form.querySelector("#new-close")),
+      bodyScrolls: getComputedStyle(form.querySelector(".dialog-body")).overflowY === "auto",
+    };
+  });
+  check("new review dialog uses the fixed shell and a close X",
+    newShell.head && newShell.body && newShell.foot && newShell.close && newShell.bodyScrolls,
+    JSON.stringify(newShell));
+  await page.click("#new-close");
+  await page.waitForFunction(() => document.querySelector("#overlay").hidden, { timeout: 5000 });
+  check("new review close X closes the dialog", true);
+  await page.click("[data-help-open]");
+  await page.waitForFunction(() => !document.querySelector("#help").hidden, { timeout: 5000 });
+  const helpShell = await page.evaluate(() => ({
+    close: Boolean(document.querySelector("#help .dialog-close")),
+    head: Boolean(document.querySelector("#help .dialog-head")),
+    foot: Boolean(document.querySelector("#help .dialog-foot")),
+  }));
+  check("help dialog uses the fixed shell and a close X",
+    helpShell.close && helpShell.head && helpShell.foot, JSON.stringify(helpShell));
+  await page.click("#help .dialog-close");
+  await page.waitForFunction(() => document.querySelector("#help").hidden, { timeout: 5000 });
+  check("help close X closes the dialog", true);
   await page.click("#new-review");
   await page.waitForFunction(
     () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),

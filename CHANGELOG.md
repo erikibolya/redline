@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Every popup is a fixed frame with a close X.** The Agent settings form scrolled as one block:
+  the title and the Save/Cancel buttons left the screen when the project list grew, and there was
+  no way to dismiss it except Cancel. The settings, New review, Keyboard and feature/branch
+  dialogs now share `.dialog-frame` / `.dialog-head` / `.dialog-body` / `.dialog-foot`: a 32 px
+  X in the top-right, an immovable title row, an immovable action row and `overflow-y: auto` only
+  on the middle. The e2e opens settings at 380 px height, scrolls the body and asserts the
+  head/foot geometry is unchanged, then clicks the X on settings, New review, help and the
+  feature decision dialog.
 - **One New review button, in the rail, always accent blue.** The dashboard put it in the header
   as a green (`primary`) button while the editor put it at the top of the left rail in blue; the
   primary action moved and changed meaning on navigation. The dashboard now uses the same

@@ -196,6 +196,15 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   branch lock. One branch has one owner. The bridge runs up to four claim workers
   (`REDLINE_AGENT_WORKERS`), each in its own git worktree; the server enforces the limits.
 
+## Dialog frame (unreleased)
+
+Every popup is one shell: a fixed header with the title and a 32 × 32 px **X** at its right
+edge, a fixed footer with the action buttons, and only the middle body scrolls (`.dialog-head`,
+`.dialog-body`, `.dialog-foot` inside `.dialog-frame`). This applies to **Agent settings**, **New
+review**, **Keyboard** and the feature/branch decision dialogs. The e2e opens settings in a
+380 px-high window, scrolls the body past the project list, and asserts the head/foot rectangles
+do not move; it also clicks every close X.
+
 ## Touch, bulk and accessibility (unreleased)
 
 - **Touch**: `body.touch` (set from `pointer: coarse` / `maxTouchPoints`) raises every tool, chip

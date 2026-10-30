@@ -179,34 +179,43 @@ try {
 </div>
 
 <div class="overlay" id="overlay" hidden>
-  <form class="modal" id="new-form">
-    <h2>New review</h2>
-    <p class="hint">Drop a screenshot, paste it with <b>Ctrl+V</b>, or click to choose a file. Then say what to look at.</p>
-    <div class="drop" id="drop">
-      <img class="drop-preview" id="drop-preview" alt="Selected screenshot" hidden />
-      <span class="drop-label" id="drop-label">Drop an image, or click to browse</span>
+  <form class="modal dialog-frame" id="new-form" role="dialog" aria-modal="true" aria-labelledby="new-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="new-title">New review</h2>
+        <p class="hint">Drop a screenshot, paste it with <b>Ctrl+V</b>, or click to choose a file. Then say what to look at.</p>
+      </div>
+      <button type="button" class="btn icon dialog-close" id="new-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
     </div>
-    <input type="file" id="file" accept="image/*" hidden />
-    <label for="f-title">Title</label>
-    <input id="f-title" type="text" placeholder="Button / default" />
-    <label for="f-project">Project</label>
-    <select id="f-project" required aria-describedby="project-hint">
-      <option value="" disabled selected>Choose a project…</option>
-      <option value="inbox">Inbox</option>
-    </select>
-    <input id="f-project-new" type="text" placeholder="New project name" aria-label="New project name" hidden />
-    <p class="field-hint" id="project-hint">Repositories are synced from the agent. <b>+ New project…</b> creates a label without a repo.</p>
-    <label for="f-branch">Feature branch (optional)</label>
-    <input id="f-branch" type="text" placeholder="feat/my-feature" spellcheck="false" autocomplete="off" aria-describedby="branch-hint" />
-    <p class="field-hint" id="branch-hint">The branch the agent works in and pushes. Empty means RedLine names it <b>feat/&lt;title&gt;</b>.</p>
-    <label for="f-url">Page URL (optional)</label>
-    <input id="f-url" type="text" placeholder="http://localhost:5016/button" spellcheck="false" aria-describedby="url-hint" />
-    <p class="field-hint" id="url-hint">The page in the screenshot. If you add no image, RedLine opens this URL and captures it.</p>
-    <label for="f-note">What should the agent check? (optional)</label>
-    <textarea id="f-note" placeholder="e.g. spacing looks off, check the hover state" aria-describedby="note-hint"></textarea>
-    <p class="field-hint" id="note-hint">This becomes the first message the agent reads.</p>
-    <div class="error" id="new-error"></div>
-    <div class="row">
+    <div class="dialog-body">
+      <div class="drop" id="drop">
+        <img class="drop-preview" id="drop-preview" alt="Selected screenshot" hidden />
+        <span class="drop-label" id="drop-label">Drop an image, or click to browse</span>
+      </div>
+      <input type="file" id="file" accept="image/*" hidden />
+      <label for="f-title">Title</label>
+      <input id="f-title" type="text" placeholder="Button / default" />
+      <label for="f-project">Project</label>
+      <select id="f-project" required aria-describedby="project-hint">
+        <option value="" disabled selected>Choose a project…</option>
+        <option value="inbox">Inbox</option>
+      </select>
+      <input id="f-project-new" type="text" placeholder="New project name" aria-label="New project name" hidden />
+      <p class="field-hint" id="project-hint">Repositories are synced from the agent. <b>+ New project…</b> creates a label without a repo.</p>
+      <label for="f-branch">Feature branch (optional)</label>
+      <input id="f-branch" type="text" placeholder="feat/my-feature" spellcheck="false" autocomplete="off" aria-describedby="branch-hint" />
+      <p class="field-hint" id="branch-hint">The branch the agent works in and pushes. Empty means RedLine names it <b>feat/&lt;title&gt;</b>.</p>
+      <label for="f-url">Page URL (optional)</label>
+      <input id="f-url" type="text" placeholder="http://localhost:5016/button" spellcheck="false" aria-describedby="url-hint" />
+      <p class="field-hint" id="url-hint">The page in the screenshot. If you add no image, RedLine opens this URL and captures it.</p>
+      <label for="f-note">What should the agent check? (optional)</label>
+      <textarea id="f-note" placeholder="e.g. spacing looks off, check the hover state" aria-describedby="note-hint"></textarea>
+      <p class="field-hint" id="note-hint">This becomes the first message the agent reads.</p>
+      <div class="error" id="new-error"></div>
+    </div>
+    <div class="dialog-foot">
       <button type="button" class="btn" id="new-cancel">Cancel</button>
       <button type="submit" class="btn accent" id="new-submit">Create review</button>
     </div>
@@ -215,27 +224,36 @@ try {
 
 <script src="/static/app.js"></script>
 <div class="overlay" id="help" hidden>
-  <div class="modal" role="dialog" aria-label="Keyboard shortcuts">
-    <h2>Keyboard</h2>
-    <p class="hint">Everything here also has a button — these are the fast paths.</p>
-    <div class="help-grid">
-      <kbd>V</kbd><span>Select, drag to move, write the note in the panel</span>
-      <kbd>R</kbd><span>Rectangle</span>
-      <kbd>A</kbd><span>Arrow</span>
-      <kbd>P</kbd><span>Pen</span>
-      <kbd>E</kbd><span>Ellipse</span>
-      <kbd>Delete</kbd><span>Remove the selected annotation</span>
-      <kbd>↑ ↓ ← →</kbd><span>Nudge 1px (Shift: 10px)</span>
-      <kbd>Ctrl Z</kbd><span>Undo</span>
-      <kbd>Ctrl ⇧ Z</kbd><span>Redo</span>
-      <kbd>Space + drag</kbd><span>Pan the image</span>
-      <kbd>Ctrl + wheel</kbd><span>Zoom at the pointer</span>
-      <kbd>0 / 1</kbd><span>Fit / actual size</span>
-      <kbd>[ / ]</kbd><span>Toggle sessions / inspector</span>
-      <kbd>Ctrl Enter</kbd><span>Submit the review</span>
-      <kbd>Esc</kbd><span>Cancel drawing or close a dialog</span>
+  <div class="modal dialog-frame" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="help-title">Keyboard</h2>
+        <p class="hint">Everything here also has a button — these are the fast paths.</p>
+      </div>
+      <button type="button" class="btn icon dialog-close" data-help-close aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
     </div>
-    <div class="row" style="display:flex;justify-content:flex-end;margin-top:18px">
+    <div class="dialog-body">
+      <div class="help-grid">
+        <kbd>V</kbd><span>Select, drag to move, write the note in the panel</span>
+        <kbd>R</kbd><span>Rectangle</span>
+        <kbd>A</kbd><span>Arrow</span>
+        <kbd>P</kbd><span>Pen</span>
+        <kbd>E</kbd><span>Ellipse</span>
+        <kbd>Delete</kbd><span>Remove the selected annotation</span>
+        <kbd>↑ ↓ ← →</kbd><span>Nudge 1px (Shift: 10px)</span>
+        <kbd>Ctrl Z</kbd><span>Undo</span>
+        <kbd>Ctrl ⇧ Z</kbd><span>Redo</span>
+        <kbd>Space + drag</kbd><span>Pan the image</span>
+        <kbd>Ctrl + wheel</kbd><span>Zoom at the pointer</span>
+        <kbd>0 / 1</kbd><span>Fit / actual size</span>
+        <kbd>[ / ]</kbd><span>Toggle sessions / inspector</span>
+        <kbd>Ctrl Enter</kbd><span>Submit the review</span>
+        <kbd>Esc</kbd><span>Cancel drawing or close a dialog</span>
+      </div>
+    </div>
+    <div class="dialog-foot">
       <button type="button" class="btn" data-help-close>Close</button>
     </div>
   </div>

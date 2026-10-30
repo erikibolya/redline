@@ -1,8 +1,9 @@
 //! HTTP surface. Same routes as v0.1, plus `POST /api/sessions` and `POST /mcp`, all behind a
 //! bearer token (or the editor cookie). The editor itself is unchanged.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, Path as RoutePath, Request, State};
@@ -13,10 +14,11 @@ use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
+use crate::agent::{AgentControl, AgentSettings, ClaimError, ClaimRequest, ClaimState};
 use crate::auth::{self, Auth};
 use crate::error::Error;
 use crate::mcp::{self, McpContext};
-use crate::model::{NewSession, Submission};
+use crate::model::{NewSession, Status, Submission};
 use crate::store::Store;
 use crate::MAX_BODY_BYTES;
 
@@ -36,10 +38,13 @@ pub struct AppState {
     pub config_path: Option<PathBuf>,
     /// `REDLINE_WEBHOOK_URL`: POSTed when the human submits (see `notify`).
     pub webhook: Option<String>,
+    /// Server-authoritative agent limits and branch claims (v0.22).
+    pub agent: Arc<Mutex<AgentControl>>,
 }
 
 impl AppState {
     pub fn new(store: Store, auth: Auth) -> Self {
+        let agent = Arc::new(Mutex::new(AgentControl::load(store.data_dir())));
         Self {
             store,
             auth,
@@ -48,6 +53,7 @@ impl AppState {
             base_url: "http://127.0.0.1:8788".to_string(),
             config_path: None,
             webhook: None,
+            agent,
         }
     }
 
@@ -99,6 +105,16 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/agent/repos", post(sync_agent_repos))
+        .route(
+            "/api/agent/settings",
+            get(agent_settings).put(update_agent_settings),
+        )
+        .route("/api/agent/status", get(agent_status))
+        .route("/api/agent/next", post(agent_next))
+        .route("/api/agent/claims", post(claim_session))
+        .route("/api/agent/claims/{id}/heartbeat", post(claim_heartbeat))
+        .route("/api/agent/claims/{id}/state", post(claim_state))
+        .route("/api/agent/claims/{id}/release", post(claim_release))
         .route(
             "/api/sessions/{id}",
             get(get_session).delete(delete_session),
@@ -395,6 +411,11 @@ async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Err
 async fn list_projects(State(state): State<AppState>) -> Result<Json<Value>, Error> {
     let projects = state.store.projects()?;
     let sessions = state.store.list()?;
+    let default_project_max = state
+        .agent
+        .lock()
+        .map(|agent| agent.settings().project_max_parallel)
+        .unwrap_or(1);
     let items: Vec<Value> = projects
         .into_iter()
         .map(|project| {
@@ -423,6 +444,8 @@ async fn list_projects(State(state): State<AppState>) -> Result<Json<Value>, Err
                 "name": project.name,
                 "agent": project.agent,
                 "repo": project.repo,
+                "max_parallel": project.max_parallel,
+                "effective_max_parallel": project.max_parallel.unwrap_or(default_project_max),
                 "created_at": project.created_at,
                 "sessions": mine.len(),
                 "waiting": waiting,
@@ -487,6 +510,358 @@ async fn sync_agent_repos(
         projects.push(json!(project));
     }
     Ok(Json(json!({ "ok": true, "projects": projects })))
+}
+
+// ---------------------------------------------------------------- agent concurrency
+
+#[derive(Debug, serde::Deserialize)]
+struct AgentSettingsUpdate {
+    #[serde(default)]
+    max_parallel: Option<u32>,
+    #[serde(default)]
+    project_max_parallel: Option<u32>,
+    #[serde(default)]
+    lease_seconds: Option<u64>,
+    #[serde(default)]
+    projects: BTreeMap<String, Option<u32>>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ClaimBody {
+    session_id: String,
+    agent_id: String,
+    #[serde(default)]
+    work_key: Option<String>,
+    #[serde(default)]
+    state: Option<ClaimState>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AgentHeartbeat {
+    agent_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ClaimStateBody {
+    agent_id: String,
+    state: ClaimState,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct AgentRelease {
+    agent_id: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NextBody {
+    agent_id: String,
+}
+
+fn claim_error(err: ClaimError) -> Error {
+    match err {
+        ClaimError::Invalid(message) => Error::BadRequest(message),
+        other => Error::Conflict(other.to_string()),
+    }
+}
+
+fn project_max(state: &AppState, project: &str, settings: &AgentSettings) -> u32 {
+    state
+        .store
+        .project(project)
+        .ok()
+        .flatten()
+        .and_then(|project| project.max_parallel)
+        .unwrap_or(settings.project_max_parallel)
+}
+
+fn agent_projects(state: &AppState, settings: &AgentSettings) -> Result<Vec<Value>, Error> {
+    Ok(state
+        .store
+        .projects()?
+        .into_iter()
+        .filter(|project| project.slug != "inbox")
+        .map(|project| {
+            json!({
+                "slug": project.slug,
+                "name": project.name,
+                "repo": project.repo,
+                "agent": project.agent,
+                "max_parallel": project.max_parallel,
+                "effective_max_parallel": project.max_parallel.unwrap_or(settings.project_max_parallel),
+            })
+        })
+        .collect())
+}
+
+async fn agent_settings(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    let (settings, status) = {
+        let mut agent = state
+            .agent
+            .lock()
+            .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        (agent.settings().clone(), agent.status())
+    };
+    let projects = agent_projects(&state, &settings)?;
+    Ok(Json(json!({
+        "max_parallel": settings.max_parallel,
+        "project_max_parallel": settings.project_max_parallel,
+        "lease_seconds": settings.lease_seconds,
+        "running": status.running,
+        "waiting": status.waiting,
+        "claims": status.claims,
+        "projects": projects,
+    })))
+}
+
+async fn update_agent_settings(
+    State(state): State<AppState>,
+    Json(body): Json<AgentSettingsUpdate>,
+) -> Result<Json<Value>, Error> {
+    for value in [body.max_parallel, body.project_max_parallel]
+        .into_iter()
+        .flatten()
+    {
+        if !(1..=32).contains(&value) {
+            return Err(Error::BadRequest(
+                "max_parallel and project_max_parallel must be between 1 and 32".to_string(),
+            ));
+        }
+    }
+    if let Some(value) = body.lease_seconds {
+        if !(30..=3600).contains(&value) {
+            return Err(Error::BadRequest(
+                "lease_seconds must be between 30 and 3600".to_string(),
+            ));
+        }
+    }
+    for value in body.projects.values().flatten() {
+        if !(1..=32).contains(value) {
+            return Err(Error::BadRequest(
+                "per-project max_parallel must be between 1 and 32".to_string(),
+            ));
+        }
+    }
+
+    for (slug, max_parallel) in &body.projects {
+        if state.store.project(slug)?.is_none() {
+            if slug == "inbox" {
+                state.store.ensure_project("Inbox")?;
+            } else {
+                return Err(Error::NotFound(slug.clone()));
+            }
+        }
+        state.store.set_project_max_parallel(slug, *max_parallel)?;
+    }
+
+    {
+        let mut agent = state
+            .agent
+            .lock()
+            .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        let mut settings = agent.settings().clone();
+        if let Some(value) = body.max_parallel {
+            settings.max_parallel = value;
+        }
+        if let Some(value) = body.project_max_parallel {
+            settings.project_max_parallel = value;
+        }
+        if let Some(value) = body.lease_seconds {
+            settings.lease_seconds = value;
+        }
+        agent.set_settings(settings).map_err(Error::BadRequest)?;
+    }
+
+    agent_settings(State(state)).await
+}
+
+async fn agent_status(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    let mut agent = state
+        .agent
+        .lock()
+        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+    Ok(Json(json!(agent.status())))
+}
+
+async fn claim_session(
+    State(state): State<AppState>,
+    Json(body): Json<ClaimBody>,
+) -> Result<Json<Value>, Error> {
+    let mut meta = state.store.require(&body.session_id)?;
+    if meta.status != Status::Submitted {
+        return Err(Error::Conflict(
+            "only a submitted review can be claimed".to_string(),
+        ));
+    }
+    let work_key = body
+        .work_key
+        .clone()
+        .or_else(|| meta.branch.clone())
+        .unwrap_or_else(|| meta.work_key());
+    if meta.branch.as_deref() != Some(work_key.as_str()) {
+        meta = state.store.set_branch(&meta.id, Some(&work_key))?;
+    }
+    let project = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
+    let mut agent = state
+        .agent
+        .lock()
+        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+    let settings = agent.settings().clone();
+    let max_parallel = project_max(&state, &project, &settings);
+    let claim = agent
+        .try_claim(ClaimRequest {
+            session_id: meta.id.clone(),
+            agent_id: body.agent_id,
+            project,
+            work_key,
+            state: body.state.unwrap_or(ClaimState::Running),
+            global_max: settings.max_parallel,
+            project_max: max_parallel,
+            lease_seconds: settings.lease_seconds,
+        })
+        .map_err(claim_error)?;
+    Ok(Json(json!({
+        "claim": claim,
+        "session": meta,
+        "limits": { "max_parallel": settings.max_parallel, "project_max": max_parallel },
+    })))
+}
+
+async fn claim_heartbeat(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    Json(body): Json<AgentHeartbeat>,
+) -> Result<Json<Value>, Error> {
+    let lease_seconds = {
+        let agent = state
+            .agent
+            .lock()
+            .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        agent.settings().lease_seconds
+    };
+    let claim = {
+        let mut agent = state
+            .agent
+            .lock()
+            .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        agent
+            .heartbeat(&id, &body.agent_id, lease_seconds)
+            .map_err(claim_error)?
+    };
+    Ok(Json(json!({ "claim": claim })))
+}
+
+async fn claim_state(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    Json(body): Json<ClaimStateBody>,
+) -> Result<Json<Value>, Error> {
+    let meta = state.store.require(&id)?;
+    let project = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
+    let mut agent = state
+        .agent
+        .lock()
+        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+    let settings = agent.settings().clone();
+    let max_parallel = project_max(&state, &project, &settings);
+    let claim = agent
+        .set_state(
+            &id,
+            &body.agent_id,
+            body.state,
+            settings.max_parallel,
+            max_parallel,
+            settings.lease_seconds,
+        )
+        .map_err(claim_error)?;
+    Ok(Json(json!({ "claim": claim })))
+}
+
+async fn claim_release(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    Json(body): Json<AgentRelease>,
+) -> Result<Json<Value>, Error> {
+    let claim = {
+        let mut agent = state
+            .agent
+            .lock()
+            .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        agent.release(&id, &body.agent_id).map_err(claim_error)?
+    };
+    Ok(Json(json!({ "ok": true, "claim": claim })))
+}
+
+async fn agent_next(
+    State(state): State<AppState>,
+    Json(body): Json<NextBody>,
+) -> Result<Json<Value>, Error> {
+    let mut sessions = state.store.list()?;
+    sessions.retain(|meta| {
+        meta.status == Status::Submitted
+            && meta.agent_state.as_deref() != Some("working")
+            && meta.agent_state.as_deref() != Some("replied")
+    });
+    sessions.sort_by_key(|meta| {
+        meta.submitted_at
+            .clone()
+            .unwrap_or_else(|| meta.created_at.clone())
+    });
+
+    let mut agent = state
+        .agent
+        .lock()
+        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+    let settings = agent.settings().clone();
+    let claims = agent.claims();
+    let mut blocked = "empty";
+
+    for mut meta in sessions {
+        if let Some(claim) = claims.iter().find(|claim| claim.session_id == meta.id) {
+            if claim.agent_id != body.agent_id {
+                blocked = "claimed";
+                continue;
+            }
+            if claim.state == ClaimState::Running {
+                blocked = "running";
+                continue;
+            }
+        }
+        let project = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
+        let max_parallel = project_max(&state, &project, &settings);
+        let work_key = meta.work_key();
+        let request = ClaimRequest {
+            session_id: meta.id.clone(),
+            agent_id: body.agent_id.clone(),
+            project,
+            work_key: work_key.clone(),
+            state: ClaimState::Running,
+            global_max: settings.max_parallel,
+            project_max: max_parallel,
+            lease_seconds: settings.lease_seconds,
+        };
+        match agent.try_claim(request) {
+            Ok(claim) => {
+                if meta.branch.as_deref() != Some(claim.work_key.as_str()) {
+                    meta = state.store.set_branch(&meta.id, Some(&claim.work_key))?;
+                }
+                return Ok(Json(json!({
+                    "session": meta,
+                    "claim": claim,
+                    "limits": { "max_parallel": settings.max_parallel, "project_max": max_parallel },
+                })));
+            }
+            Err(ClaimError::AtCapacity { .. }) => blocked = "at_capacity",
+            Err(ClaimError::BranchLocked { .. }) => blocked = "branch_locked",
+            Err(ClaimError::SessionClaimed { .. }) => blocked = "claimed",
+            Err(err) => return Err(claim_error(err)),
+        }
+    }
+
+    Ok(Json(json!({
+        "session": null,
+        "reason": blocked,
+        "limits": { "max_parallel": settings.max_parallel },
+    })))
 }
 
 fn normalize_agent_id(raw: &str) -> Result<String, Error> {
@@ -579,7 +954,7 @@ pub fn create_from_request(
         }
     };
 
-    state.store.create_from_bytes(
+    let meta = state.store.create_from_bytes(
         &bytes,
         &name,
         &body.title,
@@ -588,7 +963,12 @@ pub fn create_from_request(
         body.id.as_deref(),
         body.agent.as_deref(),
         body.project.as_deref(),
-    )
+    )?;
+    if let Some(branch) = body.branch.as_deref() {
+        state.store.set_branch(&meta.id, Some(branch))
+    } else {
+        Ok(meta)
+    }
 }
 
 async fn submit(
@@ -751,6 +1131,8 @@ struct CaptureRequest {
     agent: Option<String>,
     #[serde(default)]
     project: Option<String>,
+    #[serde(default)]
+    branch: Option<String>,
 }
 
 /// Screenshot a URL server-side and open a review for it. Same engine as the MCP tool, so the
@@ -794,6 +1176,11 @@ async fn capture_session(
         Some(body.agent.as_deref().unwrap_or("human")),
         body.project.as_deref(),
     )?;
+    let meta = if let Some(branch) = body.branch.as_deref() {
+        state.store.set_branch(&meta.id, Some(branch))?
+    } else {
+        meta
+    };
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({ "meta": meta, "review_url": review_url })))
 }

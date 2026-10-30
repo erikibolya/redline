@@ -40,6 +40,11 @@ Open the printed `review_url` in the browser or the Review pane. The server must
 python3 redline.py serve --open
 ```
 
+With the current agents, pass `branch` to `review_screenshot` or `POST /api/sessions`. RedLine
+uses it as the branch-lock key; if omitted, the first claim falls back to `session/<id>`. The
+defaults are 2 concurrent runs globally and 1 per project; waiting for the human frees the run
+slot but keeps the branch locked.
+
 ## 3. Annotate
 
 - **Rectangle** — mark a region that needs a change.

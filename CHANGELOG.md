@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Agent concurrency control (foundation).** Sessions carry an optional `branch` declared by the
+  agent (fallback `session/<id>`), the rail shows it after the relative time, and the server has
+  branch ownership leases plus global/per-project run limits — defaults 2 global and 1 per
+  project, editable in the new **Agent settings** dialog. A waiting claim keeps the branch lock
+  but frees the execution slot. The built-in bridge still runs one review at a time; the parallel
+  worker slice consumes this API next.
 - **Freehand strokes are numbered and listed again.** `renderInspector` read
   `annotation.start.x` for every non-text shape, but a pen stores `points`; the resulting
   `TypeError` aborted `mutate` before `render()`, so the live stroke stayed on screen with no

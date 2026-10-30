@@ -41,6 +41,19 @@ before `render()`; the live preview was already on the canvas, so the tool *look
 the finished annotation had no badge and no list row. The new test draws a stroke, asserts the
 row/number/label and a red badge pixel, submits it, and checks the points in the server JSON.
 
+## Agent concurrency (v0.22)
+
+- Rust `tests/agent.rs`: global/project capacity, waiting frees a run slot but keeps the branch,
+  one owner per branch, lease expiry, heartbeat/release ownership, persistence, settings
+  validation.
+- Rust `tests/api.rs`: settings round-trip and per-project overrides, claim/next, branch locks,
+  `waiting` transitions, `next` skipping locked branches.
+- Browser e2e: the Agent settings dialog saves global + per-project values, and the rail shows the
+  session's branch next to the relative time.
+- The parallel bridge must add a worktree test before it lands: two claims on different branches
+  run in separate `git worktree`s; a second claim on the same branch is refused. Until then the
+  built-in bridge stays single.
+
 ## Every UI control
 
 - A test must **click** the control, not only call the method or press the shortcut.
@@ -74,6 +87,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - [ ] `cargo test --workspace` green
 - [ ] `desktop/scripts/e2e.sh` green (see `PLAN.md` for the current count)
 - [ ] the tool matrix covers rectangle, ellipse, arrow, pen, select/move, note, undo, submit
+- [ ] agent concurrency: settings save, branch shown in the rail, claim limits/branch locks green
 - [ ] every changed UI control was clicked by the e2e; every changed endpoint has a Rust test
 - [ ] no uncaught page errors and no unexpected console errors
 - [ ] `dev` and `main` required checks green; auto-merge only on a ready PR

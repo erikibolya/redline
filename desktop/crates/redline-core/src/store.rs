@@ -299,6 +299,15 @@ impl Store {
         &self.root
     }
 
+    /// Parent of `sessions/`: server-level state such as agent settings and claims lives here.
+    pub fn data_dir(&self) -> PathBuf {
+        self.root
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.root.clone())
+    }
+
     pub fn ensure(&self) -> Result<()> {
         fs::create_dir_all(&self.root)?;
         Ok(())
@@ -352,9 +361,31 @@ impl Store {
             name: name.to_string(),
             agent: None,
             repo: None,
+            max_parallel: None,
             created_at: now(),
         };
         write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
+        Ok(project)
+    }
+
+    /// Set or clear a project's concurrent-run override (v0.22).
+    pub fn set_project_max_parallel(
+        &self,
+        slug: &str,
+        max_parallel: Option<u32>,
+    ) -> Result<crate::model::Project> {
+        let slug = slugify(slug);
+        let mut project = self
+            .project(&slug)?
+            .ok_or_else(|| Error::NotFound(slug.clone()))?;
+        project.max_parallel = max_parallel;
+        write_json(
+            &self
+                .projects_root()
+                .join(&project.slug)
+                .join("project.json"),
+            &serde_json::to_value(&project)?,
+        )?;
         Ok(project)
     }
 
@@ -411,6 +442,7 @@ impl Store {
             name: name.to_string(),
             agent: Some(agent.to_string()),
             repo: Some(repo.to_string()),
+            max_parallel: None,
             created_at: now(),
         };
         write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
@@ -438,6 +470,7 @@ impl Store {
                 name: "Inbox".to_string(),
                 agent: None,
                 repo: None,
+                max_parallel: None,
                 created_at: String::new(),
             });
         }
@@ -527,6 +560,29 @@ impl Store {
         if seen && meta.seen_by_agent_at.is_none() {
             meta.seen_by_agent_at = Some(now());
         }
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// Set or clear the feature branch shown in the rail and used as the branch-lock key.
+    pub fn set_branch(&self, id: &str, branch: Option<&str>) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let branch = branch
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if let Some(value) = branch.as_deref() {
+            if value.len() > 200 {
+                return Err(Error::BadRequest("branch is too long".to_string()));
+            }
+            if value.chars().any(char::is_control) {
+                return Err(Error::BadRequest(
+                    "branch must not contain control characters".to_string(),
+                ));
+            }
+        }
+        meta.branch = branch;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
@@ -624,6 +680,7 @@ impl Store {
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
+            branch: None,
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         write_json(

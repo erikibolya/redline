@@ -284,6 +284,130 @@ const featureState = (session) => session.feature_state
   || (session.feature_confirmed_at ? "confirmed"
     : session.feature_cancelled_at ? "cancelled" : "pending");
 
+/* ---------------------------------------------------------------- agent settings */
+
+/**
+ * Global and per-project run limits. The server is authoritative; this is only the editor for
+ * `/api/agent/settings`. A branch always has one owner; waiting for the human frees a run slot.
+ */
+const AgentSettings = {
+  dialog: null,
+
+  ensure() {
+    if (this.dialog) return this.dialog;
+    document.body.insertAdjacentHTML("beforeend", `
+      <dialog class="settings-dialog" id="agent-settings-dialog"
+              aria-labelledby="agent-settings-title">
+        <form class="settings-form" id="agent-settings-form">
+          <div class="settings-head">
+            <h2 id="agent-settings-title">Agent settings</h2>
+            <p>How many reviews may run at the same time. One feature branch always has one owner;
+              waiting for the human does not take a run slot.</p>
+          </div>
+          <div class="settings-row">
+            <label for="agent-max-parallel">Max concurrent runs</label>
+            <input type="number" id="agent-max-parallel" min="1" max="32" required />
+          </div>
+          <div class="settings-row">
+            <label for="agent-project-max-parallel">Default per-project limit</label>
+            <input type="number" id="agent-project-max-parallel" min="1" max="32" required />
+          </div>
+          <div class="settings-row">
+            <label for="agent-lease-seconds">Claim lease (seconds)</label>
+            <input type="number" id="agent-lease-seconds" min="30" max="3600" required />
+          </div>
+          <fieldset class="settings-projects">
+            <legend>Per project</legend>
+            <div id="agent-project-list"></div>
+          </fieldset>
+          <div class="settings-status" id="agent-settings-status"></div>
+          <p class="settings-error" id="agent-settings-error" hidden></p>
+          <div class="settings-actions">
+            <button type="button" class="btn" id="agent-settings-cancel">Cancel</button>
+            <button type="submit" class="btn primary" id="agent-settings-save">Save</button>
+          </div>
+        </form>
+      </dialog>`);
+    this.dialog = $("#agent-settings-dialog");
+    $("#agent-settings-cancel").addEventListener("click", () => this.dialog.close());
+    $("#agent-settings-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      this.save();
+    });
+    return this.dialog;
+  },
+
+  async open() {
+    const dialog = this.ensure();
+    if (dialog.open) return;
+    const error = $("#agent-settings-error");
+    error.hidden = true;
+    try {
+      const data = await api("/api/agent/settings");
+      $("#agent-max-parallel").value = String(data.max_parallel);
+      $("#agent-project-max-parallel").value = String(data.project_max_parallel);
+      $("#agent-lease-seconds").value = String(data.lease_seconds);
+      const projects = data.projects || [];
+      $("#agent-project-list").innerHTML = projects.length
+        ? projects.map((project) => `
+          <label class="settings-project">
+            <span class="name">${escapeHtml(project.name)}
+              <span class="repo">${escapeHtml(project.repo || "")}</span></span>
+            <input type="number" min="1" max="32" data-project="${escapeHtml(project.slug)}"
+                   value="${project.max_parallel ?? ""}"
+                   placeholder="Default (${project.effective_max_parallel})" />
+          </label>`).join("")
+        : `<div class="settings-empty">No repository-backed projects yet.</div>`;
+      const claims = data.claims || [];
+      $("#agent-settings-status").innerHTML =
+        `<b>${data.running}/${data.max_parallel}</b> running · ${data.waiting} waiting`
+        + (claims.length
+          ? claims.map((claim) => `
+            <div class="settings-claim" title="${escapeHtml(claim.session_id)}">
+              <span>${escapeHtml(claim.session_id)}</span>
+              <span>${escapeHtml(claim.work_key)}</span>
+              <span>${escapeHtml(claim.state)} · ${escapeHtml(claim.agent_id)}</span>
+            </div>`).join("")
+          : `<div class="settings-empty">No active claims.</div>`);
+    } catch (requestError) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+    }
+    dialog.showModal();
+    $("#agent-max-parallel").focus();
+  },
+
+  async save() {
+    const error = $("#agent-settings-error");
+    error.hidden = true;
+    const projects = {};
+    $$("#agent-project-list input[data-project]").forEach((input) => {
+      projects[input.dataset.project] = input.value.trim() === "" ? null : Number(input.value);
+    });
+    const body = {
+      max_parallel: Number($("#agent-max-parallel").value),
+      project_max_parallel: Number($("#agent-project-max-parallel").value),
+      lease_seconds: Number($("#agent-lease-seconds").value),
+      projects,
+    };
+    const save = $("#agent-settings-save");
+    save.disabled = true;
+    try {
+      await api("/api/agent/settings", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      this.dialog.close();
+    } catch (requestError) {
+      error.textContent = requestError.message;
+      error.hidden = false;
+    } finally {
+      save.disabled = false;
+    }
+  },
+};
+
 const unfiltered = (query) => !query;
 
 /* ------------------------------------------------------------------ theme */
@@ -572,7 +696,9 @@ class Rail {
                data-id="${escapeHtml(session.id)}"
                aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}${
                  decided ? `, feature ${feature}` : ""
-               }${queued && !working ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""}"
+               }${session.branch ? `, branch ${escapeHtml(session.branch)}` : ""}${
+                 queued && !working ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
+               }"
                aria-current="${session.id === this.selectedId}"
                ${this.bulkMode ? `aria-pressed="${this.selection.has(session.id)}"` : ""}>
             ${this.bulkMode
@@ -581,8 +707,10 @@ class Rail {
             <div class="body">
               <div class="name">${escapeHtml(session.title || session.id)}</div>
               <div class="sub">${escapeHtml(relativeTime(session.submitted_at || session.created_at))}${
-                session.note ? " · " + escapeHtml(session.note) : ""
-              }</div>
+                session.branch
+                  ? ` · <span class="branch" title="${escapeHtml(session.branch)}">${escapeHtml(session.branch)}</span>`
+                  : ""
+              }${session.note ? " · " + escapeHtml(session.note) : ""}</div>
             </div>
             <span class="row-actions">
               ${decided
@@ -2894,7 +3022,7 @@ function renderGallery(rail) {
         <b>${escapeHtml(session.title || session.id)}</b>
         <span>${escapeHtml(project)} · ${escapeHtml(relativeTime(session.submitted_at || session.created_at))} · ${escapeHtml(
           featureState(session) === "pending" ? session.status : featureState(session),
-        )}</span>
+        )}${session.branch ? ` · ${escapeHtml(session.branch)}` : ""}</span>
       </div>
     </a>`;
   }).join("");
@@ -2991,6 +3119,8 @@ document.addEventListener("DOMContentLoaded", () => {
   Theme.apply(Theme.current());
   $$("[data-theme-toggle]").forEach((button) =>
     button.addEventListener("click", () => Theme.toggle()));
+  $$("[data-agent-settings]").forEach((button) =>
+    button.addEventListener("click", () => AgentSettings.open()));
   Help.wire();
   addEventListener("keydown", (event) => {
     if (event.key === "?" && document.body.dataset.page !== "editor") {

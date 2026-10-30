@@ -186,6 +186,67 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   margin-top: 8px; flex-wrap: wrap;
 }
 
+.settings-dialog {
+  padding: 0; width: min(580px, calc(100vw - 32px));
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+.settings-dialog::backdrop {
+  background: rgba(3, 7, 12, .6);
+  backdrop-filter: blur(2px);
+}
+.settings-form {
+  display: flex; flex-direction: column; gap: 14px; padding: 22px;
+  max-height: min(86vh, 760px); overflow: auto;
+}
+.settings-head h2 { margin: 0 0 4px; font-size: 16px; }
+.settings-head p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.settings-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+}
+.settings-row label { font-size: 12px; font-weight: 600; }
+.settings-form input[type="number"] {
+  width: 92px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--panel-2); color: var(--text); font: inherit;
+}
+.settings-form input[type="number"]:focus { border-color: var(--accent); }
+.settings-projects {
+  margin: 0; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px;
+}
+.settings-projects legend {
+  padding: 0 6px; color: var(--muted); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .06em;
+}
+.settings-project {
+  display: flex; align-items: center; gap: 10px; padding: 7px 0;
+  border-top: 1px solid var(--border-soft);
+}
+.settings-project:first-child { border-top: none; }
+.settings-project .name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 12px;
+}
+.settings-project .repo {
+  display: block; color: var(--muted); font-size: 10.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.settings-project input { flex: none; }
+.settings-status {
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 11.5px; color: var(--muted);
+}
+.settings-status b { color: var(--text); }
+.settings-claim {
+  display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  gap: 8px; padding: 4px 0; border-top: 1px solid var(--border-soft); font-size: 10.5px;
+}
+.settings-claim span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.settings-empty { padding: 6px 0; color: var(--muted); font-size: 11px; }
+.settings-error { margin: 0; color: #fda4af; font-size: 12px; }
+.settings-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
 /* ---------------------------------------------------------------- buttons */
 /* Keyboard users must always see where focus is. */
 :where(button, a, input, select, textarea, [role="button"], [tabindex]):focus-visible {
@@ -290,6 +351,10 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .session .body { min-width: 0; flex: 1; }
 .session .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session .sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.session .sub .branch {
+  color: var(--accent); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10.5px;
+}
 .session .row-actions { display: none; gap: 2px; align-items: center; }
 .session:hover .row-actions, .session:focus-within .row-actions { display: flex; }
 .session .act {

@@ -492,7 +492,7 @@ services:
 
   watchtower:
     # The maintained fork (github.com/nicholas-fedor/watchtower) has the HTTP API and Swagger UI.
-    image: nickfedor/watchtower:latest
+    image: nickfedor/watchtower:1.23.2
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

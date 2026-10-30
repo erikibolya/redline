@@ -38,7 +38,15 @@ try {
   .server-state { color: var(--muted); font-size: 11px; margin-top: 2px; }
   .server-actions { display: flex; gap: 6px; flex: none; }
   .server-actions .btn { padding: 5px 9px; font-size: 12px; }
-  .server-actions .btn.danger { color: var(--danger); border-color: #7f1d1d; }
+  /* Row-level destructive action: an outline, not a filled `.btn.danger` — the filled
+     variant would paint `--danger` text on the red background and the label would vanish.
+     The label colour is theme-specific so it stays readable on both panels. */
+  .server-actions .btn.danger {
+    background: transparent; border-color: #7f1d1d; color: #fda4af; font-weight: 500;
+  }
+  .server-actions .btn.danger:hover { background: rgba(225, 29, 72, .14); color: #fecdd3; }
+  [data-theme="light"] .server-actions .btn.danger { border-color: #fda4af; color: #be123c; }
+  [data-theme="light"] .server-actions .btn.danger:hover { background: rgba(225, 29, 72, .09); color: #9f1239; }
   .servers-actions { display: flex; gap: 8px; margin-top: 20px; }
   .servers-foot { color: var(--muted); font-size: 12px; margin: 14px 4px 0; }
   .banner {

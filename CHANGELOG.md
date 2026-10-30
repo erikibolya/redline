@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The dev server follows the dev build.** Every push to `dev` now publishes
+  `ghcr.io/erikibolya/redline:browser-dev` (plus a sha tag) from the same workflow as the Windows
+  dev build. The `redline-dev` stack can pull that tag instead of building from the working tree,
+  and a User Script or scoped Watchtower updates it every few minutes. The image includes
+  Chromium, so capture works on dev too.
 - **Agent concurrency control (foundation).** Sessions carry an optional `branch` declared by the
   agent (fallback `session/<id>`), the rail shows it after the relative time, and the server has
   branch ownership leases plus global/per-project run limits — defaults 2 global and 1 per

@@ -458,6 +458,66 @@ to `dev` publishes a rolling prerelease under the moving **`dev`** tag
 (`.github/workflows/dev.yml`), versioned `<next-minor>-dev.<run number>` (bump `DEV_BASE_VERSION` in the
 workflow when a new stable minor ships).
 
+The same workflow publishes the browser image for the dev server:
+
+```
+ghcr.io/erikibolya/redline:browser-dev
+ghcr.io/erikibolya/redline:browser-dev-<sha>
+```
+
+The moving tag is for the host to follow; the sha tag is for a rollback. The image contains the
+server and Chromium, so `capture_review` works.
+
+### Dev server auto-update
+
+The `redline-dev` compose stack should use the published image instead of building from the
+working tree:
+
+```yaml
+services:
+  redline-dev:
+    image: ghcr.io/erikibolya/redline:browser-dev
+    # no build: block
+```
+
+Then pick one host-side updater:
+
+**User Scripts (no extra container).** Create a script with this body and set a custom schedule
+`*/10 * * * *`:
+
+```bash
+#!/bin/bash
+set -euo pipefail
+cd /boot/config/plugins/compose.manager/projects/redline-dev
+docker compose pull -q redline-dev
+docker compose up -d --no-build redline-dev
+```
+
+**Watchtower (fully automatic, needs the Docker socket).**
+
+```yaml
+services:
+  redline-dev:
+    image: ghcr.io/erikibolya/redline:browser-dev
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: --label-enable --interval 300 --cleanup
+```
+
+Only containers with the label are watched. If the GHCR package is private, the host must be
+logged in (`docker login ghcr.io`) just like it is for the production image. The dev data lives in
+`/mnt/user/appdata/redline-dev` and survives recreation, but an update restarts the container and
+interrupts a review in flight; that is expected on the dev server. Verify the deployed build with:
+
+```bash
+docker inspect redline-dev --format '{{index .Config.Labels "org.opencontainers.image.version"}}'
+```
+
 The desktop app's menu (RedLine/Help and the tray):
 
 | Item | Manifest | Behaviour |

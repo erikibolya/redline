@@ -13,6 +13,10 @@ on:
       - ".github/workflows/dev.yml"
   workflow_dispatch:
 
+concurrency:
+  group: dev-build
+  cancel-in-progress: true
+
 env:
   # Dev builds must sort *above* the current stable line, otherwise the updater refuses them.
   # Bump this when a new stable minor is released.
@@ -24,6 +28,11 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      # Dev builds only need to be installable; full LTO adds minutes and is not useful for
+      # a throwaway test build. Stable releases keep the production optimisations.
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v4
 

@@ -66,33 +66,13 @@ jobs:
   shell:
     name: tauri shell (windows)
     runs-on: windows-latest
-    env:
-      # createUpdaterArtifacts is on, so every bundle build needs the signing key.
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/app
-      - name: Build the app (compile check for the shell)
-        run: cargo build --release --manifest-path desktop/app/Cargo.toml
-      - name: Build the NSIS installer
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: desktop/app
-          args: --bundles nsis
-      - name: Upload installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: redline-windows-nsis
-          path: desktop/app/target/release/bundle/nsis/*.exe
-          if-no-files-found: warn
-      - name: Upload binary
-        uses: actions/upload-artifact@v4
-        with:
-          name: redline-windows-unsigned
-          path: desktop/app/target/release/redline-app.exe
-          if-no-files-found: warn
+      # The installer is built by the dev/release workflows. Pull requests only need to prove
+      # that the Tauri shell still compiles; building NSIS here added ~6 minutes to every PR.
+      - name: Compile-check the shell
+        run: cargo check --release --manifest-path desktop/app/Cargo.toml

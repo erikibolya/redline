@@ -109,12 +109,12 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - `cargo test --workspace` — 70 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, feature confirmation/cancel, path/config
   helpers, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 109 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 111 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
-  undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, feature
-  confirm/cancel/delete menus, row delete, cancelled-only purge, the All filter, rail reopen and
-  bulk confirm.
+  undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the
+  replied-but-still-running state, feature confirm/cancel/delete menus, row delete, cancelled-only
+  purge, the All filter, rail reopen and bulk confirm.
 - CI runs both on every push; releases are cut from tags only after green. The tool matrix,
   feature/bug protocol and release checklist live in `docs/TESTING.md`.
 

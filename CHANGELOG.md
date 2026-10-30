@@ -11,12 +11,21 @@
 - **Regression gate.** `docs/TESTING.md` defines the tool matrix, the bug-fix protocol (failing
   test first), the feature protocol and the release checklist. The e2e now draws every drawing
   tool (rectangle, ellipse, arrow, pen) instead of only clicking its button.
+- **A reply is not the finish line.** The run card treated `agent_state=replied` as the end of the
+  run, so it said **Run finished** while the review was still submitted, the canvas was frozen and
+  the red STOP button was armed — and then the agent kept working for minutes. `reply` now only
+  marks an answer: while the round is still submitted the card reads **Agent replied — waiting for
+  it to finish** (amber, with the age of the last step), a later `progress` line turns it back into
+  **Working**, and **Run finished** is reserved for a round that was handed back (`post_round`) or
+  resolved. The server no longer freezes `working` after a reply on an open round; the browser e2e
+  covers the answered-but-still-running state and the resume.
 - **The rail says who has the ball.** A submitted round that no agent has picked up used to carry
   the **new** badge (which only meant "this browser has not looked at it yet"), so a review
   sitting in the queue read as the human's turn. It now reads **waiting for agent**; `new` is
   reserved for rounds that are back in the human's hands, and `working` still wins while an agent
-  runs. The project header keeps a single count instead of a green waiting count beside the same
-  total. The browser e2e asserts the badge and the missing header count.
+  runs; a submitted round the agent has answered but not resolved now reads **replied**. The
+  project header keeps a single count instead of a green waiting count beside the same total. The
+  browser e2e asserts the badge and the missing header count.
 - **The Servers page Remove button is readable again.** `.server-actions .btn.danger` kept the
   filled `.btn.danger` background and only overrode the label to `--danger`, so *Remove* was red
   text on a red button. It is now an outline in both themes (label contrast 9.2:1 dark, 6.3:1

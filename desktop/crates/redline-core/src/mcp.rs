@@ -593,11 +593,11 @@ fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
         .append_agent_event(&id, &event)
         .map_err(|err| err.to_string())?;
     // The narration is always kept, but it may not re-arm the "working" indicator on a round that
-    // is over: `post_round` hands the review back (open) and `reply` answers it (replied). The
-    // agent's last line often arrives after that, and it used to flip the state back to working,
-    // leaving a spinner running on a review the human already had back.
-    let finished =
-        meta.status != Status::Submitted || meta.agent_state.as_deref() == Some("replied");
+    // is over: `post_round` hands the review back (open) and `resolve` closes it. `reply` is *not*
+    // a finish signal — the agent often answers early and keeps working for minutes — so a later
+    // `progress` is evidence that the run resumed and must show as working again while the round
+    // is still submitted (2026-10-30).
+    let finished = meta.status != Status::Submitted;
     if !finished {
         ctx.store
             .set_agent_state(&id, "working", true)

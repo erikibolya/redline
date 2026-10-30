@@ -555,9 +555,11 @@ class Rail {
             ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
             : feature === "cancelled"
               ? `<span class="badge cancelled" title="Feature cancelled by the human">cancelled</span>`
-              : queued
-                ? `<span class="badge waiting" title="Waiting for an agent — nobody has picked this round up yet">waiting for agent</span>`
-                : fresh
+              : queued && session.agent_state === "replied"
+                ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
+                : queued
+                  ? `<span class="badge waiting" title="Waiting for an agent — nobody has picked this round up yet">waiting for agent</span>`
+                  : fresh
                   ? `<span class="badge new" title="new since you last looked">new</span>`
                   : annotations
                     ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
@@ -570,7 +572,7 @@ class Rail {
                data-id="${escapeHtml(session.id)}"
                aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}${
                  decided ? `, feature ${feature}` : ""
-               }${queued && !working ? ", waiting for agent" : ""}"
+               }${queued && !working ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""}"
                aria-current="${session.id === this.selectedId}"
                ${this.bulkMode ? `aria-pressed="${this.selection.has(session.id)}"` : ""}>
             ${this.bulkMode
@@ -2394,17 +2396,23 @@ class Editor {
     const last = round[round.length - 1];
     const working = agentWorking(this.meta);
     const replied = this.meta?.agent_state === "replied";
-    // Once the agent answers, the reply above is the signal; the card keeps the tally.
+    // `reply` is a message, not the end of the run: the agent often answers and then keeps
+    // working for minutes. Only a round that left the agent's hands (a new round or `resolve`)
+    // is finished, so "Run finished" must never appear while STOP is still armed (2026-10-30).
+    const submitted = this.meta?.status === "submitted";
     const title = working
       ? "Working"
-      : replied
-        ? "Run finished"
-        : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
+      : replied && submitted
+        ? "Agent replied — waiting for it to finish"
+        : replied
+          ? "Run finished"
+          : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
     // How long ago the last step was is the honest answer to "is it still working?": a spinner
     // must never be the only evidence.
     const age = relativeTime(last.at);
     const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}`;
-    return `<div class="conv-run${working ? " working" : ""}">`
+    const state = working ? " working" : replied && submitted ? " pending" : "";
+    return `<div class="conv-run${state}">`
       + `<span class="conv-run-mark" aria-hidden="true"></span><div>`
       + `<div class="conv-run-title">${title}</div>`
       + `<div class="conv-run-sub">${sub}</div></div></div>`;

@@ -233,6 +233,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   the round (`status == submitted`), not set by the last writer; the server refuses to revive a
   finished round, the UI checks both fields, and the card always shows the age of the last step so
   "is it really working?" has an answer that is not animation.
+- **A reply is not the finish line.** The inverse trap: `reply` set `agent_state=replied`, the card
+  called that "Run finished", yet the review was still `submitted`, the canvas was locked and the
+  red STOP button was armed — and the agent kept working for minutes before resolving (2026-10-30).
+  Only a round that left the agent's hands (`post_round` → open, or `resolve`) is finished; while
+  submitted, say the agent replied and the run has not finished, and let a later `progress` (real
+  evidence the process is alive) turn the indicator back to "Working". Never print "finished" and
+  "STOP" in the same breath.
 - **A delete button is not a cancel button, and a UI badge is not a signal.** The rail's ✕ removed
   the review folder, so "cancel this feature" had no non-destructive action; the ✓ only set
   `resolved`, which told an agent nothing about shipping. Feature decisions now have their own

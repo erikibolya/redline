@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The session rail is one panel on every page.** The dashboard rendered the rail at the CSS
+  default 272 px and had no divider, while the editor restored `redline:railWidth` — switching
+  from `/` to a review jumped the whole layout sideways. The divider and the shared
+  `redline:railWidth` preference now live in one `bindRailResize` helper used by both pages; the
+  editor still clamps against the inspector, the dashboard against the viewport. The e2e drags
+  the rail on the dashboard, opens a review and asserts the same width, then drags it back.
 - **The dashboard gallery is for work in progress.** `renderGallery` listed the last twelve
   sessions regardless of state, so a confirmed or cancelled feature kept a large screenshot card
   on `/` even though it no longer needed the human. The gallery now keeps only sessions whose

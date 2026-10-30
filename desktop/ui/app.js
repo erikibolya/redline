@@ -153,6 +153,29 @@ const lastProject = {
   },
 };
 
+/**
+ * The session rail's divider, shared by the dashboard and the editor. The width lives in
+ * `redline:railWidth` and in the `--rail` CSS variable, so moving between `/` and `/s/<id>`
+ * never jumps. `max` is a callback because the editor must leave room for the inspector.
+ */
+function bindRailResize({ max, onResize = () => {} } = {}) {
+  const app = $("#app");
+  const handle = $("#rail-resizer");
+  if (!app || !handle) return null;
+  const width = () => parseFloat(app.style.getPropertyValue("--rail")) || 272;
+  const limit = max || (() => Math.max(200, Math.min(560, innerWidth - 360)));
+  const set = (px, persist = true) => {
+    app.style.setProperty("--rail", `${px}px`);
+    if (persist) prefs.set("railWidth", px);
+    onResize();
+  };
+  // Restoring (and clamping) is not a resize: keep the preferred size for a wider window.
+  set(Math.min(prefs.get("railWidth", 272), limit()), false);
+  bindSplitter(handle, { min: () => 200, max: limit, size: width, apply: set });
+  addEventListener("resize", () => set(Math.min(width(), limit()), false));
+  return { width, max: limit, set };
+}
+
 /** Sessions this browser has looked at, for the "new" dot. */
 const seen = {
   all() { return prefs.get("seen", {}); },
@@ -1296,14 +1319,15 @@ class Editor {
     const inspector = $(".inspector");
     const conversation = $("#conversation");
     const width = (name, fallback) => parseFloat(app.style.getPropertyValue(name)) || fallback;
-    const railWidth = () => width("--rail", 272);
     const inspectorWidth = () => width("--inspector", 304);
 
-    const setRail = (px, persist = true) => {
-      app.style.setProperty("--rail", `${px}px`);
-      if (persist) prefs.set("railWidth", px);
-      this.resize();
-    };
+    // The rail is shared with the dashboard; the editor only adds the inspector limit.
+    const rail = bindRailResize({
+      max: () => Math.max(160, Math.min(560, innerWidth - inspectorWidth() - 360)),
+      onResize: () => this.resize(),
+    });
+    const railWidth = () => rail?.width() ?? 272;
+
     const setInspector = (px, persist = true) => {
       app.style.setProperty("--inspector", `${px}px`);
       if (persist) prefs.set("inspectorWidth", px);
@@ -1315,22 +1339,14 @@ class Editor {
     };
 
     // A column may not eat the stage: leave room for a readable canvas on either side.
-    const railMax = () => Math.max(160, Math.min(560, innerWidth - inspectorWidth() - 360));
     const inspectorMax = () => Math.max(200, Math.min(680, innerWidth - railWidth() - 360));
     // Whatever the conversation takes, the annotation list and the disclosures keep some room.
     const conversationMax = () => Math.max(180, inspector.clientHeight - 170);
 
     // Restoring (and clamping) is not a resize: keep the preferred size for a wider window.
-    setRail(Math.min(prefs.get("railWidth", 272), railMax()), false);
     setInspector(Math.min(prefs.get("inspectorWidth", 304), inspectorMax()), false);
     setConversation(Math.min(prefs.get("convHeight", 300), conversationMax()), false);
 
-    bindSplitter($("#rail-resizer"), {
-      min: () => 200,
-      max: railMax,
-      size: railWidth,
-      apply: setRail,
-    });
     bindSplitter($("#inspector-resizer"), {
       sign: -1,
       min: () => 240,
@@ -1348,7 +1364,6 @@ class Editor {
     });
 
     addEventListener("resize", () => {
-      setRail(Math.min(railWidth(), railMax()), false);
       setInspector(Math.min(inspectorWidth(), inspectorMax()), false);
       setConversation(Math.min(prefs.get("convHeight", 300), conversationMax()), false);
     });
@@ -3158,6 +3173,7 @@ function renderGallery(rail) {
 }
 
 async function bootList() {
+  bindRailResize();
   const refresh = async () => {
     await rail.load();
     renderGallery(rail);

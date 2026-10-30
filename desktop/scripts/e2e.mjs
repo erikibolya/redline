@@ -1697,6 +1697,35 @@ const main = async () => {
   // The pick survives a reload: the next review starts in the project the human works in.
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
+
+  // ---- the rail is one panel on every page, not a per-page width
+  const listRail = () => page.evaluate(() => ({
+    rail: Math.round(document.querySelector(".rail").getBoundingClientRect().width),
+    stored: Number(localStorage.getItem("redline:railWidth")),
+    handle: Boolean(document.querySelector("#rail-resizer")),
+  }));
+  const listBefore = await listRail();
+  check("the dashboard rail keeps the editor width",
+    listBefore.handle && Math.abs(listBefore.rail - restored.rail) <= 2,
+    `${restored.rail}px editor → ${listBefore.rail}px dashboard`);
+  const listHandle = await handleAt("#rail-resizer");
+  await drag(page, listHandle, { x: listHandle.x + 40, y: listHandle.y });
+  const listDragged = await listRail();
+  check("the dashboard rail is draggable",
+    Math.abs(listDragged.rail - listBefore.rail - 40) <= 2,
+    `${listBefore.rail}px → ${listDragged.rail}px`);
+  check("the dashboard rail stores its width",
+    Math.abs(listDragged.stored - listDragged.rail) <= 1,
+    `${listDragged.stored}px stored`);
+  await page.goto(`${BASE}/s/${pickedId}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
+  const editorAgain = await panels();
+  check("the editor restores the width set on the dashboard",
+    Math.abs(editorAgain.rail - listDragged.rail) <= 2,
+    `${listDragged.rail}px dashboard → ${editorAgain.rail}px editor`);
+  await page.goto(`${BASE}/`, { waitUntil: "networkidle2" });
+  await page.waitForSelector(".gallery .card", { timeout: 5000 });
+
   await page.click("#new-review");
   await page.waitForFunction(
     () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),

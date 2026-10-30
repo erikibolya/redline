@@ -59,7 +59,9 @@ the hairline that highlights in the accent colour on hover or focus; drag it (or
 the arrow keys, Shift for bigger steps) and the panel follows while the canvas is re-measured
 mid-drag. Sizes live in CSS variables (`--rail`, `--inspector`, `--conv`) and are remembered per
 browser (`redline:railWidth`, `redline:inspectorWidth`, `redline:convHeight`). Limits keep the
-stage usable (≥ 360 px) and leave room for the annotation list above the conversation.
+stage usable (≥ 360 px) and leave room for the annotation list above the conversation. The rail
+divider is present on the dashboard too; both pages read the same `redline:railWidth` and
+`--rail`, so moving between `/` and `/s/<id>` keeps the width instead of jumping back to 272 px.
 
 Header icon buttons (`?`, theme, rail, inspector) are a fixed **32 × 32 px square**: the glyph
 inside changes width (`?` is narrower than `☀`), the button must not.

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Confirmed and cancelled badges are tinted, not black pills.** The dark rail painted
+  `confirmed` as `#10231a` and `cancelled` as `#2a1115`, which read as a black background with
+  coloured text. They now use translucent green/red tints with matching borders in dark mode and
+  solid pastel green/red in light mode; the text keeps its contrast. The e2e samples both badges
+  in both themes and asserts the computed backgrounds, text and borders.
 - **Back to sessions returns to the active server, not to the local one.** The Servers and Setup
   pages are served by the desktop app's local server; their "Back to sessions" link was always
   `href="/"`, so with a remote profile active it opened the local dashboard, which has no

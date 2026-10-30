@@ -526,6 +526,27 @@ const main = async () => {
     return sessionId;
   };
 
+  /// Read a rail badge's computed colours in both themes without leaving the current theme on.
+  const badgeStyles = (selector) => page.evaluate((sel) => {
+    const element = document.querySelector(sel);
+    if (!element) return null;
+    const theme = document.documentElement.dataset.theme || "dark";
+    const read = () => {
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        color: style.color,
+        border: style.borderTopColor,
+      };
+    };
+    document.documentElement.dataset.theme = "dark";
+    const dark = read();
+    document.documentElement.dataset.theme = "light";
+    const light = read();
+    document.documentElement.dataset.theme = theme;
+    return { dark, light };
+  }, selector);
+
   /** The row, number, label and painted badge for the last annotation in a fresh session. */
   const readLastAnnotation = async () => page.evaluate(() => {
     const editor = window.redline;
@@ -1138,6 +1159,16 @@ const main = async () => {
   check("the confirmed feature opens from Done with its decision stamped",
     confirmed.stamped && confirmed.selected && confirmed.filter === "resolved",
     JSON.stringify(confirmed));
+  const confirmedBadge = await badgeStyles(".session .badge.confirmed");
+  check("confirmed badge is a green tint, not a black pill",
+    confirmedBadge
+      && confirmedBadge.dark.background === "rgba(34, 197, 94, 0.18)"
+      && confirmedBadge.dark.color === "rgb(134, 239, 172)"
+      && confirmedBadge.dark.border === "rgba(74, 222, 128, 0.55)"
+      && confirmedBadge.light.background === "rgb(220, 252, 231)"
+      && confirmedBadge.light.color === "rgb(22, 101, 52)"
+      && confirmedBadge.light.border === "rgb(134, 239, 172)",
+    JSON.stringify(confirmedBadge));
 
   // "All" is the only view that keeps a finished session alongside active work.
   await clickChip("All");
@@ -1247,6 +1278,16 @@ const main = async () => {
     { timeout: 10000 }, id);
   await page.waitForFunction(() => Boolean(window.redline?.meta?.feature_cancelled_at),
     { timeout: 10000 });
+  const cancelledBadge = await badgeStyles(".session .badge.cancelled");
+  check("cancelled badge is a red tint, not a black pill",
+    cancelledBadge
+      && cancelledBadge.dark.background === "rgba(244, 63, 94, 0.16)"
+      && cancelledBadge.dark.color === "rgb(253, 164, 175)"
+      && cancelledBadge.dark.border === "rgba(251, 113, 133, 0.5)"
+      && cancelledBadge.light.background === "rgb(255, 228, 230)"
+      && cancelledBadge.light.color === "rgb(159, 18, 57)"
+      && cancelledBadge.light.border === "rgb(253, 164, 175)",
+    JSON.stringify(cancelledBadge));
   await page.hover(row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   let reopenedCancel = {};

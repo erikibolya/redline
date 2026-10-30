@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The rolling dev release is tagged `dev-build`, not `dev`.** A tag that shares its name with a
+  branch is a trap: git resolves the *revision* `dev` to the tag (`git log dev`, `git diff dev`,
+  `git merge dev` all used the tag's commit, silently) and `git worktree add … dev` refuses it with
+  `fatal: ambiguous object name`. The channel tag now has its own name; `DEV_MANIFEST`, the dev
+  workflow and `docs/DESKTOP.md` follow. The old `dev` release is kept only long enough for an
+  installed dev build to pick up a transitional `latest.json`, then removed. Stable releases are
+  untouched.
 - **A review belongs to a feature, not to a session id.** A review the human created without
   naming a branch (the New review dialog never asked) was claimed on the fallback
   `session/<id>`: the rail showed `session/20261030-…`, and the agent was told to push a branch
@@ -15,7 +22,6 @@
   same name, so the claim, the prompt and the rail agree. Tests: the API creates without a branch
   and asserts claim work key, rail row and rename; the store test pins the naming; the e2e creates
   a review through the dialog and asserts the rail branch is `feat/…`.
-
 - **A tag named like the base branch no longer kills the run.** The bridge picked the worktree's
   start point with a short ref (`dev`, `main`, `origin/dev`, …). This repository also has a tag
   `dev`, so `git worktree add` answered `warning: refname 'dev' is ambiguous` and

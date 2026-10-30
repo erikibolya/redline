@@ -53,8 +53,9 @@ inside changes width (`?` is narrower than `☀`), the button must not.
 - Search field (title, note, id).
 - Filter chips with counts: `All` · `Active` (default) · `Open` · `Submitted` · `Done`. `All`
   keeps finished sessions visible; `Active` hides `resolved`. The old `Mine` chip is gone.
-- Each row: agent-provided **title**, note excerpt, relative time (`2h ago`), status dot, and a
-  badge that says who has the ball: **working** while the agent runs, **waiting for agent** for a
+- Each row: agent-provided **title**, note excerpt, relative time (`2h ago`), the feature
+  **branch** when known (accent monospace), status dot, and a badge that says who has the ball:
+  **working** while the agent runs, **waiting for agent** for a
   submitted round nobody has picked up, **confirmed** / **cancelled** after a feature decision,
   otherwise a **new** marker for anything this browser has not looked at (tracked per session in
   `localStorage`) or the annotation count.
@@ -155,6 +156,20 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   confirmed features stay as the feature log. It is hidden when no feature is cancelled.
 - The decision is additive server state (`feature_confirmed_at` / `feature_cancelled_at`); a new
   submission or agent round clears it, so a feature that gets more work is pending again.
+
+## Agent settings and branches (v0.22)
+
+- The header gear opens **Agent settings**: global max concurrent runs (default 2), default
+  per-project limit (default 1), claim lease, per-project overrides, and live claims.
+- Settings live on the server (`/data/agent-settings.json`) and are shared by the desktop and web
+  UI. Changing them applies to new claims; the bridge's worker count is a separate startup knob
+  until the parallel worker slice.
+- A session can carry a `branch`. The rail shows it after the relative time in accent monospace
+  (`2h ago · feat/parallel-runs`); a missing branch falls back to `session/<id>` when an agent
+  claims the work.
+- A running claim consumes a slot; a claim waiting for the human frees the slot but keeps the
+  branch lock. One branch has one owner. The built-in bridge still runs one review at a time
+  until the parallel worker slice lands; the server/UI/API are ready for it.
 
 ## Touch, bulk and accessibility (unreleased)
 

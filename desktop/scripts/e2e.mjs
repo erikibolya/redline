@@ -111,7 +111,12 @@ const main = async () => {
 
   const created = await api("/api/sessions", {
     method: "POST",
-    body: JSON.stringify({ title: "e2e canvas", image_base64: makePng(), project: "E2E" }),
+    body: JSON.stringify({
+      title: "e2e canvas",
+      image_base64: makePng(),
+      project: "E2E",
+      branch: "feat/e2e-canvas",
+    }),
   });
   const id = created.meta.id;
 
@@ -226,6 +231,43 @@ const main = async () => {
   await page.waitForSelector(".rail-project", { timeout: 5000 });
   const projectHeader = await page.$eval(".rail-project .pname", (el) => el.textContent.trim());
   check("rail groups sessions by project", projectHeader === "E2E", `header=${projectHeader}`);
+
+  const branch = await page
+    .$eval('.session[aria-current="true"] .sub .branch', (el) => el.textContent.trim())
+    .catch(() => "");
+  check("the rail shows the feature branch next to the time", branch === "feat/e2e-canvas", branch);
+
+  // ---- agent concurrency settings are server-side and editable from the UI
+  await page.click("[data-agent-settings]");
+  await page.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+  const settingsBefore = await page.evaluate(() => ({
+    global: document.querySelector("#agent-max-parallel").value,
+    project: document.querySelector("#agent-project-max-parallel").value,
+    lease: document.querySelector("#agent-lease-seconds").value,
+    hasE2E: Boolean(document.querySelector('#agent-project-list input[data-project="e2e"]')),
+  }));
+  check("agent settings open with the server defaults",
+    settingsBefore.global === "2" && settingsBefore.project === "1"
+      && settingsBefore.lease === "120" && settingsBefore.hasE2E,
+    JSON.stringify(settingsBefore));
+  await page.$eval("#agent-max-parallel", (input) => { input.value = "3"; });
+  await page.$eval("#agent-project-max-parallel", (input) => { input.value = "2"; });
+  await page.$eval('#agent-project-list input[data-project="e2e"]', (input) => { input.value = "2"; });
+  await page.click("#agent-settings-save");
+  await page.waitForFunction(
+    () => !document.querySelector("#agent-settings-dialog")?.open,
+    { timeout: 10000 },
+  );
+  const savedSettings = await api("/api/agent/settings");
+  const e2eProject = (savedSettings.projects || []).find((project) => project.slug === "e2e");
+  check("agent settings save globally and per project",
+    savedSettings.max_parallel === 3 && savedSettings.project_max_parallel === 2
+      && e2eProject?.max_parallel === 2 && e2eProject?.effective_max_parallel === 2,
+    JSON.stringify({
+      max: savedSettings.max_parallel,
+      project: savedSettings.project_max_parallel,
+      e2e: e2eProject,
+    }));
 
   const canvas = await page.$eval("#canvas", (el) => {
     const rect = el.getBoundingClientRect();

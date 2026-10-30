@@ -65,6 +65,90 @@ fn authed(method: &str, uri: &str, body: Value) -> Request<Body> {
         .unwrap()
 }
 
+async fn submitted_session(h: &Harness, project: &str, branch: &str) -> String {
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({
+                "title": format!("{project} {branch}"),
+                "image_base64": PNG_B64,
+                "project": project,
+                "branch": branch,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["meta"]["branch"], branch);
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, submitted) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({
+                "annotations": [
+                    {"type": "text", "x": 1, "y": 2, "text": "review", "color": "#e11d48"}
+                ],
+                "png": format!("data:image/png;base64,{PNG_B64}"),
+                "width": 1,
+                "height": 1
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    assert_eq!(submitted["meta"]["status"], "submitted");
+    id
+}
+
+async fn claim(h: &Harness, id: &str, agent: &str) -> (StatusCode, axum::http::HeaderMap, Value) {
+    send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/claims",
+            json!({ "session_id": id, "agent_id": agent }),
+        ),
+    )
+    .await
+}
+
+async fn claim_state(
+    h: &Harness,
+    id: &str,
+    agent: &str,
+    state: &str,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/agent/claims/{id}/state"),
+            json!({ "agent_id": agent, "state": state }),
+        ),
+    )
+    .await
+}
+
+async fn release_claim(
+    h: &Harness,
+    id: &str,
+    agent: &str,
+) -> (StatusCode, axum::http::HeaderMap, Value) {
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/agent/claims/{id}/release"),
+            json!({ "agent_id": agent }),
+        ),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn health_is_public_but_sessions_are_not() {
     let h = harness();
@@ -407,6 +491,172 @@ async fn features_can_be_confirmed_cancelled_and_reopened() {
     )
     .await;
     assert_eq!(body["meta"]["feature_cancelled_at"], Value::Null);
+}
+
+#[tokio::test]
+async fn agent_settings_and_branch_are_exposed_and_editable() {
+    let h = harness();
+    let request = Request::builder()
+        .uri("/api/agent/settings")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["max_parallel"], 2);
+    assert_eq!(body["project_max_parallel"], 1);
+    assert_eq!(body["lease_seconds"], 120);
+
+    let (status, _, _) = send(
+        &h.app,
+        authed("POST", "/api/projects", json!({"name": "p1"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let id = submitted_session(&h, "p1", "feat/branch").await;
+    let request = Request::builder()
+        .uri("/api/sessions")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, listed) = send(&h.app, request).await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert_eq!(row["branch"], "feat/branch");
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/agent/settings",
+            json!({
+                "max_parallel": 3,
+                "project_max_parallel": 2,
+                "lease_seconds": 60,
+                "projects": { "p1": 2 }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["max_parallel"], 3);
+    assert_eq!(body["project_max_parallel"], 2);
+    assert_eq!(body["lease_seconds"], 60);
+    let project = body["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|project| project["slug"] == "p1")
+        .unwrap();
+    assert_eq!(project["max_parallel"], 2);
+    assert_eq!(project["effective_max_parallel"], 2);
+}
+
+#[tokio::test]
+async fn agent_claims_enforce_limits_and_waiting_releases_the_slot() {
+    let h = harness();
+    let a = submitted_session(&h, "p1", "feat/a").await;
+    let b = submitted_session(&h, "p1", "feat/b").await;
+    let c = submitted_session(&h, "p2", "feat/c").await;
+    let d = submitted_session(&h, "p3", "feat/d").await;
+    let e = submitted_session(&h, "p1", "feat/a").await;
+
+    let (status, _, body) = claim(&h, &a, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["claim"]["state"], "running");
+
+    let (status, _, body) = claim(&h, &b, "agent").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    let (status, _, body) = claim(&h, &c, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = claim(&h, &d, "agent").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    // A is waiting for the human: it keeps feat/a but frees the project/global run slot.
+    let (status, _, body) = claim_state(&h, &a, "agent", "waiting").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["claim"]["state"], "waiting");
+    let (status, _, body) = claim(&h, &b, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, body) = claim(&h, &e, "agent").await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+
+    let (status, _, _) = release_claim(&h, &b, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = release_claim(&h, &c, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = claim(&h, &d, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn agent_next_claims_across_branches_and_skips_locked_ones() {
+    let h = harness();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/agent/settings",
+            json!({"max_parallel": 2, "project_max_parallel": 2}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let a = submitted_session(&h, "p1", "feat/x").await;
+    let b = submitted_session(&h, "p2", "feat/x").await;
+    let c = submitted_session(&h, "p2", "feat/y").await;
+
+    let (status, _, first) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let first_id = first["session"]["id"].as_str().unwrap().to_string();
+    assert!(first_id == a || first_id == b, "{first}");
+
+    let (status, _, second) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["session"]["id"], c);
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{first_id}/resolve"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = release_claim(&h, &first_id, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{c}/resolve"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = release_claim(&h, &c, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, third) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{third}");
+    let third_id = third["session"]["id"].as_str().unwrap_or_default();
+    let expected = if first_id == a { b } else { a };
+    assert_eq!(third_id, expected);
 }
 
 #[tokio::test]

@@ -84,6 +84,7 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   "resolved_at": null,
   "feature_confirmed_at": null,
   "feature_cancelled_at": null,
+  "branch": "feat/button-hover",
   "image": "screenshot.png",
   "image_width": 1440,
   "image_height": 900
@@ -105,6 +106,18 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
 
 `review.md` is generated from meta + annotations. Text notes include their coordinates; rectangles
 include start/end/color/width; other shapes point to the JSON.
+
+### Agent concurrency state
+
+Next to `sessions/` the data directory holds `agent-settings.json` (global max, default
+per-project max, lease) and `agent-claims.json` (one claim per active session). Defaults are 2
+global runs, 1 per project and a 120 s lease. A claim is `running` or `waiting`; `waiting` keeps
+the branch lock but does not consume an execution slot.
+
+The server is the authority. The bridge asks `POST /api/agent/next`, heartbeats, and marks
+`waiting` when the human has the ball. The branch key is `meta.branch`, falling back to
+`session/<id>`; RedLine never touches git. The bridge creates a worktree per branch and runs the
+agent there.
 
 ## HTTP server
 

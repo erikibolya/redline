@@ -27,6 +27,7 @@ Editor page (HTML). The page reads the id from the path and calls the JSON API b
       "feature_state": "pending",
       "feature_confirmed_at": null,
       "feature_cancelled_at": null,
+      "branch": "feat/button-hover",
       "created_at": "2026-10-28T11:11:13+00:00",
       "submitted_at": null,
       "image": "screenshot.png"
@@ -130,6 +131,8 @@ to the agent's repo root).
       "name": "redline",
       "agent": "holly",
       "repo": "redline",
+      "max_parallel": null,
+      "effective_max_parallel": 1,
       "created_at": "2026-10-29T18:20:00+00:00",
       "sessions": 4,
       "waiting": 1,
@@ -158,6 +161,44 @@ Content-Type: application/json
 
 Returns `{"ok": true, "projects": [ … ]}`. Re-reporting the same key updates its `name`/`agent` and
 keeps its slug, so sessions keep their project.
+
+### Agent concurrency (v0.22)
+
+The server is the authority for run limits and branch ownership. Defaults are **2 concurrent
+runs** globally and **1 per project**; a branch always has at most one owner. A claim in
+`waiting` state keeps the branch lock but does not consume a run slot.
+
+```json
+GET /api/agent/settings
+{
+  "max_parallel": 2,
+  "project_max_parallel": 1,
+  "lease_seconds": 120,
+  "running": 1,
+  "waiting": 0,
+  "claims": [],
+  "projects": [
+    {"slug": "redline", "name": "redline", "repo": "redline",
+     "max_parallel": null, "effective_max_parallel": 1}
+  ]
+}
+```
+
+`PUT /api/agent/settings` accepts any of `max_parallel`, `project_max_parallel`,
+`lease_seconds`, and a `projects` map of `slug -> number|null` (`null` inherits the default).
+
+```http
+POST /api/agent/next       {"agent_id": "holly"}
+POST /api/agent/claims     {"session_id": "…", "agent_id": "holly", "work_key": "feat/x"}
+POST /api/agent/claims/…/heartbeat   {"agent_id": "holly"}
+POST /api/agent/claims/…/state       {"agent_id": "holly", "state": "waiting"}
+POST /api/agent/claims/…/release     {"agent_id": "holly"}
+```
+
+`next` returns `{"session": {…}, "claim": {…}, "limits": {…}}` or
+`{"session": null, "reason": "empty|at_capacity|branch_locked|claimed"}`. A claim response is
+`{"claim": {…}, "session": {…}, "limits": {…}}`. The branch key is `session.branch`, or
+`session/<id>` when the agent did not declare one.
 
 ### `GET /health`
 
@@ -238,6 +279,7 @@ See `docs/ARCHITECTURE.md` § Storage schema. Fields:
 | `feature_confirmed_at` | The human confirmed the feature; agents map this to their own workflow. |
 | `feature_cancelled_at` | The human cancelled the feature; nothing should be merged. |
 | `feature_state` | Derived in `GET /api/sessions`: `pending`, `confirmed` or `cancelled`. |
+| `branch` | Feature branch the agent declared. Used as the branch-lock key; missing means `session/<id>`. |
 | `image` | Screenshot filename inside the session. |
 | `image_width` / `image_height` | Present after submission; canvas dimensions. |
 

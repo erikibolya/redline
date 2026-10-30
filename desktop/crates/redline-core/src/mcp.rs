@@ -82,6 +82,7 @@ pub fn tool_definitions() -> Value {
                     "url": { "type": "string", "description": "Page URL the screenshot came from." },
                     "note": { "type": "string", "description": "What the human should look at." },
                     "project": { "type": "string", "description": "Project name or slug; created on first use. Default: Inbox." },
+                    "branch": { "type": "string", "description": "Feature branch this review belongs to. RedLine uses it as the branch-lock key." },
                     "wait_seconds": { "type": "number", "description": "Block up to this long for a submission (default 0)." }
                 },
                 "required": ["title"],
@@ -101,6 +102,7 @@ pub fn tool_definitions() -> Value {
                     "title": { "type": "string", "description": "What is being reviewed." },
                     "note": { "type": "string", "description": "What the human should look at." },
                     "project": { "type": "string", "description": "Project name or slug; created on first use. Default: Inbox." },
+                    "branch": { "type": "string", "description": "Feature branch this review belongs to. RedLine uses it as the branch-lock key." },
                     "viewport": { "type": "string", "description": "e.g. 1440x900 (default)." },
                     "wait_seconds": { "type": "number", "description": "Block up to this long for a submission." }
                 },
@@ -300,6 +302,13 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
             args.get("project").and_then(Value::as_str),
         )
         .map_err(|err| err.to_string())?;
+    let meta = if let Some(branch) = string_arg(args, "branch") {
+        ctx.store
+            .set_branch(&meta.id, Some(&branch))
+            .map_err(|err| err.to_string())?
+    } else {
+        meta
+    };
 
     let wait = args
         .get("wait_seconds")
@@ -359,6 +368,13 @@ async fn capture_review(ctx: &McpContext<'_>, args: &Value) -> Result<Value, Str
             args.get("project").and_then(Value::as_str),
         )
         .map_err(|err| err.to_string())?;
+    let meta = if let Some(branch) = string_arg(args, "branch") {
+        ctx.store
+            .set_branch(&meta.id, Some(&branch))
+            .map_err(|err| err.to_string())?
+    } else {
+        meta
+    };
 
     let wait = args
         .get("wait_seconds")

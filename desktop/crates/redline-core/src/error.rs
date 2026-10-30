@@ -13,6 +13,8 @@ pub enum Error {
     #[error("{0}")]
     BadRequest(String),
     #[error("{0}")]
+    Conflict(String),
+    #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Json(#[from] serde_json::Error),
@@ -24,7 +26,7 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Error::InvalidId | Error::NotFound(_) => StatusCode::NOT_FOUND,
-            Error::Exists(_) => StatusCode::CONFLICT,
+            Error::Exists(_) | Error::Conflict(_) => StatusCode::CONFLICT,
             Error::BadRequest(_) => StatusCode::BAD_REQUEST,
             Error::Json(_) => StatusCode::BAD_REQUEST,
             Error::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,

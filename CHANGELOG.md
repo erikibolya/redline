@@ -6,8 +6,13 @@
   agent (fallback `session/<id>`), the rail shows it after the relative time, and the server has
   branch ownership leases plus global/per-project run limits — defaults 2 global and 1 per
   project, editable in the new **Agent settings** dialog. A waiting claim keeps the branch lock
-  but frees the execution slot. The built-in bridge still runs one review at a time; the parallel
-  worker slice consumes this API next.
+  but frees the execution slot. The bridge runs parallel claim workers against this API.
+- **The agent bridge runs reviews in parallel.** `redline-agent` now runs up to four claim workers
+  (`REDLINE_AGENT_WORKERS`, default 4) against `/api/agent/next`; each claim gets its own git
+  worktree on the declared branch, heartbeats its lease, moves to `waiting` when the human has the
+  ball (freeing the run slot but keeping the branch), and releases/removes a clean worktree when
+  the round is resolved. The server's global/per-project limits and the one-owner-per-branch rule
+  still apply; a dirty worktree is left for inspection.
 - **Freehand strokes are numbered and listed again.** `renderInspector` read
   `annotation.start.x` for every non-text shape, but a pen stores `points`; the resulting
   `TypeError` aborted `mutate` before `render()`, so the live stroke stayed on screen with no

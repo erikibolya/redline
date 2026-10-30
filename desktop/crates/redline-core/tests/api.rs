@@ -611,35 +611,18 @@ async fn agent_next_claims_across_branches_and_skips_locked_ones() {
     let b = submitted_session(&h, "p2", "feat/x").await;
     let c = submitted_session(&h, "p2", "feat/y").await;
 
-    let (status, _, first) = send(
-        &h.app,
-        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{first}");
-    let first_id = first["session"]["id"].as_str().unwrap().to_string();
-    assert!(first_id == a || first_id == b, "{first}");
-
-    let (status, _, second) = send(
-        &h.app,
-        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
-    )
-    .await;
-    assert_eq!(status, StatusCode::OK, "{second}");
-    assert_eq!(second["session"]["id"], c);
-
-    let (status, _, body) = send(
-        &h.app,
-        authed(
-            "POST",
-            &format!("/api/sessions/{first_id}/resolve"),
-            json!({}),
-        ),
-    )
-    .await;
+    // a owns feat/x; b shares it and must be skipped, so next returns the independent c.
+    let (status, _, body) = claim(&h, &a, "agent").await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let (status, _, _) = release_claim(&h, &first_id, "agent").await;
-    assert_eq!(status, StatusCode::OK);
+    let (status, _, next) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["session"]["id"], c);
+
+    // Resolve and release c; a still owns feat/x, so b must remain blocked even with a free slot.
     let (status, _, body) = send(
         &h.app,
         authed("POST", &format!("/api/sessions/{c}/resolve"), json!({})),
@@ -648,15 +631,24 @@ async fn agent_next_claims_across_branches_and_skips_locked_ones() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let (status, _, _) = release_claim(&h, &c, "agent").await;
     assert_eq!(status, StatusCode::OK);
-    let (status, _, third) = send(
+    let (status, _, blocked) = send(
         &h.app,
         authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{third}");
-    let third_id = third["session"]["id"].as_str().unwrap_or_default();
-    let expected = if first_id == a { b } else { a };
-    assert_eq!(third_id, expected);
+    assert_eq!(status, StatusCode::OK, "{blocked}");
+    assert!(blocked["session"].is_null(), "{blocked}");
+
+    let (status, _, _) = release_claim(&h, &a, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, fourth) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fourth}");
+    let fourth_id = fourth["session"]["id"].as_str().unwrap_or_default();
+    assert!(fourth_id == a || fourth_id == b, "{fourth}");
 }
 
 #[tokio::test]

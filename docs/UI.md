@@ -162,14 +162,14 @@ Each session is one feature. The rail's row actions carry the human's decision; 
 - The header gear opens **Agent settings**: global max concurrent runs (default 2), default
   per-project limit (default 1), claim lease, per-project overrides, and live claims.
 - Settings live on the server (`/data/agent-settings.json`) and are shared by the desktop and web
-  UI. Changing them applies to new claims; the bridge's worker count is a separate startup knob
-  until the parallel worker slice.
+  UI. Changing them applies to new claims; the bridge's worker count is
+  `REDLINE_AGENT_WORKERS` (default 4), and the server's limits are the real cap.
 - A session can carry a `branch`. The rail shows it after the relative time in accent monospace
   (`2h ago · feat/parallel-runs`); a missing branch falls back to `session/<id>` when an agent
   claims the work.
 - A running claim consumes a slot; a claim waiting for the human frees the slot but keeps the
-  branch lock. One branch has one owner. The built-in bridge still runs one review at a time
-  until the parallel worker slice lands; the server/UI/API are ready for it.
+  branch lock. One branch has one owner. The bridge runs up to four claim workers
+  (`REDLINE_AGENT_WORKERS`), each in its own git worktree; the server enforces the limits.
 
 ## Touch, bulk and accessibility (unreleased)
 

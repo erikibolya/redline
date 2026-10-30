@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The rail says who has the ball.** A submitted round that no agent has picked up used to carry
+  the **new** badge (which only meant "this browser has not looked at it yet"), so a review
+  sitting in the queue read as the human's turn. It now reads **waiting for agent**; `new` is
+  reserved for rounds that are back in the human's hands, and `working` still wins while an agent
+  runs. The project header keeps a single count instead of a green waiting count beside the same
+  total. The browser e2e asserts the badge and the missing header count.
 - **The Servers page Remove button is readable again.** `.server-actions .btn.danger` kept the
   filled `.btn.danger` background and only overrode the label to `--danger`, so *Remove* was red
   text on a red button. It is now an outline in both themes (label contrast 9.2:1 dark, 6.3:1

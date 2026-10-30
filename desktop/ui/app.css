@@ -432,8 +432,18 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: var(--panel-3); color: var(--muted); border: 1px solid var(--border);
 }
 .session .badge.new { background: var(--accent); border-color: var(--accent); color: #fff; }
-.session .badge.confirmed { background: #10231a; border-color: #14532d; color: #86efac; }
-.session .badge.cancelled { background: #2a1115; border-color: #7f1d1d; color: #fca5a5; }
+.session .badge.confirmed {
+  background: rgba(34, 197, 94, .18); border-color: rgba(74, 222, 128, .55); color: #86efac;
+}
+.session .badge.cancelled {
+  background: rgba(244, 63, 94, .16); border-color: rgba(251, 113, 133, .5); color: #fda4af;
+}
+[data-theme="light"] .session .badge.confirmed {
+  background: #dcfce7; border-color: #86efac; color: #166534;
+}
+[data-theme="light"] .session .badge.cancelled {
+  background: #ffe4e6; border-color: #fda4af; color: #9f1239;
+}
 .session .badge.work {
   display: inline-flex; align-items: center; gap: 5px; padding: 0 8px;
   background: var(--panel-2); border-color: var(--accent); color: var(--accent);

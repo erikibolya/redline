@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Confirmed and cancelled badges are tinted, not black pills.** The dark rail painted
+  `confirmed` as `#10231a` and `cancelled` as `#2a1115`, which read as a black background with
+  coloured text. They now use translucent green/red tints with matching borders in dark mode and
+  solid pastel green/red in light mode; the text keeps its contrast. The e2e samples both badges
+  in both themes and asserts the computed backgrounds, text and borders.
 - **Connect an agent is a dialog, shown only when it is needed.** The dashboard embedded the MCP
   JSON forever, even after the bridge was already polling, so the most prominent block on `/` was
   setup the human had finished. The header chip now opens a **Connect an agent** dialog (masked

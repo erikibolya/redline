@@ -164,7 +164,9 @@ Each session is one feature. The rail's row actions carry the human's decision; 
 
 - **✓ Confirm feature** opens a dialog that explains the consequence and only then calls
   `POST /api/sessions/<id>/confirm-feature`. The session becomes `resolved` and keeps
-  `feature_confirmed_at`; the rail shows a green `confirmed` badge and dot.
+  `feature_confirmed_at`; the rail shows a green-tinted `confirmed` badge and dot. Cancelled
+  features get a red-tinted `cancelled` badge; both keep their solid text/border colours in the
+  light theme, so the decision never reads as a black pill on the dark rail.
 - **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
   **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
   with `feature_cancelled_at`, nothing is merged and the screenshot/annotations stay in **Done**.

@@ -222,6 +222,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   refname (`refs/heads/dev`, `refs/remotes/origin/dev`) and peel to `^{commit}`; keep the short
   name only where git demands a branch name (`worktree add <path> <branch>`). Tags are not
   branches: a stray `dev` tag in a repo must never change where work starts.
+- **A session id is not a branch name.** The bridge's fallback when nobody declared a branch was
+  `session/<id>`, and the New review dialog never asked — so a human-made review ran on a
+  timestamp branch (the rail showed `session/20261030-…`) that an agent cannot push or merge as a
+  feature. A review now gets `feat/<title-slug>-<id-tail>` at creation, the dialog offers a
+  *Feature branch* field and the header renames it (`PUT /api/sessions/{id}/branch`, refused while
+  the round is submitted because the worktree already exists); v0.21's persisted fallback is read
+  back as the `feat/…` name and `Meta::work_key()` derives it instead of inventing a session
+  branch. A name that only says *when* is not a name for what is being built.
 - **The OpenCode project API is experimental.** `/api/project` is useful for display names and
   active projects, but discovery must still scan the repo root for `.git`; dedupe the same repo
   seen through two mounts (`/mnt/user/...` and `/mnt/c/...`).
@@ -289,6 +297,19 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   history row the focus stays on the row, so the gesture silently died — arm space while the
   pointer hovers the stage, never while typing. Test the real gestures (drag, wheel, ctrl+wheel,
   space+drag under row focus), not only `viewing`/`locked` flags.
+- **A submission is not automatically a new round.** Every `POST /annotations` archived its own
+  copy, so *STOP* → *Submit again* with nothing changed left the same annotations and the same
+  PNG twice in History, and a session the human thought of as "one task" read as two (2026-10-30).
+  A round is what the human *changed*: collapse a run of byte-identical copies to its newest entry
+  at the one place the list is built (`Store::history`), so already-duplicated sessions heal too,
+  and let a round that really changed keep its own row. Test the collapsed count *and* the changed
+  one.
+- **A current round is not also a history row.** After the agent resolved a review, History showed
+  the last submission twice — as *Round N* and again as the live *Current* row — because `current`
+  was derived from `status == submitted`, while the canvas keeps the round after resolve/reopen
+  (2026-10-30). Derive "current" from what the canvas actually shows (saved annotations + picture
+  equal the newest archived row), let *Current* appear only when the canvas differs from every
+  round, and test the resolved case *and* the agent-posted-picture case that still needs it.
 
 ## 8. Working rules
 

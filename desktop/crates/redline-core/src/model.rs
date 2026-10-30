@@ -109,15 +109,23 @@ impl Meta {
         }
     }
 
-    /// Key used to serialize work on one feature branch. Agents normally set `branch`; the
-    /// fallback keeps legacy and ad-hoc sessions from running twice in the same worktree.
+    /// Key used to serialize work on one feature branch. A review the human created without
+    /// naming a branch still runs on a feature branch: `session/<id>` was v0.21's fallback and
+    /// says nothing about the feature, so it is not a work key any more (v0.22).
     pub fn work_key(&self) -> String {
         self.branch
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
+            .filter(|value| !self.is_legacy_session_branch(value))
             .map(str::to_string)
-            .unwrap_or_else(|| format!("session/{}", self.id))
+            .unwrap_or_else(|| crate::store::default_branch(&self.title, &self.id))
+    }
+
+    /// True when `branch` is v0.21's `session/<own id>` fallback rather than a branch a human or
+    /// agent chose. Those reviews get the derived `feat/...` name instead.
+    pub fn is_legacy_session_branch(&self, branch: &str) -> bool {
+        branch.trim() == format!("session/{}", self.id)
     }
 }
 

@@ -181,9 +181,13 @@ Each session is one feature. The rail's row actions carry the human's decision; 
 - Settings live on the server (`/data/agent-settings.json`) and are shared by the desktop and web
   UI. Changing them applies to new claims; the bridge's worker count is
   `REDLINE_AGENT_WORKERS` (default 4), and the server's limits are the real cap.
-- A session can carry a `branch`. The rail shows it after the relative time in accent monospace
-  (`2h ago · feat/parallel-runs`); a missing branch falls back to `session/<id>` when an agent
-  claims the work.
+- A session can carry a `branch`. Every review has one from creation: the New review dialog's
+  optional *Feature branch* field, or the derived `feat/<title-slug>-<id-tail>`
+  (`feat/wrong-branches-52e0`). The rail shows it after the relative time in accent monospace
+  (`2h ago · feat/parallel-runs`) and the review header shows it beside the session id; clicking
+  it renames the branch (`PUT /api/sessions/{id}/branch`) — refused while the round is submitted,
+  because the agent's worktree already exists for the old name. v0.21's `session/<id>` fallback is
+  not produced any more and is read back as the `feat/…` name.
 - A running claim consumes a slot; a claim waiting for the human frees the slot but keeps the
   branch lock. One branch has one owner. The bridge runs up to four claim workers
   (`REDLINE_AGENT_WORKERS`), each in its own git worktree; the server enforces the limits.
@@ -392,6 +396,16 @@ plus `.png` (last 20 kept). `GET /api/sessions/<id>/history` lists them, and the
 **History** section links to the old screenshots — so a re-review can compare what changed instead
 of overwriting the evidence. Rounds are compact bordered rows (stamp, annotation count, then
 ghost / diff / screenshot actions), not full-size annotation cards, so the list stays scannable.
+
+One round is one row. *STOP* then *Submit again* without touching the canvas re-sends exactly the
+annotations and the picture already archived, so the list collapses such a run of identical copies
+to its newest entry instead of showing the same round twice (2026-10-30).
+
+The same rule applies to the live canvas: a round that is still what the canvas shows (after
+*Submit*, and also after the agent resolves or the review is reopened) is marked `current` and
+labelled **Round N (current)**. It is not listed a second time as a *Current* row; *Current* only
+appears when the canvas differs from every archived round (the agent posted a new picture, or the
+human is drawing the next round). Clicking the live round returns to the canvas.
 
 ## Layers, groups, text size (v0.5)
 

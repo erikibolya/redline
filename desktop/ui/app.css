@@ -134,6 +134,17 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 }
 .header .title b { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .header .title span { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.header .subline { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.header .subline #session-sub { min-width: 0; }
+/* The branch the work runs on. A button, because an old review can still carry v0.21's
+   `session/<id>` and the human needs a way to give it its real feature name. */
+.branch-chip {
+  flex: none; max-width: 46%; padding: 1px 6px; border-radius: 5px;
+  background: var(--accent-soft); border: 1px solid transparent; color: var(--accent);
+  font: 500 10.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
+}
+.branch-chip:hover, .branch-chip:focus-visible { border-color: var(--accent); }
 .header-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 /* A hairline between the app tools and the two panel toggles: they act on the layout, not the
    review, and used to read as one row of mystery glyphs. */
@@ -167,6 +178,11 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .feature-card { display: flex; flex-direction: column; gap: 10px; padding: 22px; }
 .feature-card h2 { margin: 0; font-size: 16px; }
 .feature-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.feature-card input[type="text"] {
+  width: 100%; padding: 8px 10px; border-radius: var(--radius);
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px;
+}
 .feature-actions {
   display: flex; justify-content: flex-end; align-items: center; gap: 8px;
   margin-top: 8px; flex-wrap: wrap;

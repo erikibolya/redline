@@ -41,6 +41,17 @@ before `render()`; the live preview was already on the canvas, so the tool *look
 the finished annotation had no badge and no list row. The new test draws a stroke, asserts the
 row/number/label and a red badge pixel, submits it, and checks the points in the server JSON.
 
+## Submission history
+
+- Rust `tests/api.rs`: `resubmitting_archives_the_previous_round` (a changed round gets its own
+  row), `resubmitting_an_unchanged_round_does_not_duplicate_history` (agent reads the round, the
+  human presses STOP, then *Submit again* with the same annotations and picture → still one row;
+  a later changed round adds one), `the_round_on_the_canvas_is_not_listed_as_a_second_current`
+  (resolve and reopen keep the round `current`, and an agent picture makes it not current).
+- Browser e2e: open History, assert one row per round, that an unchanged resubmission adds no
+  row, that a row opens read-only while *Current* returns to the live canvas, and that after STOP
+  the round on the canvas is one *Round N (current)* row with no extra *Current*.
+
 ## Agent concurrency (v0.22)
 
 - Rust `tests/agent.rs`: global/project capacity, waiting frees a run slot but keeps the branch,
@@ -54,6 +65,18 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   neither breaks the worktree nor moves its base off that branch.
 - Browser e2e: the Agent settings dialog saves global + per-project values, and the rail shows the
   session's branch next to the relative time.
+
+## Feature branches (v0.22)
+
+- Rust `tests/store.rs`: `default_branch` folds Czech titles into a git-safe `feat/<slug>-<tail>`,
+  and a review created without a branch already carries one.
+- Rust `tests/api.rs`: a review created without a branch claims and lists on `feat/…` (never
+  `session/<id>`); renaming is `409` while submitted and persisted when accepted; a v0.21
+  `session/<id>` branch is read back as the derived `feat/…` name in both `GET /api/sessions` and
+  `GET /api/sessions/{id}`.
+- Browser e2e: the New review dialog suggests `feat/<title>` in the *Feature branch* placeholder,
+  creates a review through the dialog with the field left empty, and asserts the rail row and the
+  loaded meta carry `feat/<title>-<tail>`.
 
 ## Every UI control
 

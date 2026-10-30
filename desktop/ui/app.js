@@ -230,6 +230,66 @@ function askFeature({ title, body, actions }) {
 }
 
 /**
+ * Ask for the feature branch a review runs on. Returns the new name, or `null` when the human
+ * cancelled, left it unchanged, or the round is submitted (the agent already has a worktree for
+ * the old name — renaming now would describe work happening somewhere else).
+ */
+function askBranch(current, submitted = false) {
+  return new Promise((resolve) => {
+    let dialog = $("#branch-dialog");
+    if (!dialog) {
+      document.body.insertAdjacentHTML("beforeend", `
+        <dialog class="feature-dialog" id="branch-dialog" aria-labelledby="branch-dialog-title">
+          <form method="dialog" class="feature-card">
+            <h2 id="branch-dialog-title">Feature branch</h2>
+            <p id="branch-dialog-body"></p>
+            <input id="branch-input" type="text" spellcheck="false" autocomplete="off"
+                   aria-label="Feature branch" />
+            <div class="feature-actions" id="branch-actions"></div>
+          </form>
+        </dialog>`);
+      dialog = $("#branch-dialog");
+    }
+    if (dialog.open) {
+      resolve(null);
+      return;
+    }
+    const input = $("#branch-input");
+    $("#branch-dialog-body").textContent = submitted
+      ? "This review is with the agent, and its branch is already checked out. Stop it first, then give the work its feature branch."
+      : "The agent checks this branch out, works in it and pushes it. It must be a feature branch, not the session id.";
+    input.value = current || "";
+    input.hidden = submitted;
+    const actions = $("#branch-actions");
+    actions.innerHTML = "";
+    const buttons = submitted
+      ? [{ value: "keep", label: "Close" }]
+      : [
+          { value: "keep", label: "Cancel" },
+          { value: "save", label: "Save branch", kind: "primary" },
+        ];
+    for (const action of buttons) {
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.value = action.value;
+      button.className = `btn${action.kind ? ` ${action.kind}` : ""}`;
+      button.textContent = action.label;
+      actions.appendChild(button);
+    }
+    dialog.returnValue = "keep";
+    dialog.onclose = () => {
+      const value = input.value.trim();
+      resolve(dialog.returnValue === "save" && value && value !== current ? value : null);
+    };
+    dialog.showModal();
+    if (!submitted) {
+      input.focus();
+      input.select();
+    }
+  });
+}
+
+/**
  * Confirm, cancel, reopen or delete a feature. Returns the server response, `{deleted: true}`,
  * or `null` when the human dismissed the dialog.
  */
@@ -1009,6 +1069,11 @@ class Editor {
       ? `${this.meta.image_width}×${this.meta.image_height}` : null,
       this.meta.url || null].filter(Boolean);
     $("#session-sub").textContent = bits.join(" · ");
+    const branch = $("#branch-edit");
+    if (branch) {
+      branch.hidden = !this.meta.branch;
+      branch.textContent = this.meta.branch || "";
+    }
     const waiting = this.meta.status === "submitted";
     const button = $("#submit");
     if (waiting) {
@@ -1187,6 +1252,23 @@ class Editor {
     $("#zoom-100").addEventListener("click", () => { if (!this.locked) this.setZoom(1); });
     NewReview.wire();
     $("#new-review").addEventListener("click", () => NewReview.open());
+    $("#branch-edit")?.addEventListener("click", async () => {
+      const current = this.meta.branch || "";
+      const branch = await askBranch(current, this.meta.status === "submitted");
+      if (!branch) return;
+      try {
+        const body = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/branch`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ branch }),
+        });
+        this.meta = body.meta;
+        this.renderHeader();
+        this.rail.load();
+      } catch (error) {
+        alert(`Could not set the branch: ${error.message}`);
+      }
+    });
     addEventListener("resize", () => this.resize());
     addEventListener("popstate", () => {
       const id = location.pathname.split("/").filter(Boolean).pop();
@@ -2309,7 +2391,7 @@ class Editor {
           ? this.viewing.stamp === round.stamp
           : isLive;
         rows.push(`<div class="ann-row history-row${isLive ? " live" : ""}${selected ? " selected" : ""}"
-                        data-round="${escapeHtml(round.stamp)}" role="button" tabindex="0">
+                        data-round="${escapeHtml(round.stamp)}" data-live="${isLive ? "1" : "0"}" role="button" tabindex="0">
           <span class="glyph">${round.round}</span>
           <span class="label">
             <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
@@ -2329,7 +2411,9 @@ class Editor {
       const counter = $("#history-count");
       if (counter) counter.textContent = String(rows.length);
       $$("[data-round]", list).forEach((row) => {
-        const go = () => row.dataset.round === "current"
+        // A round the canvas still shows is the live canvas itself; clicking it must not open a
+        // read-only copy of what is already on screen.
+        const go = () => row.dataset.round === "current" || row.dataset.live === "1"
           ? this.showCurrent()
           : this.viewRound(row.dataset.round);
         row.addEventListener("click", go);
@@ -2838,10 +2922,21 @@ const NewReview = {
     if (error) error.textContent = "";
     const fresh = $("#f-project-new");
     if (fresh) { fresh.value = ""; fresh.hidden = true; }
+    const branch = $("#f-branch");
+    if (branch) { branch.value = ""; this.suggestBranch(); }
     const project = $("#f-project");
     if (project?.value === "__new__") project.value = "";
     this.fillProjects();
     $("#f-title").focus();
+  },
+  /// Show what the branch will be called when the field stays empty: a review belongs to a
+  /// feature, so the placeholder is `feat/<title>` — never the session id.
+  suggestBranch() {
+    const input = $("#f-branch");
+    if (!input) return;
+    const title = ($("#f-title")?.value || "").trim();
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+    input.placeholder = `feat/${slug || "my-feature"}`;
   },
   /// Repositories come from the agent sync; older label-only projects stay selectable while they
   /// still have reviews, but empty leftovers are not offered.
@@ -2957,6 +3052,7 @@ const NewReview = {
       take(event.dataTransfer.files[0]);
     });
     $("#new-cancel").addEventListener("click", () => NewReview.close());
+    $("#f-title")?.addEventListener("input", () => NewReview.suggestBranch());
     $("#f-project")?.addEventListener("change", () => NewReview.syncProjectInput());
     $("#new-form").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -2972,6 +3068,7 @@ const NewReview = {
       }
       const submit = $("#new-submit");
       submit.disabled = true;
+      const branch = ($("#f-branch")?.value || "").trim() || undefined;
       if (!picked) {
         $("#new-error").textContent = "Capturing… (a few seconds)";
         try {
@@ -2985,6 +3082,7 @@ const NewReview = {
               viewport: "1440x900",
               agent: "human",
               project: project || undefined,
+              branch,
             }),
           });
           lastProject.remember(body.meta.project);
@@ -3013,6 +3111,7 @@ const NewReview = {
             image_base64: dataUrl,
             agent: "human",
             project: project || undefined,
+            branch,
           }),
         });
         lastProject.remember(body.meta.project);

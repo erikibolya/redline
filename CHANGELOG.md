@@ -12,6 +12,21 @@
   blocked, and the live "agent is working" toast is no longer drawn over an archived screenshot.
   The e2e opens a round and asserts the cursor, a real left-drag, wheel scroll, ctrl+wheel zoom,
   space+drag under row focus, and that panning does not edit the round.
+- **The round on the canvas is listed once.** After the agent resolved a review, History showed the
+  last submission twice: as *Round N* and again as the live *Current* row, so a session with one
+  round looked like two (2026-10-30). `GET /api/sessions/<id>/history` now marks a round `current`
+  whenever the saved annotations and picture are still what the canvas shows (submitted, resolved,
+  or reopened), and the editor omits the extra *Current* row. Clicking that row returns to the live
+  canvas instead of opening a read-only copy. Regression test:
+  `the_round_on_the_canvas_is_not_listed_as_a_second_current` plus the *round on the canvas* e2e
+  check.
+- **One task is one round in History.** Pressing *STOP* and then *Submit again* without touching
+  the canvas archived the same annotations and the same picture a second time, so a single review
+  showed up as two identical rounds with nothing to diff (2026-10-30). `GET
+  /api/sessions/<id>/history` now collapses a run of identical copies (same annotations, same
+  PNG) to its newest entry; a round that really changed still gets its own row. Regression tests:
+  `resubmitting_an_unchanged_round_does_not_duplicate_history` (Rust) and the *unchanged
+  resubmission* check in the browser e2e.
 - **The rolling dev release is tagged `dev-build`, not `dev`.** A tag that shares its name with a
   branch is a trap: git resolves the *revision* `dev` to the tag (`git log dev`, `git diff dev`,
   `git merge dev` all used the tag's commit, silently) and `git worktree add … dev` refuses it with
@@ -19,6 +34,19 @@
   workflow and `docs/DESKTOP.md` follow. The old `dev` release is kept only long enough for an
   installed dev build to pick up a transitional `latest.json`, then removed. Stable releases are
   untouched.
+- **A review belongs to a feature, not to a session id.** A review the human created without
+  naming a branch (the New review dialog never asked) was claimed on the fallback
+  `session/<id>`: the rail showed `session/20261030-…`, and the agent was told to push a branch
+  named after a timestamp. Every review now carries a feature branch from the moment it is
+  created — `feat/<title-slug>-<id-tail>`, e.g. `feat/wrong-branches-52e0` — and the New review
+  dialog has an optional *Feature branch* field whose placeholder shows that name while you type
+  the title. The header shows the branch, and clicking it renames it through the new
+  `PUT /api/sessions/{id}/branch`; a submitted round keeps its name, because the agent's worktree
+  was already created for it. Sessions claimed by v0.21 with a persisted `session/<id>` are read
+  back as their `feat/…` name (no rewrite of old folders), and the bridge's `work_key` derives the
+  same name, so the claim, the prompt and the rail agree. Tests: the API creates without a branch
+  and asserts claim work key, rail row and rename; the store test pins the naming; the e2e creates
+  a review through the dialog and asserts the rail branch is `feat/…`.
 - **A tag named like the base branch no longer kills the run.** The bridge picked the worktree's
   start point with a short ref (`dev`, `main`, `origin/dev`, …). This repository also has a tag
   `dev`, so `git worktree add` answered `warning: refname 'dev' is ambiguous` and

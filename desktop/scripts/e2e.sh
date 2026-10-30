@@ -3,6 +3,7 @@
 #
 #   desktop/scripts/e2e.sh              # against ghcr.io/erikibolya/redline:browser
 #   REDLINE_IMAGE=redline:local desktop/scripts/e2e.sh
+#   E2E_SHOT=/repo/.e2e-shot.png desktop/scripts/e2e.sh   # also save the answered-round screenshot
 #
 # Needs: docker, and network access for the Node container to fetch puppeteer-core.
 set -euo pipefail
@@ -32,4 +33,5 @@ docker run --rm --network "container:$NAME" \
   -e REDLINE_BASE=http://127.0.0.1:8788 \
   -e REDLINE_TOKEN=e2e-token \
   -e CHROME_URL=http://127.0.0.1:9222 \
+  -e E2E_SHOT="${E2E_SHOT:-}" \
   node:22 sh -c 'npm i --silent puppeteer-core@23 >/dev/null 2>&1 && cp /repo/desktop/scripts/e2e.mjs /tmp/e2e.mjs && node /tmp/e2e.mjs'

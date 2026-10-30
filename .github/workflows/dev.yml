@@ -16,7 +16,7 @@ on:
 env:
   # Dev builds must sort *above* the current stable line, otherwise the updater refuses them.
   # Bump this when a new stable minor is released.
-  DEV_BASE_VERSION: "0.20.0"
+  DEV_BASE_VERSION: "0.21.0"
 
 jobs:
   windows:
@@ -62,7 +62,7 @@ jobs:
           releaseName: "RedLine dev"
           releaseDraft: false
           prerelease: true
-          includeUpdaterJson: true
+          includeUpdaterJson: false
           args: --bundles nsis --config tauri.dev.conf.json
           releaseBody: |
             Rolling **dev** build from `dev` at `${{ github.sha }}` (version `${{ env.DEV_VERSION }}`).
@@ -72,6 +72,32 @@ jobs:
 
             Dev builds are unreleased snapshots. Windows SmartScreen warns because the build is
             unsigned: *More info → Run anyway*.
+
+      - name: Publish the updater manifest
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          $version = $env:DEV_VERSION
+          $sigPath = "desktop/app/target/release/bundle/nsis/redline_${version}_x64-setup.exe.sig"
+          if (!(Test-Path $sigPath)) {
+            throw "updater signature not found at $sigPath"
+          }
+          $signature = (Get-Content $sigPath -Raw).Trim()
+          $url = "https://github.com/$env:REPO/releases/download/dev/redline_${version}_x64-setup.exe"
+          $notes = "Dev build $version from ``dev`` at ${{ github.sha }}."
+          $data = @{
+            version = $version
+            notes = $notes
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+            platforms = @{
+              "windows-x86_64" = @{ signature = $signature; url = $url }
+              "windows-x86_64-nsis" = @{ signature = $signature; url = $url }
+            }
+          }
+          $data | ConvertTo-Json -Depth 6 | Set-Content latest.json -Encoding utf8
+          gh release upload dev latest.json --repo $env:REPO --clobber
 
       - name: Attach the CLI and the agent
         env:

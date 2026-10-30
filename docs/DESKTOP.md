@@ -157,15 +157,28 @@ start). The container is preferred only because updates are a `docker pull`; the
 
 **2. Point the Windows app at it — in the app, not in a file.**
 
-Tray → **Connect to a server…**, paste the address and token, **Save and connect**. The app probes
-the server with those credentials before saving anything, so a wrong token is an error message
-instead of a broken next launch. The tray then reads *Configured: http://holly:8788*; **Use this computer** in the wizard
-switches back to standalone.
+Tray → **Add a server…**, give it a name (for example *Production*), paste the address and token,
+**Save and connect**. The app probes the server with those credentials before saving anything, so
+a wrong token is an error message instead of a broken next launch. **Servers…** lists every
+profile with its URL, state and version; *Use* switches the window without signing out of the
+other servers.
 
-The wizard writes the same `%LOCALAPPDATA%\redline\config.json` (`remote_url`, `token`) for
-scripted setups; `REDLINE_REMOTE_URL` / `REDLINE_TOKEN` still override it. The local server keeps
-running in both modes — that is what serves the wizard — but in remote mode the window (and every
-review) comes from holly.
+Profiles live in `%LOCALAPPDATA%\redline\config.json`:
+
+```json
+{
+  "servers": [
+    { "id": "production", "name": "Production", "url": "https://redline.ibolya.cz", "token": "…" },
+    { "id": "dev", "name": "Dev", "url": "http://192.168.68.115:8790", "token": "…" }
+  ],
+  "active": "production"
+}
+```
+
+`active: "local"` selects *This computer*. The old `remote_url`/`token` file is migrated as the
+first profile on read. The local server keeps running in every mode — that is what serves the
+Servers page and the wizard — but in remote mode the window (and every review) comes from the
+selected server.
 
 **3. Agents on holly** use `http://127.0.0.1:8788/mcp` — loopback inside the container network,
 never exposed to the LAN:

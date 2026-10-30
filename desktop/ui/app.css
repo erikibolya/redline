@@ -17,6 +17,8 @@
   --radius: 8px;
   --rail: 272px;
   --inspector: 304px;
+  /* Height of the conversation block inside the inspector; its top edge is draggable. */
+  --conv: 300px;
   --header: 52px;
   --status: 30px;
   /* The canvas toolbar floats at the top of the stage; the agent-status toast is placed
@@ -86,6 +88,29 @@ a:hover { text-decoration: underline; }
 .app.inspector-hidden { grid-template-columns: var(--rail) minmax(0, 1fr) 0; }
 .app.rail-hidden.inspector-hidden { grid-template-columns: 0 minmax(0, 1fr) 0; }
 .app.rail-hidden .rail, .app.inspector-hidden .inspector { display: none; }
+
+/* Draggable dividers. They sit on the column borders and overhang them a little, so the
+   hairline is an easy target instead of a one-pixel hit box. */
+.splitter {
+  position: absolute; z-index: 8; background: transparent; border: 0; padding: 0;
+  touch-action: none;
+}
+.splitter-x { top: 0; bottom: 0; width: 9px; cursor: col-resize; }
+.splitter-y { left: 0; right: 0; height: 9px; cursor: row-resize; }
+#rail-resizer { right: -4px; }
+#inspector-resizer { left: -4px; }
+#conv-resizer { top: -4px; }
+.splitter::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  border-radius: 2px; background: transparent; transition: background .12s ease;
+}
+.splitter-x::after { width: 2px; }
+.splitter-y::after { height: 2px; }
+.splitter:hover::after, .splitter.dragging::after, .splitter:focus-visible::after { background: var(--accent); }
+.splitter:focus-visible { outline: 2px solid var(--accent-soft); outline-offset: -2px; }
+/* While dragging, the cursor must not flicker over the canvas or a text field. */
+body.resizing-x, body.resizing-x * { cursor: col-resize !important; user-select: none !important; }
+body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select: none !important; }
 
 /* ---------------------------------------------------------------- header */
 .header {
@@ -170,6 +195,7 @@ a:hover { text-decoration: underline; }
   background: var(--panel);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column; min-width: 0;
+  position: relative;
 }
 .rail-head { padding: 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border-soft); }
 .search {
@@ -214,6 +240,20 @@ a:hover { text-decoration: underline; }
   color: #86efac; background: #10231a; border: 1px solid #14532d;
   border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600;
 }
+.rail-project .pworking {
+  display: inline-flex; align-items: center; gap: 4px;
+  color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent);
+  border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600;
+}
+.rail-project .pworking b { font-weight: 600; }
+/* A running agent: the same spinner on the project header and on the review row, so "busy"
+   reads the same whether the project is expanded or collapsed. */
+.spin {
+  display: inline-block; width: 9px; height: 9px; flex: none; border-radius: 50%;
+  border: 1.5px solid currentColor; border-right-color: transparent;
+  animation: spin .9s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 .rail-group { margin: 10px 6px 4px; font-size: 10px; text-transform: uppercase; letter-spacing: .08em; color: #5c6879; }
 .session {
   display: flex; gap: 10px; align-items: flex-start;
@@ -245,6 +285,12 @@ a:hover { text-decoration: underline; }
   background: var(--panel-3); color: var(--muted); border: 1px solid var(--border);
 }
 .session .badge.new { background: var(--accent); border-color: var(--accent); color: #fff; }
+.session .badge.work {
+  display: inline-flex; align-items: center; gap: 5px; padding: 0 8px;
+  background: var(--panel-2); border-color: var(--accent); color: var(--accent);
+  font-size: 10px;
+}
+.session.working .dot { background: var(--accent); animation: conv-pulse 1.4s ease-in-out infinite; }
 .rail-empty { padding: 24px 12px; text-align: center; color: var(--muted); }
 .rail-tools { display: flex; gap: 6px; }
 .rail-tools .chip { width: 100%; text-align: center; }
@@ -271,6 +317,13 @@ body.touch .btn { min-height: 38px; }
 body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 
 /* ---------------------------------------------------------------- stage */
+/* A light scrim over the screenshot while the agent has the round. It stays below the toolbar
+   and the status pill, and pointer-events are off so only the explicit guards block input. */
+.stage-dim {
+  position: absolute; inset: 0; z-index: 4; pointer-events: none;
+  background: rgba(5, 9, 14, .18); transition: opacity .15s ease;
+}
+[data-theme="light"] .stage-dim { background: rgba(15, 23, 42, .10); }
 .stage-status {
   position: absolute; z-index: 6;
   /* Centred in the stage: the submitted lock used to be a dimming modal here, which hid the
@@ -311,6 +364,8 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 }
 .tool:hover { background: var(--panel-3); color: var(--text); }
 .tool[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: #fff; }
+.tool[disabled] { opacity: .35; cursor: not-allowed; }
+.tool[disabled]:hover { background: transparent; color: var(--muted); }
 .tool svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; }
 .options .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
 .options input[type="color"] {
@@ -318,6 +373,9 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   border-radius: 7px; background: var(--panel-2);
 }
 .options input[type="range"] { width: 74px; accent-color: var(--accent); }
+/* Colour and width only matter for the next annotation, so they dim with the drawing tools. */
+#app.locked .options input[type="color"],
+#app.locked .options input[type="range"] { opacity: .4; }
 .options .zoom { min-width: 48px; text-align: center; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 .text-editor {
@@ -339,6 +397,7 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   grid-area: inspector;
   background: var(--panel); border-left: 1px solid var(--border);
   display: flex; flex-direction: column; min-width: 0;
+  position: relative;
 }
 .inspector-head {
   display: flex; align-items: center; gap: 8px; padding: 12px 14px;
@@ -358,8 +417,17 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   display: flex; gap: 8px; align-items: center; padding: 7px 8px;
   border-radius: var(--radius); border: 1px solid transparent; cursor: pointer;
 }
-.ann-row + .ann-row { margin-top: 2px; border-top-color: var(--border-soft); }
+/* The separator has to be a full-width hairline. As a plain `border-top` on a rounded row it
+   painted only the middle segment between the two rounded corners, so every row looked like a
+   frame whose ends were missing. */
+.ann-row + .ann-row {
+  margin-top: 2px; border-top-color: var(--border-soft);
+  border-top-left-radius: 0; border-top-right-radius: 0;
+}
 .ann-row:hover { background: var(--panel-2); }
+/* A read-only row is not a target: it must not pretend to be clickable. */
+.ann-row.readonly { cursor: default; }
+.ann-row.readonly:hover { background: transparent; }
 .ann-row[aria-current="true"] { background: var(--panel-3); border-color: var(--accent); }
 .ann-row .glyph {
   width: 22px; height: 22px; flex: none; display: grid; place-items: center;
@@ -408,8 +476,13 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .history-row .label span { font-size: 10px; }
 .history-row .del { padding: 2px; font-size: 11px; line-height: 1; }
 #history-list .pre { margin: 0; }
+/* The conversation is a fixed, draggable-height block: its log scrolls instead of growing,
+   so the annotation list above it keeps whatever space is left. It may still shrink on very
+   short windows (flex-shrink), otherwise the disclosures below would be pushed out of reach. */
 .conversation {
-  display: flex; flex-direction: column; min-height: 190px; max-height: 48%;
+  display: flex; flex-direction: column; position: relative;
+  flex: 0 1 var(--conv);
+  min-height: 140px;
   border-top: 1px solid var(--border-soft);
 }
 .conv-head {
@@ -460,6 +533,8 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .conv-run.working .conv-run-mark { animation: none; opacity: 1; }
+  .session.working .dot { animation: none; opacity: 1; }
+  .spin { animation: none; }
 }
 .composer { border-top: 1px solid var(--border-soft); padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 6px; }
 .composer textarea {

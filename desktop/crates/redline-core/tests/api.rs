@@ -747,7 +747,13 @@ async fn setup_saves_a_server_that_answers_and_can_disconnect() {
     let (status, _, body) = send(&h.app, request).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["mode"], "local");
-    assert!(!config.exists());
+    // Switching back to this computer must not delete the other server profile.
+    assert!(config.exists());
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(saved["active"], "local");
+    assert_eq!(saved["servers"][0]["url"], remote_url.as_str());
+    assert!(saved.get("remote_url").is_none());
 }
 
 #[tokio::test]
@@ -1213,6 +1219,128 @@ async fn posting_a_round_stays_in_the_same_session() {
     assert_eq!(thread["messages"][0]["image"], image);
 }
 
+/// A spinner is a promise. The agent's last narration line often lands *after* `post_round` or
+/// `reply`; `progress` used to set `agent_state=working` unconditionally, so a review that had
+/// already been handed back kept pulsing "Working" — the human could not tell a live agent from a
+/// dead one (2026-10-29). The event is still recorded; the state is not revived.
+#[tokio::test]
+async fn progress_never_revives_a_finished_round() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "Spinner", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let (_, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({"annotations": [], "note": "look at this"}),
+        ),
+    )
+    .await;
+
+    let call = |name: &'static str, arguments: Value| {
+        let app = h.app.clone();
+        async move {
+            let (status, _, body) = send(
+                &app,
+                authed(
+                    "POST",
+                    "/mcp",
+                    json!({
+                        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                        "params": { "name": name, "arguments": arguments }
+                    }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+        }
+    };
+    let state = |h: &Harness| {
+        let request = Request::builder()
+            .uri(format!("/api/sessions/{id}"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let app = h.app.clone();
+        async move {
+            let (_, _, body) = send(&app, request).await;
+            (
+                body["meta"]["status"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+                body["meta"]["agent_state"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        }
+    };
+
+    call(
+        "progress",
+        json!({"session_id": id, "message": "Reading the review", "state": "tool"}),
+    )
+    .await;
+    assert_eq!(
+        state(&h).await,
+        ("submitted".to_string(), "working".to_string())
+    );
+
+    // After the answer: still submitted, but the run is over.
+    call("reply", json!({"session_id": id, "message": "Done"})).await;
+    call(
+        "progress",
+        json!({"session_id": id, "message": "One last line", "state": "step"}),
+    )
+    .await;
+    assert_eq!(
+        state(&h).await,
+        ("submitted".to_string(), "replied".to_string())
+    );
+
+    // After a follow-up round: the review is back with the human.
+    call(
+        "post_round",
+        json!({"session_id": id, "note": "new screenshot", "image_base64": PNG_B64}),
+    )
+    .await;
+    call(
+        "progress",
+        json!({"session_id": id, "message": "Merged and pushed", "state": "step"}),
+    )
+    .await;
+    assert_eq!(state(&h).await, ("open".to_string(), "replied".to_string()));
+
+    // The narration itself is never dropped: the human still sees what the agent did.
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}/events"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, events) = send(&h.app, request).await;
+    let messages: Vec<&str> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["message"].as_str())
+        .collect();
+    assert_eq!(
+        messages,
+        ["Reading the review", "One last line", "Merged and pushed"],
+        "{events}"
+    );
+}
+
 /// STOP before an agent read the submission: the round is withdrawn, the canvas is untouched.
 #[tokio::test]
 async fn cancelling_before_the_agent_reads_withdraws_the_round() {
@@ -1333,4 +1461,70 @@ async fn cancelling_after_the_agent_read_the_round_keeps_it() {
         .unwrap();
     let (_, _, history) = send(&h.app, request).await;
     assert_eq!(history["submissions"].as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn switching_servers_keeps_every_profile_and_token() {
+    let h = harness();
+    let config = h._dir.path().join("config.json");
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/setup",
+            json!({"name": "Production", "remote_url": "https://prod.example", "token": "p"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/servers",
+            json!({"name": "Dev", "url": "https://dev.example", "token": "d"}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["active"], "dev");
+
+    let request = Request::builder()
+        .uri("/api/servers")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["servers"].as_array().unwrap().len(), 2);
+    assert_eq!(body["active"], "dev");
+    assert!(body["servers"][0].get("token").is_none());
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/servers/production/activate")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["open_url"], "https://prod.example/?t=p");
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/setup/disconnect")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
+    assert_eq!(saved["active"], "local");
+    assert_eq!(saved["servers"].as_array().unwrap().len(), 2);
+    assert_eq!(saved["servers"][0]["token"], "p");
+    assert_eq!(saved["servers"][1]["token"], "d");
 }

@@ -83,8 +83,15 @@ docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust
 docker build -q -f desktop/Dockerfile.browser -t redline:local .
 REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per check
 
-# Ship
-git push origin main            # CI: core+cli on Linux & Windows, tauri shell, browser e2e
+# Ship a feature (dev is protected; never push it directly)
+git push origin feat/my-feature
+feature-ready "what changed and why"
+# draft PR -> ready -> required CI -> auto-merge -> dev build
+
+# Release (only after an explicit yes; main is protected)
+gh pr create --base main --head dev --title "release: vX.Y.Z" --body "Release notes"
+# wait for the required checks, merge the PR, then:
+git checkout main && git pull --ff-only
 git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z   # release: installer, CLI, linux binary, images
 REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.cz \
   bash desktop/install-unraid.sh                        # deploy to holly
@@ -121,6 +128,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 
 ## 6. Architecture in one screen
 
+- Desktop profiles: `config.json` holds `servers[]` + `active`; the local server serves
+  `/servers`, and switching only navigates the webview to another origin. All profiles/tokens
+  stay; never treat "switch" as "disconnect".
 - `redline-agent` — unattended bridge: watch submitted reviews → resolve the project's repo →
   `opencode run` → progress/reply/resolve. It syncs the git repos it can see (`POST
   /api/agent/repos`) and runs each review in its project's repo. Also embedded in the desktop app
@@ -178,6 +188,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   format with the browser's locale — `clockTime()` / `stampTime()` in `app.js`. Capture screenshots
   inherit the *container's* timezone (usually UTC), so a "fixed clocks" screenshot looks unfixed
   unless you capture from a browser started with `TZ=Europe/Prague`.
+- **Switching a server is not logging out.** The desktop app keeps every profile and token in
+  `config.json`; `/servers` only changes `active` and navigates to the chosen server. Cookies are
+  per origin, so the other servers stay signed in. "Use this computer" must also preserve profiles.
 - **A project is not a repository.** RedLine projects began as labels; a label does not tell the
   agent where to work. Repo projects now store a **relative** key (`redline`, `ActiUnit/Au.Net`)
   plus an agent id. Never store an absolute mount path: the OpenCode server, the agent container
@@ -187,15 +200,48 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - **The OpenCode project API is experimental.** `/api/project` is useful for display names and
   active projects, but discovery must still scan the repo root for `.git`; dedupe the same repo
   seen through two mounts (`/mnt/user/...` and `/mnt/c/...`).
+- **A push is not a done signal.** A feature branch becomes a PR only when the agent runs
+  `feature-ready`; auto-merge then waits for the required checks. Merging on
+  every push would ship checkpoints and half-finished work. Do not open a non-draft PR while the
+  feature is still being worked on.
 - **An empty-state class outlives the empty state.** `#history-list` was declared once in
   `index.html` as `inspector-empty` (22 px padding, centred text) and never lost the class when
   rows were injected, so a populated list still carried the empty state's dead space. Toggle the
   class with the content — a populated list needs its own layout class.
+- **A rounded border is not a separator.** `.ann-row + .ann-row` used `border-top-color` on a
+  rounded row to draw the divider, so the line only appeared between the two rounded corners and
+  the annotation list read as a stack of open frames. A divider spans the row: square the top
+  corners (or use a pseudo-element), and assert it in the e2e — a "broken border" is invisible to
+  every DOM test that does not measure the row.
+
+- **A grid column resize is not a canvas resize.** Moving `--rail` or `--inspector` reflows the
+  layout, but the `<canvas>` bitmap keeps its old pixel size until `resize()` runs — so the stage
+  is measured again on every pointermove of a divider drag. Sizes belong in CSS variables plus
+  `localStorage`, never only in the DOM element's inline width.
+- **A lock flag is not a lock.** The submitted lock set `Editor.locked` and guarded the canvas
+  pointer plus `setTool`, but Delete/arrow keys, undo/redo, the inspector's align/layer/group
+  buttons and the note field wrote anyway — the e2e only asserted `window.redline.locked`, so it
+  passed while the human could still edit a submitted round. Enforce a lock at the single
+  mutation choke point (`mutate`, and the few paths that bypass it), and test the *refusal*: draw,
+  delete, nudge and click the write tools, then assert nothing changed. A control that looks armed
+  but silently refuses clicks reads as a broken lock; disable it visibly.
+- **A spinner is a promise.** `progress` set `agent_state=working` unconditionally, so the agent's
+  final narration line — written after `post_round` had handed the review back — re-armed the
+  indicator. The card pulsed "Working" on a review the human already had, with a green Submit
+  button beside it, and stayed like that until the next submit. A state flag must be derived from
+  the round (`status == submitted`), not set by the last writer; the server refuses to revive a
+  finished round, the UI checks both fields, and the card always shows the age of the last step so
+  "is it really working?" has an answer that is not animation.
 
 ## 8. Working rules
 
 - Ask before destructive actions (see global AGENTS.md). Creating/updating the `redline` container
   is normal work; say what is lost first if a review is in flight.
+- **`dev` and `main` are protected.** Do not merge or push either directly. Push a feature
+  branch; when the work is done run `feature-ready "summary"` (global agent tool; the repo copy
+  still works). It creates the ready PR and auto-merge lands it in `dev`. A release is a PR from
+  `dev` to `main`, merged after the required checks and an explicit human yes; tag afterwards.
+  See `docs/AUTO-MERGE.md`.
 - Do not hand-edit `annotations.json`, `meta.json`, `review.md` or `annotated.png` in a session.
 - Never commit screenshots, sessions, tokens or keys. `sessions/` and `target/` are gitignored.
 - Keep the UI dependency-free (vanilla JS/CSS, served from the binary).
@@ -229,6 +275,9 @@ curl -s -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
 curl -X POST -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>/resolve
 curl -X POST -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>/reopen
 curl -X DELETE -H "Authorization: Bearer $TOKEN" https://redline.ibolya.cz/api/sessions/<id>
+
+# mark a feature ready (from its branch; no dirty files)
+feature-ready "what changed and why"
 
 # rebuild/redeploy
 REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.cz bash desktop/install-unraid.sh

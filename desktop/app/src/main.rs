@@ -38,6 +38,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("index.html", include_str!("../../ui/index.html")),
     ("list.html", include_str!("../../ui/list.html")),
     ("setup.html", include_str!("../../ui/setup.html")),
+    ("servers.html", include_str!("../../ui/servers.html")),
     ("app.css", include_str!("../../ui/app.css")),
     ("app.js", include_str!("../../ui/app.js")),
 ];
@@ -142,7 +143,8 @@ fn main() {
 /// The window menu bar. Same ids as the tray menu, same handler.
 fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let sessions = MenuItem::with_id(app, "open", "Sessions", true, Some("CmdOrCtrl+1"))?;
-    let connect = MenuItem::with_id(app, "connect", "Connect to a server…", true, None::<&str>)?;
+    let connect = MenuItem::with_id(app, "connect", "Add a server…", true, None::<&str>)?;
+    let servers = MenuItem::with_id(app, "servers", "Servers…", true, None::<&str>)?;
     let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_mcp = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
     let agent_start = MenuItem::with_id(app, "agent-start", "Start local agent", true, None::<&str>)?;
@@ -166,8 +168,8 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         "RedLine",
         true,
         &[
-            &sessions, &connect, &copy_link, &copy_mcp, &separator, &agent_start, &agent_stop,
-            &agent_repo, &agent_separator, &quit,
+            &sessions, &servers, &connect, &copy_link, &copy_mcp, &separator, &agent_start,
+            &agent_stop, &agent_repo, &agent_separator, &quit,
         ],
     )?;
     let help =
@@ -184,7 +186,8 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
 
 fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "tray:open", "Open RedLine", true, None::<&str>)?;
-    let connect = MenuItem::with_id(app, "tray:connect", "Connect to a server…", true, None::<&str>)?;
+    let connect = MenuItem::with_id(app, "tray:connect", "Add a server…", true, None::<&str>)?;
+    let servers = MenuItem::with_id(app, "tray:servers", "Servers…", true, None::<&str>)?;
     let login = tauri::menu::CheckMenuItem::with_id(
         app,
         "tray:autostart",
@@ -215,9 +218,9 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &open, &connect, &login, &copy_link, &copy_config, &separator, &agent_start,
-            &agent_stop, &agent_repo, &agent_separator, &check, &dev_update, &revert, &address,
-            &separator, &quit,
+            &open, &servers, &connect, &login, &copy_link, &copy_config, &separator,
+            &agent_start, &agent_stop, &agent_repo, &agent_separator, &check, &dev_update,
+            &revert, &address, &separator, &quit,
         ],
     )?;
 
@@ -268,7 +271,11 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
     match id {
         "open" => open_window(app, ctx),
         "connect" => {
-            let url = format!("{}/setup?t={}", ctx.local.base_url, ctx.local.token);
+            let url = format!("{}/setup?t={}&new=1", ctx.local.base_url, ctx.local.token);
+            navigate(app, &url);
+        }
+        "servers" => {
+            let url = format!("{}/servers?t={}", ctx.local.base_url, ctx.local.token);
             navigate(app, &url);
         }
         "copy-link" => {
@@ -332,13 +339,12 @@ fn copy_or_complain(app: &AppHandle, text: &str, what: &str) {
 
 /// Standalone → the local UI; remote → the server's UI, or the wizard if it is not answering.
 fn launch_url(data_dir: &Path, local: &Local) -> String {
-    let setup = format!("{}/setup?t={}", local.base_url, local.token);
     match read_remote(data_dir) {
         Some(remote) => {
             if reachable(&remote.base_url, &remote.token) {
                 format!("{}/?t={}", remote.base_url, remote.token)
             } else {
-                format!("{setup}&unreachable=1")
+                format!("{}/servers?t={}&unreachable=1", local.base_url, local.token)
             }
         }
         None => format!("{}/?t={}", local.base_url, local.token),
@@ -484,6 +490,36 @@ fn choose_agent_repo(app: &AppHandle, ctx: &Ctx) {
 fn read_remote(data_dir: &Path) -> Option<Local> {
     let text = std::fs::read_to_string(data_dir.join("config.json")).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let active = value.get("active").and_then(|value| value.as_str());
+
+    // `active: "local"` wins even if an older `remote_url` still sits in the file.
+    if active == Some("local") {
+        return None;
+    }
+    if let Some(servers) = value.get("servers").and_then(|value| value.as_array()) {
+        let selected = active
+            .and_then(|id| servers.iter().find(|server| server.get("id").and_then(|value| value.as_str()) == Some(id)))
+            .or_else(|| servers.first());
+        if let Some(server) = selected {
+            let base_url = server
+                .get("url")
+                .and_then(|value| value.as_str())?
+                .trim()
+                .trim_end_matches('/')
+                .to_string();
+            if base_url.is_empty() {
+                return None;
+            }
+            let token = server
+                .get("token")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default()
+                .to_string();
+            return Some(Local { base_url, token });
+        }
+    }
+
+    // Pre-profiles config.
     let base_url = value
         .get("remote_url")?
         .as_str()?
@@ -627,7 +663,9 @@ fn align_window(app: &AppHandle, data_dir: &Path, local: &Local, skip_setup: boo
     let Ok(current) = window.url() else {
         return false;
     };
-    if skip_setup && current.path().starts_with("/setup") {
+    if skip_setup
+        && (current.path().starts_with("/setup") || current.path().starts_with("/servers"))
+    {
         return false;
     }
     let target = launch_url(data_dir, local);

@@ -207,8 +207,10 @@ const main = async () => {
     picker.tag === "SELECT" && picker.values.includes("e2e") && picker.values.includes("inbox")
       && picker.values.includes("e2e-repo") && picker.repos.includes("e2e-repo")
       && picker.others.includes("e2e") && picker.values.includes("__new__")
-      && picker.placeholder === "" && picker.required && !picker.capture,
+      && picker.required && !picker.capture,
     JSON.stringify(picker));
+  check("new review preselects the project of the open review",
+    picker.placeholder === "e2e", picker.placeholder);
   check("the page URL field explains capture and metadata",
     picker.urlHint.includes("captures it"), picker.urlHint);
 
@@ -414,6 +416,64 @@ const main = async () => {
     runCard?.working && runCard.text.includes("Working")
       && runCard.text.includes("Used 2 tools: Edit and Shell"),
     runCard ? runCard.text : "no run summary");
+
+  // ---- the rail says which review and which project an agent is working on, without opening it
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const busyRail = await page.evaluate(() => {
+    const row = document.querySelector(".session.working");
+    return {
+      row: row ? row.textContent : "",
+      badge: Boolean(row?.querySelector(".badge.work .spin")),
+      project: Boolean(document.querySelector(".rail-project .pworking .spin")),
+    };
+  });
+  check("the rail marks the review the agent is working on",
+    busyRail.badge && busyRail.row.includes("working"), busyRail.row.trim());
+  check("the rail marks the whole project as busy", busyRail.project);
+
+  // A resolved/cancelled run must lose the indicator again; a spinner that never stops is worse
+  // than none, because it reads as an agent stuck on the task.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 8, method: "tools/call",
+      params: { name: "reply", arguments: { session_id: id, message: "Done for now" } },
+    }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const idleRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    project: Boolean(document.querySelector(".rail-project .pworking")),
+  }));
+  check("the working indicator clears when the agent replies",
+    !idleRail.row && !idleRail.project, JSON.stringify(idleRail));
+
+  // A late narration line must not re-arm the spinner: the answered round is finished, and the
+  // card says how long ago the last step was so the spinner is never the only evidence.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 9, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: id, message: "Last line after the answer", state: "step",
+      } },
+    }),
+  });
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const finishedCard = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return {
+      working: Boolean(card?.classList.contains("working")),
+      text: card?.textContent || "",
+      pill: document.querySelector("#agent-state")?.textContent || "",
+    };
+  });
+  check("a late step after the reply does not revive the working indicator",
+    !finishedCard.working && finishedCard.text.includes("Run finished")
+      && finishedCard.text.includes("last step"), finishedCard.text);
+  check("the header does not claim a working agent on an answered round",
+    !finishedCard.pill.includes("working"), finishedCard.pill);
+  if (process.env.E2E_SHOT) await page.screenshot({ path: process.env.E2E_SHOT });
 
   // Those checks need the submitted state; now unlock and keep drawing.
   await stopReview();
@@ -677,6 +737,13 @@ const main = async () => {
     `${beforeSwitch} → ${afterSwitch}`);
 
   // ---- submitting locks the canvas; STOP takes the submission back
+  // A second annotation, so the read-only list below has a row *pair* to measure a separator on.
+  await page.evaluate(() => window.redline.mutate(() => {
+    window.redline.annotations.push({
+      id: "e2e-second", type: "rect", color: "#e11d48", width: 3,
+      start: { x: 120, y: 160 }, end: { x: 260, y: 240 }, note: "second",
+    });
+  }));
   const beforeStop = await page.evaluate(() => window.redline.annotations.length);
   await page.keyboard.down("Control");
   await page.keyboard.press("Enter");
@@ -701,6 +768,79 @@ const main = async () => {
       && locked.red === "rgb(220, 38, 38)" && locked.square,
     JSON.stringify(locked));
 
+  const lockedView = await page.evaluate(() => ({
+    dim: !document.querySelector("#stage-dim").hidden,
+    zoomDisabled: document.querySelector("#zoom-in").disabled,
+    scale: window.redline.view.scale,
+    x: window.redline.view.x,
+    y: window.redline.view.y,
+  }));
+  await page.$eval("#stage", (stage) => stage.dispatchEvent(new WheelEvent("wheel", {
+    deltaY: -240, ctrlKey: true, bubbles: true, cancelable: true,
+  })));
+  await page.keyboard.press("+");
+  const lockedViewAfter = await page.evaluate(() => ({
+    scale: window.redline.view.scale,
+    x: window.redline.view.x,
+    y: window.redline.view.y,
+  }));
+  check("a locked canvas dims and ignores scroll and zoom",
+    lockedView.dim && lockedView.zoomDisabled
+      && lockedViewAfter.scale === lockedView.scale
+      && lockedViewAfter.x === lockedView.x && lockedViewAfter.y === lockedView.y,
+    JSON.stringify({ lockedView, lockedViewAfter }));
+
+  // The lock must *refuse* edits, not merely report `locked`: the inspector's align/layer/group
+  // bar stayed armed after a submit, and Delete/arrow keys still rewrote the selected annotation.
+  await page.evaluate(() => window.redline.select(0));
+  const guarded = await page.evaluate(() => ({
+    before: JSON.stringify(window.redline.annotations),
+    tool: window.redline.tool,
+    toolsHidden: document.querySelector("#selection-tools").classList.contains("hidden"),
+    toolsDisabled: [...document.querySelectorAll(".options .tool[data-tool]")]
+      .every((button) => button.disabled),
+  }));
+  await page.keyboard.press("Delete");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("a");
+  await drag(page, { x: 400, y: 500 }, { x: 520, y: 560 });
+  const stillLocked = await page.evaluate(() => ({
+    after: JSON.stringify(window.redline.annotations),
+    tool: window.redline.tool,
+  }));
+  check("a locked review refuses drawing, deleting, nudging and the inspector write tools",
+    guarded.toolsHidden && guarded.toolsDisabled && stillLocked.after === guarded.before
+      && stillLocked.tool === guarded.tool,
+    JSON.stringify({ toolsHidden: guarded.toolsHidden, toolsDisabled: guarded.toolsDisabled,
+      changed: stillLocked.after !== guarded.before, tool: stillLocked.tool }));
+  // The read-only list is a list, not a stack of broken frames: the separator between two rows
+  // has to be a straight hairline across the whole row. As a `border-top` on a rounded box it
+  // painted only the middle segment, so each row looked like an open frame with missing ends.
+  const list = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#ann-list .ann-row")];
+    if (rows.length < 2) return { rows: rows.length };
+    const style = getComputedStyle(rows[1]);
+    const first = rows[0].getBoundingClientRect();
+    const second = rows[1].getBoundingClientRect();
+    return {
+      rows: rows.length,
+      readonly: rows.every((row) => row.classList.contains("readonly")
+        && getComputedStyle(row).cursor === "default"),
+      radius: style.borderTopLeftRadius,
+      separator: style.borderTopColor,
+      firstSeparator: getComputedStyle(rows[0]).borderTopColor,
+      sameWidth: Math.abs(first.width - second.width) < 0.5
+        && Math.abs(first.left - second.left) < 0.5,
+    };
+  });
+  check("a locked review lists its annotations as flat read-only rows with a full separator",
+    list.rows < 2 || (list.readonly && list.radius === "0px" && list.sameWidth
+      && list.separator !== list.firstSeparator
+      && list.separator !== "rgba(0, 0, 0, 0)"),
+    JSON.stringify(list));
+
+  await page.evaluate(() => window.redline.select(-1));
+
   await page.waitForFunction(() => {
     const button = document.querySelector("#submit");
     return button && !button.disabled && button.textContent.trim() === "STOP";
@@ -710,11 +850,14 @@ const main = async () => {
   await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
   const unlocked = await page.evaluate(() => ({
     locked: Boolean(window.redline.locked),
+    dim: !document.querySelector("#stage-dim").hidden,
+    zoomDisabled: document.querySelector("#zoom-in").disabled,
     label: document.querySelector("#submit").textContent.trim(),
     annotations: window.redline.annotations.length,
   }));
   check("STOP unlocks the canvas and keeps the annotations",
-    !unlocked.locked && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
+    !unlocked.locked && !unlocked.dim && !unlocked.zoomDisabled
+      && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
     JSON.stringify(unlocked));
 
   // ---- touch mode: bigger tools, row actions not hover-only
@@ -795,6 +938,19 @@ const main = async () => {
       && setup.secondary.includes("btn") && setup.card !== "0px",
     JSON.stringify(setup));
 
+  await page.goto(`${BASE}/servers?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => (document.querySelector("#list")?.textContent || "").includes("desktop app"),
+    { timeout: 5000 },
+  );
+  const serversPage = await page.evaluate(() => ({
+    title: document.querySelector("h1")?.textContent.trim() || "",
+    text: document.querySelector("#list")?.textContent || "",
+  }));
+  check("servers page is local-only and explains headless mode",
+    serversPage.title === "Servers" && serversPage.text.includes("desktop app"),
+    JSON.stringify(serversPage));
+
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
@@ -839,6 +995,73 @@ const main = async () => {
     picked.meta.project === "e2e-repo" && picked.meta.title === "from the project picker",
     `${picked.meta.project} · ${picked.meta.title}`);
 
+  // ---- the dividers resize the panels (rail width, inspector width, conversation height)
+  const panels = () => page.evaluate(() => ({
+    rail: Math.round(document.querySelector(".rail").getBoundingClientRect().width),
+    inspector: Math.round(document.querySelector(".inspector").getBoundingClientRect().width),
+    conv: Math.round(document.querySelector("#conversation").getBoundingClientRect().height),
+    canvas: document.querySelector("#canvas").width,
+    stored: {
+      rail: Number(localStorage.getItem("redline:railWidth")),
+      inspector: Number(localStorage.getItem("redline:inspectorWidth")),
+      conv: Number(localStorage.getItem("redline:convHeight")),
+    },
+  }));
+  const handleAt = (selector) => page.$eval(selector, (el) => {
+    const rect = el.getBoundingClientRect();
+    return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+  });
+
+  const panelsBefore = await panels();
+  const railHandle = await handleAt("#rail-resizer");
+  await drag(page, railHandle, { x: railHandle.x + 70, y: railHandle.y });
+  const railDragged = await panels();
+  check("dragging the rail divider widens the session list",
+    Math.abs(railDragged.rail - panelsBefore.rail - 70) <= 2,
+    `${panelsBefore.rail}px → ${railDragged.rail}px`);
+  check("the canvas is re-measured while the rail moves",
+    railDragged.canvas < panelsBefore.canvas, `${panelsBefore.canvas} → ${railDragged.canvas}`);
+
+  const inspectorHandle = await handleAt("#inspector-resizer");
+  await drag(page, inspectorHandle, { x: inspectorHandle.x - 60, y: inspectorHandle.y });
+  const inspectorDragged = await panels();
+  check("dragging the inspector divider widens the annotation panel",
+    Math.abs(inspectorDragged.inspector - panelsBefore.inspector - 60) <= 2,
+    `${panelsBefore.inspector}px → ${inspectorDragged.inspector}px`);
+
+  const convHandle = await handleAt("#conv-resizer");
+  await drag(page, convHandle, { x: convHandle.x, y: convHandle.y - 50 });
+  const convDragged = await panels();
+  check("dragging the conversation divider gives it more room",
+    Math.abs(convDragged.conv - panelsBefore.conv - 50) <= 2,
+    `${panelsBefore.conv}px → ${convDragged.conv}px`);
+  check("panel sizes are remembered",
+    Math.abs(convDragged.stored.rail - convDragged.rail) <= 1
+      && Math.abs(convDragged.stored.inspector - convDragged.inspector) <= 1
+      && Math.abs(convDragged.stored.conv - convDragged.conv) <= 2,
+    JSON.stringify(convDragged.stored));
+
+  await page.reload({ waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
+  const restored = await panels();
+  check("panel sizes survive a reload",
+    Math.abs(restored.rail - convDragged.rail) <= 2
+      && Math.abs(restored.inspector - convDragged.inspector) <= 2
+      && Math.abs(restored.conv - convDragged.conv) <= 2,
+    `${restored.rail} / ${restored.inspector} / ${restored.conv}`);
+
+  // The pick survives a reload: the next review starts in the project the human works in.
+  await page.goto(`${BASE}/`);
+  await page.waitForSelector(".gallery .card", { timeout: 5000 });
+  await page.click("#new-review");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
+  const remembered = await page.$eval("#f-project", (el) => el.value);
+  check("a new review preselects the last used project after a reload",
+    remembered === "e2e-repo", `project=${remembered}`);
+  await page.click("#new-cancel");
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 
   await browser.close();

@@ -82,7 +82,7 @@ Tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback
 | **Drafts** | unsent annotations and the composer survive switching sessions; quitting warns first |
 | **Capture** | server-side Chromium screenshots a URL (`:browser` image) |
 | **Auth** | one token; Bearer header, `?t=` link or HttpOnly cookie; cross-site requests refused |
-| **Desktop** | Tauri v2 tray app, auto-update with stable and dev channels |
+| **Desktop** | Tauri v2 tray app, auto-update with stable and dev channels, multiple server profiles (Production/Dev/This computer) with a one-click switcher |
 
 ## Configuration
 

@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.20.0 — 2026-10-30
+
+- **A locked canvas also freezes the view.** While a submitted review waits for the agent, the
+  wheel, zoom buttons, keyboard zoom and pan no longer move the screenshot, and a light scrim
+  covers the stage; STOP removes both. The toolbar and status pill stay above the scrim.
+- **Multiple server profiles in the desktop app.** The local **Servers** page (tray → *Servers…*)
+  lists Production, Dev and *This computer*, shows each server's version/state and switches the
+  window with one click. Profiles and tokens are stored side by side in `config.json`; switching
+  only changes the active profile, so other servers stay signed in. Adding a server reuses the
+  existing wizard, and the old `remote_url`/`token` config is read as the first profile.
+- **The annotation list is a list, not a stack of broken frames.** In a submitted (read-only) round
+  the separator between rows was a `border-top` on a rounded row, so it painted only the middle
+  segment between the two rounded corners and every row looked like an open frame. The separator is
+  now a full-width hairline and read-only rows are a plain `.ann-row.readonly` (no pointer cursor,
+  no hover highlight, no delete button). The browser e2e measures the separator and the class.
+
+- **Panels are resizable.** The two column borders and the line above the conversation in the
+  editor are now drag handles: the session rail, the annotation inspector and the conversation
+  each remember the size you drag them to (`localStorage`), the canvas is re-measured mid-drag, and
+  the handles are keyboard-operable (`←/→` or `↑/↓`, Shift for bigger steps). Limits keep the stage
+  at least ~360 px wide and stop the conversation from swallowing the annotation list. The browser
+  e2e covers all three dividers, including a reload.
+- **A finished round can no longer keep saying "working".** The agent's last narration line often
+  arrives *after* `post_round` (review handed back) or `reply` (answer posted); `progress` used to
+  set `agent_state=working` unconditionally, so the review kept pulsing a spinner with a green
+  **Submit review** button and the human could not tell a live agent from a dead one. The server
+  now only marks a round working while it is still submitted, the UI derives the state from
+  `status` as well, and the run card shows how long ago the last step was ("Used 1 tool · last
+  step 6m ago"). The narration event itself is still recorded.
+
+- **The rail shows which review and which project an agent is working on.** While an agent runs a
+  round the review row carries a spinner and a **working** badge (in place of the annotation
+  count), its dot pulses, and its project header shows the same spinner and label — with a count
+  when more than one review runs at once — even when the project is collapsed. The rail polls the
+  session list every 8 s and redraws only when the set of running reviews changes; the indicator
+  clears as soon as the agent replies or the human presses STOP. The browser e2e asserts both the
+  appearance and the removal.
+
+- **A new review starts in the project you were just working in.** Opening a review (or picking a
+  project in the dialog) records it in the browser, and the next **Ctrl+V** or **New review** opens
+  with that project already selected instead of the placeholder — on the editor and on the start
+  page, and across reloads. The memory is per browser and per server origin; a project that no
+  longer exists or is hidden from the picker falls back to the placeholder. The browser e2e covers
+  both the preselect and its survival across a reload.
+
+- **The submitted lock actually holds.** After a submit, Delete/Backspace, arrow-key nudging,
+  undo/redo, the inspector's align/layer/group buttons, the note field and the keyboard tool
+  shortcuts could still change annotations while the stage pill claimed the canvas was locked.
+  All annotation writes now funnel through one `Editor.mutate` guard that refuses while the round
+  waits for the agent (and while a history round is open), the drawing tools are `disabled` and
+  dimmed instead of merely ignoring clicks, and the inspector's write toolbar hides with the note
+  field. The browser e2e proves the refusal, not just the flag.
+
 ## 0.19.0 — 2026-10-29
 
 - **Projects are repositories now.** The agent discovers git repos from OpenCode

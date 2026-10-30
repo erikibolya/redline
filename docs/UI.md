@@ -53,8 +53,10 @@ inside changes width (`?` is narrower than `☀`), the button must not.
 - Search field (title, note, id).
 - Filter chips with counts: `All 7` · `Open 5` · `Submitted 2` · `Mine` (created by a human).
 - Each row: agent-provided **title**, note excerpt, relative time (`2h ago`), status dot, and a
-  badge: annotation count for submitted sessions, a **new** dot for anything created or submitted
-  since this browser last looked (tracked per session in `localStorage`).
+  badge that says who has the ball: **working** while the agent runs, **waiting for agent** for a
+  submitted round nobody has picked up, **confirmed** / **cancelled** after a feature decision,
+  otherwise a **new** marker for anything this browser has not looked at (tracked per session in
+  `localStorage`) or the annotation count.
 - Selected row is highlighted; clicking loads that session into the canvas without a page reload.
 - Groups by day (`Today`, `Yesterday`, older) when more than ~15 sessions.
 
@@ -245,8 +247,9 @@ The rail lists projects (conversation areas), not a flat stream of requests.
 - Sessions created without a project live flat and are shown as **Inbox** — there is no migration,
   the label is added on read. **Inbox** and legacy label-only projects still work; the agent uses
   its default `REDLINE_AGENT_REPO` for them.
-- Each project header shows its name, the number of waiting submissions (green) and the total.
-  Click to collapse; the state persists per browser.
+- Each project header shows its name and the total number of sessions — one count, not a waiting
+  count beside the total (the per-row badge says which rounds are waiting). Click to collapse; the
+  state persists per browser.
 - **A running agent is visible in the rail.** A review the agent is currently working on carries a
   spinner and a **working** badge instead of its annotation count, its dot pulses, and the project
   header shows the same spinner and label (with a count when several reviews run at once) — even

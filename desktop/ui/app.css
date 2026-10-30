@@ -259,10 +259,6 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   margin-left: auto; color: var(--muted); font-weight: 500; font-size: 11px;
   background: var(--panel-3); border: 1px solid var(--border); border-radius: 999px; padding: 0 7px;
 }
-.rail-project .pwait {
-  color: #86efac; background: #10231a; border: 1px solid #14532d;
-  border-radius: 999px; padding: 0 7px; font-size: 11px; font-weight: 600;
-}
 .rail-project .pworking {
   display: inline-flex; align-items: center; gap: 4px;
   color: var(--accent); background: var(--panel-2); border: 1px solid var(--accent);
@@ -316,6 +312,11 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   display: inline-flex; align-items: center; gap: 5px; padding: 0 8px;
   background: var(--panel-2); border-color: var(--accent); color: var(--accent);
   font-size: 10px;
+}
+/* Submitted, not picked up: words rather than a count, so "who has the ball" is readable. */
+.session .badge.waiting {
+  padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+  background: var(--panel-2); border-color: var(--border); color: var(--muted);
 }
 .session.working .dot { background: var(--accent); animation: conv-pulse 1.4s ease-in-out infinite; }
 .rail-empty { padding: 24px 12px; text-align: center; color: var(--muted); }

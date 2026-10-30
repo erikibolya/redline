@@ -476,7 +476,6 @@ class Rail {
       const project = known.get(slug);
       const label = project?.name || (slug === "inbox" ? "Inbox" : slug);
       const collapsed = this.collapsed.has(slug);
-      const waiting = items.filter((session) => session.status === "submitted").length;
       const working = items.filter(agentWorking).length;
       parts.push(`
         <div class="rail-project" data-project="${escapeHtml(slug)}" role="button" tabindex="0"
@@ -486,7 +485,6 @@ class Rail {
           ${working ? `<span class="pworking" title="The agent is working on ${plural(working, "review")}">
             <span class="spin" aria-hidden="true"></span>${working > 1 ? `<b>${working}</b>` : ""}working
           </span>` : ""}
-          ${waiting ? `<span class="pwait" title="${waiting} waiting for the agent">${waiting}</span>` : ""}
           <span class="pcount">${items.length}</span>
         </div>`);
       if (collapsed) continue;
@@ -506,6 +504,10 @@ class Rail {
         const working = agentWorking(session);
         const feature = featureState(session);
         const decided = feature !== "pending";
+        // A submitted round belongs to the agent, so its badge says who has the ball: a round
+        // nobody has picked up yet used to read "new" (unread by the human), which is a lie
+        // about the state. Only a review that is back in the human's hands can be "new".
+        const queued = session.status === "submitted";
         // An agent currently running outranks "new" and the annotation count: it is the one
         // state that changes a few seconds later without the human touching anything. A feature
         // decision is the human's answer to the session, so it outranks the unread marker.
@@ -516,11 +518,13 @@ class Rail {
             ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
             : feature === "cancelled"
               ? `<span class="badge cancelled" title="Feature cancelled by the human">cancelled</span>`
-              : fresh
-                ? `<span class="badge new" title="new since you last looked">new</span>`
-                : annotations
-                  ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
-                  : "";
+              : queued
+                ? `<span class="badge waiting" title="Waiting for an agent — nobody has picked this round up yet">waiting for agent</span>`
+                : fresh
+                  ? `<span class="badge new" title="new since you last looked">new</span>`
+                  : annotations
+                    ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
+                    : "";
         parts.push(`
           <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${
             decided ? ` feature-${feature}` : ""
@@ -529,7 +533,7 @@ class Rail {
                data-id="${escapeHtml(session.id)}"
                aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}${
                  decided ? `, feature ${feature}` : ""
-               }"
+               }${queued && !working ? ", waiting for agent" : ""}"
                aria-current="${session.id === this.selectedId}"
                ${this.bulkMode ? `aria-pressed="${this.selection.has(session.id)}"` : ""}>
             ${this.bulkMode

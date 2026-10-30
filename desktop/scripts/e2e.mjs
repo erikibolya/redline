@@ -340,6 +340,23 @@ const main = async () => {
   check("submission says it is waiting for an agent", waiting.includes("Waiting for an agent"),
     waiting.slice(0, 60));
 
+  // ---- the rail says the same thing. A submitted round is the agent's ball; it used to read
+  // "new" (unread by the human), which said nothing about who was expected to act next.
+  await page.evaluate(() => window.redline.rail.render());
+  const queuedRail = await page.evaluate(() => {
+    const row = document.querySelector('.session[aria-current="true"]');
+    return {
+      badge: row?.querySelector(".badge.waiting")?.textContent.trim() || "",
+      unread: Boolean(row?.querySelector(".badge.new")),
+      pwait: Boolean(document.querySelector(".rail-project .pwait")),
+      counts: document.querySelectorAll(".rail-project .pcount").length,
+    };
+  });
+  check("the rail says a submitted round is waiting for an agent",
+    queuedRail.badge === "waiting for agent" && !queuedRail.unread, JSON.stringify(queuedRail));
+  check("the project header keeps one count, not a waiting count beside it",
+    !queuedRail.pwait && queuedRail.counts > 0, JSON.stringify(queuedRail));
+
   // ---- the status toast sits in the middle of the stage, clear of the toolbar
   const toastBox = await page.evaluate(() => {
     const toast = document.querySelector("#stage-status");

@@ -508,6 +508,13 @@ async fn sync_agent_repos(
     Json(body): Json<RepoSync>,
 ) -> Result<Json<Value>, Error> {
     let agent = normalize_agent_id(&body.agent_id)?;
+    // A repo sync is the bridge's periodic heartbeat (every 60 s), so it is the natural place to
+    // record presence even when no review is claimed.
+    state
+        .agent
+        .lock()
+        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?
+        .touch(&agent);
     if body.repos.len() > 200 {
         return Err(Error::BadRequest(
             "too many repositories (max 200)".to_string(),
@@ -720,6 +727,7 @@ async fn claim_session(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+    agent.touch(&body.agent_id);
     let settings = agent.settings().clone();
     let max_parallel = project_max(&state, &project, &settings);
     let claim = agent
@@ -758,6 +766,7 @@ async fn claim_heartbeat(
             .agent
             .lock()
             .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        agent.touch(&body.agent_id);
         agent
             .heartbeat(&id, &body.agent_id, lease_seconds)
             .map_err(claim_error)?
@@ -778,6 +787,7 @@ async fn claim_state(
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
     let settings = agent.settings().clone();
     let max_parallel = project_max(&state, &project, &settings);
+    agent.touch(&body.agent_id);
     let claim = agent
         .set_state(
             &id,
@@ -801,6 +811,7 @@ async fn claim_release(
             .agent
             .lock()
             .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        agent.touch(&body.agent_id);
         agent.release(&id, &body.agent_id).map_err(claim_error)?
     };
     Ok(Json(json!({ "ok": true, "claim": claim })))
@@ -826,6 +837,7 @@ async fn agent_next(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+    agent.touch(&body.agent_id);
     let settings = agent.settings().clone();
     let claims = agent.claims();
     let mut blocked = "empty";

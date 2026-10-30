@@ -18,6 +18,10 @@ use serde::{Deserialize, Serialize};
 pub const DEFAULT_MAX_PARALLEL: u32 = 2;
 pub const DEFAULT_PROJECT_MAX_PARALLEL: u32 = 1;
 pub const DEFAULT_LEASE_SECONDS: u64 = 120;
+/// The bridge syncs its repositories every 60 s. Three missed beats means it is offline.
+pub const PRESENCE_ONLINE_SECONDS: u64 = 180;
+/// Keep an offline agent's last-seen row for a week so the UI can still say who was last here.
+const PRESENCE_RETENTION_SECONDS: u64 = 7 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AgentSettings {
@@ -124,12 +128,23 @@ impl fmt::Display for ClaimError {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentPresence {
+    pub agent_id: String,
+    pub last_seen: u64,
+    /// Derived at read time from `last_seen`, never trusted from the file.
+    #[serde(default)]
+    pub online: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentStatus {
     pub settings: AgentSettings,
     pub running: usize,
     pub waiting: usize,
     pub claims: Vec<Claim>,
+    pub agents: Vec<AgentPresence>,
+    pub online: usize,
 }
 
 /// In-memory authority for settings and claims, persisted beside the sessions folder.
@@ -138,6 +153,7 @@ pub struct AgentControl {
     data_dir: PathBuf,
     settings: AgentSettings,
     claims: BTreeMap<String, Claim>,
+    agents: BTreeMap<String, AgentPresence>,
 }
 
 impl AgentControl {
@@ -146,10 +162,12 @@ impl AgentControl {
         let _ = fs::create_dir_all(&data_dir);
         let settings = read_json(&settings_path(&data_dir)).unwrap_or_default();
         let claims = read_json(&claims_path(&data_dir)).unwrap_or_default();
+        let agents = read_json(&presence_path(&data_dir)).unwrap_or_default();
         let mut control = Self {
             data_dir,
             settings,
             claims,
+            agents,
         };
         control.cleanup();
         control
@@ -179,8 +197,32 @@ impl AgentControl {
         self.claims.values().cloned().collect()
     }
 
+    /// Record that an agent bridge is alive. Called from every agent-facing endpoint; the repo
+    /// sync alone beats every 60 s, so an idle bridge is still visible.
+    pub fn touch(&mut self, agent_id: &str) {
+        let id = agent_id.trim();
+        if id.is_empty() {
+            return;
+        }
+        let now = now();
+        self.agents.insert(
+            id.to_string(),
+            AgentPresence {
+                agent_id: id.to_string(),
+                last_seen: now,
+                online: true,
+            },
+        );
+        // Bound the file without dropping the last-seen history the status panel shows.
+        self.agents.retain(|_, presence| {
+            now.saturating_sub(presence.last_seen) <= PRESENCE_RETENTION_SECONDS
+        });
+        let _ = self.save_presence();
+    }
+
     pub fn status(&mut self) -> AgentStatus {
-        self.cleanup();
+        let now = now();
+        self.cleanup_at(now);
         let running = self
             .claims
             .values()
@@ -191,11 +233,22 @@ impl AgentControl {
             .values()
             .filter(|claim| claim.state == ClaimState::Waiting)
             .count();
+        let agents: Vec<AgentPresence> = self
+            .agents
+            .values()
+            .map(|presence| AgentPresence {
+                online: now.saturating_sub(presence.last_seen) <= PRESENCE_ONLINE_SECONDS,
+                ..presence.clone()
+            })
+            .collect();
+        let online = agents.iter().filter(|presence| presence.online).count();
         AgentStatus {
             settings: self.settings.clone(),
             running,
             waiting,
             claims: self.claims.values().cloned().collect(),
+            agents,
+            online,
         }
     }
 
@@ -400,6 +453,13 @@ impl AgentControl {
         if self.claims.len() != before {
             let _ = self.save_claims();
         }
+        let before = self.agents.len();
+        self.agents.retain(|_, presence| {
+            now.saturating_sub(presence.last_seen) <= PRESENCE_RETENTION_SECONDS
+        });
+        if self.agents.len() != before {
+            let _ = self.save_presence();
+        }
     }
 
     fn save_settings(&self) -> Result<(), String> {
@@ -408,6 +468,10 @@ impl AgentControl {
 
     fn save_claims(&self) -> Result<(), String> {
         write_json(&claims_path(&self.data_dir), &self.claims)
+    }
+
+    fn save_presence(&self) -> Result<(), String> {
+        write_json(&presence_path(&self.data_dir), &self.agents)
     }
 
     fn persist_claims(&self) -> Result<(), ClaimError> {
@@ -422,6 +486,10 @@ fn settings_path(data_dir: &Path) -> PathBuf {
 
 fn claims_path(data_dir: &Path) -> PathBuf {
     data_dir.join("agent-claims.json")
+}
+
+fn presence_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("agent-presence.json")
 }
 
 fn now() -> u64 {

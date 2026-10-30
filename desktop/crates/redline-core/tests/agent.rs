@@ -257,3 +257,34 @@ fn settings_are_validated_and_persisted() {
     assert_eq!(reloaded.settings().project_max_parallel, 2);
     assert_eq!(reloaded.settings().lease_seconds, 60);
 }
+
+#[test]
+fn presence_is_tracked_and_expires_after_three_missed_beats() {
+    let (dir, mut control) = control();
+    control.touch("holly");
+    let live = control.status();
+    assert_eq!(live.online, 1);
+    assert_eq!(live.agents.len(), 1);
+    assert_eq!(live.agents[0].agent_id, "holly");
+    assert!(live.agents[0].online);
+    drop(control);
+
+    // A bridge that stopped beating: last seen older than the online window, but inside the
+    // retention window, so the UI can still name the agent that went quiet.
+    let stale = (chrono::Utc::now().timestamp().max(0) as u64)
+        .saturating_sub(redline_core::agent::PRESENCE_ONLINE_SECONDS + 5);
+    let file = dir.path().join("data").join("agent-presence.json");
+    std::fs::write(
+        file,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "holly": { "agent_id": "holly", "last_seen": stale }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut reloaded = AgentControl::load(dir.path().join("data"));
+    let offline = reloaded.status();
+    assert_eq!(offline.agents.len(), 1);
+    assert_eq!(offline.online, 0);
+    assert!(!offline.agents[0].online);
+}

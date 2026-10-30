@@ -64,21 +64,20 @@ try {
 
   <main class="list-main">
     <div class="wrap">
+      <section class="agent-cta" id="agent-cta" hidden>
+        <div>
+          <h2>Connect an agent</h2>
+          <p>No agent is connected yet. Paste the MCP config into your agent so submitted
+            reviews can run.</p>
+        </div>
+        <button class="btn accent" id="agent-connect" type="button">Connect an agent</button>
+      </section>
       <div class="gallery" id="gallery" hidden></div>
       <h2 style="font-size:16px;margin:0 0 6px">Start a review</h2>
       <p style="color:var(--muted);margin:0 0 18px;font-size:13px">
         Drop a screenshot anywhere on this page, paste it with <b>Ctrl+V</b>, or press <b>+ New review</b>. An agent can also
         create one over MCP — it will appear in the list on the left.
       </p>
-
-      <h2 style="font-size:16px;margin:26px 0 6px">Connect an agent</h2>
-      <p style="color:var(--muted);margin:0 0 10px;font-size:13px">
-        Paste this into your agent's MCP settings. The token is masked here —
-        <b>Copy config</b> puts the real one on your clipboard.
-      </p>
-      <pre class="pre" id="mcp-json">Loading…</pre>
-      <button class="btn" id="copy-mcp">Copy config</button>
-      <span id="copy-status" style="color:var(--ok);font-size:12px;margin-left:8px"></span>
 
       <h2 style="font-size:16px;margin:26px 0 6px">Keyboard</h2>
       <div class="pre">V select · R rectangle · E ellipse · A arrow · P pen

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Connect an agent is a dialog, shown only when it is needed.** The dashboard embedded the MCP
+  JSON forever, even after the bridge was already polling, so the most prominent block on `/` was
+  setup the human had finished. The header chip now opens a **Connect an agent** dialog (masked
+  config, Copy config button, live online/offline status) on both pages. The dashboard keeps only
+  an amber invitation card while no agent is online; it and the rail warning disappear as soon as
+  a bridge polls. The old `#mcp-json`/`#copy-mcp` block is gone. The e2e opens the dialog from the
+  dashboard and editor, checks the masked token and status, verifies the offline invitation and
+  its disappearance after a poll.
 - **The server says whether an agent is listening.** A submitted review with no bridge behind it
   waited silently; nothing on screen explained why. `AgentControl` now records `last_seen` on
   every agent-facing call (repo sync is the periodic 60 s heartbeat, `next`/claims touch it too),

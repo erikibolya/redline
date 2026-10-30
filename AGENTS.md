@@ -304,6 +304,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   already looks: a header chip with words, plus a rail warning when the count is zero. Keep it
   non-blocking — never trap work behind a bridge that is down — but never let a dead queue look
   alive.
+- **A permanent setup block is not a status.** The dashboard kept the MCP config on screen after
+  the agent was already connected, so the most prominent thing on `/` was setup the human had
+  finished. Move configuration into a dialog opened from the status chip, and leave only an
+  invitation while the condition that needs it (no bridge online) is true. Test the dialog from
+  both pages, the masked token, and the invitation appearing/disappearing with presence.
 - **A submission is not automatically a new round.** Every `POST /annotations` archived its own
   copy, so *STOP* → *Submit again* with nothing changed left the same annotations and the same
   PNG twice in History, and a session the human thought of as "one task" read as two (2026-10-30).

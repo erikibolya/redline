@@ -566,6 +566,126 @@ const AgentStatus = {
     $$("#agent-warning").forEach((warning) => {
       warning.hidden = !data || online > 0;
     });
+    // The dashboard's invitation to connect is only for a server with no bridge; the dialog can
+    // stay open while the bridge appears, so refresh its status too.
+    $$("#agent-cta").forEach((callout) => {
+      callout.hidden = !data || online > 0;
+    });
+    if (ConnectAgent.dialog?.open) ConnectAgent.renderStatus();
+  },
+};
+
+/* ---------------------------------------------------------------- connect agent */
+
+/**
+ * The MCP config used to live permanently on the dashboard, even after the agent was already
+ * connected. It is now a dialog: the header chip opens it anywhere, and the dashboard only shows
+ * an invitation while no bridge is online.
+ */
+const ConnectAgent = {
+  dialog: null,
+  config: null,
+  error: null,
+
+  ensure() {
+    if (this.dialog) return this.dialog;
+    document.body.insertAdjacentHTML("beforeend", `
+      <dialog class="feature-dialog connect-dialog" id="connect-dialog"
+              aria-labelledby="connect-title">
+        <div class="feature-card dialog-frame">
+          <div class="dialog-head">
+            <div>
+              <h2 id="connect-title">Connect an agent</h2>
+              <p class="connect-status" id="connect-status">Checking…</p>
+            </div>
+            <button type="button" class="btn icon dialog-close" id="connect-close" aria-label="Close">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <div class="dialog-body stack">
+            <p class="hint">Paste this into your agent's MCP settings. The token is masked here —
+              <b>Copy config</b> puts the real one on your clipboard.</p>
+            <pre class="pre" id="connect-json">Loading…</pre>
+          </div>
+          <div class="dialog-foot">
+            <span class="copy-status" id="connect-copy-status"></span>
+            <button type="button" class="btn accent" id="connect-copy">Copy config</button>
+          </div>
+        </div>
+      </dialog>`);
+    this.dialog = $("#connect-dialog");
+    $("#connect-close").addEventListener("click", () => this.dialog.close());
+    $("#connect-copy").addEventListener("click", () => this.copy());
+    return this.dialog;
+  },
+
+  async open() {
+    const dialog = this.ensure();
+    if (dialog.open) return;
+    this.renderStatus();
+    dialog.showModal();
+    await this.load();
+  },
+
+  async load() {
+    if (this.config) {
+      this.renderConfig();
+      return;
+    }
+    try {
+      const config = await api("/api/config");
+      this.config = JSON.stringify(config.mcp_config, null, 2);
+      this.error = null;
+    } catch (requestError) {
+      this.error = requestError.message;
+    }
+    this.renderConfig();
+  },
+
+  renderConfig() {
+    const block = $("#connect-json");
+    if (!block) return;
+    if (!this.config) {
+      block.textContent = this.error ? `Could not load the config: ${this.error}` : "Could not load the config.";
+      return;
+    }
+    // The token is real in the clipboard, masked on screen: this dialog is a screenshot target too.
+    block.textContent = this.config.replace(
+      /(Bearer\s+)[A-Za-z0-9._~+/=-]{6,}/g,
+      "$1••••••••••••",
+    );
+  },
+
+  renderStatus() {
+    const status = $("#connect-status");
+    if (!status) return;
+    const data = AgentStatus.data;
+    const online = data?.online || 0;
+    status.classList.toggle("online", online > 0);
+    status.classList.toggle("offline", Boolean(data && !online));
+    status.textContent = !data
+      ? "Checking the agent status…"
+      : online
+        ? `${online} agent${online === 1 ? "" : "s"} connected — this config is already in use.`
+        : "No agent is connected yet. Paste this config into your agent to start.";
+  },
+
+  async copy() {
+    const note = $("#connect-copy-status");
+    if (!this.config) await this.load();
+    if (!this.config) {
+      if (note) note.textContent = "config unavailable";
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(this.config);
+      if (note) {
+        note.textContent = "copied";
+        setTimeout(() => { note.textContent = ""; }, 3000);
+      }
+    } catch {
+      if (note) note.textContent = "select the text above and copy";
+    }
   },
 };
 
@@ -3350,28 +3470,6 @@ async function bootList() {
   $("#new-review").addEventListener("click", () => NewReview.open());
   const count = $("#sessions-count");
   if (count) count.textContent = plural(rail.sessions.length, "session");
-
-  try {
-    const config = await api("/api/config");
-    const json = JSON.stringify(config.mcp_config, null, 2);
-    // This page is a screenshot target (redline can capture itself), so the token is masked on
-    // screen. "Copy config" still copies the real JSON.
-    const masked = json.replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{6,}/g, "$1••••••••••••");
-    const block = $("#mcp-json");
-    if (block) block.textContent = masked;
-    const copy = $("#copy-mcp");
-    if (copy) {
-      copy.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(json);
-          $("#copy-status").textContent = "copied";
-          setTimeout(() => { $("#copy-status").textContent = ""; }, 3000);
-        } catch {
-          $("#copy-status").textContent = "select the text above and copy";
-        }
-      });
-    }
-  } catch { /* not signed in yet */ }
 }
 
 /* ------------------------------------------------------------------ boot */
@@ -3388,7 +3486,9 @@ document.addEventListener("DOMContentLoaded", () => {
   AgentStatus.start();
   window.redlineAgentStatus = AgentStatus;
   $$("#agent-status").forEach((chip) =>
-    chip.addEventListener("click", () => AgentSettings.open()));
+    chip.addEventListener("click", () => ConnectAgent.open()));
+  $$("#agent-connect").forEach((button) =>
+    button.addEventListener("click", () => ConnectAgent.open()));
   Help.wire();
   addEventListener("keydown", (event) => {
     if (event.key === "?" && document.body.dataset.page !== "editor") {

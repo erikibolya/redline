@@ -217,13 +217,27 @@ const main = async () => {
   check("agent status recovers when a bridge polls", true);
 
   await page.click("#agent-status");
-  await page.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
-  await page.click("#agent-settings-close");
+  await page.waitForSelector("#connect-dialog[open]", { timeout: 5000 });
   await page.waitForFunction(
-    () => !document.querySelector("#agent-settings-dialog")?.open,
+    () => !document.querySelector("#connect-json")?.textContent.includes("Loading"),
     { timeout: 5000 },
   );
-  check("the agent chip opens the agent panel", true);
+  const connectEditor = await page.evaluate(() => ({
+    title: document.querySelector("#connect-title")?.textContent || "",
+    json: document.querySelector("#connect-json")?.textContent || "",
+    status: document.querySelector("#connect-status")?.textContent || "",
+    copy: Boolean(document.querySelector("#connect-copy")),
+  }));
+  check("the agent chip opens the connect dialog with a masked config",
+    connectEditor.title === "Connect an agent" && connectEditor.json.includes("mcpServers")
+      && connectEditor.json.includes("••••") && !connectEditor.json.includes("e2e-token")
+      && connectEditor.copy && connectEditor.status.includes("connected"),
+    JSON.stringify({ ...connectEditor, json: connectEditor.json.slice(0, 80) }));
+  await page.click("#connect-close");
+  await page.waitForFunction(
+    () => !document.querySelector("#connect-dialog")?.open,
+    { timeout: 5000 },
+  );
 
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
   const chrome = await page.evaluate(() => {
@@ -1791,6 +1805,58 @@ const main = async () => {
   check("the dashboard shows the same connected agent",
     listAgent.chip && listAgent.online && listAgent.label.includes("connected")
       && listAgent.warningHidden, JSON.stringify(listAgent));
+
+  // ---- the MCP config is a dialog, not a permanent block on the dashboard
+  const connectUi = await page.evaluate(() => ({
+    oldConfigGone: !document.querySelector("#mcp-json") && !document.querySelector("#copy-mcp"),
+    ctaHidden: Boolean(document.querySelector("#agent-cta")?.hidden),
+  }));
+  check("the dashboard no longer embeds the agent config",
+    connectUi.oldConfigGone && connectUi.ctaHidden, JSON.stringify(connectUi));
+  await page.click("#agent-status");
+  await page.waitForSelector("#connect-dialog[open]", { timeout: 5000 });
+  await page.waitForFunction(
+    () => !document.querySelector("#connect-json")?.textContent.includes("Loading"),
+    { timeout: 5000 },
+  );
+  const connect = await page.evaluate(() => ({
+    title: document.querySelector("#connect-title")?.textContent || "",
+    json: document.querySelector("#connect-json")?.textContent || "",
+    status: document.querySelector("#connect-status")?.textContent || "",
+    copy: Boolean(document.querySelector("#connect-copy")),
+  }));
+  check("the dashboard chip opens the connect dialog with a masked config",
+    connect.title === "Connect an agent" && connect.json.includes("mcpServers")
+      && connect.json.includes("••••") && !connect.json.includes("e2e-token")
+      && connect.copy && connect.status.includes("connected"),
+    JSON.stringify({ ...connect, json: connect.json.slice(0, 80) }));
+  await page.click("#connect-close");
+  await page.waitForFunction(() => !document.querySelector("#connect-dialog")?.open,
+    { timeout: 5000 });
+
+  // Without a bridge the dashboard offers the one-click invitation instead.
+  await page.evaluate(() => window.redlineAgentStatus.render({ online: 0, agents: [] }));
+  const cta = await page.evaluate(() => ({
+    visible: !document.querySelector("#agent-cta")?.hidden,
+    text: document.querySelector("#agent-cta")?.textContent || "",
+    warning: !document.querySelector("#agent-warning")?.hidden,
+  }));
+  check("without an agent the dashboard offers Connect an agent",
+    cta.visible && cta.text.includes("No agent is connected") && cta.warning,
+    JSON.stringify(cta));
+  await page.click("#agent-connect");
+  await page.waitForSelector("#connect-dialog[open]", { timeout: 5000 });
+  const offlineConnect = await page.evaluate(() =>
+    document.querySelector("#connect-status")?.textContent || "");
+  check("the connect dialog says no agent is connected yet",
+    offlineConnect.includes("No agent is connected"), offlineConnect);
+  await page.click("#connect-close");
+  await page.waitForFunction(() => !document.querySelector("#connect-dialog")?.open,
+    { timeout: 5000 });
+  await page.evaluate(() => window.redlineAgentStatus.refresh());
+  await page.waitForSelector("#agent-status.online", { timeout: 5000 });
+  const ctaGone = await page.evaluate(() => Boolean(document.querySelector("#agent-cta")?.hidden));
+  check("the connect invitation disappears when a bridge polls", ctaGone);
 
   // A decided feature is finished work, not a review to resume: the gallery must not keep it.
   const galleryState = await page.evaluate(() => ({

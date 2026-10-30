@@ -279,6 +279,16 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   decided), and RedLine never touches git — the agent owns the PR/merge workflow. Cancel keeps
   the files and Delete is a deliberate extra choice, not a reflex click; make every human
   decision readable by the agent, not just visible in the UI.
+- **A read-only viewer is not a dead image.** `viewRound` set `viewing`, and `pointerdown`
+  returned early on it, so a historical screenshot could not be dragged, pinched or panned —
+  read-only means "no edits", not "no navigation". Keep pan/zoom on their own guard and turn the
+  main button into a drag (grab/grabbing cursor) when there is nothing to select. The "back to
+  current" pill lives *inside* the stage, so it needs the same
+  `closest(".options, .text-editor, .viewing-bar")` guard as the toolbar or pointer capture
+  swallows its click. Space-pan required `event.target === document.body`; after clicking a
+  history row the focus stays on the row, so the gesture silently died — arm space while the
+  pointer hovers the stage, never while typing. Test the real gestures (drag, wheel, ctrl+wheel,
+  space+drag under row focus), not only `viewing`/`locked` flags.
 
 ## 8. Working rules
 

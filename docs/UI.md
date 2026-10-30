@@ -85,7 +85,8 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   fixed-resolution canvas).
 - **Zoom**: wheel with Ctrl/Cmd at the pointer, `+`/`-`, `0` fit, `1` 100%, double-click a tool
   button to reset. Range 10 %–800 %. Fit-to-window on load.
-- **Pan**: space+drag, middle-drag, or plain wheel (shift for horizontal). Cursor changes.
+- **Pan**: space+drag, middle-drag, or plain wheel (shift for horizontal). Cursor changes. In a
+  historical round (read-only viewer) the main button also drags the picture.
 - Image is centred; the stage has a dark checkerboard so transparent PNGs read correctly.
 
 ## Tools and interaction
@@ -224,7 +225,13 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   never empty after the first submit.
 - **History is navigation, not actions**: `Current` is always present; round rows open the
   archived source screenshot + annotations **read-only**; the header bar
-  `Viewing round N — back to current` returns to the live canvas. Only `Current` is editable.
+  `Viewing round N — drag to pan, Ctrl+scroll to zoom · back to current` returns to the live
+  canvas. Only `Current` is editable.
+- **A historical round is a viewer, not a dead image**: left-drag pans (the canvas shows a grab
+  cursor), the wheel scrolls (Shift for horizontal), Ctrl/Cmd+wheel zooms at the pointer, and the
+  zoom buttons plus `+`/`-`/`0`/`1` keep working. Space+drag works even when a history row still
+  has keyboard focus; the pointer being over the stage is what arms space. The live "agent is
+  working" toast is hidden while an archived round is on screen.
 - The ghost (`◫`), diff (`Δ`) and open-PNG (`↗`) buttons and the `Ghost · …` chip were removed;
   the diff endpoint remains for agents.
 - The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History

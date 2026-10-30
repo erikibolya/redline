@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A historical round is a viewer, not a dead image.** Opening a round from History left the
+  canvas frozen: `pointerdown` returned early whenever `viewing` was set, so no pan or pinch
+  survived, and the "Viewing round N" pill sat inside the stage without its own pointer guard.
+  The viewer now pans with the main button (grab/grabbing cursor), middle/right-drag and
+  space+drag, scrolls with the wheel and zooms with Ctrl/Cmd+wheel, the zoom buttons and
+  `+`/`-`/`0`/`1`; drawing and selection stay refused. Space+drag also works when a history row
+  still holds keyboard focus, which the old `event.target === document.body` guard silently
+  blocked, and the live "agent is working" toast is no longer drawn over an archived screenshot.
+  The e2e opens a round and asserts the cursor, a real left-drag, wheel scroll, ctrl+wheel zoom,
+  space+drag under row focus, and that panning does not edit the round.
 - **The rolling dev release is tagged `dev-build`, not `dev`.** A tag that shares its name with a
   branch is a trap: git resolves the *revision* `dev` to the tag (`git log dev`, `git diff dev`,
   `git merge dev` all used the tag's commit, silently) and `git worktree add … dev` refuses it with

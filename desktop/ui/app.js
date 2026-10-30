@@ -814,6 +814,7 @@ class Editor {
     this.lineWidth = prefs.get("width", 3);
     this.view = { scale: 1, x: 0, y: 0, fitted: false };
     this.pointers = new Map();
+    this.pointerInStage = false;
     this.drag = null;
     this.draw = null;
     this.pan = null;
@@ -1027,8 +1028,10 @@ class Editor {
     const stageStatus = $("#stage-status");
     if (stageStatus) {
       const submitted = this.meta.status === "submitted";
-      stageStatus.hidden = !submitted;
-      if (submitted) {
+      // A historical round is not the round the agent is working on: the live toast must not
+      // hover over an archived screenshot.
+      stageStatus.hidden = !submitted || Boolean(this.viewing);
+      if (submitted && !this.viewing) {
         const last = (this.events || [])[this.events.length - 1];
         stageStatus.textContent = agentWorking(this.meta) && last
           ? `Agent is working — ${last.message}`
@@ -1841,10 +1844,10 @@ class Editor {
     const pinch = { start: null, scale: 1 };
 
     stage.addEventListener("pointerdown", (event) => {
-      if (!this.image || this.viewing || this.locked) return;
-      // The options bar and the inline text editor live inside the stage. Capturing the pointer
-      // for marquee/pan on those would swallow their click events.
-      if (event.target.closest(".options, .text-editor")) return;
+      if (!this.image || this.locked) return;
+      // The options bar, the inline text editor and the "back to current" pill live inside the
+      // stage. Capturing the pointer for marquee/pan on those would swallow their click events.
+      if (event.target.closest(".options, .text-editor, .viewing-bar")) return;
 
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 2) {
@@ -1858,11 +1861,15 @@ class Editor {
         this.draw = null;
         this.drag = null;
         this.pan = null;
+        stage.classList.remove("panning");
         return;
       }
       const point = this.toImage(event);
 
-      if (event.button === 1 || event.button === 2 || this.spacePan) {
+      // A historical round (and any other read-only view) is a viewer: there is nothing to
+      // select or draw, so the main button drags the picture. Without this, `viewing` returned
+      // from pointerdown before any pan branch and the history screenshot could not be moved.
+      if (event.button === 1 || event.button === 2 || this.spacePan || this.readOnly) {
         this.pan = { x: event.clientX, y: event.clientY, vx: this.view.x, vy: this.view.y };
         stage.classList.add("panning");
         stage.setPointerCapture(event.pointerId);
@@ -2060,9 +2067,17 @@ class Editor {
     });
     stage.addEventListener("contextmenu", (event) => event.preventDefault());
 
-    // space to pan
+    // space to pan. The old guard required `document.body` as the target, so after clicking a
+    // history row (focus stays on the button) space+drag silently did nothing. The pointer is
+    // the intent signal: while it hovers the stage, space belongs to the canvas, not to a
+    // focused control — but never while typing into a field.
+    stage.addEventListener("pointerenter", () => { this.pointerInStage = true; });
+    stage.addEventListener("pointerleave", () => { this.pointerInStage = false; });
     addEventListener("keydown", (event) => {
-      if (event.code === "Space" && !event.repeat && event.target === document.body) {
+      const tag = event.target.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || event.target.isContentEditable;
+      if (event.code === "Space" && !event.repeat && !typing
+        && (event.target === document.body || this.pointerInStage)) {
         event.preventDefault();
         this.spacePan = true;
       }
@@ -2439,8 +2454,11 @@ class Editor {
     const bar = $("#viewing-bar");
     if (!bar) return;
     bar.hidden = !this.viewing;
+    // The cursor is the affordance: a historical round can be dragged like a map, and the grab
+    // hand says so before the first drag.
+    this.stage.classList.toggle("viewing", Boolean(this.viewing));
     if (this.viewing) {
-      bar.textContent = `Viewing round ${this.viewing.round || ""} — back to current`;
+      bar.textContent = `Viewing round ${this.viewing.round || ""} — drag to pan, Ctrl+scroll to zoom · back to current`;
     }
   }
 

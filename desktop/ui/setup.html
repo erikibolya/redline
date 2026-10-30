@@ -84,11 +84,9 @@ try {
 
       <div class="setup-actions">
         <button class="btn accent" type="submit" id="save">Save and connect</button>
-        <button class="btn" type="button" id="local">Use this computer</button>
+        <a class="btn" id="back-servers" href="/servers">Back</a>
       </div>
 
-      <p class="hint" style="margin-top:10px">No server? “Use this computer” keeps everything local —
-        no token needed.</p>
       <div id="status" class="setup-status"></div>
     </form>
 
@@ -107,8 +105,10 @@ const statusBox = document.getElementById("status");
 const banner = document.getElementById("banner");
 const saveButton = document.getElementById("save");
 const back = document.getElementById("back");
+const backServers = document.getElementById("back-servers");
 
 back.href = localToken ? `/?t=${encodeURIComponent(localToken)}` : "/";
+backServers.href = localToken ? `/servers?t=${encodeURIComponent(localToken)}` : "/servers";
 if (params.get("unreachable")) {
   banner.hidden = false;
   banner.textContent = "The server you were connected to did not answer. Check that it is running, or switch back to this computer.";
@@ -166,16 +166,6 @@ document.getElementById("form").addEventListener("submit", async (event) => {
   } catch (error) {
     setStatus("Could not reach RedLine: " + error.message, "error");
     saveButton.disabled = false;
-  }
-});
-
-document.getElementById("local").addEventListener("click", async () => {
-  try {
-    const response = await fetch(`/api/setup/disconnect?t=${encodeURIComponent(localToken)}`, { method: "POST" });
-    const data = await response.json();
-    location.replace(`${data.local_url}/?t=${encodeURIComponent(localToken)}`);
-  } catch (error) {
-    setStatus("Could not switch to standalone mode: " + error.message, "error");
   }
 });
 

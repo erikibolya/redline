@@ -190,7 +190,8 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   unless you capture from a browser started with `TZ=Europe/Prague`.
 - **Switching a server is not logging out.** The desktop app keeps every profile and token in
   `config.json`; `/servers` only changes `active` and navigates to the chosen server. Cookies are
-  per origin, so the other servers stay signed in. "Use this computer" must also preserve profiles.
+  per origin, so the other servers stay signed in. Switching back to *This computer* must also
+  preserve profiles.
 - **A project is not a repository.** RedLine projects began as labels; a label does not tell the
   agent where to work. Repo projects now store a **relative** key (`redline`, `ActiUnit/Au.Net`)
   plus an agent id. Never store an absolute mount path: the OpenCode server, the agent container

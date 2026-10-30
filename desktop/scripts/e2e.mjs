@@ -1018,13 +1018,16 @@ const main = async () => {
   const setup = await page.evaluate(() => ({
     back: document.querySelector("#back")?.getAttribute("href") || "",
     primary: document.querySelector("#save")?.className || "",
-    secondary: document.querySelector("#local")?.className || "",
+    secondary: document.querySelector("#back-servers")?.className || "",
+    secondaryHref: document.querySelector("#back-servers")?.getAttribute("href") || "",
+    localSwitch: Boolean(document.querySelector("#local")),
     card: getComputedStyle(document.querySelector(".setup-card")).borderRadius,
     css: getComputedStyle(document.body).backgroundColor,
   }));
-  check("setup page has a way back and app-styled buttons",
+  check("setup page goes back to the server list and has no duplicate standalone switch",
     setup.back.startsWith("/") && setup.primary.includes("accent")
-      && setup.secondary.includes("btn") && setup.card !== "0px",
+      && setup.secondary.includes("btn") && setup.secondaryHref.includes("/servers")
+      && !setup.localSwitch && setup.card !== "0px",
     JSON.stringify(setup));
 
   await page.goto(`${BASE}/servers?t=${TOKEN}`, { waitUntil: "networkidle2" });
@@ -1039,6 +1042,48 @@ const main = async () => {
   check("servers page is local-only and explains headless mode",
     serversPage.title === "Servers" && serversPage.text.includes("desktop app"),
     JSON.stringify(serversPage));
+
+  // Headless mode has no profiles, so render the page's own row markup and measure the
+  // destructive button in both themes: an outline must not inherit the filled `.btn.danger`
+  // background, or the red label disappears into a red button.
+  const removeButton = await page.evaluate(() => {
+    const host = document.getElementById("list");
+    host.innerHTML = row({ id: "e2e-alpha", name: "Alpha", url: "https://alpha.example", active: false }, false)
+      + row({ id: "e2e-beta", name: "Beta", url: "https://beta.example", active: true }, false);
+    const button = host.querySelector("[data-remove]");
+    if (!button) return null;
+    const rgb = (value) => value.match(/[\d.]+/g).map(Number).slice(0, 3);
+    const luminance = ([r, g, b]) => {
+      const channel = (c) => {
+        const s = c / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+    };
+    const sample = () => {
+      const style = getComputedStyle(button);
+      const card = getComputedStyle(document.querySelector(".servers-card")).backgroundColor;
+      const [light, dark] = [luminance(rgb(style.color)), luminance(rgb(card))].sort((a, b) => b - a);
+      return {
+        color: style.color,
+        background: style.backgroundColor,
+        contrast: Number(((light + 0.05) / (dark + 0.05)).toFixed(2)),
+      };
+    };
+    const theme = document.documentElement.dataset.theme || "light";
+    document.documentElement.dataset.theme = "dark";
+    const dark = sample();
+    document.documentElement.dataset.theme = "light";
+    const light = sample();
+    document.documentElement.dataset.theme = theme;
+    return { text: button.textContent.trim(), dark, light };
+  });
+  check("servers page Remove button is an outline with a readable label in both themes",
+    Boolean(removeButton) && removeButton.text === "Remove"
+      && removeButton.dark.background === "rgba(0, 0, 0, 0)"
+      && removeButton.light.background === "rgba(0, 0, 0, 0)"
+      && removeButton.dark.contrast >= 4.5 && removeButton.light.contrast >= 4.5,
+    JSON.stringify(removeButton));
 
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });

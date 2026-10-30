@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The Servers page Remove button is readable again.** `.server-actions .btn.danger` kept the
+  filled `.btn.danger` background and only overrode the label to `--danger`, so *Remove* was red
+  text on a red button. It is now an outline in both themes (label contrast 9.2:1 dark, 6.3:1
+  light), and the e2e measures that contrast instead of trusting the stylesheet.
+- **Adding a server lives on the Servers page only.** The app menu and the tray no longer carry
+  **Add a server…**; **Servers…** stays and its **Add server** button opens the same wizard. The
+  wizard's **Use this computer** button is gone (the *This computer* row in the list is always
+  present and cannot be removed) and is replaced by **Back**, which returns to the server list.
 - **Each session is one feature.** The rail's ✓ now asks for confirmation and records
   `feature_confirmed_at`; the ✕ is **Cancel feature** and records `feature_cancelled_at` instead
   of deleting the review. Both close the session (`resolved`), keep the screenshot/annotations,

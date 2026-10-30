@@ -143,7 +143,6 @@ fn main() {
 /// The window menu bar. Same ids as the tray menu, same handler.
 fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let sessions = MenuItem::with_id(app, "open", "Sessions", true, Some("CmdOrCtrl+1"))?;
-    let connect = MenuItem::with_id(app, "connect", "Add a server…", true, None::<&str>)?;
     let servers = MenuItem::with_id(app, "servers", "Servers…", true, None::<&str>)?;
     let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_mcp = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
@@ -168,7 +167,7 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         "RedLine",
         true,
         &[
-            &sessions, &servers, &connect, &copy_link, &copy_mcp, &separator, &agent_start,
+            &sessions, &servers, &copy_link, &copy_mcp, &separator, &agent_start,
             &agent_stop, &agent_repo, &agent_separator, &quit,
         ],
     )?;
@@ -186,7 +185,6 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
 
 fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "tray:open", "Open RedLine", true, None::<&str>)?;
-    let connect = MenuItem::with_id(app, "tray:connect", "Add a server…", true, None::<&str>)?;
     let servers = MenuItem::with_id(app, "tray:servers", "Servers…", true, None::<&str>)?;
     let login = tauri::menu::CheckMenuItem::with_id(
         app,
@@ -218,7 +216,7 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &open, &servers, &connect, &login, &copy_link, &copy_config, &separator,
+            &open, &servers, &login, &copy_link, &copy_config, &separator,
             &agent_start, &agent_stop, &agent_repo, &agent_separator, &check, &dev_update,
             &revert, &address, &separator, &quit,
         ],
@@ -270,10 +268,6 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
     }
     match id {
         "open" => open_window(app, ctx),
-        "connect" => {
-            let url = format!("{}/setup?t={}&new=1", ctx.local.base_url, ctx.local.token);
-            navigate(app, &url);
-        }
         "servers" => {
             let url = format!("{}/servers?t={}", ctx.local.base_url, ctx.local.token);
             navigate(app, &url);

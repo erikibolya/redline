@@ -302,6 +302,9 @@ do not move; it also clicks every close X.
   zoom buttons plus `+`/`-`/`0`/`1` keep working. Space+drag works even when a history row still
   has keyboard focus; the pointer being over the stage is what arms space. The live "agent is
   working" toast is hidden while an archived round is on screen.
+- Every history row is its own card (4 px apart, all four corners rounded). The live round keeps
+  the same fill and border as the archived ones; only its glyph is green, and the accent outline
+  marks the round currently being viewed.
 - The ghost (`◫`), diff (`Δ`) and open-PNG (`↗`) buttons and the `Ghost · …` chip were removed;
   the diff endpoint remains for agents.
 - The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History

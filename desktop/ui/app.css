@@ -709,18 +709,30 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .ann-row .end:hover { background: var(--accent); color: #fff; }
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
 /* History rounds are a list of small, bounded rows — no dead space around them. */
-#history-list .history-row.live {
-  background: rgba(47, 129, 247, .10);
-  border-color: rgba(47, 129, 247, .28);
-}
 #history-list .history-row.selected { border-color: var(--accent); background: var(--panel-3); }
-#history-list .history-row.selected.live { background: rgba(47, 129, 247, .16); }
+/* The live round is not a different kind of card: it keeps the same fill and border as the
+   archived rounds, and only its glyph turns green so it stands out. When it is the row being
+   viewed (the normal live state) it must not also wear the selection outline. */
+#history-list .history-row.live,
+#history-list .history-row.live.selected { background: var(--panel-2); border-color: var(--border); }
+#history-list .history-row.live .glyph {
+  background: rgba(22, 163, 74, .16); border-color: rgba(22, 163, 74, .45); color: var(--ok);
+}
+[data-theme="light"] #history-list .history-row.live .glyph {
+  background: #dcfce7; border-color: #86efac; color: #15803d;
+}
 .history-list { display: flex; flex-direction: column; gap: 4px; }
 .history-row {
   padding: 4px 6px; gap: 6px; border-radius: 6px;
   background: var(--panel-2); border-color: var(--border);
 }
-.history-row + .history-row { margin-top: 0; border-top-color: var(--border); }
+/* History rows are 4px apart and each owns all four corners. The generic `.ann-row + .ann-row`
+   divider squares the top corners for a stacked list, which left every round below the first
+   looking chopped off; restore the radius here. */
+.history-row + .history-row {
+  margin-top: 0; border-top-color: var(--border);
+  border-top-left-radius: 6px; border-top-right-radius: 6px;
+}
 .history-row:hover { background: var(--panel-3); }
 .history-row .glyph { width: 18px; height: 18px; border-radius: 4px; font-size: 10px; }
 .history-row .label b { font-size: 11px; }

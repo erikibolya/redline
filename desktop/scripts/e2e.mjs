@@ -1414,8 +1414,47 @@ const main = async () => {
   });
   check("selected row is outlined on every side",
     borders[0] === borders[1] && borders[1] === borders[2], borders.join(" / "));
+  // A history row is a card, not a stacked list item: the shared `.ann-row + .ann-row` divider
+  // squared the top corners, so every round below the first looked chopped off.
+  const radii = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list .history-row")].map((row) => {
+      const style = getComputedStyle(row);
+      return [
+        style.borderTopLeftRadius, style.borderTopRightRadius,
+        style.borderBottomRightRadius, style.borderBottomLeftRadius,
+      ];
+    }),
+  );
+  check("every history row keeps all four rounded corners",
+    radii.length > 1 && radii.every((corners) => corners.every((radius) => radius === corners[0])),
+    JSON.stringify(radii));
   await page.click("#viewing-bar");
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
+  // `showCurrent` reloads the list; the stale rows still contain `current`, so wait for the
+  // live row to also be the selected one before reading its look.
+  await page.waitForFunction(
+    () => Boolean(document.querySelector("#history-list .history-row.live.selected")),
+    { timeout: 5000 },
+  );
+  // The live round is identified by its green glyph, not by a different fill or border.
+  const liveLook = await page.evaluate(() => {
+    const live = document.querySelector("#history-list .history-row.live");
+    const other = [...document.querySelectorAll("#history-list .history-row")]
+      .find((row) => row !== live);
+    const liveStyle = getComputedStyle(live);
+    const glyph = getComputedStyle(live.querySelector(".glyph"));
+    return {
+      live: [liveStyle.backgroundColor, liveStyle.borderTopColor],
+      other: other ? [getComputedStyle(other).backgroundColor,
+        getComputedStyle(other).borderTopColor] : [],
+      glyph: glyph.color,
+    };
+  });
+  check("the live history row looks like the other rounds",
+    liveLook.other.length === 2 && liveLook.live.join() === liveLook.other.join(),
+    JSON.stringify(liveLook));
+  check("the live history row is marked by a green glyph",
+    ["rgb(22, 163, 74)", "rgb(21, 128, 61)"].includes(liveLook.glyph), liveLook.glyph);
 
   // ---- unsent annotations survive a session switch
   await page.keyboard.press("r");

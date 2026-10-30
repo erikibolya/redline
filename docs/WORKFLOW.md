@@ -93,7 +93,8 @@ the dev build is the testable result.
   gets **Reopen** in the ✕ menu.
 - A new submission or agent round clears the decision, so more work makes the feature pending.
 - `resolve` only closes an agent round; it is **not** the human's feature confirmation.
-- Data deletion is separate: the ✕ menu's **Delete files…**, bulk **Delete**, or **Delete done**.
+- Data deletion is separate: the ✕ menu's **Delete files…**, bulk **Delete**, or **Delete
+  cancelled** (only cancelled features; confirmed features stay as the log).
 
 For a fixed-state follow-up, post a new round into the same session (the old flow created a second
 session; v0.14 keeps one task per session instead).

@@ -316,13 +316,14 @@ const workingIds = (sessions) => (sessions || [])
   .sort()
   .join("\n");
 
-// "Active" is the default so finished sessions drop out of the way; "Done" is the archive.
+// "Active" is the default so finished sessions drop out of the way; "All" is the archive view
+// and "Done" is the resolved-only view.
 const FILTERS = [
+  { id: "all", label: "All", test: () => true },
   { id: "active", label: "Active", test: (s) => s.status !== "resolved" },
   { id: "open", label: "Open", test: (s) => s.status === "open" },
   { id: "submitted", label: "Submitted", test: (s) => s.status === "submitted" },
   { id: "resolved", label: "Done", test: (s) => s.status === "resolved" },
-  { id: "mine", label: "Mine", test: (s) => s.agent === "human" },
 ];
 
 class Rail {
@@ -342,7 +343,12 @@ class Rail {
     this.projects = [];
     this.collapsed = new Set(prefs.get("collapsedProjects", []));
     this.filter = prefs.get("filter", "active");
-    if (this.filter === "all") this.filter = "active"; // pre-v0.6 preference
+    // Drop preferences for removed filters (the old "mine") instead of rendering an unpressed
+    // chip row with no matching view.
+    if (!FILTERS.some((filter) => filter.id === this.filter)) {
+      this.filter = "active";
+      prefs.set("filter", this.filter);
+    }
     this.query = "";
     this.agentTimer = null;
     this.wire();
@@ -351,9 +357,11 @@ class Rail {
   wire() {
     if (this.purge) {
       this.purge.addEventListener("click", () => {
-        const ids = this.sessions.filter((session) => session.status === "resolved").map((s) => s.id);
+        const ids = this.sessions
+          .filter((session) => featureState(session) === "cancelled")
+          .map((session) => session.id);
         if (!ids.length) return;
-        if (confirm(`Delete ${ids.length} finished session(s)? Their files go too.`)) {
+        if (confirm(`Delete ${ids.length} cancelled session(s)? Their files go too.`)) {
           this.onPurge?.(ids);
         }
       });
@@ -447,9 +455,10 @@ class Rail {
       FILTERS.map((filter) => [filter.id, this.sessions.filter(filter.test).length]),
     );
     if (this.purge) {
-      const done = this.sessions.filter((session) => session.status === "resolved").length;
-      this.purge.hidden = done === 0;
-      this.purge.textContent = `Delete done (${done})`;
+      const cancelled = this.sessions
+        .filter((session) => featureState(session) === "cancelled").length;
+      this.purge.hidden = cancelled === 0;
+      this.purge.textContent = `Delete cancelled (${cancelled})`;
     }
     this.chips.innerHTML = FILTERS.map(
       (filter) => `
@@ -676,7 +685,7 @@ class Editor {
       body: $("#rail-body"),
       chips: $("#chips"),
       search: $("#search"),
-      purge: $("#purge-done"),
+      purge: $("#purge-cancelled"),
       selectedId: this.sessionId,
       onSelect: (id) => this.openSession(id),
       onAction: (action, id) => this.railAction(action, id),
@@ -2883,7 +2892,7 @@ async function bootList() {
     body: $("#rail-body"),
     chips: $("#chips"),
     search: $("#search"),
-    purge: $("#purge-done"),
+    purge: $("#purge-cancelled"),
     onSelect: (id) => { location.href = `/s/${encodeURIComponent(id)}`; },
     onAction: async (action, id) => {
       try {

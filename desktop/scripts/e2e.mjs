@@ -666,6 +666,18 @@ const main = async () => {
     status === "resolved" && confirmed.stamped && confirmed.pill === "confirmed",
     JSON.stringify({ status, ...confirmed }));
 
+  // "All" is the only view that keeps a finished session alongside active work.
+  await clickChip("All");
+  await page.waitForSelector(row, { timeout: 5000 });
+  const allFilter = await page.evaluate(() => ({
+    filter: window.redline.rail.filter,
+    visible: Boolean(document.querySelector('.session[aria-current="true"]')),
+    mine: Boolean(document.querySelector('.chip[data-filter="mine"]')),
+  }));
+  check("the All filter shows every session and the Mine chip is gone",
+    allFilter.filter === "all" && allFilter.visible && !allFilter.mine,
+    JSON.stringify(allFilter));
+
   // Resolved sessions leave the default 'Active' view, so check the badge and reopen them from
   // the 'Done' filter.
   await clickChip("Done");
@@ -1064,6 +1076,33 @@ const main = async () => {
   const afterDelete = await api("/api/sessions");
   check("deleting from the row removes the session and its files",
     !afterDelete.sessions.some((session) => session.id === doomedId), doomedId);
+
+  // ---- "Delete cancelled" is scoped to cancelled features; confirmed ones are the log
+  const cancelMe = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "cancel me", image_base64: makePng() }),
+  });
+  const cancelMeId = cancelMe.meta.id;
+  await api(`/api/sessions/${cancelMeId}/cancel-feature`, { method: "POST" });
+  await page.evaluate(() => window.redline.rail.load());
+  const purge = await page.evaluate(() => ({
+    hidden: document.querySelector("#purge-cancelled")?.hidden,
+    label: document.querySelector("#purge-cancelled")?.textContent.trim() || "",
+  }));
+  check("Delete cancelled appears for a cancelled feature",
+    purge.hidden === false && purge.label.includes("Delete cancelled"),
+    JSON.stringify(purge));
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.click("#purge-cancelled");
+  await page.waitForFunction(
+    () => document.querySelector("#purge-cancelled")?.hidden !== false,
+    { timeout: 10000 },
+  );
+  const afterPurge = await api("/api/sessions");
+  const remaining = new Set(afterPurge.sessions.map((session) => session.id));
+  check("Delete cancelled removes only cancelled features",
+    !remaining.has(cancelMeId) && extra.every((id) => remaining.has(id)),
+    JSON.stringify({ cancelMeId, extras: extra.map((id) => remaining.has(id)) }));
 
   // ---- accessible names and a live region
   const a11y = await page.evaluate(() => ({

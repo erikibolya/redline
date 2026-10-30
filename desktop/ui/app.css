@@ -206,6 +206,17 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   margin-top: 8px; flex-wrap: wrap;
 }
 
+/* The MCP config is a dialog now: wide enough for the JSON, with a live status line. */
+.connect-dialog { width: min(680px, calc(100vw - 32px)); }
+.connect-status { margin: 4px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted); }
+.connect-status.online { color: #86efac; }
+.connect-status.offline { color: #fbbf24; }
+[data-theme="light"] .connect-status.online { color: #047857; }
+[data-theme="light"] .connect-status.offline { color: #b45309; }
+.connect-dialog .hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.connect-dialog .pre { margin: 0; max-height: none; }
+.copy-status { margin-right: auto; color: var(--ok); font-size: 12px; }
+
 .settings-dialog {
   padding: 0; width: min(580px, calc(100vw - 32px));
   max-height: min(88vh, 820px); overflow: hidden;
@@ -321,6 +332,17 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   color: #fbbf24; background: #231a08; border: 1px solid #78350f;
 }
 [data-theme="light"] .agent-warning { color: #92400e; background: #fffbeb; border-color: #fde68a; }
+/* The dashboard's only invitation to connect: hidden while a bridge is online. */
+.agent-cta {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  margin-bottom: 22px; padding: 14px 16px; border-radius: 10px;
+  background: #231a08; border: 1px solid #78350f;
+}
+.agent-cta h2 { margin: 0 0 3px; font-size: 14px; color: #fbbf24; }
+.agent-cta p { margin: 0; color: #d6b46a; font-size: 12px; line-height: 1.5; }
+[data-theme="light"] .agent-cta { background: #fffbeb; border-color: #fde68a; }
+[data-theme="light"] .agent-cta h2 { color: #92400e; }
+[data-theme="light"] .agent-cta p { color: #a16207; }
 .search {
   width: 100%; padding: 7px 10px; border-radius: var(--radius);
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);

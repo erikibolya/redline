@@ -212,6 +212,11 @@ Each session is one feature. The rail's row actions carry the human's decision; 
 - Presence is the bridge's own heartbeat: repo sync every 60 s (and every `next`/claim call)
   touches `last_seen`; an agent stays online for 180 s. The dashboard and the editor share the
   same chip, fed by `GET /api/agent/status` every 10 s.
+- **Connect an agent** is a dialog, not a permanent dashboard block. The header chip opens it on
+  both pages; it shows the live status, the MCP JSON with the token masked (Copy config copies the
+  real one), and sits in the shared fixed dialog shell. The dashboard only shows the amber
+  invitation card — with a **Connect an agent** button — while no bridge is online; once one
+  polls, both the card and the rail warning disappear.
 
 ## Dialog frame (unreleased)
 

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The header is icons, and the status pills are gone.** `submitted`/`replied`/`working` sat in
+  the header as GitHub-style pills and competed with the review title, although the rail card, the
+  stage toast and the composer/STOP button already say whose turn it is; they are removed. Agent
+  settings is now a solid gear instead of a `⚙` glyph, keyboard shortcuts is a keyboard instead of
+  `?`, the theme button is a sun/moon SVG, and the two panel toggles are left/right frame icons
+  with `aria-pressed` and a *Hide/Show* title, separated from the app tools by a hairline. Every
+  icon is inline SVG, so none of it depends on the platform's emoji font. The e2e clicks both panel
+  toggles, asserts the canvas bitmap follows the grid, swaps the theme icon, and checks the header
+  has no `.pill` while the state still renders in the toast and the rail card.
+
 - **The dev server follows the dev build.** Every push to `dev` now publishes
   `ghcr.io/erikibolya/redline:browser-dev` (plus a sha tag) from the same workflow as the Windows
   dev build. The `redline-dev` stack can pull that tag instead of building from the working tree,

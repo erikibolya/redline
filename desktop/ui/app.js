@@ -412,6 +412,13 @@ const unfiltered = (query) => !query;
 
 /* ------------------------------------------------------------------ theme */
 
+/// The toggle shows the theme it switches *to*, as an inline SVG: a glyph swap is not a promise
+/// that the sun means "light now" on someone else's emoji font.
+const THEME_ICONS = {
+  light: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg>',
+  dark: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4"/></svg>',
+};
+
 const Theme = {
   current() {
     return prefs.get("theme", null)
@@ -421,8 +428,10 @@ const Theme = {
     document.documentElement.dataset.theme = theme;
     prefs.set("theme", theme);
     $$("[data-theme-toggle]").forEach((button) => {
-      button.textContent = theme === "light" ? "☾" : "☀";
-      button.title = theme === "light" ? "Dark theme" : "Light theme";
+      // Dark theme offers the sun, light theme offers the moon.
+      button.innerHTML = THEME_ICONS[theme === "light" ? "light" : "dark"];
+      button.title = theme === "light" ? "Switch to dark theme" : "Switch to light theme";
+      button.setAttribute("aria-label", button.title);
     });
   },
   toggle() {
@@ -999,15 +1008,6 @@ class Editor {
       ? `${this.meta.image_width}×${this.meta.image_height}` : null,
       this.meta.url || null].filter(Boolean);
     $("#session-sub").textContent = bits.join(" · ");
-    const status = $("#session-status");
-    const feature = featureState(this.meta);
-    status.textContent = feature === "pending" ? this.meta.status : feature;
-    status.className = `pill ${feature === "pending" ? this.meta.status : feature}`;
-    status.title = feature === "confirmed"
-      ? "Feature confirmed — the agent may open a pull request"
-      : feature === "cancelled"
-        ? "Feature cancelled — nothing will be merged"
-        : "";
     const waiting = this.meta.status === "submitted";
     const button = $("#submit");
     if (waiting) {
@@ -1038,17 +1038,6 @@ class Editor {
             ? "The agent replied — read it in the conversation"
             : "Waiting for the agent…";
       }
-    }
-    const agent = $("#agent-state");
-    if (agent) {
-      // A stale "working" on a round that is over is not a state worth showing: the header would
-      // claim an agent is running on a review that is already back in the human's hands.
-      const state = this.meta.agent_state === "working" && !agentWorking(this.meta)
-        ? null
-        : this.meta.agent_state;
-      agent.hidden = !state;
-      agent.textContent = state || "";
-      agent.className = `pill agent ${state || ""}`;
     }
     this.applyTitle();
     const idLabel = $("#session-id-status");
@@ -1095,16 +1084,33 @@ class Editor {
       $("#conv-new")?.addEventListener("click", () => this.seenConversation());
     }
     $("#viewing-bar")?.addEventListener("click", () => this.showCurrent());
+    const syncPanels = () => {
+      const app = $("#app");
+      const rail = $("#toggle-rail");
+      const inspector = $("#toggle-inspector");
+      const railHidden = app.classList.contains("rail-hidden");
+      const inspectorHidden = app.classList.contains("inspector-hidden");
+      if (rail) {
+        rail.setAttribute("aria-pressed", String(!railHidden));
+        rail.title = `${railHidden ? "Show" : "Hide"} sessions ( [ )`;
+      }
+      if (inspector) {
+        inspector.setAttribute("aria-pressed", String(!inspectorHidden));
+        inspector.title = `${inspectorHidden ? "Show" : "Hide"} inspector ( ] )`;
+      }
+    };
     $("#toggle-rail").addEventListener("click", () => {
       const app = $("#app");
       app.classList.toggle("rail-hidden");
       prefs.set("railHidden", app.classList.contains("rail-hidden"));
+      syncPanels();
       this.resize();
     });
     $("#toggle-inspector").addEventListener("click", () => {
       const app = $("#app");
       app.classList.toggle("inspector-hidden");
       prefs.set("inspectorHidden", app.classList.contains("inspector-hidden"));
+      syncPanels();
       this.resize();
     });
     const historyBlock = $("#history-block");
@@ -1122,6 +1128,7 @@ class Editor {
 
     if (prefs.get("railHidden", false)) $("#app").classList.add("rail-hidden");
     if (prefs.get("inspectorHidden", false)) $("#app").classList.add("inspector-hidden");
+    syncPanels();
 
     $$(".tool").forEach((button) =>
       button.addEventListener("click", () => this.setTool(button.dataset.tool)),

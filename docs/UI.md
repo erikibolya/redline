@@ -14,7 +14,7 @@ options, right inspector, status bar. We borrow the layout, not the feature set.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ header:   redline · <session title>            [status]      [Submit review] │
+│ header:   redline · <session title>          ⚙ ⌨ ☀ │ ▤ ▥   [review actions]   │
 ├──────────────┬───────────────────────────────────────────────┬───────────────┤
 │ left rail    │  options bar (floating, top-centre)           │ right panel   │
 │ 264px        │  [V][R][A][P][T]   colour   width   zoom      │ 300px         │
@@ -35,6 +35,23 @@ options, right inspector, status bar. We borrow the layout, not the feature set.
 Columns collapse: `[` toggles the left rail, `]` the right panel. Both states persist in
 `localStorage`. The canvas always fills what is left — no fixed page width, no centred 1000 px
 column.
+
+### The header is icons, not badges (unreleased)
+
+- The header's right side is one row of inline-SVG icon buttons with a tooltip and an `aria-label`
+  each: **agent settings** (a solid gear), **keyboard shortcuts** (a keyboard, not a `?`), the
+  **theme** toggle (sun/moon, showing the theme it switches to), then a hairline, then the two
+  **panel** toggles (a frame with the left or right column marked). The `☰`/`⌥`/`?`/`⚙` text
+  glyphs depended on the platform's emoji font and read as decoration; a gear that renders as an
+  outline at 17 px does not say "settings".
+- The panel toggles carry `aria-pressed` and a title that names the next action (*Hide sessions* /
+  *Show sessions*), and a hidden panel's icon is muted.
+- **The status pills are gone.** `#session-status` and `#agent-state` put `submitted`/`replied`/
+  `working` in the header as GitHub-style chips, which competed with the review title and
+  duplicated state that is already on screen: the rail card's badge says *working* / *replied* /
+  *waiting for agent* / *confirmed* / *cancelled*, the stage toast says what the agent is doing,
+  and the composer/STOP button says whose turn it is. The e2e asserts the header has no `.pill`
+  and that those states still render in the toast and the rail card.
 
 The three vertical/horizontal borders are **draggable**: the rail's right edge, the
 inspector's left edge, and the line above the conversation. Each is a 9 px transparent strip over
@@ -142,8 +159,7 @@ Each session is one feature. The rail's row actions carry the human's decision; 
 
 - **✓ Confirm feature** opens a dialog that explains the consequence and only then calls
   `POST /api/sessions/<id>/confirm-feature`. The session becomes `resolved` and keeps
-  `feature_confirmed_at`; the rail shows a green `confirmed` badge and dot, and the header pill
-  says `confirmed`.
+  `feature_confirmed_at`; the rail shows a green `confirmed` badge and dot.
 - **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
   **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
   with `feature_cancelled_at`, nothing is merged and the screenshot/annotations stay in **Done**.
@@ -191,7 +207,7 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   hidden, and the composer textarea is disabled. The annotation list becomes a flat read-only list
   (`.ann-row.readonly`: no cursor affordance, no delete button) whose rows are separated by a
   full-width hairline — a `border-top` on a rounded row paints only the segment between the two
-  rounded corners, which reads as a broken frame. There is **no modal** — a single status pill in
+  rounded corners, which reads as a broken frame. There is **no modal** — a single status toast in
   the middle of the stage says *"Agent is working — …"* (or *"Waiting for the agent…"*) above a
   light scrim. While locked, wheel, zoom buttons, keyboard zoom and pan are frozen; STOP removes
   the scrim and restores the view. Reading other panels is still allowed.
@@ -230,7 +246,7 @@ new one.
   conversation scrolled where the reader is.
 - The round appears in the conversation with a thumbnail (`/sessions/<id>/rounds/<file>`), next to
   the agent's note. History keeps the archived annotated rounds.
-- A small pill at the top of the stage says "Waiting for the agent…" (or the latest activity)
+- A small toast at the top of the stage says "Waiting for the agent…" (or the latest activity)
   while `submitted`; it is `pointer-events: none`, so annotating is never blocked.
 
 ## Waiting states and the webhook (v0.12)
@@ -238,8 +254,8 @@ new one.
 - After Submit, the conversation says what is happening: **Waiting for an agent** (nobody has read
   it yet, with the age of the submission and the two MCP calls that would read it), **Agent
   received this** (with the time), the live activity line while `working`, and the reply itself.
-- The canvas pill repeats that line while `submitted`. It sits **under** the tool bar — the tools
-  are at the top of the stage and the pill must never cover them — and ignores the pointer.
+- The canvas toast repeats that line while `submitted`. It sits **under** the tool bar — the tools
+  are at the top of the stage and the toast must never cover them — and ignores the pointer.
 - `REDLINE_WEBHOOK_URL=http://host:port/path` makes the server POST a small JSON body
   (`event`, `session_id`, `title`, `project`, `prompt`, `annotations`, `review_url`) when the human
   submits. It is a plain HTTP POST with a 5 s timeout, fire-and-forget: a dead endpoint never
@@ -300,9 +316,9 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
   `meta.prompt` and appears in the timeline as a "you" bubble.
 - **Timeline**: the agent's request (grey), your prompt (blue), activity events (small lines with
   a dot and a time) and agent replies (green), merged and sorted by timestamp.
-- **Agent state** pill in the header: `received` (the agent read the submission), `working` (it is
-  doing something, with the latest activity line beside the conversation title) and `replied`.
-  `seen_by_agent_at` records the first read.
+- **Agent state** in the stage toast and the rail card: `received` (the agent read the
+  submission), `working` (it is doing something, with the latest activity line beside the
+  conversation title) and `replied`. `seen_by_agent_at` records the first read.
 - **Run summary** at the tail of the conversation (v0.19): a card that reads **Working** with a
   pulsing dot while `agent_state` is `working`, and **Used N tools: Edit and Shell** — the distinct
   `tool` names the agent reported through `progress`, counted for the current round only. **Run
@@ -315,7 +331,7 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
   step lines to know whether anything is still happening — and STOP, which is still armed, never
   contradicts the card.
 - **"Working" means the round is still submitted.** The run card also shows *last step X ago*, and
-  the header pill never claims `working` on a review that already went back to the human — even if
+  the stage toast never claims `working` on a review that already went back to the human — even if
   a late narration line arrives after `post_round` (the server refuses to revive a finished round,
   and the UI derives the state from `status` as well as `agent_state`). A spinner that never stops
   is indistinguishable from a dead agent, so the age of the last step is always on screen. The

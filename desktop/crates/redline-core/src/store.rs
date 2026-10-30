@@ -47,6 +47,77 @@ pub fn slugify(value: &str) -> String {
     }
 }
 
+/// The feature branch a review gets when nobody named one: `feat/<title>-<tail>`.
+///
+/// A review is one feature, so a review without a branch must not invent `session/<id>` — that
+/// name says nothing about what is being built and cannot be the branch an agent pushes and
+/// merges. The four-character tail of the session id keeps two features that share a title apart;
+/// the human can rename it in the New review dialog or from the review header (v0.22).
+pub fn default_branch(title: &str, id: &str) -> String {
+    let slug = slugify(&fold_latin(title));
+    let slug: String = slug.chars().take(48).collect();
+    let slug = slug.trim_end_matches('-');
+    let tail: String = id
+        .rsplit('-')
+        .next()
+        .unwrap_or(id)
+        .chars()
+        .take(4)
+        .collect();
+    if tail.is_empty() {
+        format!("feat/{slug}")
+    } else {
+        format!("feat/{slug}-{tail}")
+    }
+}
+
+/// `slugify` keeps ASCII only, so a Czech title would lose its letters (`Tlačítko` → `tla-tko`).
+/// A branch name is read by humans and typed in git commands, so fold the common Latin accents
+/// before slugifying it. Unknown characters are left to `slugify`.
+fn fold_latin(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' => 'a',
+            'č' | 'ç' => 'c',
+            'ď' => 'd',
+            'é' | 'è' | 'ë' | 'ê' | 'ě' => 'e',
+            'í' | 'ì' | 'ï' | 'î' | 'ı' => 'i',
+            'ň' | 'ñ' => 'n',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
+            'ř' => 'r',
+            'š' => 's',
+            'ť' => 't',
+            'ú' | 'ů' | 'ü' | 'ù' | 'û' => 'u',
+            'ý' | 'ÿ' => 'y',
+            'ž' => 'z',
+            other => other,
+        })
+        .collect()
+}
+
+/// Read v0.21's `session/<id>` fallback as the feature branch the review would get today.
+///
+/// Claiming an unnamed review used to persist `session/<id>` into `meta.branch`; that name is not
+/// a branch anybody chose, it is the absence of one. Normalise on read (like flat sessions
+/// becoming the Inbox) so the rail and the agent prompt show the feature, and let the next claim
+/// or rename write the real name (v0.22).
+fn normalize_branch(meta: &mut Meta) {
+    let legacy = meta
+        .branch
+        .as_deref()
+        .map(|branch| meta.is_legacy_session_branch(branch))
+        .unwrap_or(true);
+    if legacy {
+        meta.branch = Some(default_branch(&meta.title, &meta.id));
+    }
+}
+
+fn effective_branch(mut meta: Meta) -> Meta {
+    normalize_branch(&mut meta);
+    meta
+}
+
 /// RFC 3339 with second precision and a `+00:00` offset — byte-compatible with v0.1's
 /// `datetime.now(timezone.utc).isoformat(timespec="seconds")`.
 pub fn now() -> String {
@@ -258,6 +329,17 @@ fn archive_round(
     }
     prune_history(&history, 20)?;
     Ok(())
+}
+
+/// Whether two archived rounds carry the same picture. Two rounds without a picture are the same
+/// picture (an annotations-only round).
+fn same_picture(history: &Path, a: &str, b: &str) -> bool {
+    let file = |stamp: &str| history.join(format!("{stamp}.png"));
+    match (fs::read(file(a)), fs::read(file(b))) {
+        (Ok(a), Ok(b)) => a == b,
+        (Err(_), Err(_)) => true,
+        _ => false,
+    }
 }
 
 fn prune_history(history: &std::path::Path, keep: usize) -> Result<()> {
@@ -480,7 +562,9 @@ impl Store {
 
     pub fn get(&self, id: &str) -> Result<Option<Meta>> {
         let dir = self.dir(id)?;
-        Ok(read_json(&dir.join("meta.json")).and_then(|value| serde_json::from_value(value).ok()))
+        Ok(read_json(&dir.join("meta.json"))
+            .and_then(|value| serde_json::from_value(value).ok())
+            .map(effective_branch))
     }
 
     pub fn require(&self, id: &str) -> Result<Meta> {
@@ -532,6 +616,7 @@ impl Store {
             if meta.project.is_none() {
                 meta.project = Some(INBOX.to_string());
             }
+            normalize_branch(meta);
         }
         metas.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(metas)
@@ -655,13 +740,15 @@ impl Store {
         let extension = image_extension(image_name);
         write_atomic(&dir.join(format!("screenshot{extension}")), image)?;
 
+        let title = if title.is_empty() {
+            sid.clone()
+        } else {
+            title.to_string()
+        };
+        let branch = default_branch(&title, &sid);
         let meta = Meta {
             id: sid.clone(),
-            title: if title.is_empty() {
-                sid.clone()
-            } else {
-                title.to_string()
-            },
+            title,
             url: url.to_string(),
             note: note.to_string(),
             status: Status::Open,
@@ -680,7 +767,7 @@ impl Store {
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
-            branch: None,
+            branch: Some(branch),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         write_json(
@@ -950,7 +1037,9 @@ impl Store {
         if !history.exists() {
             return Ok(Vec::new());
         }
-        let mut entries = Vec::new();
+        // Each row carries the round's marks and picture, so a run of copies can be collapsed
+        // below and the round still on the canvas can be recognised.
+        let mut entries: Vec<(HistoryEntry, Value, Option<String>)> = Vec::new();
         for entry in fs::read_dir(&history)? {
             let path = entry?.path();
             if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
@@ -963,34 +1052,57 @@ impl Store {
             else {
                 continue;
             };
-            let annotations = fs::read_to_string(&path)
+            let set = fs::read_to_string(&path)
                 .ok()
-                .and_then(|text| serde_json::from_str::<AnnotationSet>(&text).ok())
-                .map(|set| set.annotations.len())
-                .unwrap_or(0);
-            entries.push(HistoryEntry {
-                png: history.join(format!("{stamp}.png")).is_file(),
-                source: history.join(format!("{stamp}-source.png")).is_file(),
-                stamp,
-                annotations,
-                round: 0,
-                current: false,
-            });
+                .and_then(|text| serde_json::from_str::<AnnotationSet>(&text).ok());
+            let marks = set
+                .as_ref()
+                .map(|set| json!(&set.annotations))
+                .unwrap_or(Value::Null);
+            let picture = set
+                .as_ref()
+                .and_then(|set| set.image.as_ref())
+                .and_then(|image| image.file.clone());
+            entries.push((
+                HistoryEntry {
+                    png: history.join(format!("{stamp}.png")).is_file(),
+                    source: history.join(format!("{stamp}-source.png")).is_file(),
+                    stamp,
+                    annotations: set.map(|set| set.annotations.len()).unwrap_or(0),
+                    round: 0,
+                    current: false,
+                },
+                marks,
+                picture,
+            ));
         }
-        entries.sort_by(|a, b| b.stamp.cmp(&a.stamp));
+        entries.sort_by(|a, b| b.0.stamp.cmp(&a.0.stamp));
+        // One round is one row. STOP then *Submit again* without touching the canvas archived the
+        // same annotations and the same picture a second time, so History read as "this one task
+        // ran twice" (2026-10-30). Copies are indistinguishable by definition, so keep the newest
+        // of a run; `dedup_by` drops the older one.
+        entries.dedup_by(|older, newer| {
+            older.1 == newer.1 && same_picture(&history, &older.0.stamp, &newer.0.stamp)
+        });
         let total = entries.len();
         let meta = self.require(id)?;
-        let current = if meta.status == Status::Submitted {
-            meta.round_stamp.clone()
-        } else {
-            None
-        };
-        for (index, entry) in entries.iter_mut().enumerate() {
+        // The round the canvas still shows must appear once. A submission is archived at submit
+        // time and the canvas keeps it after resolve or reopen, so History listed the same round
+        // as "Round N" *and* "Current" (2026-10-30). Status alone cannot tell — an agent round
+        // replaces the picture while the session is open — so compare the saved marks and picture
+        // with the newest row.
+        let live = self.annotations(id)?;
+        let live_marks = json!(&live.annotations);
+        let current = entries.first().and_then(|(entry, marks, picture)| {
+            (*marks == live_marks && *picture == Some(meta.image.clone()))
+                .then(|| entry.stamp.clone())
+        });
+        for (index, (entry, _, _)) in entries.iter_mut().enumerate() {
             // Newest first, but numbered oldest = 1.
             entry.round = total - index;
             entry.current = current.as_deref() == Some(entry.stamp.as_str());
         }
-        Ok(entries)
+        Ok(entries.into_iter().map(|(entry, _, _)| entry).collect())
     }
 
     pub fn history_file(&self, id: &str, name: &str) -> Result<PathBuf> {

@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.21.0.** Live in production on holly:
+**Current release: v0.22.0.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -214,6 +214,22 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   and the Windows app can see the same repo through different roots. Resolve keys under
   `REDLINE_AGENT_REPO_ROOT`, canonicalize and refuse escapes/missing paths — a silent fallback to
   the default repo is worse than a visible error.
+- **A branch name is not a ref name.** The bridge chose the worktree's start point with a short
+  ref (`dev`, `main`, `origin/dev`, …). This repository also carries a tag `dev`, so git answered
+  `warning: refname 'dev' is ambiguous` and then `fatal: ambiguous object name: 'dev'`, and the
+  review never started (*I cannot start this review*). The same lookup also just **picks the tag**
+  when it succeeds, so a feature can silently start from the wrong commit. Resolve bases by full
+  refname (`refs/heads/dev`, `refs/remotes/origin/dev`) and peel to `^{commit}`; keep the short
+  name only where git demands a branch name (`worktree add <path> <branch>`). Tags are not
+  branches: a stray `dev` tag in a repo must never change where work starts.
+- **A session id is not a branch name.** The bridge's fallback when nobody declared a branch was
+  `session/<id>`, and the New review dialog never asked — so a human-made review ran on a
+  timestamp branch (the rail showed `session/20261030-…`) that an agent cannot push or merge as a
+  feature. A review now gets `feat/<title-slug>-<id-tail>` at creation, the dialog offers a
+  *Feature branch* field and the header renames it (`PUT /api/sessions/{id}/branch`, refused while
+  the round is submitted because the worktree already exists); v0.21's persisted fallback is read
+  back as the `feat/…` name and `Meta::work_key()` derives it instead of inventing a session
+  branch. A name that only says *when* is not a name for what is being built.
 - **The OpenCode project API is experimental.** `/api/project` is useful for display names and
   active projects, but discovery must still scan the repo root for `.git`; dedupe the same repo
   seen through two mounts (`/mnt/user/...` and `/mnt/c/...`).
@@ -271,6 +287,47 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   decided), and RedLine never touches git — the agent owns the PR/merge workflow. Cancel keeps
   the files and Delete is a deliberate extra choice, not a reflex click; make every human
   decision readable by the agent, not just visible in the UI.
+- **A read-only viewer is not a dead image.** `viewRound` set `viewing`, and `pointerdown`
+  returned early on it, so a historical screenshot could not be dragged, pinched or panned —
+  read-only means "no edits", not "no navigation". Keep pan/zoom on their own guard and turn the
+  main button into a drag (grab/grabbing cursor) when there is nothing to select. The "back to
+  current" pill lives *inside* the stage, so it needs the same
+  `closest(".options, .text-editor, .viewing-bar")` guard as the toolbar or pointer capture
+  swallows its click. Space-pan required `event.target === document.body`; after clicking a
+  history row the focus stays on the row, so the gesture silently died — arm space while the
+  pointer hovers the stage, never while typing. Test the real gestures (drag, wheel, ctrl+wheel,
+  space+drag under row focus), not only `viewing`/`locked` flags.
+- **A queue with no listener is a silent dead end.** A submitted review with no bridge behind it
+  looked exactly like one the agent was about to pick up; the human had no way to tell "nobody is
+  listening" from "be patient". Record presence from the bridge's existing periodic repo sync
+  (and every `next`/claim call), expose an online window (180 s), and put it where the human
+  already looks: a header chip with words, plus a rail warning when the count is zero. Keep it
+  non-blocking — never trap work behind a bridge that is down — but never let a dead queue look
+  alive.
+- **A permanent setup block is not a status.** The dashboard kept the MCP config on screen after
+  the agent was already connected, so the most prominent thing on `/` was setup the human had
+  finished. Move configuration into a dialog opened from the status chip, and leave only an
+  invitation while the condition that needs it (no bridge online) is true. Test the dialog from
+  both pages, the masked token, and the invitation appearing/disappearing with presence.
+- **A local page's back link is not a session link.** The Servers and Setup pages are served by
+  the desktop app's local server, but the window may be pointed at a remote profile. Their
+  `href="/"` returned to the local dashboard, which has no reviews and no agent presence — the
+  human saw "No agent connected" and had to switch servers twice to recover. Read the active
+  profile (`active_url`) from the local API and follow that origin; test the remote and local
+  cases, not only the headless page.
+- **A submission is not automatically a new round.** Every `POST /annotations` archived its own
+  copy, so *STOP* → *Submit again* with nothing changed left the same annotations and the same
+  PNG twice in History, and a session the human thought of as "one task" read as two (2026-10-30).
+  A round is what the human *changed*: collapse a run of byte-identical copies to its newest entry
+  at the one place the list is built (`Store::history`), so already-duplicated sessions heal too,
+  and let a round that really changed keep its own row. Test the collapsed count *and* the changed
+  one.
+- **A current round is not also a history row.** After the agent resolved a review, History showed
+  the last submission twice — as *Round N* and again as the live *Current* row — because `current`
+  was derived from `status == submitted`, while the canvas keeps the round after resolve/reopen
+  (2026-10-30). Derive "current" from what the canvas actually shows (saved annotations + picture
+  equal the newest archived row), let *Current* appear only when the canvas differs from every
+  round, and test the resolved case *and* the agent-posted-picture case that still needs it.
 
 ## 8. Working rules
 

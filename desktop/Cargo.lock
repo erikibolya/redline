@@ -670,7 +670,7 @@ dependencies = [
 
 [[package]]
 name = "redline"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "axum",
  "base64",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "redline-agent"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "axum",
  "redline-core",
@@ -697,7 +697,7 @@ dependencies = [
 
 [[package]]
 name = "redline-core"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "axum",
  "base64",

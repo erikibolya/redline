@@ -10,7 +10,7 @@ use axum::extract::{DefaultBodyLimit, Path as RoutePath, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
@@ -119,6 +119,7 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/{id}",
             get(get_session).delete(delete_session),
         )
+        .route("/api/sessions/{id}/branch", put(set_session_branch))
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/api/sessions/{id}/reopen", post(reopen))
@@ -136,7 +137,10 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{id}/rounds/{name}", get(round_image))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
         .route("/mcp", post(mcp_post))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_token));
+        .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
+        // The rail polls `/api/sessions`; a browser must never answer a decision with yesterday's
+        // list. API/session responses are live data, not documents, so no-store is correct.
+        .layer(middleware::from_fn(no_store));
 
     Router::new()
         .route("/health", get(health))
@@ -189,6 +193,17 @@ async fn require_token(State(state): State<AppState>, request: Request, next: Ne
         )
             .into_response(),
     }
+}
+
+/// Protected data (API JSON, images, history) is produced from mutable state and must not be
+/// replayed by the browser cache. Images are cache-busted by `?v=<filename>`, so `no-store` costs
+/// no correctness there either.
+async fn no_store(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
 }
 
 /// The human-facing entry point: `GET /s/<id>?t=<token>` trades the token for a cookie so the
@@ -493,6 +508,13 @@ async fn sync_agent_repos(
     Json(body): Json<RepoSync>,
 ) -> Result<Json<Value>, Error> {
     let agent = normalize_agent_id(&body.agent_id)?;
+    // A repo sync is the bridge's periodic heartbeat (every 60 s), so it is the natural place to
+    // record presence even when no review is claimed.
+    state
+        .agent
+        .lock()
+        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?
+        .touch(&agent);
     if body.repos.len() > 200 {
         return Err(Error::BadRequest(
             "too many repositories (max 200)".to_string(),
@@ -705,6 +727,7 @@ async fn claim_session(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+    agent.touch(&body.agent_id);
     let settings = agent.settings().clone();
     let max_parallel = project_max(&state, &project, &settings);
     let claim = agent
@@ -743,6 +766,7 @@ async fn claim_heartbeat(
             .agent
             .lock()
             .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        agent.touch(&body.agent_id);
         agent
             .heartbeat(&id, &body.agent_id, lease_seconds)
             .map_err(claim_error)?
@@ -763,6 +787,7 @@ async fn claim_state(
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
     let settings = agent.settings().clone();
     let max_parallel = project_max(&state, &project, &settings);
+    agent.touch(&body.agent_id);
     let claim = agent
         .set_state(
             &id,
@@ -786,6 +811,7 @@ async fn claim_release(
             .agent
             .lock()
             .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        agent.touch(&body.agent_id);
         agent.release(&id, &body.agent_id).map_err(claim_error)?
     };
     Ok(Json(json!({ "ok": true, "claim": claim })))
@@ -811,6 +837,7 @@ async fn agent_next(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+    agent.touch(&body.agent_id);
     let settings = agent.settings().clone();
     let claims = agent.claims();
     let mut blocked = "empty";
@@ -904,6 +931,38 @@ async fn get_session(
     let meta = state.store.require(&id)?;
     let annotations = state.store.annotations(&id)?;
     Ok(Json(json!({ "meta": meta, "annotations": annotations })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BranchBody {
+    #[serde(default)]
+    branch: Option<String>,
+}
+
+/// Name the feature branch a review runs on.
+///
+/// A review created before v0.22 can still carry `session/<id>`, which is not a feature branch.
+/// Renaming is refused while the round is submitted: the agent's worktree was already created for
+/// the old name, so a rename would describe work that is happening somewhere else.
+async fn set_session_branch(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    Json(body): Json<BranchBody>,
+) -> Result<Json<Value>, Error> {
+    let meta = state.store.require(&id)?;
+    if meta.status == Status::Submitted {
+        return Err(Error::Conflict(
+            "stop the review before renaming its branch".to_string(),
+        ));
+    }
+    let branch = body
+        .branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    Ok(Json(json!({
+        "meta": state.store.set_branch(&id, branch)?,
+    })))
 }
 
 async fn create_session(
@@ -1520,6 +1579,9 @@ async fn list_servers(State(state): State<AppState>) -> Result<Json<Value>, Erro
         "active": active,
         "local_url": state.base_url,
         "active_name": servers.iter().find(|profile| profile.id == active).map(|profile| profile.name.clone()),
+        // The local Servers page's "Back to sessions" must return to the *active* origin, not
+        // to this local server: the local server has no reviews and no agent presence.
+        "active_url": active_open_url(&state, &servers, &active),
     })))
 }
 
@@ -1605,6 +1667,7 @@ async fn setup_status(State(state): State<AppState>) -> Json<Value> {
         "active_name": current.map(|profile| profile.name.clone()),
         "servers": servers.len(),
         "local_url": state.base_url,
+        "active_url": active_open_url(&state, &servers, &active),
         "sessions_dir": state.store.root().display().to_string(),
     }))
 }

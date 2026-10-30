@@ -6,7 +6,7 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.21.0` on holly — `https://redline.ibolya.cz`, container
+**Shipped and in production:** `v0.22.0` on holly — `https://redline.ibolya.cz`, container
 `ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
 
 ## What exists today
@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 81 Rust tests, 119-check browser E2E in CI on Linux + Windows |
+| Tests | 91 Rust tests, 165-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 

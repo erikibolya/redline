@@ -59,14 +59,18 @@ the hairline that highlights in the accent colour on hover or focus; drag it (or
 the arrow keys, Shift for bigger steps) and the panel follows while the canvas is re-measured
 mid-drag. Sizes live in CSS variables (`--rail`, `--inspector`, `--conv`) and are remembered per
 browser (`redline:railWidth`, `redline:inspectorWidth`, `redline:convHeight`). Limits keep the
-stage usable (≥ 360 px) and leave room for the annotation list above the conversation.
+stage usable (≥ 360 px) and leave room for the annotation list above the conversation. The rail
+divider is present on the dashboard too; both pages read the same `redline:railWidth` and
+`--rail`, so moving between `/` and `/s/<id>` keeps the width instead of jumping back to 272 px.
 
 Header icon buttons (`?`, theme, rail, inspector) are a fixed **32 × 32 px square**: the glyph
 inside changes width (`?` is narrower than `☀`), the button must not.
 
 ## Left rail — sessions as folders
 
-- **+ New review** at the top (drop a screenshot anywhere in the window also works).
+- **+ New review** at the top (drop a screenshot anywhere in the window also works). It is the
+  same accent-blue button in the same place on the dashboard and in a review; the header carries
+  icons only, so the primary action never moves or changes colour between pages.
 - Search field (title, note, id).
 - Filter chips with counts: `All` · `Active` (default) · `Open` · `Submitted` · `Done`. `All`
   keeps finished sessions visible; `Active` hides `resolved`. The old `Mine` chip is gone.
@@ -85,7 +89,8 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   fixed-resolution canvas).
 - **Zoom**: wheel with Ctrl/Cmd at the pointer, `+`/`-`, `0` fit, `1` 100%, double-click a tool
   button to reset. Range 10 %–800 %. Fit-to-window on load.
-- **Pan**: space+drag, middle-drag, or plain wheel (shift for horizontal). Cursor changes.
+- **Pan**: space+drag, middle-drag, or plain wheel (shift for horizontal). Cursor changes. In a
+  historical round (read-only viewer) the main button also drags the picture.
 - Image is centred; the stage has a dark checkerboard so transparent PNGs read correctly.
 
 ## Tools and interaction
@@ -159,13 +164,20 @@ Each session is one feature. The rail's row actions carry the human's decision; 
 
 - **✓ Confirm feature** opens a dialog that explains the consequence and only then calls
   `POST /api/sessions/<id>/confirm-feature`. The session becomes `resolved` and keeps
-  `feature_confirmed_at`; the rail shows a green `confirmed` badge and dot.
+  `feature_confirmed_at`; the rail shows a green-tinted `confirmed` badge and dot. Cancelled
+  features get a red-tinted `cancelled` badge; both keep their solid text/border colours in the
+  light theme, so the decision never reads as a black pill on the dark rail.
 - **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
   **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
   with `feature_cancelled_at`, nothing is merged and the screenshot/annotations stay in **Done**.
   Delete files… removes them permanently. A decided feature gets **Reopen** instead of Cancel in
   the same menu. The row itself never deletes on a single click.
 - **↺ Reopen** clears both feature stamps and returns the session to `open`.
+- **A decision closes the screen that showed the review.** Confirming, cancelling or deleting the
+  review that is currently open navigates back to `/` with no selection; a decision on another
+  row leaves the editor where it is. This is the same rule as a filter or search that no longer
+  contains the open review: the rail deselects it and the dashboard appears instead of a review
+  the chosen view says is gone.
 - **Bulk Select** now offers **Confirm** (one dialog for the selection), **Delete** and **Close**;
   single-session delete is also one dialog away from the row's ✕.
 - **Delete cancelled** in the rail head purges only features with `feature_cancelled_at`;
@@ -180,12 +192,42 @@ Each session is one feature. The rail's row actions carry the human's decision; 
 - Settings live on the server (`/data/agent-settings.json`) and are shared by the desktop and web
   UI. Changing them applies to new claims; the bridge's worker count is
   `REDLINE_AGENT_WORKERS` (default 4), and the server's limits are the real cap.
-- A session can carry a `branch`. The rail shows it after the relative time in accent monospace
-  (`2h ago · feat/parallel-runs`); a missing branch falls back to `session/<id>` when an agent
-  claims the work.
+- A session can carry a `branch`. Every review has one from creation: the New review dialog's
+  optional *Feature branch* field, or the derived `feat/<title-slug>-<id-tail>`
+  (`feat/wrong-branches-52e0`). The rail shows it after the relative time in accent monospace
+  (`2h ago · feat/parallel-runs`) and the review header shows it beside the session id; clicking
+  it renames the branch (`PUT /api/sessions/{id}/branch`) — refused while the round is submitted,
+  because the agent's worktree already exists for the old name. v0.21's `session/<id>` fallback is
+  not produced any more and is read back as the `feat/…` name.
 - A running claim consumes a slot; a claim waiting for the human frees the slot but keeps the
   branch lock. One branch has one owner. The bridge runs up to four claim workers
   (`REDLINE_AGENT_WORKERS`), each in its own git worktree; the server enforces the limits.
+
+## Agent presence (unreleased)
+
+- The header carries an agent chip next to the settings gear: green **N agents connected** or
+  amber **No agent connected**, with the agent ids in its tooltip. Clicking it opens the agent
+  panel.
+- When nobody is online the rail head shows **No agent connected. Reviews will wait until an
+  agent connects.** The warning is informational: creating, annotating and submitting a review
+  stays enabled, so a bridge can be connected afterwards without losing work.
+- Presence is the bridge's own heartbeat: repo sync every 60 s (and every `next`/claim call)
+  touches `last_seen`; an agent stays online for 180 s. The dashboard and the editor share the
+  same chip, fed by `GET /api/agent/status` every 10 s.
+- **Connect an agent** is a dialog, not a permanent dashboard block. The header chip opens it on
+  both pages; it shows the live status, the MCP JSON with the token masked (Copy config copies the
+  real one), and sits in the shared fixed dialog shell. The dashboard only shows the amber
+  invitation card — with a **Connect an agent** button — while no bridge is online; once one
+  polls, both the card and the rail warning disappear.
+
+## Dialog frame (unreleased)
+
+Every popup is one shell: a fixed header with the title and a 32 × 32 px **X** at its right
+edge, a fixed footer with the action buttons, and only the middle body scrolls (`.dialog-head`,
+`.dialog-body`, `.dialog-foot` inside `.dialog-frame`). This applies to **Agent settings**, **New
+review**, **Keyboard** and the feature/branch decision dialogs. The e2e opens settings in a
+380 px-high window, scrolls the body past the project list, and asserts the head/foot rectangles
+do not move; it also clicks every close X.
 
 ## Touch, bulk and accessibility (unreleased)
 
@@ -224,7 +266,13 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   never empty after the first submit.
 - **History is navigation, not actions**: `Current` is always present; round rows open the
   archived source screenshot + annotations **read-only**; the header bar
-  `Viewing round N — back to current` returns to the live canvas. Only `Current` is editable.
+  `Viewing round N — drag to pan, Ctrl+scroll to zoom · back to current` returns to the live
+  canvas. Only `Current` is editable.
+- **A historical round is a viewer, not a dead image**: left-drag pans (the canvas shows a grab
+  cursor), the wheel scrolls (Shift for horizontal), Ctrl/Cmd+wheel zooms at the pointer, and the
+  zoom buttons plus `+`/`-`/`0`/`1` keep working. Space+drag works even when a history row still
+  has keyboard focus; the pointer being over the stage is what arms space. The live "agent is
+  working" toast is hidden while an archived round is on screen.
 - The ghost (`◫`), diff (`Δ`) and open-PNG (`↗`) buttons and the `Ghost · …` chip were removed;
   the diff endpoint remains for agents.
 - The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History
@@ -267,8 +315,9 @@ new one.
 - **Ctrl+V** anywhere in the app opens the New review dialog with the clipboard image already
   attached (title defaults to "Pasted screenshot"). No file on disk, no upload round-trip.
   Works on the editor and on the start page; drops still work the same way.
-- **Gallery on `/`**: the last twelve reviews as cards with their screenshot, project, relative
-  time and status. The start screen below it is unchanged.
+- **Gallery on `/`**: the last twelve *active* reviews as cards with their screenshot, project,
+  relative time and status. Confirmed and cancelled features are finished work and stay in the
+  rail's All/Done filters, not on the dashboard. The start screen below it is unchanged.
 - **Diff overlay**: in the History disclosure, the `◫` button ghosts that round's annotations
   behind the current ones at 35 % opacity; a `Ghost · <stamp>` chip in the header clears it.
   The `Δ` button still prints the textual diff.
@@ -385,6 +434,16 @@ plus `.png` (last 20 kept). `GET /api/sessions/<id>/history` lists them, and the
 **History** section links to the old screenshots — so a re-review can compare what changed instead
 of overwriting the evidence. Rounds are compact bordered rows (stamp, annotation count, then
 ghost / diff / screenshot actions), not full-size annotation cards, so the list stays scannable.
+
+One round is one row. *STOP* then *Submit again* without touching the canvas re-sends exactly the
+annotations and the picture already archived, so the list collapses such a run of identical copies
+to its newest entry instead of showing the same round twice (2026-10-30).
+
+The same rule applies to the live canvas: a round that is still what the canvas shows (after
+*Submit*, and also after the agent resolves or the review is reopened) is marked `current` and
+labelled **Round N (current)**. It is not listed a second time as a *Current* row; *Current* only
+appears when the canvas differs from every archived round (the agent posted a new picture, or the
+human is drawing the next round). Clicking the live round returns to the canvas.
 
 ## Layers, groups, text size (v0.5)
 

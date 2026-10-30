@@ -4,6 +4,127 @@
 
 _(nothing yet)_
 
+## 0.22.0 — 2026-10-31
+
+- **Confirmed and cancelled badges are tinted, not black pills.** The dark rail painted
+  `confirmed` as `#10231a` and `cancelled` as `#2a1115`, which read as a black background with
+  coloured text. They now use translucent green/red tints with matching borders in dark mode and
+  solid pastel green/red in light mode; the text keeps its contrast. The e2e samples both badges
+  in both themes and asserts the computed backgrounds, text and borders.
+- **Back to sessions returns to the active server, not to the local one.** The Servers and Setup
+  pages are served by the desktop app's local server; their "Back to sessions" link was always
+  `href="/"`, so with a remote profile active it opened the local dashboard, which has no
+  sessions and reported "No agent connected". `/api/servers` and `/api/setup` now expose
+  `active_url` (the active profile's origin + token, or the local origin), and both pages point
+  the link there. The Rust test asserts the remote and local cases; the e2e stubs the profile
+  endpoints and checks the link on both pages.
+- **Connect an agent is a dialog, shown only when it is needed.** The dashboard embedded the MCP
+  JSON forever, even after the bridge was already polling, so the most prominent block on `/` was
+  setup the human had finished. The header chip now opens a **Connect an agent** dialog (masked
+  config, Copy config button, live online/offline status) on both pages. The dashboard keeps only
+  an amber invitation card while no agent is online; it and the rail warning disappear as soon as
+  a bridge polls. The old `#mcp-json`/`#copy-mcp` block is gone. The e2e opens the dialog from the
+  dashboard and editor, checks the masked token and status, verifies the offline invitation and
+  its disappearance after a poll.
+- **The server says whether an agent is listening.** A submitted review with no bridge behind it
+  waited silently; nothing on screen explained why. `AgentControl` now records `last_seen` on
+  every agent-facing call (repo sync is the periodic 60 s heartbeat, `next`/claims touch it too),
+  persists `/data/agent-presence.json`, and `GET /api/agent/status` exposes `online` + the
+  per-agent rows (online for 180 s). The header chip on both pages says *N agents connected* or
+  *No agent connected*; when nobody is online the rail head shows a warning that reviews will
+  wait. Nothing is blocked: work can still be created, annotated and submitted. The e2e checks
+  both chip states, the warning, recovery after a poll, and the chip's panel. Rust tests cover
+  the online/offline expiry and the API status payload.
+- **Finishing the open review returns to the dashboard, and filters do not leave a ghost selected.**
+  Confirming, cancelling or deleting the review currently on screen left the human staring at the
+  same canvas (or a deleted session); a filter or search that no longer contained the open review
+  still kept it selected. `railAction` and the bulk confirm/delete now navigate to `/` when the
+  current session gets a decision, and `Rail.onViewChange` uses the editor's fresh `meta` plus the
+  chosen filter/search to leave a review the view no longer shows. The dashboard refreshes a
+  back-forward-cache restore, and all authenticated API/session responses carry
+  `Cache-Control: no-store` so a gallery cannot be built from a list fetched before the decision.
+  The e2e covers confirm, cancel, delete-of-open, and a filter that hides the open review.
+- **Every popup is a fixed frame with a close X.** The Agent settings form scrolled as one block:
+  the title and the Save/Cancel buttons left the screen when the project list grew, and there was
+  no way to dismiss it except Cancel. The settings, New review, Keyboard and feature/branch
+  dialogs now share `.dialog-frame` / `.dialog-head` / `.dialog-body` / `.dialog-foot`: a 32 px
+  X in the top-right, an immovable title row, an immovable action row and `overflow-y: auto` only
+  on the middle. The e2e opens settings at 380 px height, scrolls the body and asserts the
+  head/foot geometry is unchanged, then clicks the X on settings, New review, help and the
+  feature decision dialog.
+- **One New review button, in the rail, always accent blue.** The dashboard put it in the header
+  as a green (`primary`) button while the editor put it at the top of the left rail in blue; the
+  primary action moved and changed meaning on navigation. The dashboard now uses the same
+  `.btn.accent` rail button as the editor, and the header keeps only icon actions. The e2e asserts
+  it is inside `.rail`, absent from `.header-actions`, and that its computed background matches
+  `.btn.accent` on both pages.
+- **The session rail is one panel on every page.** The dashboard rendered the rail at the CSS
+  default 272 px and had no divider, while the editor restored `redline:railWidth` — switching
+  from `/` to a review jumped the whole layout sideways. The divider and the shared
+  `redline:railWidth` preference now live in one `bindRailResize` helper used by both pages; the
+  editor still clamps against the inspector, the dashboard against the viewport. The e2e drags
+  the rail on the dashboard, opens a review and asserts the same width, then drags it back.
+- **The dashboard gallery is for work in progress.** `renderGallery` listed the last twelve
+  sessions regardless of state, so a confirmed or cancelled feature kept a large screenshot card
+  on `/` even though it no longer needed the human. The gallery now keeps only sessions whose
+  feature decision is still pending, re-renders after a rail action/purge/bulk decision, and each
+  card carries `data-session` for the test. Decided reviews remain reachable through the rail's
+  All/Done filters. The e2e confirms and cancels two sessions, opens `/` with the All filter, and
+  asserts every card belongs to a pending session.
+- **A historical round is a viewer, not a dead image.** Opening a round from History left the
+  canvas frozen: `pointerdown` returned early whenever `viewing` was set, so no pan or pinch
+  survived, and the "Viewing round N" pill sat inside the stage without its own pointer guard.
+  The viewer now pans with the main button (grab/grabbing cursor), middle/right-drag and
+  space+drag, scrolls with the wheel and zooms with Ctrl/Cmd+wheel, the zoom buttons and
+  `+`/`-`/`0`/`1`; drawing and selection stay refused. Space+drag also works when a history row
+  still holds keyboard focus, which the old `event.target === document.body` guard silently
+  blocked, and the live "agent is working" toast is no longer drawn over an archived screenshot.
+  The e2e opens a round and asserts the cursor, a real left-drag, wheel scroll, ctrl+wheel zoom,
+  space+drag under row focus, and that panning does not edit the round.
+- **The round on the canvas is listed once.** After the agent resolved a review, History showed the
+  last submission twice: as *Round N* and again as the live *Current* row, so a session with one
+  round looked like two (2026-10-30). `GET /api/sessions/<id>/history` now marks a round `current`
+  whenever the saved annotations and picture are still what the canvas shows (submitted, resolved,
+  or reopened), and the editor omits the extra *Current* row. Clicking that row returns to the live
+  canvas instead of opening a read-only copy. Regression test:
+  `the_round_on_the_canvas_is_not_listed_as_a_second_current` plus the *round on the canvas* e2e
+  check.
+- **One task is one round in History.** Pressing *STOP* and then *Submit again* without touching
+  the canvas archived the same annotations and the same picture a second time, so a single review
+  showed up as two identical rounds with nothing to diff (2026-10-30). `GET
+  /api/sessions/<id>/history` now collapses a run of identical copies (same annotations, same
+  PNG) to its newest entry; a round that really changed still gets its own row. Regression tests:
+  `resubmitting_an_unchanged_round_does_not_duplicate_history` (Rust) and the *unchanged
+  resubmission* check in the browser e2e.
+- **The rolling dev release is tagged `dev-build`, not `dev`.** A tag that shares its name with a
+  branch is a trap: git resolves the *revision* `dev` to the tag (`git log dev`, `git diff dev`,
+  `git merge dev` all used the tag's commit, silently) and `git worktree add … dev` refuses it with
+  `fatal: ambiguous object name`. The channel tag now has its own name; `DEV_MANIFEST`, the dev
+  workflow and `docs/DESKTOP.md` follow. The old `dev` release is kept only long enough for an
+  installed dev build to pick up a transitional `latest.json`, then removed. Stable releases are
+  untouched.
+- **A review belongs to a feature, not to a session id.** A review the human created without
+  naming a branch (the New review dialog never asked) was claimed on the fallback
+  `session/<id>`: the rail showed `session/20261030-…`, and the agent was told to push a branch
+  named after a timestamp. Every review now carries a feature branch from the moment it is
+  created — `feat/<title-slug>-<id-tail>`, e.g. `feat/wrong-branches-52e0` — and the New review
+  dialog has an optional *Feature branch* field whose placeholder shows that name while you type
+  the title. The header shows the branch, and clicking it renames it through the new
+  `PUT /api/sessions/{id}/branch`; a submitted round keeps its name, because the agent's worktree
+  was already created for it. Sessions claimed by v0.21 with a persisted `session/<id>` are read
+  back as their `feat/…` name (no rewrite of old folders), and the bridge's `work_key` derives the
+  same name, so the claim, the prompt and the rail agree. Tests: the API creates without a branch
+  and asserts claim work key, rail row and rename; the store test pins the naming; the e2e creates
+  a review through the dialog and asserts the rail branch is `feat/…`.
+- **A tag named like the base branch no longer kills the run.** The bridge picked the worktree's
+  start point with a short ref (`dev`, `main`, `origin/dev`, …). This repository also has a tag
+  `dev`, so `git worktree add` answered `warning: refname 'dev' is ambiguous` and
+  `fatal: ambiguous object name: 'dev'`, and the review died with *I cannot start this review*
+  before the agent ever ran. The candidates are now fully qualified (`refs/heads/dev`,
+  `refs/remotes/origin/dev`, …) and peeled to a commit, which also removes the silent variant: a
+  successful resolution that picked the tag's commit instead of the branch tip. A regression test
+  creates a tag with the branch's name and asserts the worktree starts at the branch tip.
+
 ## 0.21.0 — 2026-10-30
 
 - **The header is icons, and the status pills are gone.** `submitted`/`replied`/`working` sat in

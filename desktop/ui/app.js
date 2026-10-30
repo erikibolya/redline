@@ -153,6 +153,29 @@ const lastProject = {
   },
 };
 
+/**
+ * The session rail's divider, shared by the dashboard and the editor. The width lives in
+ * `redline:railWidth` and in the `--rail` CSS variable, so moving between `/` and `/s/<id>`
+ * never jumps. `max` is a callback because the editor must leave room for the inspector.
+ */
+function bindRailResize({ max, onResize = () => {} } = {}) {
+  const app = $("#app");
+  const handle = $("#rail-resizer");
+  if (!app || !handle) return null;
+  const width = () => parseFloat(app.style.getPropertyValue("--rail")) || 272;
+  const limit = max || (() => Math.max(200, Math.min(560, innerWidth - 360)));
+  const set = (px, persist = true) => {
+    app.style.setProperty("--rail", `${px}px`);
+    if (persist) prefs.set("railWidth", px);
+    onResize();
+  };
+  // Restoring (and clamping) is not a resize: keep the preferred size for a wider window.
+  set(Math.min(prefs.get("railWidth", 272), limit()), false);
+  bindSplitter(handle, { min: () => 200, max: limit, size: width, apply: set });
+  addEventListener("resize", () => set(Math.min(width(), limit()), false));
+  return { width, max: limit, set };
+}
+
 /** Sessions this browser has looked at, for the "new" dot. */
 const seen = {
   all() { return prefs.get("seen", {}); },
@@ -194,10 +217,17 @@ function askFeature({ title, body, actions }) {
       document.body.insertAdjacentHTML("beforeend", `
         <dialog class="feature-dialog" id="feature-dialog"
                 aria-labelledby="feature-dialog-title" aria-describedby="feature-dialog-body">
-          <form method="dialog" class="feature-card">
-            <h2 id="feature-dialog-title"></h2>
-            <p id="feature-dialog-body"></p>
-            <div class="feature-actions" id="feature-actions"></div>
+          <form method="dialog" class="feature-card dialog-frame">
+            <div class="dialog-head">
+              <div><h2 id="feature-dialog-title"></h2></div>
+              <button type="submit" value="keep" class="btn icon dialog-close" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            <div class="dialog-body stack">
+              <p id="feature-dialog-body"></p>
+            </div>
+            <div class="dialog-foot feature-actions" id="feature-actions"></div>
           </form>
         </dialog>`);
       dialog = $("#feature-dialog");
@@ -226,6 +256,73 @@ function askFeature({ title, body, actions }) {
       resolve(choice && choice !== "keep" ? choice : null);
     };
     dialog.showModal();
+  });
+}
+
+/**
+ * Ask for the feature branch a review runs on. Returns the new name, or `null` when the human
+ * cancelled, left it unchanged, or the round is submitted (the agent already has a worktree for
+ * the old name — renaming now would describe work happening somewhere else).
+ */
+function askBranch(current, submitted = false) {
+  return new Promise((resolve) => {
+    let dialog = $("#branch-dialog");
+    if (!dialog) {
+      document.body.insertAdjacentHTML("beforeend", `
+        <dialog class="feature-dialog" id="branch-dialog" aria-labelledby="branch-dialog-title">
+          <form method="dialog" class="feature-card dialog-frame">
+            <div class="dialog-head">
+              <div><h2 id="branch-dialog-title">Feature branch</h2></div>
+              <button type="submit" value="keep" class="btn icon dialog-close" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            <div class="dialog-body stack">
+              <p id="branch-dialog-body"></p>
+              <input id="branch-input" type="text" spellcheck="false" autocomplete="off"
+                     aria-label="Feature branch" />
+            </div>
+            <div class="dialog-foot feature-actions" id="branch-actions"></div>
+          </form>
+        </dialog>`);
+      dialog = $("#branch-dialog");
+    }
+    if (dialog.open) {
+      resolve(null);
+      return;
+    }
+    const input = $("#branch-input");
+    $("#branch-dialog-body").textContent = submitted
+      ? "This review is with the agent, and its branch is already checked out. Stop it first, then give the work its feature branch."
+      : "The agent checks this branch out, works in it and pushes it. It must be a feature branch, not the session id.";
+    input.value = current || "";
+    input.hidden = submitted;
+    const actions = $("#branch-actions");
+    actions.innerHTML = "";
+    const buttons = submitted
+      ? [{ value: "keep", label: "Close" }]
+      : [
+          { value: "keep", label: "Cancel" },
+          { value: "save", label: "Save branch", kind: "primary" },
+        ];
+    for (const action of buttons) {
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.value = action.value;
+      button.className = `btn${action.kind ? ` ${action.kind}` : ""}`;
+      button.textContent = action.label;
+      actions.appendChild(button);
+    }
+    dialog.returnValue = "keep";
+    dialog.onclose = () => {
+      const value = input.value.trim();
+      resolve(dialog.returnValue === "save" && value && value !== current ? value : null);
+    };
+    dialog.showModal();
+    if (!submitted) {
+      input.focus();
+      input.select();
+    }
   });
 }
 
@@ -298,37 +395,45 @@ const AgentSettings = {
     document.body.insertAdjacentHTML("beforeend", `
       <dialog class="settings-dialog" id="agent-settings-dialog"
               aria-labelledby="agent-settings-title">
-        <form class="settings-form" id="agent-settings-form">
-          <div class="settings-head">
-            <h2 id="agent-settings-title">Agent settings</h2>
-            <p>How many reviews may run at the same time. One feature branch always has one owner;
-              waiting for the human does not take a run slot.</p>
+        <form class="settings-form dialog-frame" id="agent-settings-form">
+          <div class="dialog-head settings-head">
+            <div>
+              <h2 id="agent-settings-title">Agent settings</h2>
+              <p>How many reviews may run at the same time. One feature branch always has one owner;
+                waiting for the human does not take a run slot.</p>
+            </div>
+            <button type="button" class="btn icon dialog-close" id="agent-settings-close" aria-label="Close">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
           </div>
-          <div class="settings-row">
-            <label for="agent-max-parallel">Max concurrent runs</label>
-            <input type="number" id="agent-max-parallel" min="1" max="32" required />
+          <div class="dialog-body settings-body">
+            <div class="settings-row">
+              <label for="agent-max-parallel">Max concurrent runs</label>
+              <input type="number" id="agent-max-parallel" min="1" max="32" required />
+            </div>
+            <div class="settings-row">
+              <label for="agent-project-max-parallel">Default per-project limit</label>
+              <input type="number" id="agent-project-max-parallel" min="1" max="32" required />
+            </div>
+            <div class="settings-row">
+              <label for="agent-lease-seconds">Claim lease (seconds)</label>
+              <input type="number" id="agent-lease-seconds" min="30" max="3600" required />
+            </div>
+            <fieldset class="settings-projects">
+              <legend>Per project</legend>
+              <div id="agent-project-list"></div>
+            </fieldset>
+            <div class="settings-status" id="agent-settings-status"></div>
+            <p class="settings-error" id="agent-settings-error" hidden></p>
           </div>
-          <div class="settings-row">
-            <label for="agent-project-max-parallel">Default per-project limit</label>
-            <input type="number" id="agent-project-max-parallel" min="1" max="32" required />
-          </div>
-          <div class="settings-row">
-            <label for="agent-lease-seconds">Claim lease (seconds)</label>
-            <input type="number" id="agent-lease-seconds" min="30" max="3600" required />
-          </div>
-          <fieldset class="settings-projects">
-            <legend>Per project</legend>
-            <div id="agent-project-list"></div>
-          </fieldset>
-          <div class="settings-status" id="agent-settings-status"></div>
-          <p class="settings-error" id="agent-settings-error" hidden></p>
-          <div class="settings-actions">
+          <div class="dialog-foot settings-actions">
             <button type="button" class="btn" id="agent-settings-cancel">Cancel</button>
             <button type="submit" class="btn primary" id="agent-settings-save">Save</button>
           </div>
         </form>
       </dialog>`);
     this.dialog = $("#agent-settings-dialog");
+    $("#agent-settings-close").addEventListener("click", () => this.dialog.close());
     $("#agent-settings-cancel").addEventListener("click", () => this.dialog.close());
     $("#agent-settings-form").addEventListener("submit", (event) => {
       event.preventDefault();
@@ -410,6 +515,180 @@ const AgentSettings = {
 
 const unfiltered = (query) => !query;
 
+/* ---------------------------------------------------------------- agent presence */
+
+/**
+ * "Is anybody listening?" One server endpoint feeds the header chip and the rail warning. The
+ * status is deliberately non-blocking: reviews can always be created and submitted, they just
+ * wait until a bridge connects.
+ */
+const AgentStatus = {
+  timer: null,
+  data: null,
+
+  start() {
+    this.refresh();
+    clearInterval(this.timer);
+    this.timer = setInterval(() => this.refresh(), 10000);
+  },
+
+  async refresh() {
+    try {
+      this.render(await api("/api/agent/status"));
+    } catch {
+      this.render(null);
+    }
+  },
+
+  render(data) {
+    this.data = data;
+    const agents = data?.agents || [];
+    const online = data ? (data.online || 0) : 0;
+    const label = !data
+      ? "Agent status unavailable"
+      : online
+        ? `${online} agent${online === 1 ? "" : "s"} connected`
+        : "No agent connected";
+    const title = !data
+      ? "Could not read the agent status from this server"
+      : online
+        ? `Connected: ${agents.filter((agent) => agent.online).map((agent) => agent.agent_id).join(", ")}`
+        : "No agent is polling this server — submitted reviews will wait";
+    $$("#agent-status").forEach((chip) => {
+      chip.classList.toggle("online", Boolean(data && online));
+      chip.classList.toggle("offline", Boolean(data && !online));
+      chip.classList.toggle("unknown", !data);
+      chip.title = title;
+      chip.setAttribute("aria-label", title);
+      const text = chip.querySelector(".agent-label");
+      if (text) text.textContent = label;
+    });
+    $$("#agent-warning").forEach((warning) => {
+      warning.hidden = !data || online > 0;
+    });
+    // The dashboard's invitation to connect is only for a server with no bridge; the dialog can
+    // stay open while the bridge appears, so refresh its status too.
+    $$("#agent-cta").forEach((callout) => {
+      callout.hidden = !data || online > 0;
+    });
+    if (ConnectAgent.dialog?.open) ConnectAgent.renderStatus();
+  },
+};
+
+/* ---------------------------------------------------------------- connect agent */
+
+/**
+ * The MCP config used to live permanently on the dashboard, even after the agent was already
+ * connected. It is now a dialog: the header chip opens it anywhere, and the dashboard only shows
+ * an invitation while no bridge is online.
+ */
+const ConnectAgent = {
+  dialog: null,
+  config: null,
+  error: null,
+
+  ensure() {
+    if (this.dialog) return this.dialog;
+    document.body.insertAdjacentHTML("beforeend", `
+      <dialog class="feature-dialog connect-dialog" id="connect-dialog"
+              aria-labelledby="connect-title">
+        <div class="feature-card dialog-frame">
+          <div class="dialog-head">
+            <div>
+              <h2 id="connect-title">Connect an agent</h2>
+              <p class="connect-status" id="connect-status">Checking…</p>
+            </div>
+            <button type="button" class="btn icon dialog-close" id="connect-close" aria-label="Close">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+          </div>
+          <div class="dialog-body stack">
+            <p class="hint">Paste this into your agent's MCP settings. The token is masked here —
+              <b>Copy config</b> puts the real one on your clipboard.</p>
+            <pre class="pre" id="connect-json">Loading…</pre>
+          </div>
+          <div class="dialog-foot">
+            <span class="copy-status" id="connect-copy-status"></span>
+            <button type="button" class="btn accent" id="connect-copy">Copy config</button>
+          </div>
+        </div>
+      </dialog>`);
+    this.dialog = $("#connect-dialog");
+    $("#connect-close").addEventListener("click", () => this.dialog.close());
+    $("#connect-copy").addEventListener("click", () => this.copy());
+    return this.dialog;
+  },
+
+  async open() {
+    const dialog = this.ensure();
+    if (dialog.open) return;
+    this.renderStatus();
+    dialog.showModal();
+    await this.load();
+  },
+
+  async load() {
+    if (this.config) {
+      this.renderConfig();
+      return;
+    }
+    try {
+      const config = await api("/api/config");
+      this.config = JSON.stringify(config.mcp_config, null, 2);
+      this.error = null;
+    } catch (requestError) {
+      this.error = requestError.message;
+    }
+    this.renderConfig();
+  },
+
+  renderConfig() {
+    const block = $("#connect-json");
+    if (!block) return;
+    if (!this.config) {
+      block.textContent = this.error ? `Could not load the config: ${this.error}` : "Could not load the config.";
+      return;
+    }
+    // The token is real in the clipboard, masked on screen: this dialog is a screenshot target too.
+    block.textContent = this.config.replace(
+      /(Bearer\s+)[A-Za-z0-9._~+/=-]{6,}/g,
+      "$1••••••••••••",
+    );
+  },
+
+  renderStatus() {
+    const status = $("#connect-status");
+    if (!status) return;
+    const data = AgentStatus.data;
+    const online = data?.online || 0;
+    status.classList.toggle("online", online > 0);
+    status.classList.toggle("offline", Boolean(data && !online));
+    status.textContent = !data
+      ? "Checking the agent status…"
+      : online
+        ? `${online} agent${online === 1 ? "" : "s"} connected — this config is already in use.`
+        : "No agent is connected yet. Paste this config into your agent to start.";
+  },
+
+  async copy() {
+    const note = $("#connect-copy-status");
+    if (!this.config) await this.load();
+    if (!this.config) {
+      if (note) note.textContent = "config unavailable";
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(this.config);
+      if (note) {
+        note.textContent = "copied";
+        setTimeout(() => { note.textContent = ""; }, 3000);
+      }
+    } catch {
+      if (note) note.textContent = "select the text above and copy";
+    }
+  },
+};
+
 /* ------------------------------------------------------------------ theme */
 
 /// The toggle shows the theme it switches *to*, as an inline SVG: a glyph swap is not a promise
@@ -460,7 +739,7 @@ const FILTERS = [
 ];
 
 class Rail {
-  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk }) {
+  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk, onViewChange }) {
     this.body = body;
     this.chips = chips;
     this.search = search;
@@ -470,6 +749,7 @@ class Rail {
     this.onAction = onAction;
     this.onPurge = onPurge;
     this.onBulk = onBulk;
+    this.onViewChange = onViewChange;
     this.bulkMode = false;
     this.selection = new Set();
     this.sessions = [];
@@ -513,8 +793,15 @@ class Rail {
         this.query = this.search.value;
         prefs.set("query", this.query);
         this.render();
+        this.viewChanged();
       });
     }
+  }
+
+  /// The visible list changed by a human action (filter or search), not by an initial load.
+  /// The editor uses it to leave a review that the chosen view no longer contains.
+  viewChanged() {
+    this.onViewChange?.();
   }
 
   toggleBulk(force) {
@@ -571,15 +858,19 @@ class Rail {
   }
 
   visible() {
+    return this.sessions.filter((session) => this.matches(session));
+  }
+
+  /// Does one session belong to the current filter and search? Kept separate from `visible` so
+  /// the editor can test its live `meta` instead of a rail row that may be a poll behind.
+  matches(session) {
     const active = FILTERS.find((f) => f.id === this.filter) || FILTERS[0];
+    if (!active.test(session)) return false;
     const query = this.query.trim().toLowerCase();
-    return this.sessions.filter((session) => {
-      if (!active.test(session)) return false;
-      if (unfiltered(query)) return true;
-      return [session.title, session.note, session.id, session.url]
-        .filter(Boolean)
-        .some((field) => field.toLowerCase().includes(query));
-    });
+    if (unfiltered(query)) return true;
+    return [session.title, session.note, session.id, session.url]
+      .filter(Boolean)
+      .some((field) => field.toLowerCase().includes(query));
   }
 
   renderChips() {
@@ -605,6 +896,7 @@ class Rail {
         this.filter = chip.dataset.filter;
         prefs.set("filter", this.filter);
         this.render();
+        this.viewChanged();
       }),
     );
   }
@@ -814,6 +1106,7 @@ class Editor {
     this.lineWidth = prefs.get("width", 3);
     this.view = { scale: 1, x: 0, y: 0, fitted: false };
     this.pointers = new Map();
+    this.pointerInStage = false;
     this.drag = null;
     this.draw = null;
     this.pan = null;
@@ -855,11 +1148,13 @@ class Editor {
           alert(`Could not ${action}: ${error.message}`);
         }
         this.rail.exitBulk();
-        await this.rail.load();
-        if (action === "delete" && ids.includes(this.sessionId)) {
+        // Confirming (or deleting) the review that is open finishes the work on screen; there is
+        // no review left to look at, so go back to the dashboard instead of an empty canvas.
+        if (ids.includes(this.sessionId) && (action === "delete" || action === "confirm")) {
           location.href = "/";
           return;
         }
+        await this.rail.load();
         if (ids.includes(this.sessionId)) {
           try {
             const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}`);
@@ -870,6 +1165,7 @@ class Editor {
           }
         }
       },
+      onViewChange: () => this.leaveIfFiltered(),
     });
     this.bindChrome();
     this.bindPanels();
@@ -892,11 +1188,15 @@ class Editor {
       const title = session?.title || id;
       const result = await featureAction(action, id, title, featureState(session || {}));
       if (!result) return;
+      const finished = result.deleted
+        || Boolean(result.meta?.feature_confirmed_at)
+        || Boolean(result.meta?.feature_cancelled_at);
+      if (id === this.sessionId && finished) {
+        // The decision closed the review on screen; the dashboard is the next useful place.
+        location.href = "/";
+        return;
+      }
       if (result.deleted) {
-        if (id === this.sessionId) {
-          location.href = "/";
-          return;
-        }
         await this.rail.load();
         return;
       }
@@ -908,6 +1208,19 @@ class Editor {
     } catch (error) {
       alert(`Could not ${action}: ${error.message}`);
     }
+  }
+
+  /// A filter or search may hide the review that is open. Keeping it on the canvas would leave a
+  /// selected review that the chosen view says is gone, so return to the dashboard instead. The
+  /// editor's `meta` is fresher than the rail's poll, so test the merged record; a session the
+  /// rail has never loaded is simply new, not filtered out.
+  leaveIfFiltered() {
+    if (!this.sessionId || !this.rail) return;
+    const entry = this.rail.sessions.find((session) => session.id === this.sessionId);
+    if (!entry) return;
+    const session = { ...entry, ...(this.meta || {}), id: this.sessionId };
+    if (this.rail.matches(session)) return;
+    location.href = "/";
   }
 
   async purgeSessions(ids) {
@@ -1008,6 +1321,11 @@ class Editor {
       ? `${this.meta.image_width}×${this.meta.image_height}` : null,
       this.meta.url || null].filter(Boolean);
     $("#session-sub").textContent = bits.join(" · ");
+    const branch = $("#branch-edit");
+    if (branch) {
+      branch.hidden = !this.meta.branch;
+      branch.textContent = this.meta.branch || "";
+    }
     const waiting = this.meta.status === "submitted";
     const button = $("#submit");
     if (waiting) {
@@ -1027,8 +1345,10 @@ class Editor {
     const stageStatus = $("#stage-status");
     if (stageStatus) {
       const submitted = this.meta.status === "submitted";
-      stageStatus.hidden = !submitted;
-      if (submitted) {
+      // A historical round is not the round the agent is working on: the live toast must not
+      // hover over an archived screenshot.
+      stageStatus.hidden = !submitted || Boolean(this.viewing);
+      if (submitted && !this.viewing) {
         const last = (this.events || [])[this.events.length - 1];
         stageStatus.textContent = agentWorking(this.meta) && last
           ? `Agent is working — ${last.message}`
@@ -1184,6 +1504,23 @@ class Editor {
     $("#zoom-100").addEventListener("click", () => { if (!this.locked) this.setZoom(1); });
     NewReview.wire();
     $("#new-review").addEventListener("click", () => NewReview.open());
+    $("#branch-edit")?.addEventListener("click", async () => {
+      const current = this.meta.branch || "";
+      const branch = await askBranch(current, this.meta.status === "submitted");
+      if (!branch) return;
+      try {
+        const body = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/branch`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ branch }),
+        });
+        this.meta = body.meta;
+        this.renderHeader();
+        this.rail.load();
+      } catch (error) {
+        alert(`Could not set the branch: ${error.message}`);
+      }
+    });
     addEventListener("resize", () => this.resize());
     addEventListener("popstate", () => {
       const id = location.pathname.split("/").filter(Boolean).pop();
@@ -1211,14 +1548,15 @@ class Editor {
     const inspector = $(".inspector");
     const conversation = $("#conversation");
     const width = (name, fallback) => parseFloat(app.style.getPropertyValue(name)) || fallback;
-    const railWidth = () => width("--rail", 272);
     const inspectorWidth = () => width("--inspector", 304);
 
-    const setRail = (px, persist = true) => {
-      app.style.setProperty("--rail", `${px}px`);
-      if (persist) prefs.set("railWidth", px);
-      this.resize();
-    };
+    // The rail is shared with the dashboard; the editor only adds the inspector limit.
+    const rail = bindRailResize({
+      max: () => Math.max(160, Math.min(560, innerWidth - inspectorWidth() - 360)),
+      onResize: () => this.resize(),
+    });
+    const railWidth = () => rail?.width() ?? 272;
+
     const setInspector = (px, persist = true) => {
       app.style.setProperty("--inspector", `${px}px`);
       if (persist) prefs.set("inspectorWidth", px);
@@ -1230,22 +1568,14 @@ class Editor {
     };
 
     // A column may not eat the stage: leave room for a readable canvas on either side.
-    const railMax = () => Math.max(160, Math.min(560, innerWidth - inspectorWidth() - 360));
     const inspectorMax = () => Math.max(200, Math.min(680, innerWidth - railWidth() - 360));
     // Whatever the conversation takes, the annotation list and the disclosures keep some room.
     const conversationMax = () => Math.max(180, inspector.clientHeight - 170);
 
     // Restoring (and clamping) is not a resize: keep the preferred size for a wider window.
-    setRail(Math.min(prefs.get("railWidth", 272), railMax()), false);
     setInspector(Math.min(prefs.get("inspectorWidth", 304), inspectorMax()), false);
     setConversation(Math.min(prefs.get("convHeight", 300), conversationMax()), false);
 
-    bindSplitter($("#rail-resizer"), {
-      min: () => 200,
-      max: railMax,
-      size: railWidth,
-      apply: setRail,
-    });
     bindSplitter($("#inspector-resizer"), {
       sign: -1,
       min: () => 240,
@@ -1263,7 +1593,6 @@ class Editor {
     });
 
     addEventListener("resize", () => {
-      setRail(Math.min(railWidth(), railMax()), false);
       setInspector(Math.min(inspectorWidth(), inspectorMax()), false);
       setConversation(Math.min(prefs.get("convHeight", 300), conversationMax()), false);
     });
@@ -1841,10 +2170,10 @@ class Editor {
     const pinch = { start: null, scale: 1 };
 
     stage.addEventListener("pointerdown", (event) => {
-      if (!this.image || this.viewing || this.locked) return;
-      // The options bar and the inline text editor live inside the stage. Capturing the pointer
-      // for marquee/pan on those would swallow their click events.
-      if (event.target.closest(".options, .text-editor")) return;
+      if (!this.image || this.locked) return;
+      // The options bar, the inline text editor and the "back to current" pill live inside the
+      // stage. Capturing the pointer for marquee/pan on those would swallow their click events.
+      if (event.target.closest(".options, .text-editor, .viewing-bar")) return;
 
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 2) {
@@ -1858,11 +2187,15 @@ class Editor {
         this.draw = null;
         this.drag = null;
         this.pan = null;
+        stage.classList.remove("panning");
         return;
       }
       const point = this.toImage(event);
 
-      if (event.button === 1 || event.button === 2 || this.spacePan) {
+      // A historical round (and any other read-only view) is a viewer: there is nothing to
+      // select or draw, so the main button drags the picture. Without this, `viewing` returned
+      // from pointerdown before any pan branch and the history screenshot could not be moved.
+      if (event.button === 1 || event.button === 2 || this.spacePan || this.readOnly) {
         this.pan = { x: event.clientX, y: event.clientY, vx: this.view.x, vy: this.view.y };
         stage.classList.add("panning");
         stage.setPointerCapture(event.pointerId);
@@ -2060,9 +2393,17 @@ class Editor {
     });
     stage.addEventListener("contextmenu", (event) => event.preventDefault());
 
-    // space to pan
+    // space to pan. The old guard required `document.body` as the target, so after clicking a
+    // history row (focus stays on the button) space+drag silently did nothing. The pointer is
+    // the intent signal: while it hovers the stage, space belongs to the canvas, not to a
+    // focused control — but never while typing into a field.
+    stage.addEventListener("pointerenter", () => { this.pointerInStage = true; });
+    stage.addEventListener("pointerleave", () => { this.pointerInStage = false; });
     addEventListener("keydown", (event) => {
-      if (event.code === "Space" && !event.repeat && event.target === document.body) {
+      const tag = event.target.tagName;
+      const typing = tag === "INPUT" || tag === "TEXTAREA" || event.target.isContentEditable;
+      if (event.code === "Space" && !event.repeat && !typing
+        && (event.target === document.body || this.pointerInStage)) {
         event.preventDefault();
         this.spacePan = true;
       }
@@ -2294,7 +2635,7 @@ class Editor {
           ? this.viewing.stamp === round.stamp
           : isLive;
         rows.push(`<div class="ann-row history-row${isLive ? " live" : ""}${selected ? " selected" : ""}"
-                        data-round="${escapeHtml(round.stamp)}" role="button" tabindex="0">
+                        data-round="${escapeHtml(round.stamp)}" data-live="${isLive ? "1" : "0"}" role="button" tabindex="0">
           <span class="glyph">${round.round}</span>
           <span class="label">
             <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
@@ -2314,7 +2655,9 @@ class Editor {
       const counter = $("#history-count");
       if (counter) counter.textContent = String(rows.length);
       $$("[data-round]", list).forEach((row) => {
-        const go = () => row.dataset.round === "current"
+        // A round the canvas still shows is the live canvas itself; clicking it must not open a
+        // read-only copy of what is already on screen.
+        const go = () => row.dataset.round === "current" || row.dataset.live === "1"
           ? this.showCurrent()
           : this.viewRound(row.dataset.round);
         row.addEventListener("click", go);
@@ -2439,8 +2782,11 @@ class Editor {
     const bar = $("#viewing-bar");
     if (!bar) return;
     bar.hidden = !this.viewing;
+    // The cursor is the affordance: a historical round can be dragged like a map, and the grab
+    // hand says so before the first drag.
+    this.stage.classList.toggle("viewing", Boolean(this.viewing));
     if (this.viewing) {
-      bar.textContent = `Viewing round ${this.viewing.round || ""} — back to current`;
+      bar.textContent = `Viewing round ${this.viewing.round || ""} — drag to pan, Ctrl+scroll to zoom · back to current`;
     }
   }
 
@@ -2820,10 +3166,21 @@ const NewReview = {
     if (error) error.textContent = "";
     const fresh = $("#f-project-new");
     if (fresh) { fresh.value = ""; fresh.hidden = true; }
+    const branch = $("#f-branch");
+    if (branch) { branch.value = ""; this.suggestBranch(); }
     const project = $("#f-project");
     if (project?.value === "__new__") project.value = "";
     this.fillProjects();
     $("#f-title").focus();
+  },
+  /// Show what the branch will be called when the field stays empty: a review belongs to a
+  /// feature, so the placeholder is `feat/<title>` — never the session id.
+  suggestBranch() {
+    const input = $("#f-branch");
+    if (!input) return;
+    const title = ($("#f-title")?.value || "").trim();
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+    input.placeholder = `feat/${slug || "my-feature"}`;
   },
   /// Repositories come from the agent sync; older label-only projects stay selectable while they
   /// still have reviews, but empty leftovers are not offered.
@@ -2939,6 +3296,8 @@ const NewReview = {
       take(event.dataTransfer.files[0]);
     });
     $("#new-cancel").addEventListener("click", () => NewReview.close());
+    $("#new-close")?.addEventListener("click", () => NewReview.close());
+    $("#f-title")?.addEventListener("input", () => NewReview.suggestBranch());
     $("#f-project")?.addEventListener("change", () => NewReview.syncProjectInput());
     $("#new-form").addEventListener("submit", async (event) => {
       event.preventDefault();
@@ -2954,6 +3313,7 @@ const NewReview = {
       }
       const submit = $("#new-submit");
       submit.disabled = true;
+      const branch = ($("#f-branch")?.value || "").trim() || undefined;
       if (!picked) {
         $("#new-error").textContent = "Capturing… (a few seconds)";
         try {
@@ -2967,6 +3327,7 @@ const NewReview = {
               viewport: "1440x900",
               agent: "human",
               project: project || undefined,
+              branch,
             }),
           });
           lastProject.remember(body.meta.project);
@@ -2995,6 +3356,7 @@ const NewReview = {
             image_base64: dataUrl,
             agent: "human",
             project: project || undefined,
+            branch,
           }),
         });
         lastProject.remember(body.meta.project);
@@ -3010,11 +3372,15 @@ const NewReview = {
 
 /* ------------------------------------------------------------------ list page */
 
-/// The start page is a gallery: the last few reviews with their screenshots.
+/// The start page is a gallery: the last few reviews with their screenshots. A decided review
+/// (confirmed or cancelled) is finished work, not something to resume, so it does not belong
+/// here — the rail's All/Done filters are where history lives.
 function renderGallery(rail) {
   const box = $("#gallery");
   if (!box) return;
-  const sessions = (rail.sessions || []).slice(0, 12);
+  const sessions = (rail.sessions || [])
+    .filter((session) => featureState(session) === "pending")
+    .slice(0, 12);
   if (!sessions.length) {
     box.hidden = true;
     return;
@@ -3023,7 +3389,8 @@ function renderGallery(rail) {
   box.hidden = false;
   box.innerHTML = sessions.map((session) => {
     const project = names.get(session.project || "inbox") || (session.project || "Inbox");
-    return `<a class="card" href="/s/${encodeURIComponent(session.id)}">
+    return `<a class="card" data-session="${escapeHtml(session.id)}"
+      href="/s/${encodeURIComponent(session.id)}">
       <img src="/sessions/${encodeURIComponent(session.id)}/image" loading="lazy" alt="" />
       <div class="card-body">
         <b>${escapeHtml(session.title || session.id)}</b>
@@ -3036,6 +3403,11 @@ function renderGallery(rail) {
 }
 
 async function bootList() {
+  bindRailResize();
+  const refresh = async () => {
+    await rail.load();
+    renderGallery(rail);
+  };
   const rail = new Rail({
     body: $("#rail-body"),
     chips: $("#chips"),
@@ -3047,7 +3419,7 @@ async function bootList() {
         const session = rail.sessions.find((s) => s.id === id);
         const title = session?.title || id;
         const result = await featureAction(action, id, title, featureState(session || {}));
-        if (result) await rail.load();
+        if (result) await refresh();
       } catch (error) {
         alert(`Could not ${action}: ${error.message}`);
       }
@@ -3056,7 +3428,7 @@ async function bootList() {
       for (const id of ids) {
         await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
       }
-      await rail.load();
+      await refresh();
     },
     onBulk: async (action, ids) => {
       if (action === "confirm") {
@@ -3084,37 +3456,20 @@ async function bootList() {
         alert(`Could not ${action}: ${error.message}`);
       }
       rail.exitBulk();
-      await rail.load();
+      await refresh();
     },
   });
   await rail.load();
   renderGallery(rail);
+  // A dashboard restored from the back-forward cache keeps the DOM it had when the human left it,
+  // including gallery cards for reviews that have since been confirmed or cancelled. Refresh it.
+  addEventListener("pageshow", (event) => {
+    if (event.persisted) refresh();
+  });
   NewReview.wire();
   $("#new-review").addEventListener("click", () => NewReview.open());
   const count = $("#sessions-count");
   if (count) count.textContent = plural(rail.sessions.length, "session");
-
-  try {
-    const config = await api("/api/config");
-    const json = JSON.stringify(config.mcp_config, null, 2);
-    // This page is a screenshot target (redline can capture itself), so the token is masked on
-    // screen. "Copy config" still copies the real JSON.
-    const masked = json.replace(/(Bearer\s+)[A-Za-z0-9._~+/=-]{6,}/g, "$1••••••••••••");
-    const block = $("#mcp-json");
-    if (block) block.textContent = masked;
-    const copy = $("#copy-mcp");
-    if (copy) {
-      copy.addEventListener("click", async () => {
-        try {
-          await navigator.clipboard.writeText(json);
-          $("#copy-status").textContent = "copied";
-          setTimeout(() => { $("#copy-status").textContent = ""; }, 3000);
-        } catch {
-          $("#copy-status").textContent = "select the text above and copy";
-        }
-      });
-    }
-  } catch { /* not signed in yet */ }
 }
 
 /* ------------------------------------------------------------------ boot */
@@ -3128,6 +3483,12 @@ document.addEventListener("DOMContentLoaded", () => {
     button.addEventListener("click", () => Theme.toggle()));
   $$("[data-agent-settings]").forEach((button) =>
     button.addEventListener("click", () => AgentSettings.open()));
+  AgentStatus.start();
+  window.redlineAgentStatus = AgentStatus;
+  $$("#agent-status").forEach((chip) =>
+    chip.addEventListener("click", () => ConnectAgent.open()));
+  $$("#agent-connect").forEach((button) =>
+    button.addEventListener("click", () => ConnectAgent.open()));
   Help.wire();
   addEventListener("keydown", (event) => {
     if (event.key === "?" && document.body.dataset.page !== "editor") {

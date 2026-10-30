@@ -162,6 +162,83 @@ const main = async () => {
   }));
   check("editor booted with an image", true, `scale ${view.scale.toFixed(3)}`);
 
+  // The primary action lives in the rail on both pages, not in the header of one of them.
+  const editorNewReview = await page.evaluate(() => {
+    const button = document.querySelector("#new-review");
+    const probe = document.createElement("button");
+    probe.className = "btn accent";
+    document.body.appendChild(probe);
+    const accent = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return {
+      inRail: Boolean(button?.closest(".rail")),
+      inHeader: Boolean(button?.closest(".header-actions")),
+      background: button ? getComputedStyle(button).backgroundColor : "",
+      accent,
+    };
+  });
+  check("editor new review is the same blue rail button",
+    editorNewReview.inRail && !editorNewReview.inHeader
+      && editorNewReview.background === editorNewReview.accent,
+    JSON.stringify(editorNewReview));
+
+  // ---- agent presence is visible (header chip + rail warning) and never blocks the review
+  await page.waitForFunction(
+    () => document.querySelector("#agent-status")?.classList.contains("online"),
+    { timeout: 15000 },
+  );
+  const agentOnline = await page.evaluate(() => ({
+    label: document.querySelector("#agent-status .agent-label")?.textContent || "",
+    warningHidden: Boolean(document.querySelector("#agent-warning")?.hidden),
+    title: document.querySelector("#agent-status")?.title || "",
+    classes: document.querySelector("#agent-status")?.className || "",
+  }));
+  check("the header says an agent is connected",
+    agentOnline.classes.includes("online") && agentOnline.label.includes("connected")
+      && agentOnline.warningHidden,
+    JSON.stringify(agentOnline));
+
+  await page.evaluate(() => window.redlineAgentStatus.render({ online: 0, agents: [] }));
+  const agentOffline = await page.evaluate(() => ({
+    offline: document.querySelector("#agent-status")?.classList.contains("offline"),
+    label: document.querySelector("#agent-status .agent-label")?.textContent || "",
+    warningVisible: !document.querySelector("#agent-warning")?.hidden,
+    editorStillThere: Boolean(window.redline?.image),
+  }));
+  check("no agent shows a visible warning without blocking the editor",
+    agentOffline.offline && agentOffline.label === "No agent connected"
+      && agentOffline.warningVisible && agentOffline.editorStillThere,
+    JSON.stringify(agentOffline));
+  await page.evaluate(() => window.redlineAgentStatus.refresh());
+  await page.waitForFunction(
+    () => document.querySelector("#agent-status")?.classList.contains("online"),
+    { timeout: 5000 },
+  );
+  check("agent status recovers when a bridge polls", true);
+
+  await page.click("#agent-status");
+  await page.waitForSelector("#connect-dialog[open]", { timeout: 5000 });
+  await page.waitForFunction(
+    () => !document.querySelector("#connect-json")?.textContent.includes("Loading"),
+    { timeout: 5000 },
+  );
+  const connectEditor = await page.evaluate(() => ({
+    title: document.querySelector("#connect-title")?.textContent || "",
+    json: document.querySelector("#connect-json")?.textContent || "",
+    status: document.querySelector("#connect-status")?.textContent || "",
+    copy: Boolean(document.querySelector("#connect-copy")),
+  }));
+  check("the agent chip opens the connect dialog with a masked config",
+    connectEditor.title === "Connect an agent" && connectEditor.json.includes("mcpServers")
+      && connectEditor.json.includes("••••") && !connectEditor.json.includes("e2e-token")
+      && connectEditor.copy && connectEditor.status.includes("connected"),
+    JSON.stringify({ ...connectEditor, json: connectEditor.json.slice(0, 80) }));
+  await page.click("#connect-close");
+  await page.waitForFunction(
+    () => !document.querySelector("#connect-dialog")?.open,
+    { timeout: 5000 },
+  );
+
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
   const chrome = await page.evaluate(() => {
     const header = document.querySelector(".header");
@@ -328,6 +405,75 @@ const main = async () => {
   // ---- agent concurrency settings are server-side and editable from the UI
   await page.click("[data-agent-settings]");
   await page.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+
+  // Every popup is a fixed frame: X top-right, head and foot pinned, only the middle scrolls.
+  const settingsShell = await page.evaluate(() => {
+    const dialog = document.querySelector("#agent-settings-dialog");
+    const head = dialog.querySelector(".dialog-head");
+    const body = dialog.querySelector(".dialog-body");
+    const foot = dialog.querySelector(".dialog-foot");
+    const close = dialog.querySelector("#agent-settings-close");
+    const dialogBox = dialog.getBoundingClientRect();
+    const closeBox = close.getBoundingClientRect();
+    return {
+      head: Boolean(head), body: Boolean(body), foot: Boolean(foot),
+      topRight: closeBox.left > dialogBox.left + dialogBox.width / 2
+        && closeBox.top < dialogBox.top + 60,
+      bodyScrolls: getComputedStyle(body).overflowY === "auto",
+      footButtons: foot.querySelectorAll("button").length,
+    };
+  });
+  check("settings dialog has a top-right X, a fixed head and a fixed foot",
+    settingsShell.head && settingsShell.body && settingsShell.foot
+      && settingsShell.topRight && settingsShell.bodyScrolls && settingsShell.footButtons === 2,
+    JSON.stringify(settingsShell));
+
+  await page.click("#agent-settings-close");
+  await page.waitForFunction(
+    () => !document.querySelector("#agent-settings-dialog")?.open,
+    { timeout: 5000 },
+  );
+  check("settings close X closes without saving", true);
+
+  // A short viewport on its own page: resizing the editor page would re-fit the canvas under the
+  // coordinate tests that follow.
+  const scrollPage = await browser.newPage();
+  await scrollPage.setViewport({ width: 1440, height: 380 });
+  await scrollPage.goto(`${BASE}/s/${id}`, { waitUntil: "networkidle2" });
+  await scrollPage.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
+  await scrollPage.click("[data-agent-settings]");
+  await scrollPage.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+  const settingsScroll = await scrollPage.evaluate(() => {
+    const dialog = document.querySelector("#agent-settings-dialog");
+    const head = dialog.querySelector(".dialog-head");
+    const body = dialog.querySelector(".dialog-body");
+    const foot = dialog.querySelector(".dialog-foot");
+    const before = {
+      headTop: Math.round(head.getBoundingClientRect().top),
+      footBottom: Math.round(foot.getBoundingClientRect().bottom),
+      clientHeight: body.clientHeight,
+      scrollHeight: body.scrollHeight,
+      scrollTop: body.scrollTop,
+    };
+    body.scrollTop = body.scrollHeight;
+    const after = {
+      headTop: Math.round(head.getBoundingClientRect().top),
+      footBottom: Math.round(foot.getBoundingClientRect().bottom),
+      scrollTop: body.scrollTop,
+    };
+    return { before, after };
+  });
+  check("settings dialog keeps head and foot fixed while only its body scrolls",
+    settingsScroll.before.scrollHeight > settingsScroll.before.clientHeight
+      && settingsScroll.after.scrollTop > 0
+      && settingsScroll.before.headTop === settingsScroll.after.headTop
+      && settingsScroll.before.footBottom === settingsScroll.after.footBottom,
+    JSON.stringify(settingsScroll));
+  await scrollPage.close();
+
+  await page.click("[data-agent-settings]");
+  await page.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+
   const settingsBefore = await page.evaluate(() => ({
     global: document.querySelector("#agent-max-parallel").value,
     project: document.querySelector("#agent-project-max-parallel").value,
@@ -379,6 +525,27 @@ const main = async () => {
     );
     return sessionId;
   };
+
+  /// Read a rail badge's computed colours in both themes without leaving the current theme on.
+  const badgeStyles = (selector) => page.evaluate((sel) => {
+    const element = document.querySelector(sel);
+    if (!element) return null;
+    const theme = document.documentElement.dataset.theme || "dark";
+    const read = () => {
+      const style = getComputedStyle(element);
+      return {
+        background: style.backgroundColor,
+        color: style.color,
+        border: style.borderTopColor,
+      };
+    };
+    document.documentElement.dataset.theme = "dark";
+    const dark = read();
+    document.documentElement.dataset.theme = "light";
+    const light = read();
+    document.documentElement.dataset.theme = theme;
+    return { dark, light };
+  }, selector);
 
   /** The row, number, label and painted badge for the last annotation in a fresh session. */
   const readLastAnnotation = async () => page.evaluate(() => {
@@ -724,11 +891,25 @@ const main = async () => {
   let history = { submissions: [] };
   for (let attempt = 0; attempt < 24; attempt += 1) {
     history = await api(`/api/sessions/${id}/history`);
-    if (history.submissions.length) break;
+    // Two submissions so far, so two rounds: waiting for both keeps the baseline honest.
+    if (history.submissions.length >= 2) break;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
-  check("a second submission archives the first round", history.submissions.length >= 1,
+  check("a second submission archives the first round", history.submissions.length === 2,
     `${history.submissions.length} archived`);
+
+  // ---- STOP then *Submit again* without touching the canvas is the same round, not a new one
+  // (2026-10-30: one task's History showed the identical round twice).
+  const beforeRepeat = history.submissions.length;
+  await stopReview();
+  await page.keyboard.down("Control");
+  await page.keyboard.press("Enter");
+  await page.keyboard.up("Control");
+  // The page only learns `submitted` once the submit response landed, i.e. after the archive.
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  const repeated = (await api(`/api/sessions/${id}/history`)).submissions.length;
+  check("an unchanged resubmission does not add a history round",
+    repeated === beforeRepeat, `${beforeRepeat} → ${repeated}`);
 
   // ---- history opens a previous round read-only, and Current brings the live canvas back
   if (!(await page.$eval("#history-block", (el) => el.open))) {
@@ -741,13 +922,20 @@ const main = async () => {
     () => document.querySelectorAll("#history-list [data-round]").length > 0,
     { timeout: 5000 },
   );
+  const rowsForRounds = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list [data-round]")]
+      .filter((row) => row.dataset.round !== "current").length);
+  check("history draws one row per round", rowsForRounds === repeated,
+    `${rowsForRounds} rows, ${repeated} rounds`);
   const opened = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#history-list [data-round]")];
-    const target = rows.find((row) => row.dataset.round !== "current") || rows[0];
+    // The newest round is still the canvas: clicking it returns to the live view, so open an
+    // earlier round to test the read-only viewer.
+    const target = rows.find((row) => row.dataset.round !== "current" && row.dataset.live !== "1");
     target?.click();
     return Boolean(target);
   });
-  check("history lists at least one round", opened);
+  check("history lists an earlier round to open", opened);
   await page.waitForFunction(() => Boolean(window.redline.viewing), { timeout: 5000 });
   const viewing = await page.evaluate(() => ({
     round: window.redline.viewing.round,
@@ -756,10 +944,79 @@ const main = async () => {
   }));
   check("history opens a round read-only", viewing.round >= 1 && viewing.readonly && viewing.bar,
     JSON.stringify(viewing));
+
+  // ---- a historical round is a viewer, not a dead image: it pans, scrolls and zooms
+  const viewer = await page.evaluate(() => ({
+    view: { ...window.redline.view },
+    annotations: JSON.stringify(window.redline.annotations),
+    cursor: getComputedStyle(document.querySelector("#stage canvas")).cursor,
+    box: (() => {
+      const rect = document.querySelector("#stage").getBoundingClientRect();
+      return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+    })(),
+  }));
+  check("history viewer shows a pan cursor", viewer.cursor === "grab", viewer.cursor);
+  const panX = viewer.box.x + viewer.box.width / 2;
+  const panY = viewer.box.y + viewer.box.height / 2;
+  await drag(page, { x: panX, y: panY }, { x: panX + 70, y: panY + 45 });
+  const panned = await page.evaluate(() => ({ ...window.redline.view }));
+  check(
+    "history viewer pans with a left-drag",
+    Math.abs(panned.x - viewer.view.x - 70) <= 1 && Math.abs(panned.y - viewer.view.y - 45) <= 1,
+    `${viewer.view.x},${viewer.view.y} -> ${panned.x},${panned.y}`,
+  );
+  await page.mouse.wheel({ deltaY: 120 });
+  const scrolled = await page.evaluate(() => ({ ...window.redline.view }));
+  check("history viewer scrolls with the wheel", Math.abs(scrolled.y - panned.y + 120) <= 1,
+    `${panned.y} -> ${scrolled.y}`);
+  const scaleBefore = scrolled.scale;
+  await page.keyboard.down("Control");
+  await page.mouse.wheel({ deltaY: -120 });
+  await page.keyboard.up("Control");
+  const zoomed = await page.evaluate(() => window.redline.view.scale);
+  check("history viewer zooms with ctrl+wheel", zoomed > scaleBefore, `${scaleBefore} -> ${zoomed}`);
+  const untouched = await page.evaluate(() => JSON.stringify(window.redline.annotations));
+  check("panning a history round does not edit it", untouched === viewer.annotations);
+
+  // A mouse click leaves focus on the history row; space+drag must still pan the canvas.
+  const focusedRow = await page.evaluate(() => {
+    const row = document.querySelector("#history-list .history-row.selected");
+    row?.focus();
+    return document.activeElement === row;
+  });
+  const spaceBefore = await page.evaluate(() => ({ ...window.redline.view }));
+  await page.mouse.move(panX, panY);
+  await page.keyboard.down("Space");
+  await drag(page, { x: panX, y: panY }, { x: panX - 40, y: panY - 30 });
+  await page.keyboard.up("Space");
+  const spacePanned = await page.evaluate(() => ({ ...window.redline.view }));
+  check("history viewer pans with space+drag while a history row is focused",
+    focusedRow && Math.abs(spacePanned.x - spaceBefore.x + 40) <= 1
+      && Math.abs(spacePanned.y - spaceBefore.y + 30) <= 1,
+    `${spaceBefore.x},${spaceBefore.y} -> ${spacePanned.x},${spacePanned.y}`);
+
   await page.click("#viewing-bar");
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
   check("Current returns to the live canvas", true);
   await stopReview();
+
+  // After STOP the canvas still shows the newest round, so that round is the current one:
+  // one row labelled "Round N (current)", not "Round N" plus a second live "Current" row
+  // (2026-10-30).
+  await page.evaluate(() => window.redline.loadHistory());
+  await page.waitForFunction(
+    () => document.querySelectorAll("#history-list [data-round]").length > 0,
+    { timeout: 5000 },
+  );
+  const stoppedHistory = await page.evaluate(() => ({
+    rows: document.querySelectorAll("#history-list [data-round]").length,
+    current: Boolean(document.querySelector('#history-list [data-round="current"]')),
+    live: document.querySelector("#history-list .history-row.live")?.textContent || "",
+  }));
+  check("the round on the canvas is not also listed as a separate Current",
+    stoppedHistory.rows === repeated && !stoppedHistory.current
+      && stoppedHistory.live.includes("current"),
+    JSON.stringify(stoppedHistory));
 
   // ---- ellipse tool draws a real ellipse
   await page.keyboard.press("e");
@@ -848,6 +1105,23 @@ const main = async () => {
       && confirmDialog.body.includes("pull request")
       && confirmDialog.primary && confirmDialog.count === 2,
     JSON.stringify(confirmDialog));
+  const featureClose = await page.evaluate(() => {
+    const button = document.querySelector("#feature-dialog .dialog-close");
+    return Boolean(button) && button.getAttribute("aria-label") === "Close";
+  });
+  check("feature dialog has a close X", featureClose);
+  await page.click("#feature-dialog .dialog-close");
+  await page.waitForFunction(
+    () => !document.querySelector("#feature-dialog")?.open,
+    { timeout: 5000 },
+  );
+  const afterFeatureClose = await api(`/api/sessions/${id}`);
+  check("closing the feature dialog leaves the feature pending",
+    !afterFeatureClose.meta.feature_confirmed_at,
+    String(afterFeatureClose.meta.feature_confirmed_at || "none"));
+  await page.hover(row);
+  await page.click(`${row} [data-act="confirm"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   await page.click('#feature-actions [data-action="confirm"]');
   let status = "";
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -856,24 +1130,45 @@ const main = async () => {
     if (status === "resolved" && meta.meta.feature_confirmed_at) break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  // `railAction` reloads the rail after the POST, but the click resolves before that await does;
-  // poll the rail's own data instead of reading it a frame too early. The card itself is checked
-  // in the Done filter below — a resolved session leaves the default Active view.
-  let confirmedState = "";
-  for (let attempt = 0; attempt < 30 && confirmedState !== "confirmed"; attempt += 1) {
-    confirmedState = await page.evaluate(() => {
-      const entry = window.redline.rail.sessions.find((session) => session.id === window.redline.sessionId);
-      return entry?.feature_state || "";
-    });
-    if (confirmedState !== "confirmed") await new Promise((resolve) => setTimeout(resolve, 100));
-  }
+  // A decision on the review that is open finishes it: back to the dashboard, no selection.
+  await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
+  await page.waitForFunction((sessionId) => !document.querySelector(`#gallery .card[data-session="${sessionId}"]`),
+    { timeout: 5000 }, id);
+  const confirmDashboard = await page.evaluate((sessionId) => ({
+    selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+    card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),
+  }), id);
+  check("rail 'confirm' on the open review returns to the dashboard",
+    status === "resolved" && !confirmDashboard.selected && !confirmDashboard.card,
+    JSON.stringify({ status, ...confirmDashboard }));
+
+  // Reopen it from the Done filter to check the decision and the reopen path.
+  await clickChip("Done");
+  await page.waitForSelector(row, { timeout: 5000 });
+  await page.$eval(row, (el) => el.click());
+  await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
+    { timeout: 10000 }, id);
+  await page.waitForFunction(() => Boolean(window.redline?.meta?.feature_confirmed_at),
+    { timeout: 10000 });
   const confirmed = await page.evaluate(() => ({
     stamped: Boolean(window.redline.meta?.feature_confirmed_at),
-    row: Boolean(document.querySelector('.session[aria-current="true"]')),
+    selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+    filter: window.redline.rail.filter,
   }));
-  check("rail 'confirm' closes the feature and records the decision",
-    status === "resolved" && confirmed.stamped && confirmedState === "confirmed" && !confirmed.row,
-    JSON.stringify({ status, ...confirmed, state: confirmedState }));
+  check("the confirmed feature opens from Done with its decision stamped",
+    confirmed.stamped && confirmed.selected && confirmed.filter === "resolved",
+    JSON.stringify(confirmed));
+  const confirmedBadge = await badgeStyles(".session .badge.confirmed");
+  check("confirmed badge is a green tint, not a black pill",
+    confirmedBadge
+      && confirmedBadge.dark.background === "rgba(34, 197, 94, 0.18)"
+      && confirmedBadge.dark.color === "rgb(134, 239, 172)"
+      && confirmedBadge.dark.border === "rgba(74, 222, 128, 0.55)"
+      && confirmedBadge.light.background === "rgb(220, 252, 231)"
+      && confirmedBadge.light.color === "rgb(22, 101, 52)"
+      && confirmedBadge.light.border === "rgb(134, 239, 172)",
+    JSON.stringify(confirmedBadge));
 
   // "All" is the only view that keeps a finished session alongside active work.
   await clickChip("All");
@@ -960,8 +1255,39 @@ const main = async () => {
       && !cancelled.feature_confirmed_at,
     JSON.stringify({ status: cancelled.status, cancelled: cancelled.feature_cancelled_at }));
 
+  await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
+  let cancelDashboard = {};
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    cancelDashboard = await page.evaluate((sessionId) => ({
+      selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+      card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),
+      cards: [...document.querySelectorAll("#gallery .card")].map((card) => card.dataset.session),
+    }), id);
+    if (!cancelDashboard.card) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("rail 'cancel' on the open review returns to the dashboard",
+    Boolean(cancelled.feature_cancelled_at) && !cancelDashboard.selected && !cancelDashboard.card,
+    JSON.stringify({ cancelled: cancelled.feature_cancelled_at, ...cancelDashboard }));
+
   await clickChip("Done");
   await page.waitForSelector(row, { timeout: 5000 });
+  await page.$eval(row, (el) => el.click());
+  await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
+    { timeout: 10000 }, id);
+  await page.waitForFunction(() => Boolean(window.redline?.meta?.feature_cancelled_at),
+    { timeout: 10000 });
+  const cancelledBadge = await badgeStyles(".session .badge.cancelled");
+  check("cancelled badge is a red tint, not a black pill",
+    cancelledBadge
+      && cancelledBadge.dark.background === "rgba(244, 63, 94, 0.16)"
+      && cancelledBadge.dark.color === "rgb(253, 164, 175)"
+      && cancelledBadge.dark.border === "rgba(251, 113, 133, 0.5)"
+      && cancelledBadge.light.background === "rgb(255, 228, 230)"
+      && cancelledBadge.light.color === "rgb(159, 18, 57)"
+      && cancelledBadge.light.border === "rgb(253, 164, 175)",
+    JSON.stringify(cancelledBadge));
   await page.hover(row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   let reopenedCancel = {};
@@ -977,6 +1303,23 @@ const main = async () => {
     JSON.stringify({ status: reopenedCancel.status }));
   await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
+
+  // ---- a filter that hides the open review sends the human back to the dashboard
+  await clickChip("Submitted");
+  await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="active"]', { timeout: 10000 });
+  const filteredOut = await page.evaluate(() => ({
+    selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+    filter: JSON.parse(localStorage.getItem("redline:filter") || '"active"'),
+  }));
+  check("a filter that hides the open review returns to the dashboard",
+    !filteredOut.selected && filteredOut.filter === "submitted", JSON.stringify(filteredOut));
+  await clickChip("Active");
+  await page.waitForSelector(row, { timeout: 5000 });
+  await page.$eval(row, (el) => el.click());
+  await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
+    { timeout: 10000 }, id);
+  await page.waitForFunction(() => Boolean(window.redline?.image), { timeout: 15000 });
 
   const annotated = await fetch(`${BASE}/sessions/${id}/annotated.png`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
@@ -1430,7 +1773,7 @@ const main = async () => {
     css: getComputedStyle(document.body).backgroundColor,
   }));
   check("setup page goes back to the server list and has no duplicate standalone switch",
-    setup.back.startsWith("/") && setup.primary.includes("accent")
+    setup.back === `${BASE}/?t=${TOKEN}` && setup.primary.includes("accent")
       && setup.secondary.includes("btn") && setup.secondaryHref.includes("/servers")
       && !setup.localSwitch && setup.card !== "0px",
     JSON.stringify(setup));
@@ -1490,11 +1833,188 @@ const main = async () => {
       && removeButton.dark.contrast >= 4.5 && removeButton.light.contrast >= 4.5,
     JSON.stringify(removeButton));
 
+  // The local Servers/Setup pages must send "Back to sessions" to the *active* server. The e2e
+  // server has no config file, so answer the profile endpoints like the desktop app would.
+  await page.setRequestInterception(true);
+  const profiles = (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path !== "/api/servers" && path !== "/api/setup") {
+      request.continue();
+      return;
+    }
+    const body = path === "/api/setup"
+      ? {
+        mode: "remote", remote_url: "http://remote.example:8788", active_name: "Remote",
+        servers: 1, local_url: BASE, active_url: `${BASE}/?t=remote-token`,
+      }
+      : {
+        servers: [{ id: "remote", name: "Remote", url: "http://remote.example:8788", has_token: true, active: true }],
+        active: "remote", local_url: BASE, active_name: "Remote",
+        active_url: `${BASE}/?t=remote-token`,
+      };
+    request.respond({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+  };
+  page.on("request", profiles);
+  await page.goto(`${BASE}/servers?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => document.querySelector("#back")?.href.endsWith("/?t=remote-token"),
+    { timeout: 5000 },
+  );
+  const serversBack = await page.$eval("#back", (el) => el.href);
+  check("servers Back to sessions returns to the active server",
+    serversBack === `${BASE}/?t=remote-token`, serversBack);
+
+  await page.goto(`${BASE}/setup?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => document.querySelector("#back")?.href.endsWith("/?t=remote-token"),
+    { timeout: 5000 },
+  );
+  const setupBack = await page.$eval("#back", (el) => el.href);
+  check("setup Back to sessions returns to the active server",
+    setupBack === `${BASE}/?t=remote-token`, setupBack);
+  page.off("request", profiles);
+  await page.setRequestInterception(false);
+
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
   check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
+  const listAgent = await page.evaluate(() => ({
+    chip: Boolean(document.querySelector("#agent-status")),
+    online: document.querySelector("#agent-status")?.classList.contains("online") || false,
+    label: document.querySelector("#agent-status .agent-label")?.textContent || "",
+    warningHidden: Boolean(document.querySelector("#agent-warning")?.hidden),
+  }));
+  check("the dashboard shows the same connected agent",
+    listAgent.chip && listAgent.online && listAgent.label.includes("connected")
+      && listAgent.warningHidden, JSON.stringify(listAgent));
 
+  // ---- the MCP config is a dialog, not a permanent block on the dashboard
+  const connectUi = await page.evaluate(() => ({
+    oldConfigGone: !document.querySelector("#mcp-json") && !document.querySelector("#copy-mcp"),
+    ctaHidden: Boolean(document.querySelector("#agent-cta")?.hidden),
+  }));
+  check("the dashboard no longer embeds the agent config",
+    connectUi.oldConfigGone && connectUi.ctaHidden, JSON.stringify(connectUi));
+  await page.click("#agent-status");
+  await page.waitForSelector("#connect-dialog[open]", { timeout: 5000 });
+  await page.waitForFunction(
+    () => !document.querySelector("#connect-json")?.textContent.includes("Loading"),
+    { timeout: 5000 },
+  );
+  const connect = await page.evaluate(() => ({
+    title: document.querySelector("#connect-title")?.textContent || "",
+    json: document.querySelector("#connect-json")?.textContent || "",
+    status: document.querySelector("#connect-status")?.textContent || "",
+    copy: Boolean(document.querySelector("#connect-copy")),
+  }));
+  check("the dashboard chip opens the connect dialog with a masked config",
+    connect.title === "Connect an agent" && connect.json.includes("mcpServers")
+      && connect.json.includes("••••") && !connect.json.includes("e2e-token")
+      && connect.copy && connect.status.includes("connected"),
+    JSON.stringify({ ...connect, json: connect.json.slice(0, 80) }));
+  await page.click("#connect-close");
+  await page.waitForFunction(() => !document.querySelector("#connect-dialog")?.open,
+    { timeout: 5000 });
+
+  // Without a bridge the dashboard offers the one-click invitation instead.
+  await page.evaluate(() => window.redlineAgentStatus.render({ online: 0, agents: [] }));
+  const cta = await page.evaluate(() => ({
+    visible: !document.querySelector("#agent-cta")?.hidden,
+    text: document.querySelector("#agent-cta")?.textContent || "",
+    warning: !document.querySelector("#agent-warning")?.hidden,
+  }));
+  check("without an agent the dashboard offers Connect an agent",
+    cta.visible && cta.text.includes("No agent is connected") && cta.warning,
+    JSON.stringify(cta));
+  await page.click("#agent-connect");
+  await page.waitForSelector("#connect-dialog[open]", { timeout: 5000 });
+  const offlineConnect = await page.evaluate(() =>
+    document.querySelector("#connect-status")?.textContent || "");
+  check("the connect dialog says no agent is connected yet",
+    offlineConnect.includes("No agent is connected"), offlineConnect);
+  await page.click("#connect-close");
+  await page.waitForFunction(() => !document.querySelector("#connect-dialog")?.open,
+    { timeout: 5000 });
+  await page.evaluate(() => window.redlineAgentStatus.refresh());
+  await page.waitForSelector("#agent-status.online", { timeout: 5000 });
+  const ctaGone = await page.evaluate(() => Boolean(document.querySelector("#agent-cta")?.hidden));
+  check("the connect invitation disappears when a bridge polls", ctaGone);
+
+  // A decided feature is finished work, not a review to resume: the gallery must not keep it.
+  const galleryState = await page.evaluate(() => ({
+    ids: [...document.querySelectorAll("#gallery .card")].map((card) => card.dataset.session),
+  }));
+  const allSessions = (await api("/api/sessions")).sessions || [];
+  const decided = (session) => session.feature_state === "confirmed"
+    || session.feature_state === "cancelled"
+    || Boolean(session.feature_confirmed_at || session.feature_cancelled_at);
+  const pendingIds = allSessions.filter((session) => !decided(session)).map((session) => session.id);
+  const decidedIds = allSessions.filter(decided).map((session) => session.id);
+  check("gallery hides confirmed and cancelled reviews",
+    decidedIds.length > 0 && galleryState.ids.every((id) => pendingIds.includes(id))
+      && !galleryState.ids.some((id) => decidedIds.includes(id)),
+    JSON.stringify({ cards: galleryState.ids.length, pending: pendingIds.length, decided: decidedIds.length }));
+
+  // One primary action, one place: the left rail, in the accent blue — not a green header button
+  // that moves to the rail as soon as a review is open.
+  const newReview = await page.evaluate(() => {
+    const button = document.querySelector("#new-review");
+    const probe = document.createElement("button");
+    probe.className = "btn accent";
+    document.body.appendChild(probe);
+    const accent = getComputedStyle(probe).backgroundColor;
+    probe.remove();
+    return {
+      inRail: Boolean(button?.closest(".rail")),
+      inHeader: Boolean(button?.closest(".header-actions")),
+      classes: button?.className || "",
+      background: button ? getComputedStyle(button).backgroundColor : "",
+      accent,
+    };
+  });
+  check("dashboard new review is the blue button in the left rail",
+    newReview.inRail && !newReview.inHeader && newReview.classes.includes("accent")
+      && newReview.background === newReview.accent,
+    JSON.stringify(newReview));
+
+  await page.click("#new-review");
+  await page.waitForFunction(
+    () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 5000 },
+  );
+  const newShell = await page.evaluate(() => {
+    const form = document.querySelector("#new-form");
+    return {
+      head: Boolean(form.querySelector(".dialog-head")),
+      body: Boolean(form.querySelector(".dialog-body")),
+      foot: Boolean(form.querySelector(".dialog-foot")),
+      close: Boolean(form.querySelector("#new-close")),
+      bodyScrolls: getComputedStyle(form.querySelector(".dialog-body")).overflowY === "auto",
+    };
+  });
+  check("new review dialog uses the fixed shell and a close X",
+    newShell.head && newShell.body && newShell.foot && newShell.close && newShell.bodyScrolls,
+    JSON.stringify(newShell));
+  await page.click("#new-close");
+  await page.waitForFunction(() => document.querySelector("#overlay").hidden, { timeout: 5000 });
+  check("new review close X closes the dialog", true);
+  await page.click("[data-help-open]");
+  await page.waitForFunction(() => !document.querySelector("#help").hidden, { timeout: 5000 });
+  const helpShell = await page.evaluate(() => ({
+    close: Boolean(document.querySelector("#help .dialog-close")),
+    head: Boolean(document.querySelector("#help .dialog-head")),
+    foot: Boolean(document.querySelector("#help .dialog-foot")),
+  }));
+  check("help dialog uses the fixed shell and a close X",
+    helpShell.close && helpShell.head && helpShell.foot, JSON.stringify(helpShell));
+  await page.click("#help .dialog-close");
+  await page.waitForFunction(() => document.querySelector("#help").hidden, { timeout: 5000 });
+  check("help close X closes the dialog", true);
   await page.click("#new-review");
   await page.waitForFunction(
     () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
@@ -1592,6 +2112,35 @@ const main = async () => {
   // The pick survives a reload: the next review starts in the project the human works in.
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
+
+  // ---- the rail is one panel on every page, not a per-page width
+  const listRail = () => page.evaluate(() => ({
+    rail: Math.round(document.querySelector(".rail").getBoundingClientRect().width),
+    stored: Number(localStorage.getItem("redline:railWidth")),
+    handle: Boolean(document.querySelector("#rail-resizer")),
+  }));
+  const listBefore = await listRail();
+  check("the dashboard rail keeps the editor width",
+    listBefore.handle && Math.abs(listBefore.rail - restored.rail) <= 2,
+    `${restored.rail}px editor → ${listBefore.rail}px dashboard`);
+  const listHandle = await handleAt("#rail-resizer");
+  await drag(page, listHandle, { x: listHandle.x + 40, y: listHandle.y });
+  const listDragged = await listRail();
+  check("the dashboard rail is draggable",
+    Math.abs(listDragged.rail - listBefore.rail - 40) <= 2,
+    `${listBefore.rail}px → ${listDragged.rail}px`);
+  check("the dashboard rail stores its width",
+    Math.abs(listDragged.stored - listDragged.rail) <= 1,
+    `${listDragged.stored}px stored`);
+  await page.goto(`${BASE}/s/${pickedId}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
+  const editorAgain = await panels();
+  check("the editor restores the width set on the dashboard",
+    Math.abs(editorAgain.rail - listDragged.rail) <= 2,
+    `${listDragged.rail}px dashboard → ${editorAgain.rail}px editor`);
+  await page.goto(`${BASE}/`, { waitUntil: "networkidle2" });
+  await page.waitForSelector(".gallery .card", { timeout: 5000 });
+
   await page.click("#new-review");
   await page.waitForFunction(
     () => [...document.querySelectorAll("#f-project option")].some((option) => option.value === "e2e-repo"),
@@ -1600,7 +2149,67 @@ const main = async () => {
   const remembered = await page.$eval("#f-project", (el) => el.value);
   check("a new review preselects the last used project after a reload",
     remembered === "e2e-repo", `project=${remembered}`);
-  await page.click("#new-cancel");
+
+  // A review the human creates without naming a branch must still belong to a feature: v0.21
+  // fell back to `session/<id>` at claim time, which is not a branch anyone can merge.
+  await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 200;
+    canvas.getContext("2d").fillRect(0, 0, 320, 200);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], "image.png", { type: "image/png" }));
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: data });
+    window.dispatchEvent(event);
+  });
+  await page.waitForFunction(() => document.querySelector("#f-title").value === "Pasted screenshot", { timeout: 5000 });
+  await page.$eval("#f-title", (el) => {
+    el.value = "Branch check";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const suggestion = await page.$eval("#f-branch", (el) => el.placeholder);
+  check("the branch field suggests feat/<title> before it is typed",
+    suggestion === "feat/branch-check", suggestion);
+  await page.select("#f-project", "e2e");
+  await page.click("#new-submit");
+  await page.waitForFunction(() => window.redline?.meta?.branch, { timeout: 20000 });
+  const newBranch = await page.evaluate(() => window.redline.meta.branch);
+  check("a review created without a branch runs on feat/<title>, not session/<id>",
+    /^feat\/branch-check-[0-9a-f]{4}$/.test(newBranch), newBranch);
+  const railBranch = await page
+    .$eval('.session[aria-current="true"] .sub .branch', (el) => el.textContent.trim())
+    .catch(() => "");
+  check("the rail shows that feature branch", railBranch === newBranch, `${railBranch} vs ${newBranch}`);
+
+  // ---- deleting the review that is open also returns to the dashboard
+  const openDelete = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "delete the open review", image_base64: makePng() }),
+  });
+  const openDeleteId = openDelete.meta.id;
+  await page.goto(`${BASE}/s/${openDeleteId}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
+  const openDeleteRow = `.session[data-id="${openDeleteId}"]`;
+  await page.hover(openDeleteRow);
+  await page.click(`${openDeleteRow} [data-act="menu"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.click('#feature-actions [data-action="delete"]');
+  await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await page.waitForSelector("#gallery", { timeout: 10000 });
+  const deletedOpen = await fetch(`${BASE}/api/sessions/${openDeleteId}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  const deleteDashboard = await page.evaluate((sessionId) => ({
+    selected: Boolean(document.querySelector('.session[aria-current="true"]')),
+    card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),
+  }), openDeleteId);
+  check("deleting the open review returns to the dashboard",
+    deletedOpen.status === 404 && !deleteDashboard.selected && !deleteDashboard.card,
+    JSON.stringify({ status: deletedOpen.status, ...deleteDashboard }));
+
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 
   await browser.close();

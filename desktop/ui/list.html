@@ -22,6 +22,10 @@ try {
       <span>Pick one on the left, or start a review</span>
     </div>
     <div class="header-actions">
+      <button class="agent-chip unknown" id="agent-status" type="button" aria-live="polite" title="Agent status">
+        <span class="agent-dot" aria-hidden="true"></span>
+        <span class="agent-label">Checking agent…</span>
+      </button>
       <button class="btn icon" data-agent-settings title="Agent settings" aria-label="Agent settings">
         <svg class="fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
       </button>
@@ -31,12 +35,17 @@ try {
       <button class="btn icon" data-theme-toggle title="Toggle theme">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4"/></svg>
       </button>
-      <button class="btn primary" id="new-review">+ New review</button>
     </div>
   </header>
 
   <aside class="rail">
+    <span class="splitter splitter-x" id="rail-resizer" role="separator" aria-orientation="vertical"
+          aria-label="Resize sessions panel" title="Drag to resize" tabindex="0"></span>
     <div class="rail-head">
+      <button class="btn accent" id="new-review">+ New review</button>
+      <div class="agent-warning" id="agent-warning" hidden>
+        No agent connected. Reviews will wait until an agent connects.
+      </div>
       <input class="search" id="search" placeholder="Search sessions…" spellcheck="false" />
       <div class="chips" id="chips"></div>
       <div class="rail-tools">
@@ -55,21 +64,20 @@ try {
 
   <main class="list-main">
     <div class="wrap">
+      <section class="agent-cta" id="agent-cta" hidden>
+        <div>
+          <h2>Connect an agent</h2>
+          <p>No agent is connected yet. Paste the MCP config into your agent so submitted
+            reviews can run.</p>
+        </div>
+        <button class="btn accent" id="agent-connect" type="button">Connect an agent</button>
+      </section>
       <div class="gallery" id="gallery" hidden></div>
       <h2 style="font-size:16px;margin:0 0 6px">Start a review</h2>
       <p style="color:var(--muted);margin:0 0 18px;font-size:13px">
         Drop a screenshot anywhere on this page, paste it with <b>Ctrl+V</b>, or press <b>+ New review</b>. An agent can also
         create one over MCP — it will appear in the list on the left.
       </p>
-
-      <h2 style="font-size:16px;margin:26px 0 6px">Connect an agent</h2>
-      <p style="color:var(--muted);margin:0 0 10px;font-size:13px">
-        Paste this into your agent's MCP settings. The token is masked here —
-        <b>Copy config</b> puts the real one on your clipboard.
-      </p>
-      <pre class="pre" id="mcp-json">Loading…</pre>
-      <button class="btn" id="copy-mcp">Copy config</button>
-      <span id="copy-status" style="color:var(--ok);font-size:12px;margin-left:8px"></span>
 
       <h2 style="font-size:16px;margin:26px 0 6px">Keyboard</h2>
       <div class="pre">V select · R rectangle · E ellipse · A arrow · P pen
@@ -87,31 +95,43 @@ Ctrl+Enter submit · [ toggle sessions · ] toggle inspector</div>
 </div>
 
 <div class="overlay" id="overlay" hidden>
-  <form class="modal" id="new-form">
-    <h2>New review</h2>
-    <p class="hint">Drop a screenshot — or click to choose a file. Then say what to look at.</p>
-    <div class="drop" id="drop">
-      <img class="drop-preview" id="drop-preview" alt="Selected screenshot" hidden />
-      <span class="drop-label" id="drop-label">Drop an image, or click to browse</span>
+  <form class="modal dialog-frame" id="new-form" role="dialog" aria-modal="true" aria-labelledby="new-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="new-title">New review</h2>
+        <p class="hint">Drop a screenshot — or click to choose a file. Then say what to look at.</p>
+      </div>
+      <button type="button" class="btn icon dialog-close" id="new-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
     </div>
-    <input type="file" id="file" accept="image/*" hidden />
-    <label for="f-title">Title</label>
-    <input id="f-title" type="text" placeholder="Button / default" />
-    <label for="f-project">Project</label>
-    <select id="f-project" required aria-describedby="project-hint">
-      <option value="" disabled selected>Choose a project…</option>
-      <option value="inbox">Inbox</option>
-    </select>
-    <input id="f-project-new" type="text" placeholder="New project name" aria-label="New project name" hidden />
-    <p class="field-hint" id="project-hint">Repositories are synced from the agent. <b>+ New project…</b> creates a label without a repo.</p>
-    <label for="f-url">Page URL (optional)</label>
-    <input id="f-url" type="text" placeholder="http://localhost:5016/button" spellcheck="false" aria-describedby="url-hint" />
-    <p class="field-hint" id="url-hint">The page in the screenshot. If you add no image, RedLine opens this URL and captures it.</p>
-    <label for="f-note">What should the agent check? (optional)</label>
-    <textarea id="f-note" placeholder="e.g. spacing looks off, check the hover state" aria-describedby="note-hint"></textarea>
-    <p class="field-hint" id="note-hint">This becomes the first message the agent reads.</p>
-    <div class="error" id="new-error"></div>
-    <div class="row">
+    <div class="dialog-body">
+      <div class="drop" id="drop">
+        <img class="drop-preview" id="drop-preview" alt="Selected screenshot" hidden />
+        <span class="drop-label" id="drop-label">Drop an image, or click to browse</span>
+      </div>
+      <input type="file" id="file" accept="image/*" hidden />
+      <label for="f-title">Title</label>
+      <input id="f-title" type="text" placeholder="Button / default" />
+      <label for="f-project">Project</label>
+      <select id="f-project" required aria-describedby="project-hint">
+        <option value="" disabled selected>Choose a project…</option>
+        <option value="inbox">Inbox</option>
+      </select>
+      <input id="f-project-new" type="text" placeholder="New project name" aria-label="New project name" hidden />
+      <p class="field-hint" id="project-hint">Repositories are synced from the agent. <b>+ New project…</b> creates a label without a repo.</p>
+      <label for="f-branch">Feature branch (optional)</label>
+      <input id="f-branch" type="text" placeholder="feat/my-feature" spellcheck="false" autocomplete="off" aria-describedby="branch-hint" />
+      <p class="field-hint" id="branch-hint">The branch the agent works in and pushes. Empty means RedLine names it <b>feat/&lt;title&gt;</b>.</p>
+      <label for="f-url">Page URL (optional)</label>
+      <input id="f-url" type="text" placeholder="http://localhost:5016/button" spellcheck="false" aria-describedby="url-hint" />
+      <p class="field-hint" id="url-hint">The page in the screenshot. If you add no image, RedLine opens this URL and captures it.</p>
+      <label for="f-note">What should the agent check? (optional)</label>
+      <textarea id="f-note" placeholder="e.g. spacing looks off, check the hover state" aria-describedby="note-hint"></textarea>
+      <p class="field-hint" id="note-hint">This becomes the first message the agent reads.</p>
+      <div class="error" id="new-error"></div>
+    </div>
+    <div class="dialog-foot">
       <button type="button" class="btn" id="new-cancel">Cancel</button>
       <button type="submit" class="btn accent" id="new-submit">Create review</button>
     </div>
@@ -120,27 +140,36 @@ Ctrl+Enter submit · [ toggle sessions · ] toggle inspector</div>
 
 <script src="/static/app.js"></script>
 <div class="overlay" id="help" hidden>
-  <div class="modal" role="dialog" aria-label="Keyboard shortcuts">
-    <h2>Keyboard</h2>
-    <p class="hint">Everything here also has a button — these are the fast paths.</p>
-    <div class="help-grid">
-      <kbd>V</kbd><span>Select, drag to move, double-click text to edit</span>
-      <kbd>R</kbd><span>Rectangle</span>
-      <kbd>A</kbd><span>Arrow</span>
-      <kbd>P</kbd><span>Pen</span>
-      <kbd>T</kbd><span>Text — click, type, Enter</span>
-      <kbd>Delete</kbd><span>Remove the selected annotation</span>
-      <kbd>↑ ↓ ← →</kbd><span>Nudge 1px (Shift: 10px)</span>
-      <kbd>Ctrl Z</kbd><span>Undo</span>
-      <kbd>Ctrl ⇧ Z</kbd><span>Redo</span>
-      <kbd>Space + drag</kbd><span>Pan the image</span>
-      <kbd>Ctrl + wheel</kbd><span>Zoom at the pointer</span>
-      <kbd>0 / 1</kbd><span>Fit / actual size</span>
-      <kbd>[ / ]</kbd><span>Toggle sessions / inspector</span>
-      <kbd>Ctrl Enter</kbd><span>Submit the review</span>
-      <kbd>Esc</kbd><span>Cancel drawing or close a dialog</span>
+  <div class="modal dialog-frame" role="dialog" aria-modal="true" aria-labelledby="help-title">
+    <div class="dialog-head">
+      <div>
+        <h2 id="help-title">Keyboard</h2>
+        <p class="hint">Everything here also has a button — these are the fast paths.</p>
+      </div>
+      <button type="button" class="btn icon dialog-close" data-help-close aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
     </div>
-    <div class="row" style="display:flex;justify-content:flex-end;margin-top:18px">
+    <div class="dialog-body">
+      <div class="help-grid">
+        <kbd>V</kbd><span>Select, drag to move, double-click text to edit</span>
+        <kbd>R</kbd><span>Rectangle</span>
+        <kbd>A</kbd><span>Arrow</span>
+        <kbd>P</kbd><span>Pen</span>
+        <kbd>T</kbd><span>Text — click, type, Enter</span>
+        <kbd>Delete</kbd><span>Remove the selected annotation</span>
+        <kbd>↑ ↓ ← →</kbd><span>Nudge 1px (Shift: 10px)</span>
+        <kbd>Ctrl Z</kbd><span>Undo</span>
+        <kbd>Ctrl ⇧ Z</kbd><span>Redo</span>
+        <kbd>Space + drag</kbd><span>Pan the image</span>
+        <kbd>Ctrl + wheel</kbd><span>Zoom at the pointer</span>
+        <kbd>0 / 1</kbd><span>Fit / actual size</span>
+        <kbd>[ / ]</kbd><span>Toggle sessions / inspector</span>
+        <kbd>Ctrl Enter</kbd><span>Submit the review</span>
+        <kbd>Esc</kbd><span>Cancel drawing or close a dialog</span>
+      </div>
+    </div>
+    <div class="dialog-foot">
       <button type="button" class="btn" data-help-close>Close</button>
     </div>
   </div>

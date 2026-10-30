@@ -1,7 +1,9 @@
 # HTTP API & data reference
 
 Base URL: `http://127.0.0.1:8788` by default. All API responses are JSON; static pages are HTML;
-session images are served with the original content type.
+session images are served with the original content type. Authenticated data (everything under
+`/api/*` plus session images/history) is sent with `Cache-Control: no-store`: a rail poll or a
+dashboard load must never replay a list from before a feature was confirmed, cancelled or deleted.
 
 ## Endpoints
 
@@ -58,8 +60,21 @@ Newest first by `created_at`. `feature_state` is derived: `confirmed` when
 `annotations` is the last submitted payload (or `{session, annotations: []}` before submission).
 The `meta` object carries `feature_confirmed_at` / `feature_cancelled_at` when the human decided.
 
-### `POST /api/sessions/<id>/confirm-feature`
+### `PUT /api/sessions/<id>/branch`
 
+Name the feature branch the review runs on.
+
+```json
+{ "branch": "feat/wrong-branches" }
+```
+
+Returns `{ "meta": { … } }`. `{"branch": null}` (or an empty string) restores the derived
+default. `409` while the session is `submitted`: the agent's worktree was created for the old
+name, so stop the round first. A review created without a name already has a branch —
+`feat/<title-slug>-<id-tail>` — so `session/<id>` is no longer produced; sessions that v0.21
+claimed under that fallback are read back under their `feat/…` name.
+
+### `POST /api/sessions/<id>/confirm-feature`
 The human says the feature is complete. Sets `status=resolved`, `resolved_at` (if unset) and
 `feature_confirmed_at`, clears `feature_cancelled_at`. RedLine does not touch git; agents read
 `feature_state == "confirmed"` and apply their own workflow (for this repo: open a PR into `dev`).
@@ -200,6 +215,25 @@ POST /api/agent/claims/…/release     {"agent_id": "holly"}
 `{"claim": {…}, "session": {…}, "limits": {…}}`. The branch key is `session.branch`, or
 `session/<id>` when the agent did not declare one.
 
+### Agent presence
+
+Every agent-facing call records a `last_seen`: `POST /api/agent/repos` is the periodic heartbeat
+(the bridge calls it every 60 s), and `next`/claim calls update it too. `GET /api/agent/status`
+adds the presence list to the settings/claims payload:
+
+```json
+{
+  "online": 1,
+  "agents": [
+    {"agent_id": "holly", "last_seen": 1793000000, "online": true}
+  ]
+}
+```
+
+An agent is `online` for **180 s** after its last call (three missed repo-sync beats); the
+presence file keeps its last-seen row for seven days. Presence is informational: RedLine never
+blocks creating or submitting a review when no agent is connected.
+
 ### `GET /health`
 
 `{"ok": true}`.
@@ -279,7 +313,7 @@ See `docs/ARCHITECTURE.md` § Storage schema. Fields:
 | `feature_confirmed_at` | The human confirmed the feature; agents map this to their own workflow. |
 | `feature_cancelled_at` | The human cancelled the feature; nothing should be merged. |
 | `feature_state` | Derived in `GET /api/sessions`: `pending`, `confirmed` or `cancelled`. |
-| `branch` | Feature branch the agent declared. Used as the branch-lock key; missing means `session/<id>`. |
+| `branch` | The feature branch the review runs on. Every review has one: `feat/<title-slug>-<id-tail>` when nobody named it, and the branch-lock key. v0.21's `session/<id>` fallback is read back as that `feat/…` name. |
 | `image` | Screenshot filename inside the session. |
 | `image_width` / `image_height` | Present after submission; canvas dimensions. |
 

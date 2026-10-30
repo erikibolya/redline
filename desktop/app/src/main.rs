@@ -698,11 +698,12 @@ fn navigate(app: &AppHandle, url: &str) {
     }
 }
 
-/// Stable releases come from the rolling `latest` manifest; dev builds from the rolling `dev`
-/// prerelease. Both are GitHub release assets, so no extra infrastructure.
+/// Stable releases come from the rolling `latest` manifest; dev builds from the rolling
+/// `dev-build` prerelease (never `dev`: that collides with the branch of the same name). Both are
+/// GitHub release assets, so no extra infrastructure.
 const STABLE_MANIFEST: &str =
     "https://github.com/erikibolya/redline/releases/latest/download/latest.json";
-const DEV_MANIFEST: &str = "https://github.com/erikibolya/redline/releases/download/dev/latest.json";
+const DEV_MANIFEST: &str = "https://github.com/erikibolya/redline/releases/download/dev-build/latest.json";
 
 #[derive(Clone, Copy)]
 enum UpdateChannel {

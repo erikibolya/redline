@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+_(nothing yet)_
+
+## 0.21.0 — 2026-10-30
+
 - **The header is icons, and the status pills are gone.** `submitted`/`replied`/`working` sat in
   the header as GitHub-style pills and competed with the review title, although the rail card, the
   stage toast and the composer/STOP button already say whose turn it is; they are removed. Agent

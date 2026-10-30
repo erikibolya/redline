@@ -6,21 +6,21 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.19.0` on holly — `https://redline.ibolya.cz`, container
+**Shipped and in production:** `v0.21.0` on holly — `https://redline.ibolya.cz`, container
 `ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
 
 ## What exists today
 
 | Area | State |
 |---|---|
-| Agent API | MCP over HTTP (`review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`, `reply`, `resolve`) + plain JSON API + CLI |
+| Agent API | MCP over HTTP (`review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`) + plain JSON API + CLI; branch claims, leases and global/per-project run limits |
 | Capture | Headless Chromium server-side, from MCP or the UI (`/browser` image) |
-| Editor | 3-column shell: session rail, zoom/pan canvas, inspector with a conversation + composer (v0.9); rect/ellipse/arrow/pen; numbered, per-shape notes (v0.8); round history with a read-only viewer (v0.17); submitted lock + STOP; move, nudge, delete, undo/redo, grouping, z-order, align/distribute |
-| Sessions | open → submitted → resolved; repository-backed projects in the rail (v0.10, repo keys v0.19); search, filters, badges, "new" dots; delete / mark done / reopen / purge done |
+| Editor | 3-column shell: resizable session rail, zoom/pan canvas, inspector with a conversation + composer (v0.9); rect/ellipse/arrow/pen; numbered, per-shape notes (v0.8); round history with a read-only viewer and diff (v0.17); submitted lock + STOP; move, nudge, delete, undo/redo, grouping, z-order, align/distribute; resizable panels |
+| Sessions | open → submitted → resolved; repository-backed projects in the rail (v0.10, repo keys v0.19); search, filters, badges, "new" dots; feature confirm/cancel stamps; branch per feature; delete / mark done / reopen / purge cancelled; start-page gallery |
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
-| Desktop | Tauri v2 tray app: standalone or thin client, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle (`redline-agent`, v0.13) |
-| Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`) |
-| Tests | 63 Rust tests, 72-check browser E2E in CI on Linux + Windows |
+| Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
+| Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
+| Tests | 81 Rust tests, 119-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 

@@ -279,6 +279,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   decided), and RedLine never touches git — the agent owns the PR/merge workflow. Cancel keeps
   the files and Delete is a deliberate extra choice, not a reflex click; make every human
   decision readable by the agent, not just visible in the UI.
+- **A submission is not automatically a new round.** Every `POST /annotations` archived its own
+  copy, so *STOP* → *Submit again* with nothing changed left the same annotations and the same
+  PNG twice in History, and a session the human thought of as "one task" read as two (2026-10-30).
+  A round is what the human *changed*: collapse a run of byte-identical copies to its newest entry
+  at the one place the list is built (`Store::history`), so already-duplicated sessions heal too,
+  and let a round that really changed keep its own row. Test the collapsed count *and* the changed
+  one.
 
 ## 8. Working rules
 

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **One task is one round in History.** Pressing *STOP* and then *Submit again* without touching
+  the canvas archived the same annotations and the same picture a second time, so a single review
+  showed up as two identical rounds with nothing to diff (2026-10-30). `GET
+  /api/sessions/<id>/history` now collapses a run of identical copies (same annotations, same
+  PNG) to its newest entry; a round that really changed still gets its own row. Regression tests:
+  `resubmitting_an_unchanged_round_does_not_duplicate_history` (Rust) and the *unchanged
+  resubmission* check in the browser e2e.
 - **The rolling dev release is tagged `dev-build`, not `dev`.** A tag that shares its name with a
   branch is a trap: git resolves the *revision* `dev` to the tag (`git log dev`, `git diff dev`,
   `git merge dev` all used the tag's commit, silently) and `git worktree add … dev` refuses it with

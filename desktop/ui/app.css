@@ -56,6 +56,7 @@
 [data-theme="light"] .session[aria-current="true"] { background: var(--panel-3); }
 [data-theme="light"] .pre { color: #334155; }
 [data-theme="light"] .text-editor { background: #fff; color: var(--text); }
+[data-theme="light"] .conv-run.pending .conv-run-title { color: #b45309; }
 
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -318,6 +319,15 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
   background: var(--panel-2); border-color: var(--border); color: var(--muted);
 }
+/* The agent answered but has not handed the round back: still the agent's ball, phrased as
+   "replied" instead of the "waiting for agent" lie (it already read and answered). */
+.session .badge.replied {
+  padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+  background: #231a08; border-color: #78350f; color: #fbbf24;
+}
+[data-theme="light"] .session .badge.replied {
+  background: #fef3c7; border-color: #fde68a; color: #92400e;
+}
 .session.working .dot { background: var(--accent); animation: conv-pulse 1.4s ease-in-out infinite; }
 .rail-empty { padding: 24px 12px; text-align: center; color: var(--muted); }
 .rail-tools { display: flex; gap: 6px; }
@@ -555,6 +565,11 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .conv-run.working { border-color: rgba(47, 129, 247, .35); background: rgba(47, 129, 247, .07); }
 .conv-run.working .conv-run-title { color: var(--accent); }
 .conv-run.working .conv-run-mark { background: var(--accent); animation: conv-pulse 1.4s ease-in-out infinite; }
+/* The agent answered but the round is still submitted: not finished, and not provably working
+   either. Amber (the agent-state colour) plus the age of the last step says "open, not done". */
+.conv-run.pending { border-color: rgba(251, 191, 36, .35); background: rgba(251, 191, 36, .06); }
+.conv-run.pending .conv-run-title { color: #fbbf24; }
+.conv-run.pending .conv-run-mark { background: #fbbf24; }
 @keyframes conv-pulse {
   0%, 100% { opacity: .25; transform: scale(.8); }
   50% { opacity: 1; transform: scale(1.15); }

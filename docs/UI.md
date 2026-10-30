@@ -261,7 +261,9 @@ The rail lists projects (conversation areas), not a flat stream of requests.
   while the project is collapsed. The rail re-reads `/api/sessions` every 8 s and redraws only when
   the set of running reviews changes, so the received → working → replied transition appears
   without a reload. `agent_state` comes from `progress`/`reply`; STOP clears it, and the rail only
-  treats a review as running while it is still `submitted`.
+  treats a review as running while it is still `submitted`. A submitted round the agent has
+  answered but not resolved reads **replied** (amber) instead of **waiting for agent**, because
+  the agent already picked it up and may still be working.
 - Filters and search still apply inside every project; day separators appear only in long lists.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
@@ -285,16 +287,22 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
   `seen_by_agent_at` records the first read.
 - **Run summary** at the tail of the conversation (v0.19): a card that reads **Working** with a
   pulsing dot while `agent_state` is `working`, and **Used N tools: Edit and Shell** — the distinct
-  `tool` names the agent reported through `progress`, counted for the current round only. When the
-  agent answers it settles to **Run finished**; a round with no activity shows no card. This is the
+  `tool` names the agent reported through `progress`, counted for the current round only. **Run
+  finished** appears only when the round has left the agent's hands (a new round was posted or the
+  review was resolved); a round with no activity shows no card. A `reply` does **not** finish the
+  run: the agent can answer and keep working for minutes, so while the review is still `submitted`
+  the card reads **Agent replied — waiting for it to finish** in amber, keeps the age of the last
+  step, and turns back into **Working** as soon as the next `progress` line arrives. This is the
   interactive-run view an agent's own terminal chat shows, so the human does not have to read the
-  step lines to know whether anything is still happening.
+  step lines to know whether anything is still happening — and STOP, which is still armed, never
+  contradicts the card.
 - **"Working" means the round is still submitted.** The run card also shows *last step X ago*, and
   the header pill never claims `working` on a review that already went back to the human — even if
-  a late narration line arrives after `post_round` or `reply` (the server refuses to revive a
-  finished round, and the UI derives the state from `status` as well as `agent_state`). A spinner
-  that never stops is indistinguishable from a dead agent, so the age of the last step is always on
-  screen.
+  a late narration line arrives after `post_round` (the server refuses to revive a finished round,
+  and the UI derives the state from `status` as well as `agent_state`). A spinner that never stops
+  is indistinguishable from a dead agent, so the age of the last step is always on screen. The
+  exception is a `reply` on a still-submitted round: that is not a finished round, and a later
+  `progress` is proof the run resumed, so it may set `working` again.
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.

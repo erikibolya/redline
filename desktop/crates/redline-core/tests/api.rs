@@ -1291,12 +1291,16 @@ async fn posting_a_round_stays_in_the_same_session() {
     assert_eq!(thread["messages"][0]["image"], image);
 }
 
-/// A spinner is a promise. The agent's last narration line often lands *after* `post_round` or
-/// `reply`; `progress` used to set `agent_state=working` unconditionally, so a review that had
-/// already been handed back kept pulsing "Working" — the human could not tell a live agent from a
-/// dead one (2026-10-29). The event is still recorded; the state is not revived.
+/// A spinner is a promise. The agent's last narration line often lands *after* `post_round`;
+/// `progress` used to set `agent_state=working` unconditionally, so a review that had already been
+/// handed back kept pulsing "Working" — the human could not tell a live agent from a dead one
+/// (2026-10-29). The event is still recorded; the state is not revived once the round is over.
+///
+/// `reply` is not the end of the run, though: an agent can answer early and keep working for
+/// minutes. Calling the reply "Run finished" while STOP was still armed confused a human
+/// (2026-10-30), so a later `progress` must revive "working" while the review is still submitted.
 #[tokio::test]
-async fn progress_never_revives_a_finished_round() {
+async fn progress_never_revives_a_finished_round_but_does_revive_an_open_one() {
     let h = harness();
     let (_, _, created) = send(
         &h.app,
@@ -1368,16 +1372,21 @@ async fn progress_never_revives_a_finished_round() {
         ("submitted".to_string(), "working".to_string())
     );
 
-    // After the answer: still submitted, but the run is over.
+    // The agent answers without finishing the run; the round is still submitted.
     call("reply", json!({"session_id": id, "message": "Done"})).await;
+    assert_eq!(
+        state(&h).await,
+        ("submitted".to_string(), "replied".to_string())
+    );
     call(
         "progress",
-        json!({"session_id": id, "message": "One last line", "state": "step"}),
+        json!({"session_id": id, "message": "One more step", "state": "tool", "tool": "shell"}),
     )
     .await;
     assert_eq!(
         state(&h).await,
-        ("submitted".to_string(), "replied".to_string())
+        ("submitted".to_string(), "working".to_string()),
+        "a progress after reply proves the run is still going"
     );
 
     // After a follow-up round: the review is back with the human.
@@ -1408,7 +1417,7 @@ async fn progress_never_revives_a_finished_round() {
         .collect();
     assert_eq!(
         messages,
-        ["Reading the review", "One last line", "Merged and pushed"],
+        ["Reading the review", "One more step", "Merged and pushed"],
         "{events}"
     );
 }

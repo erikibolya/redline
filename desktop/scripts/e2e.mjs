@@ -463,35 +463,59 @@ const main = async () => {
   const idleRail = await page.evaluate(() => ({
     row: Boolean(document.querySelector(".session.working")),
     project: Boolean(document.querySelector(".rail-project .pworking")),
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim() || "",
   }));
   check("the working indicator clears when the agent replies",
     !idleRail.row && !idleRail.project, JSON.stringify(idleRail));
+  check("the rail says replied, not waiting for agent, on an answered open round",
+    idleRail.badge === "replied", idleRail.badge);
 
-  // A late narration line must not re-arm the spinner: the answered round is finished, and the
-  // card says how long ago the last step was so the spinner is never the only evidence.
+  // `reply` is a message, not the finish line: the round is still submitted and STOP is still
+  // armed, so the card must not claim "Run finished". It says the agent answered and the run has
+  // not finished, with the age of the last step so an idle agent is distinguishable from a busy one.
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const repliedCard = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return {
+      working: Boolean(card?.classList.contains("working")),
+      pending: Boolean(card?.classList.contains("pending")),
+      text: card?.textContent || "",
+      pill: document.querySelector("#agent-state")?.textContent || "",
+      stop: document.querySelector("#submit")?.textContent || "",
+    };
+  });
+  check("an answered round that is still submitted does not claim to be finished",
+    !repliedCard.working && repliedCard.pending
+      && repliedCard.text.includes("Agent replied") && !repliedCard.text.includes("Run finished")
+      && repliedCard.text.includes("last step") && repliedCard.stop.includes("STOP"),
+    `${repliedCard.text}${repliedCard.stop}`);
+  check("the header does not claim a working agent on an answered round",
+    !repliedCard.pill.includes("working"), repliedCard.pill);
+
+  // The run can resume after the reply (it did, for minutes); a new progress line is evidence
+  // that the agent is working again, so the indicator comes back while the round is submitted.
   await api("/mcp", {
     method: "POST",
     body: JSON.stringify({
       jsonrpc: "2.0", id: 9, method: "tools/call",
       params: { name: "progress", arguments: {
-        session_id: id, message: "Last line after the answer", state: "step",
+        session_id: id, message: "Resumed after the answer", state: "tool", tool: "shell",
       } },
     }),
   });
   await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
-  const finishedCard = await page.evaluate(() => {
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const resumedCard = await page.evaluate(() => {
     const card = document.querySelector("#conv-log .conv-run");
     return {
       working: Boolean(card?.classList.contains("working")),
       text: card?.textContent || "",
-      pill: document.querySelector("#agent-state")?.textContent || "",
+      rail: Boolean(document.querySelector(".session.working")),
     };
   });
-  check("a late step after the reply does not revive the working indicator",
-    !finishedCard.working && finishedCard.text.includes("Run finished")
-      && finishedCard.text.includes("last step"), finishedCard.text);
-  check("the header does not claim a working agent on an answered round",
-    !finishedCard.pill.includes("working"), finishedCard.pill);
+  check("a step after the reply revives the working indicator while the round is open",
+    resumedCard.working && resumedCard.text.includes("Working") && resumedCard.rail,
+    `${resumedCard.text} · rail ${resumedCard.rail}`);
   if (process.env.E2E_SHOT) await page.screenshot({ path: process.env.E2E_SHOT });
 
   // Those checks need the submitted state; now unlock and keep drawing.

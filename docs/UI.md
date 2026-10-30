@@ -51,7 +51,8 @@ inside changes width (`?` is narrower than `☀`), the button must not.
 
 - **+ New review** at the top (drop a screenshot anywhere in the window also works).
 - Search field (title, note, id).
-- Filter chips with counts: `All 7` · `Open 5` · `Submitted 2` · `Mine` (created by a human).
+- Filter chips with counts: `All` · `Active` (default) · `Open` · `Submitted` · `Done`. `All`
+  keeps finished sessions visible; `Active` hides `resolved`. The old `Mine` chip is gone.
 - Each row: agent-provided **title**, note excerpt, relative time (`2h ago`), status dot, and a
   badge that says who has the ball: **working** while the agent runs, **waiting for agent** for a
   submitted round nobody has picked up, **confirmed** / **cancelled** after a feature decision,
@@ -140,14 +141,15 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   `feature_confirmed_at`; the rail shows a green `confirmed` badge and dot, and the header pill
   says `confirmed`.
 - **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
-  **Delete files…**. Cancel calls
-  `POST /api/sessions/<id>/cancel-feature`: the review closes with `feature_cancelled_at`, nothing
-  is merged and the screenshot/annotations stay in **Done**. Delete files… removes them
-  permanently. A decided feature gets **Reopen** instead of Cancel in the same menu. The row
-  itself never deletes on a single click.
+  **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
+  with `feature_cancelled_at`, nothing is merged and the screenshot/annotations stay in **Done**.
+  Delete files… removes them permanently. A decided feature gets **Reopen** instead of Cancel in
+  the same menu. The row itself never deletes on a single click.
 - **↺ Reopen** clears both feature stamps and returns the session to `open`.
 - **Bulk Select** now offers **Confirm** (one dialog for the selection), **Delete** and **Close**;
   single-session delete is also one dialog away from the row's ✕.
+- **Delete cancelled** in the rail head purges only features with `feature_cancelled_at`;
+  confirmed features stay as the feature log. It is hidden when no feature is cancelled.
 - The decision is additive server state (`feature_confirmed_at` / `feature_cancelled_at`); a new
   submission or agent round clears it, so a feature that gets more work is pending again.
 

@@ -109,10 +109,10 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - `cargo test --workspace` — 70 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, feature confirmation/cancel, path/config
   helpers, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 99 checks in real Chromium: tool clicks, coordinate mapping at 46 %
+- `desktop/scripts/e2e.sh` — 102 checks in real Chromium: tool clicks, coordinate mapping at 46 %
   zoom, drag, undo, inline text (diacritics), submit, multi-select, align, grouping, z-order, text
-  size, history, diff, feature confirm/cancel/delete menus, row delete, rail reopen and bulk
-  confirm.
+  size, history, diff, feature confirm/cancel/delete menus, row delete, cancelled-only purge, the
+  All filter, rail reopen and bulk confirm.
 - CI runs both on every push; releases are cut from tags only after green.
 
 ## Definition of done

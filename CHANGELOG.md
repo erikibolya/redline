@@ -24,7 +24,8 @@
   (`pending`/`confirmed`/`cancelled`) from `GET /api/sessions`, MCP `get_feedback`,
   `wait_for_feedback` and `list_reviews`; RedLine itself never touches git. A new submission or
   agent round makes the feature pending again. Bulk mode gained **Confirm**; multi-delete stays
-  in bulk **Delete**, and **Delete done** purges closed sessions.
+  in bulk **Delete**, and **Delete cancelled** purges only cancelled features; confirmed features
+  stay as the log.
 
 ## 0.20.0 — 2026-10-30
 

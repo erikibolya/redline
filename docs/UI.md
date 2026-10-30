@@ -139,12 +139,15 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   `POST /api/sessions/<id>/confirm-feature`. The session becomes `resolved` and keeps
   `feature_confirmed_at`; the rail shows a green `confirmed` badge and dot, and the header pill
   says `confirmed`.
-- **✕ Cancel feature** replaced the old delete button. It asks first and calls
+- **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
+  **Delete files…**. Cancel calls
   `POST /api/sessions/<id>/cancel-feature`: the review closes with `feature_cancelled_at`, nothing
-  is merged and the screenshot/annotations stay in **Done**. Deleting data is still possible with
-  bulk **Delete** or **Delete done**.
+  is merged and the screenshot/annotations stay in **Done**. Delete files… removes them
+  permanently. A decided feature gets **Reopen** instead of Cancel in the same menu. The row
+  itself never deletes on a single click.
 - **↺ Reopen** clears both feature stamps and returns the session to `open`.
-- **Bulk Select** now offers **Confirm** (one dialog for the selection), **Delete** and **Close**.
+- **Bulk Select** now offers **Confirm** (one dialog for the selection), **Delete** and **Close**;
+  single-session delete is also one dialog away from the row's ✕.
 - The decision is additive server state (`feature_confirmed_at` / `feature_cancelled_at`); a new
   submission or agent round clears it, so a feature that gets more work is pending again.
 

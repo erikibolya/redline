@@ -342,7 +342,9 @@ const main = async () => {
 
   // ---- the rail says the same thing. A submitted round is the agent's ball; it used to read
   // "new" (unread by the human), which said nothing about who was expected to act next.
-  await page.evaluate(() => window.redline.rail.render());
+  // `submit()` updates the header before its rail reload finishes; wait for the rail itself
+  // rather than re-rendering the previous session list.
+  await page.evaluate(() => window.redline.rail.load());
   const queuedRail = await page.evaluate(() => {
     const row = document.querySelector('.session[aria-current="true"]');
     return {
@@ -632,19 +634,23 @@ const main = async () => {
   await page.hover(row);
   await page.click(`${row} [data-act="confirm"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
-  const confirmDialog = await page.evaluate(() => ({
-    title: document.querySelector("#feature-dialog-title").textContent,
-    body: document.querySelector("#feature-dialog-body").textContent,
-    accept: document.querySelector("#feature-accept").textContent,
-    primary: document.querySelector("#feature-accept").classList.contains("primary"),
-  }));
+  const confirmDialog = await page.evaluate(() => {
+    const accept = document.querySelector('#feature-actions [data-action="confirm"]');
+    return {
+      title: document.querySelector("#feature-dialog-title").textContent,
+      body: document.querySelector("#feature-dialog-body").textContent,
+      accept: accept?.textContent.trim() || "",
+      primary: Boolean(accept?.classList.contains("primary")),
+      count: document.querySelectorAll("#feature-actions button").length,
+    };
+  });
   check("confirming a feature asks for agreement first",
     confirmDialog.title === "Confirm this feature?"
       && confirmDialog.accept === "Confirm feature"
       && confirmDialog.body.includes("pull request")
-      && confirmDialog.primary,
+      && confirmDialog.primary && confirmDialog.count === 2,
     JSON.stringify(confirmDialog));
-  await page.click("#feature-accept");
+  await page.click('#feature-actions [data-action="confirm"]');
   let status = "";
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const meta = await api(`/api/sessions/${id}`);
@@ -671,6 +677,21 @@ const main = async () => {
   check("a confirmed feature shows a badge and a reopen action",
     confirmedRow.badge.includes("confirmed") && confirmedRow.row, JSON.stringify(confirmedRow));
   await page.hover(row);
+  await page.click(`${row} [data-act="menu"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  const decidedMenu = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll("#feature-actions button")];
+    return {
+      actions: buttons.map((button) => button.textContent.trim()),
+      deleteDanger: Boolean(buttons.find((button) => button.dataset.action === "delete")
+        ?.classList.contains("danger")),
+    };
+  });
+  check("a confirmed feature's menu offers reopen and delete",
+    decidedMenu.actions.join("|") === "Keep working|Reopen|Delete files…"
+      && decidedMenu.deleteDanger, JSON.stringify(decidedMenu));
+  await page.click('#feature-actions [data-action="keep"]');
+  await page.hover(row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   let reopened = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -687,21 +708,25 @@ const main = async () => {
   await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
   await page.hover(row);
-  await page.click(`${row} [data-act="cancel-feature"]`);
+  await page.click(`${row} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
-  const cancelDialog = await page.evaluate(() => ({
-    title: document.querySelector("#feature-dialog-title").textContent,
-    body: document.querySelector("#feature-dialog-body").textContent,
-    accept: document.querySelector("#feature-accept").textContent,
-    danger: document.querySelector("#feature-accept").classList.contains("danger"),
-  }));
-  check("cancelling a feature asks first and says nothing is merged",
-    cancelDialog.title === "Cancel this feature?"
-      && cancelDialog.accept === "Cancel feature"
-      && cancelDialog.body.includes("Nothing will be merged")
-      && cancelDialog.danger,
-    JSON.stringify(cancelDialog));
-  await page.click("#feature-accept");
+  const featureMenu = await page.evaluate(() => {
+    const buttons = [...document.querySelectorAll("#feature-actions button")];
+    return {
+      title: document.querySelector("#feature-dialog-title").textContent,
+      body: document.querySelector("#feature-dialog-body").textContent,
+      actions: buttons.map((button) => button.textContent.trim()),
+      deleteDanger: Boolean(buttons.find((button) => button.dataset.action === "delete")
+        ?.classList.contains("danger")),
+    };
+  });
+  check("the row menu offers cancel and delete without deleting instantly",
+    featureMenu.title === "What should happen to this feature?"
+      && featureMenu.actions.join("|") === "Keep working|Cancel feature|Delete files…"
+      && featureMenu.body.includes("keeps the screenshot")
+      && featureMenu.deleteDanger,
+    JSON.stringify(featureMenu));
+  await page.click('#feature-actions [data-action="cancel-feature"]');
   let cancelled = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const meta = await api(`/api/sessions/${id}`);
@@ -1005,7 +1030,7 @@ const main = async () => {
   check("bulk mode selects sessions without opening them", bulkSelected === 2, `${bulkSelected}`);
   await page.click("#bulk-confirm");
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
-  await page.click("#feature-accept");
+  await page.click('#feature-actions [data-action="confirm"]');
   await page.waitForFunction(() => window.redline.rail.bulkMode === false, { timeout: 10000 });
   const bulkStatuses = [];
   const bulkConfirmed = [];
@@ -1017,6 +1042,28 @@ const main = async () => {
   check("bulk confirm marks every selected feature confirmed",
     bulkStatuses.every((status) => status === "resolved")
       && bulkConfirmed.every(Boolean), JSON.stringify({ bulkStatuses, bulkConfirmed }));
+
+  // ---- deleting from the row is one explicit dialog away
+  const doomed = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "delete me", image_base64: makePng() }),
+  });
+  const doomedId = doomed.meta.id;
+  const doomedRow = `.session[data-id="${doomedId}"]`;
+  await page.evaluate(() => window.redline.rail.load());
+  await page.waitForSelector(doomedRow, { timeout: 5000 });
+  await page.hover(doomedRow);
+  await page.click(`${doomedRow} [data-act="menu"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  await page.click('#feature-actions [data-action="delete"]');
+  await page.waitForFunction(
+    (sessionId) => !document.querySelector(`.session[data-id="${sessionId}"]`),
+    { timeout: 10000 },
+    doomedId,
+  );
+  const afterDelete = await api("/api/sessions");
+  check("deleting from the row removes the session and its files",
+    !afterDelete.sessions.some((session) => session.id === doomedId), doomedId);
 
   // ---- accessible names and a live region
   const a11y = await page.evaluate(() => ({

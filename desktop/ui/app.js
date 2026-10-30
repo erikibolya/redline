@@ -185,9 +185,9 @@ async function api(path, options = {}) {
 /**
  * A native `confirm()` cannot explain what "the feature is done" means to an agent, and it
  * looks different on every platform. This is a small `<dialog>` built on first use, shared by
- * the editor and the sessions page. It resolves true only when the explicit action is chosen.
+ * the editor and the sessions page. It returns the chosen action value, or null when dismissed.
  */
-function askFeature({ title, body, accept, danger = false }) {
+function askFeature({ title, body, actions }) {
   return new Promise((resolve) => {
     let dialog = $("#feature-dialog");
     if (!dialog) {
@@ -197,54 +197,82 @@ function askFeature({ title, body, accept, danger = false }) {
           <form method="dialog" class="feature-card">
             <h2 id="feature-dialog-title"></h2>
             <p id="feature-dialog-body"></p>
-            <div class="feature-actions">
-              <button class="btn" value="cancel">Keep working</button>
-              <button class="btn" id="feature-accept" value="confirm"></button>
-            </div>
+            <div class="feature-actions" id="feature-actions"></div>
           </form>
         </dialog>`);
       dialog = $("#feature-dialog");
     }
     // A second action while the dialog is open is a double click; the first decision wins.
     if (dialog.open) {
-      resolve(false);
+      resolve(null);
       return;
     }
     $("#feature-dialog-title").textContent = title;
     $("#feature-dialog-body").textContent = body;
-    const acceptButton = $("#feature-accept");
-    acceptButton.textContent = accept;
-    acceptButton.className = `btn ${danger ? "danger" : "primary"}`;
-    dialog.returnValue = "cancel";
-    dialog.onclose = () => resolve(dialog.returnValue === "confirm");
+    const container = $("#feature-actions");
+    container.innerHTML = "";
+    for (const action of actions) {
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.value = action.value;
+      button.dataset.action = action.value;
+      button.className = `btn${action.kind ? ` ${action.kind}` : ""}`;
+      button.textContent = action.label;
+      container.appendChild(button);
+    }
+    dialog.returnValue = "keep";
+    dialog.onclose = () => {
+      const choice = dialog.returnValue;
+      resolve(choice && choice !== "keep" ? choice : null);
+    };
     dialog.showModal();
   });
 }
 
 /**
- * Confirm, cancel or reopen a feature. Returns the server response on success and `null` when
- * the human dismissed the dialog, so the caller can reload the rail without stealing focus.
+ * Confirm, cancel, reopen or delete a feature. Returns the server response, `{deleted: true}`,
+ * or `null` when the human dismissed the dialog.
  */
-async function featureAction(action, id, title) {
+async function featureAction(action, id, title, state = "pending") {
   const path = `/api/sessions/${encodeURIComponent(id)}`;
   if (action === "confirm") {
-    const ok = await askFeature({
+    const choice = await askFeature({
       title: "Confirm this feature?",
       body: `“${title}” will be marked as confirmed and closed. Your agent may now open a pull request and merge it into the integration branch.`,
-      accept: "Confirm feature",
+      actions: [
+        { value: "keep", label: "Keep working" },
+        { value: "confirm", label: "Confirm feature", kind: "primary" },
+      ],
     });
-    if (!ok) return null;
+    if (choice !== "confirm") return null;
     return api(`${path}/confirm-feature`, { method: "POST" });
   }
-  if (action === "cancel-feature") {
-    const ok = await askFeature({
-      title: "Cancel this feature?",
-      body: `“${title}” will be marked as cancelled. Nothing will be merged; the screenshot and annotations stay in Done and you can reopen it later.`,
-      accept: "Cancel feature",
-      danger: true,
+  if (action === "menu") {
+    const decided = state !== "pending";
+    const choice = await askFeature({
+      title: "What should happen to this feature?",
+      body: decided
+        ? `“${title}” is ${state}. Reopen returns it to the queue; Delete files removes the screenshot and annotations permanently.`
+        : `“${title}” has no decision yet. Cancel feature closes it without merging and keeps the screenshot and annotations; Delete files removes them permanently.`,
+      actions: decided
+        ? [
+            { value: "keep", label: "Keep working" },
+            { value: "reopen", label: "Reopen" },
+            { value: "delete", label: "Delete files…", kind: "danger" },
+          ]
+        : [
+            { value: "keep", label: "Keep working" },
+            { value: "cancel-feature", label: "Cancel feature" },
+            { value: "delete", label: "Delete files…", kind: "danger" },
+          ],
     });
-    if (!ok) return null;
-    return api(`${path}/cancel-feature`, { method: "POST" });
+    if (choice === "reopen") return api(`${path}/reopen`, { method: "POST" });
+    if (choice === "cancel-feature") return api(`${path}/cancel-feature`, { method: "POST" });
+    if (choice === "delete") {
+      await api(path, { method: "DELETE" });
+      return { deleted: true };
+    }
+    return null;
   }
   if (action === "reopen") {
     return api(`${path}/reopen`, { method: "POST" });
@@ -548,8 +576,9 @@ class Rail {
             <span class="row-actions">
               ${decided
                 ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
-                : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>
-                   <button class="act" data-act="cancel-feature" title="Cancel feature">✕</button>`}
+                : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>`}
+              <button class="act" data-act="menu"
+                      title="${decided ? "Feature actions (reopen or delete)" : "Feature actions (cancel or delete)"}">✕</button>
             </span>
             ${badge}
           </div>`);
@@ -654,12 +683,15 @@ class Editor {
       onPurge: (ids) => this.purgeSessions(ids),
       onBulk: async (action, ids) => {
         if (action === "confirm") {
-          const ok = await askFeature({
+          const choice = await askFeature({
             title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
             body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
-            accept: "Confirm features",
+            actions: [
+              { value: "keep", label: "Keep working" },
+              { value: "confirm", label: "Confirm features", kind: "primary" },
+            ],
           });
-          if (!ok) return;
+          if (choice !== "confirm") return;
         }
         if (action === "delete"
           && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
@@ -705,12 +737,21 @@ class Editor {
     await this.load(this.sessionId);
   }
 
-  /** Confirm, cancel or reopen a feature, straight from the rail. */
+  /** Confirm, cancel, reopen or delete a feature, straight from the rail. */
   async railAction(action, id) {
     try {
-      const title = this.rail.sessions.find((s) => s.id === id)?.title || id;
-      const result = await featureAction(action, id, title);
+      const session = this.rail.sessions.find((s) => s.id === id);
+      const title = session?.title || id;
+      const result = await featureAction(action, id, title, featureState(session || {}));
       if (!result) return;
+      if (result.deleted) {
+        if (id === this.sessionId) {
+          location.href = "/";
+          return;
+        }
+        await this.rail.load();
+        return;
+      }
       if (id === this.sessionId && result.meta) {
         this.meta = result.meta;
         this.renderHeader();
@@ -2846,8 +2887,9 @@ async function bootList() {
     onSelect: (id) => { location.href = `/s/${encodeURIComponent(id)}`; },
     onAction: async (action, id) => {
       try {
-        const title = rail.sessions.find((s) => s.id === id)?.title || id;
-        const result = await featureAction(action, id, title);
+        const session = rail.sessions.find((s) => s.id === id);
+        const title = session?.title || id;
+        const result = await featureAction(action, id, title, featureState(session || {}));
         if (result) await rail.load();
       } catch (error) {
         alert(`Could not ${action}: ${error.message}`);
@@ -2861,12 +2903,15 @@ async function bootList() {
     },
     onBulk: async (action, ids) => {
       if (action === "confirm") {
-        const ok = await askFeature({
+        const choice = await askFeature({
           title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
           body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
-          accept: "Confirm features",
+          actions: [
+            { value: "keep", label: "Keep working" },
+            { value: "confirm", label: "Confirm features", kind: "primary" },
+          ],
         });
-        if (!ok) return;
+        if (choice !== "confirm") return;
       }
       if (action === "delete"
         && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;

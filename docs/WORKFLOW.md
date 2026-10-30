@@ -87,12 +87,13 @@ The agent reads the decision as `feature_state == "confirmed"` from MCP (`get_fe
 keep the work on a feature branch, open a PR into `dev`, wait for the required checks and merge;
 the dev build is the testable result.
 
-- **✕ Cancel feature** closes the review without merging and keeps the screenshot/annotations.
-- **↺ Reopen** clears either decision and returns the session to the queue.
+- **✕** opens a feature-actions dialog: **Cancel feature** closes the review without merging and
+  keeps the screenshot/annotations; **Delete files…** removes them permanently.
+- **↺ Reopen** clears either decision and returns the session to the queue. A decided feature also
+  gets **Reopen** in the ✕ menu.
 - A new submission or agent round clears the decision, so more work makes the feature pending.
 - `resolve` only closes an agent round; it is **not** the human's feature confirmation.
-- Data deletion is separate: bulk **Delete** or **Delete done**. The ✕ row action no longer
-  deletes files.
+- Data deletion is separate: the ✕ menu's **Delete files…**, bulk **Delete**, or **Delete done**.
 
 For a fixed-state follow-up, post a new round into the same session (the old flow created a second
 session; v0.14 keeps one task per session instead).

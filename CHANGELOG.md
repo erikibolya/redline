@@ -17,13 +17,14 @@
   wizard's **Use this computer** button is gone (the *This computer* row in the list is always
   present and cannot be removed) and is replaced by **Back**, which returns to the server list.
 - **Each session is one feature.** The rail's ✓ now asks for confirmation and records
-  `feature_confirmed_at`; the ✕ is **Cancel feature** and records `feature_cancelled_at` instead
-  of deleting the review. Both close the session (`resolved`), keep the screenshot/annotations,
-  and are undone by ↺ Reopen. Agents read the decision as `feature_state`
+  `feature_confirmed_at`. The ✕ opens a feature-actions dialog: **Cancel feature** records
+  `feature_cancelled_at` and keeps the screenshot/annotations, while **Delete files…** removes
+  them permanently. A decided feature offers **Reopen** in the same menu. Both decisions close
+  the session (`resolved`) and ↺ Reopen undoes them. Agents read the decision as `feature_state`
   (`pending`/`confirmed`/`cancelled`) from `GET /api/sessions`, MCP `get_feedback`,
   `wait_for_feedback` and `list_reviews`; RedLine itself never touches git. A new submission or
-  agent round makes the feature pending again. Bulk mode gained **Confirm**; data deletion stays
-  in bulk **Delete** and **Delete done**.
+  agent round makes the feature pending again. Bulk mode gained **Confirm**; multi-delete stays
+  in bulk **Delete**, and **Delete done** purges closed sessions.
 
 ## 0.20.0 — 2026-10-30
 

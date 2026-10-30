@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Freehand strokes are numbered and listed again.** `renderInspector` read
+  `annotation.start.x` for every non-text shape, but a pen stores `points`; the resulting
+  `TypeError` aborted `mutate` before `render()`, so the live stroke stayed on screen with no
+  badge and no inspector row (and could only be removed with Ctrl+Z). Shapes now get explicit
+  labels per type, and the e2e draws a pen, asserts its row/number and badge pixel, submits it
+  and checks the points in the server JSON.
+- **Regression gate.** `docs/TESTING.md` defines the tool matrix, the bug-fix protocol (failing
+  test first), the feature protocol and the release checklist. The e2e now draws every drawing
+  tool (rectangle, ellipse, arrow, pen) instead of only clicking its button.
 - **The rail says who has the ball.** A submitted round that no agent has picked up used to carry
   the **new** badge (which only meant "this browser has not looked at it yet"), so a review
   sitting in the queue read as the human's turn. It now reads **waiting for agent**; `new` is

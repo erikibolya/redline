@@ -76,10 +76,13 @@ inside changes width (`?` is narrower than `☀`), the button must not.
 |-----|------|-------|
 | `V` | Select | click to select, drag to move, `Delete` to remove, arrows nudge 1 px (shift 10) |
 | `R` | Rectangle | drag; shift = square |
+| `E` | Ellipse | drag |
 | `A` | Arrow | drag |
 | `P` | Pen | freehand |
-| `T` | Text | click, type inline at that point (no `prompt()`), `Enter` commits, `Esc` cancels |
+| — | Text | gone since v0.8: notes live in the inspector; legacy text annotations are read-only |
 
+- Every shape is numbered on the canvas and in the inspector; freehand rows read
+  `freehand · N points`. A pen stores `points`, not `start`/`end`.
 - `Ctrl/Cmd+Z` undo, `Ctrl/Cmd+Shift+Z` redo (full history, not just "remove last").
 - `Esc` cancels the in-progress shape or clears selection.
 - `Ctrl/Cmd+Enter` submits the review.

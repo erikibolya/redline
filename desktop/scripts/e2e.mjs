@@ -233,6 +233,45 @@ const main = async () => {
   });
   const at = (dx, dy) => ({ x: canvas.x + dx, y: canvas.y + dy });
 
+  /** Open a fresh session so a tool test cannot inherit another tool's annotations. */
+  const freshSession = async (title) => {
+    const made = await api("/api/sessions", {
+      method: "POST",
+      body: JSON.stringify({ title, image_base64: makePng(), project: "E2E" }),
+    });
+    const sessionId = made.meta.id;
+    await page.evaluate((id) => window.redline.openSession(id), sessionId);
+    await page.waitForFunction(
+      (id) => window.redline.sessionId === id
+        && Boolean(window.redline.image) && window.redline.view.fitted,
+      { timeout: 10000 },
+      sessionId,
+    );
+    return sessionId;
+  };
+
+  /** The row, number, label and painted badge for the last annotation in a fresh session. */
+  const readLastAnnotation = async () => page.evaluate(() => {
+    const editor = window.redline;
+    const index = editor.annotations.length - 1;
+    const annotation = editor.annotations[index];
+    const row = document.querySelector(`#ann-list .ann-row[data-index="${index}"]`);
+    const anchor = annotation?.start || annotation?.points?.[0] || { x: 0, y: 0 };
+    const inset = 2 / editor.view.scale;
+    const radius = 12 / editor.view.scale;
+    const x = Math.round((editor.view.x + (anchor.x + inset + radius * 0.7) * editor.view.scale) * editor.dpr);
+    const y = Math.round((editor.view.y + (anchor.y + inset) * editor.view.scale) * editor.dpr);
+    const pixel = document.querySelector("#canvas").getContext("2d").getImageData(x, y, 1, 1).data;
+    return {
+      type: annotation?.type,
+      count: editor.annotations.length,
+      rows: document.querySelectorAll("#ann-list .ann-row").length,
+      number: row?.querySelector(".ann-num")?.textContent.trim() || "",
+      label: row?.querySelector(".label b")?.textContent.trim() || "",
+      pixel: [pixel[0], pixel[1], pixel[2], pixel[3]],
+    };
+  });
+
   // ---- tools must respond to clicks (they sit inside the stage, which captures pointers)
   for (const tool of ["rect", "ellipse", "arrow", "pen", "select"]) {
     await page.click(`.tool[data-tool="${tool}"]`);
@@ -1011,6 +1050,99 @@ const main = async () => {
   check("touch mode enlarges tools and shows row actions",
     touch.width === "40px" && touch.height === "40px" && touch.opacity === "1",
     JSON.stringify(touch));
+
+  // ---- every tool has to work end to end, not just select its button. The pen regression:
+  // `renderInspector` labelled shapes from `annotation.start`, but a pen has `points`; the
+  // TypeError aborted `mutate` before `render()`, so the live stroke stayed visible with no
+  // badge and no inspector row. Clicking the tool alone never caught it.
+  const penSession = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "pen regression", image_base64: makePng(), project: "E2E" }),
+  });
+  const penId = penSession.meta.id;
+  await page.evaluate((sessionId) => window.redline.openSession(sessionId), penId);
+  await page.waitForFunction(
+    (sessionId) => window.redline.sessionId === sessionId
+      && Boolean(window.redline.image) && window.redline.view.fitted,
+    { timeout: 10000 },
+    penId,
+  );
+  await page.click('.tool[data-tool="pen"]');
+  await drag(page, at(300, 200), at(520, 340), 20);
+  const pen = await page.evaluate(() => {
+    const editor = window.redline;
+    const index = editor.annotations.length - 1;
+    const annotation = editor.annotations[index];
+    const row = document.querySelector(`#ann-list .ann-row[data-index="${index}"]`);
+    const first = annotation?.points?.[0] || { x: 0, y: 0 };
+    const inset = 2 / editor.view.scale;
+    const radius = 12 / editor.view.scale;
+    const x = Math.round((editor.view.x + (first.x + inset + radius * 0.7) * editor.view.scale) * editor.dpr);
+    const y = Math.round((editor.view.y + (first.y + inset) * editor.view.scale) * editor.dpr);
+    const pixel = document.querySelector("#canvas").getContext("2d").getImageData(x, y, 1, 1).data;
+    return {
+      type: annotation?.type,
+      points: annotation?.points?.length || 0,
+      count: editor.annotations.length,
+      rows: document.querySelectorAll("#ann-list .ann-row").length,
+      number: row?.querySelector(".ann-num")?.textContent.trim() || "",
+      label: row?.querySelector(".label b")?.textContent.trim() || "",
+      pixel: [pixel[0], pixel[1], pixel[2], pixel[3]],
+    };
+  });
+  check("a freehand stroke is numbered and listed like every other annotation",
+    pen.type === "pen" && pen.points > 1 && pen.count === 1
+      && pen.rows === 1 && pen.number === "1" && pen.label.includes("freehand"),
+    JSON.stringify(pen));
+  check("the freehand badge is painted on the canvas",
+    pen.pixel[0] > 150 && pen.pixel[0] > pen.pixel[1] * 2 && pen.pixel[0] > pen.pixel[2] * 1.5,
+    JSON.stringify(pen.pixel));
+
+  // The pen has its own move path (`translateAnnotation` shifts `points`) and bounds/hit test.
+  const penBefore = await page.evaluate(() => window.redline.annotations[0].points[0]);
+  await page.keyboard.press("v");
+  await drag(page, at(400, 264), at(430, 284));
+  const penMoved = await page.evaluate(() => ({
+    point: window.redline.annotations[0].points[0],
+    scale: window.redline.view.scale,
+  }));
+  const penDx = (penMoved.point.x - penBefore.x) * penMoved.scale;
+  const penDy = (penMoved.point.y - penBefore.y) * penMoved.scale;
+  check("dragging a freehand stroke moves its points",
+    Math.abs(penDx - 30) < 4 && Math.abs(penDy - 20) < 4,
+    `moved ${penDx.toFixed(1)},${penDy.toFixed(1)} screen px`);
+  await page.keyboard.down("Control");
+  await page.keyboard.press("z");
+  await page.keyboard.up("Control");
+  const penRestored = await page.evaluate(() => window.redline.annotations[0].points[0]);
+  check("undo restores a freehand stroke",
+    penRestored.x === penBefore.x && penRestored.y === penBefore.y,
+    JSON.stringify({ before: penBefore, after: penRestored }));
+
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  const penStored = await api(`/api/sessions/${penId}`);
+  const storedPen = penStored.annotations.annotations.find((annotation) => annotation.type === "pen");
+  check("a submitted freehand stroke keeps its points on the server",
+    Boolean(storedPen) && storedPen.points.length > 1,
+    JSON.stringify(storedPen || null));
+
+  // The same full path for the other shape tools: draw, number, list, badge.
+  for (const tool of ["ellipse", "arrow"]) {
+    await freshSession(`tool: ${tool}`);
+    await page.click(`.tool[data-tool="${tool}"]`);
+    await drag(page, at(300, 200), at(460, 320), 12);
+    const report = await readLastAnnotation();
+    check(`${tool} stroke is numbered, listed and badged`,
+      report.type === tool && report.count === 1 && report.rows === 1
+        && report.number === "1" && report.label.includes("→")
+        && report.pixel[0] > 150 && report.pixel[0] > report.pixel[1] * 2
+        && report.pixel[0] > report.pixel[2] * 1.5,
+      JSON.stringify(report));
+  }
+
+  // Text notes are inspector notes / legacy history since v0.8; there is no canvas text tool
+  // left to test here. The rectangle's note is covered above.
 
   // ---- bulk confirm from the rail
   // The rail may still be filtered to Done from the reopen test; new sessions are active.

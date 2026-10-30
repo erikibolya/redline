@@ -419,6 +419,7 @@ services:
       REDLINE_AGENT_ID: holly
       REDLINE_AGENT_OPENCODE_SERVER: http://opencode:4096
       REDLINE_AGENT_MODEL: deepseek/deepseek-flash
+      REDLINE_AGENT_WORKERS: 4                     # claim workers; server caps actual runs
     volumes:
       - /mnt/user/appdata/redline/token:/data/token:ro
       - /srv/repos:/repos
@@ -435,6 +436,12 @@ Three things that bite:
   uses for the same directory, so both mounts collapse to `redline`, `ActiUnit/Au.Net`, ….
 - **Two owners.** Once compose owns the `redline` container name, do not run
   `install-unraid.sh` again; update with `docker compose pull && docker compose up -d`.
+
+**Parallel runs.** The bridge starts `REDLINE_AGENT_WORKERS` claim workers (default 4) and asks
+RedLine for work; the **Agent settings** dialog caps actual parallelism (default 2 global, 1 per
+project). Each claim gets a worktree under `<REDLINE_AGENT_REPO_ROOT>/.redline-worktrees/`. The
+OpenCode server must see that directory just like the repositories themselves; a dirty worktree
+after a failure is left for inspection.
 
 The agent refreshes the repo list every `REDLINE_AGENT_SYNC` seconds (default 60) and at startup.
 It never deletes a project with reviews; a repo that disappears becomes an error in the review

@@ -45,6 +45,11 @@ uses it as the branch-lock key; if omitted, the first claim falls back to `sessi
 defaults are 2 concurrent runs globally and 1 per project; waiting for the human frees the run
 slot but keeps the branch locked.
 
+The bridge runs up to four claim workers (`REDLINE_AGENT_WORKERS`, default 4). Each claim gets a
+separate git worktree on its branch; the agent commits and pushes there. One branch has one owner,
+so two rounds of the same feature never edit the same worktree at once. A resolved round releases
+the claim and removes a clean worktree; a dirty one is left for inspection.
+
 ## 3. Annotate
 
 - **Rectangle** — mark a region that needs a change.

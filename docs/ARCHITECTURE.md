@@ -116,8 +116,11 @@ the branch lock but does not consume an execution slot.
 
 The server is the authority. The bridge asks `POST /api/agent/next`, heartbeats, and marks
 `waiting` when the human has the ball. The branch key is `meta.branch`, falling back to
-`session/<id>`; RedLine never touches git. The bridge creates a worktree per branch and runs the
-agent there.
+`session/<id>`; RedLine never touches git. `redline-agent` runs `REDLINE_AGENT_WORKERS` claim
+workers (default 4), each with its own worktree under
+`<repo_root>/.redline-worktrees/<repo>-<hash>/<branch>-<hash>`, and running heartbeats every
+`lease/3`. A resolved round releases the claim and removes a clean worktree; a dirty one is left
+for inspection. The OpenCode server must see the worktree path just like the repository itself.
 
 ## HTTP server
 

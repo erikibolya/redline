@@ -9,3 +9,6 @@ desktop/app/target/
 desktop/app/gen/
 
 desktop/app/tauri.dev.conf.json
+
+# Parallel agent worktrees (when repo_root is this checkout)
+.redline-worktrees/

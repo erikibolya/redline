@@ -151,8 +151,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - Agent concurrency (v0.22): `/data/agent-settings.json` + `/data/agent-claims.json`; defaults
   global 2, per-project 1, lease 120 s. A claim is `running` or `waiting`; waiting keeps the
   branch lock but frees the run slot. The branch key is `meta.branch` (fallback `session/<id>`);
-  the bridge creates one worktree per branch. The built-in bridge still runs one review at a
-  time until the parallel worker slice.
+  the bridge runs `REDLINE_AGENT_WORKERS` (default 4) claim workers, each in its own worktree under
+  `<repo_root>/.redline-worktrees/`, with heartbeats and one owner per branch. The OpenCode
+  server must see the worktree path just like the repo itself.
 - UI: no framework, no build step. `app.js` holds the shell (rail, canvas engine, inspector);
   `app.css` the design tokens incl. light theme. Served from the binary at `/static/*`.
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform

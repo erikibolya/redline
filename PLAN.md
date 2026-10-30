@@ -101,17 +101,15 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - **Feature confirmation is a signal, not a git action.** RedLine records `feature_state`; each
   agent maps `confirmed` to its own workflow (this repo: feature branch → PR → required checks →
   merge into `dev`). There is no server-side GitHub token.
-- **The parallel bridge is not in this slice.** The server has branch claims/limits and the UI
-  settings; the built-in `redline-agent` still runs one review at a time until the worker/worktree
-  slice lands.
 - No server-side pagination; the rail renders everything it gets.
 - Text notes have a fixed font family, one size per note.
 
 ## Testing plan
 
-- `cargo test --workspace` — 79 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+- `cargo test --workspace` — 81 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
-  settings/claims/leases/limits/next, path/config helpers, CLI end-to-end.
+  settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
+  helpers, CLI end-to-end.
 - `desktop/scripts/e2e.sh` — 114 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,

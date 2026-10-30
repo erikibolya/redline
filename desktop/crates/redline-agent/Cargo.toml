@@ -12,6 +12,12 @@ serde_json = { workspace = true }
 ureq = { version = "2", default-features = false, features = ["tls"] }
 wait-timeout = "0.2"
 
+[dev-dependencies]
+axum = { workspace = true }
+redline-core = { path = "../redline-core" }
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
+
 [[bin]]
 name = "redline-agent"
 path = "src/main.rs"

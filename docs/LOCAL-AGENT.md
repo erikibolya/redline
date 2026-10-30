@@ -73,6 +73,7 @@ REDLINE_TOKEN=… \
 REDLINE_AGENT_REPO=/repos/app \
 REDLINE_AGENT_REPO_ROOT=/repos \
 REDLINE_AGENT_ID=holly \
+REDLINE_AGENT_WORKERS=4 \
 redline-agent
 ```
 
@@ -88,6 +89,12 @@ docker run -d --name redline-agent \
 ```
 
 The token can also be mounted at `/data/token` instead of passed in the environment.
+
+The bridge runs `REDLINE_AGENT_WORKERS` claim workers (default 4) and asks the server for work.
+The server's **Agent settings** caps actual parallelism (default 2 global, 1 per project). Each
+claim gets a git worktree under `<REDLINE_AGENT_REPO_ROOT>/.redline-worktrees/`; the OpenCode
+server must see that directory just like the repositories themselves. Worktrees on resolved
+rounds are removed when clean; dirty ones are left for inspection.
 
 ## What RedLine does *not* do
 

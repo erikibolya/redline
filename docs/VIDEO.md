@@ -2,6 +2,26 @@
 
 Status: **proposal**, waiting for product answers. Nothing in this document is implemented.
 
+## 0. Decisions from the product owner (2026-10-31)
+
+1. **Annotation model:** both point-in-time and time ranges (`at`, optional `until`).
+2. **Sources:** human upload and agent-supplied video; whether RedLine itself records a browser
+   session is still open (see §14 Q1).
+3. **Limits:** delegated to engineering. Proposal: 5 min, 250 MB, 1080p recommended (4K accepted
+   with a warning); no hard per-session cap in v1 — show disk usage instead.
+4. **New video:** a new round in the same review; the previous video moves to history.
+5. **History:** keep the existing 20-round retention; no separate video cap in v1, show size and
+   warn for large sessions. Videos stay local.
+6. **Annotation visibility:** current-time annotations full; other annotations are ghosts at low
+   opacity and fade in/out as their time is approached (timeline markers always visible).
+7. **Timeline:** basic controls plus a zoomable timeline (wheel/zoom + overview strip).
+8. **Agent output:** contact sheet **and** full-resolution frames for the unique annotated
+   timestamps (see the explanation in §7); capped to keep the payload sane.
+9. **Audio:** no audio controls in v1; playback is muted.
+10. **Desktop:** both the Windows WebView2 app and the browser UI.
+11. **Time:** `mm:ss.mmm` for humans, seconds in JSON, fps optional when the file provides it.
+12. **Deletion:** deleting a review removes its videos; no separate video purge.
+
 ## 1. Goal
 
 Let a human attach a video to a review, watch it in the canvas, scrub/pause on a frame, and draw
@@ -23,12 +43,15 @@ In:
 
 - upload a video from the New review dialog (file picker, drag & drop, paste if the browser
   provides a video file), with a poster/thumbnail;
-- video playback in the editor: play/pause, scrub, step, current time/duration, timeline markers;
+- video playback in the editor: play/pause, scrub, frame step, current time/duration, speed,
+  timeline markers, and a **zoomable timeline** with an overview strip;
 - annotations tied to a timestamp; optional `until` for a time range;
 - drawing while paused (drawing auto-pauses playback);
-- annotations visible at the current time, with timeline markers for all annotations;
+- annotations visible at the current time with full opacity; other annotations remain as faint
+  ghosts and fade in as their time approaches; timeline markers are always visible;
 - inspector rows with timecodes; clicking a row seeks the video;
-- submit: annotations JSON + timecoded `review.md` + a labelled contact sheet of annotated frames;
+- submit: annotations JSON + timecoded `review.md` + a labelled contact sheet **and**
+  full-resolution frames for the unique annotated timestamps (bounded; see §7);
 - history: view a previous video round read-only, seek and inspect its annotations;
 - MCP/API: create a video review, read timecoded feedback, post a new video round;
 - poster image used by the dashboard gallery and rail;
@@ -36,14 +59,12 @@ In:
 
 Out of v1 (candidates for later):
 
-- screen recording from RedLine itself;
-- audio annotations/waveforms (audio playback exists, annotation stays visual);
+- screen recording from RedLine itself (the agent can supply an existing clip; see §14 Q1);
+- audio controls/waveforms (playback is muted in v1);
 - automatic video diff / frame-by-frame comparison between rounds;
 - transcoding or codec conversion;
-- timeline zoom for very long videos;
 - multiple videos in one session;
-- in-browser video editing/trimming;
-- full-resolution frame extraction on every annotation (see §7 for the contact sheet decision).
+- in-browser video editing/trimming.
 
 ## 3. UX
 
@@ -61,30 +82,43 @@ Layout: the existing stage/canvas gains a **video bar** under the stage, above t
 just under the canvas, never covering the image):
 
 ```
-[▶/❚❚]  00:02.340 / 00:12.000   [◀ frame] [frame ▶]   0.5× 1× 2×   [mute]   ● ● ● markers
+[▶/❚❚]  00:02.340 / 00:12.000   [◀ frame] [frame ▶]   0.5× 1× 2×   [− zoom +] [Fit]
 [────────────────────────────────────────────────────────────────────────────────────────]
+overview strip (full duration, viewport window, annotation markers)
+[────────────────────────────────────────────────────────────────────────────────────────]
+detail timeline (zoomable window; scrubber, markers, time ruler)
 ```
 
 - The video frame is drawn into the existing canvas at natural resolution; zoom/pan, fit and
   history viewer pan/zoom keep working.
-- The timeline is a range control with annotation markers (colour = annotation colour, cluster
-  when close). Hover shows time and count; click seeks.
-- Annotation visibility: point annotations show at `abs(t - at) <= window` while paused, with a
-  small window (e.g. 120 ms) while playing; range annotations show between `at` and `until`.
-  A "show all annotations" toggle can be added later if this is too restrictive.
+- The timeline has two levels: a full-duration overview strip showing the viewport window, and a
+  zoomable detail ruler. Wheel over the timeline zooms around the pointer; drag pans the window;
+  `Fit` returns to the full duration. Marker positions, the scrubber and the time labels all
+  respect the current window. Basic controls stay usable without zooming.
+- Annotation markers (colour = annotation colour, clustered when close) live on both strips.
+  Hover shows time and count; click seeks.
+- Annotation visibility: the annotation(s) at the current time are full opacity. Other
+  annotations are ghosts at low opacity (proposal: 12–15%) so the geometry is visible without
+  clutter; as playback approaches an annotation's `at` (within ~350 ms), it fades to full, and a
+  finished point annotation fades back to ghost. Range annotations are full between `at` and
+  `until` and ghost outside, with a short fade at both boundaries. A "ghosts" toggle can hide
+  them entirely; timeline markers always show every annotation.
 - Drawing: pointerdown on the canvas pauses the video first, then starts the shape at the current
   frame. The annotation gets the current `at` (and `until` if the user creates a range).
 - Selecting an annotation seeks to its `at`; the inspector row shows `00:02.340` (or
   `00:02.340–00:02.600`).
-- Keyboard: `Space` is already pan; use `K` play/pause, `,`/`.` step frame, `J`/`L` jump 1 s,
-  `M` mute. Keep the existing shortcuts; document the conflict.
+- Keyboard: `Space` is already pan; use `K` play/pause, `,`/`.` step frame, `J`/`L` jump 1 s.
+  Timeline zoom uses `+`/`-` or Ctrl+wheel when the pointer is over the timeline (not the canvas,
+  where Ctrl+wheel still zooms the image). Keep the existing shortcuts; document the conflict.
+- Audio is not exposed in v1: playback is muted, no waveform or mute control.
 - When the video ends, pause at the last frame (do not loop by default).
 - A still image session behaves exactly as today; the video bar is absent.
 
 ### 3.3 Submit and history
 
-- Submit sends annotations with `at`/`until` and a contact sheet PNG; the server stores the
-  annotations JSON, `review.md`, `annotated.png` (contact sheet) and the current video.
+- Submit sends annotations with `at`/`until`, a labelled contact sheet PNG and the full-resolution
+  frames for the unique annotated timestamps (bounded; see §7). The server stores the annotations
+  JSON, `review.md`, `annotated.png` (contact sheet), `frames/NNN.png` and the current video.
 - History rows for video rounds show a play badge and duration. Opening a round loads the
   archived video (if the video changed) and its annotations; playback/seek work; drawing is
   refused, as in the image viewer.
@@ -168,6 +202,7 @@ sessions/<id>/
   annotations.json
   review.md
   annotated.png          contact sheet for video
+  frames/                full-resolution PNGs for unique annotated timestamps
   agent-thread.jsonl
   agent-events.jsonl
   history/
@@ -176,10 +211,9 @@ sessions/<id>/
     <stamp>.mp4          archived video when the media was replaced (moved, not copied)
 ```
 
-Policy questions: whether to move or copy archived videos, retention (20 rounds today), and a
-disk cap. Recommendation: **move** the old video into history when a new video is posted (no
-duplicate bytes), keep a configurable per-session video budget, and never delete the current
-video on an annotation-only resubmit.
+Policy: **move** the old video into history when a new video is posted (no duplicate bytes);
+keep the current video on annotation-only resubmits; keep the existing 20-round retention and show
+session disk usage (warning at 2 GB) rather than silently deleting videos.
 
 ## 5. Server and API
 
@@ -197,7 +231,19 @@ streaming upload:
 - The browser New review dialog uploads the file with `FormData` after creating the session (or
   in one multipart create request). Progress is shown; cancel removes the temp file.
 
-### 5.2 Serving and seeking
+### 5.2 Submit
+
+- Image reviews keep the existing JSON submit (`annotations` + one base64 `png`).
+- Video reviews use a multipart submit on `POST /api/sessions/{id}/annotations`:
+  - `annotations` — the JSON `Submission` (with `at`/`until`),
+  - `png` — the contact sheet,
+  - `frames` — zero or more full-resolution PNG files named by their timecode
+    (`2.340.png`), capped per §7.
+  The server writes `frames/` and reuses the existing submission/archive path. A JSON-only video
+  submit is still accepted for agents/tests with annotations but no visual frames; the server
+  then has no contact sheet to serve and says so.
+
+### 5.3 Serving and seeking
 
 - `GET /sessions/{id}/media` (or `/video`) streams the file with `Accept-Ranges`, `Content-Type`
   and `206 Partial Content` for `Range`. The current `serve_file` reads the whole file and has no
@@ -209,7 +255,7 @@ streaming upload:
 - Optional later: `GET /sessions/{id}/frame?at=2.340` (server-side frame extraction with ffmpeg)
   for agents/tools that want full-resolution frames.
 
-### 5.3 Store / model
+### 5.4 Store / model
 
 - `Store::create_video`, `Store::attach_media`, `Store::submit` (media-aware), `archive_round`
   (move video), `review_markdown` (timecodes).
@@ -235,12 +281,13 @@ Current editor model:
 - Timeline: DOM overlay + markers; no framework, no build step. Use a `<input type="range">` for
   the scrubber and absolutely positioned marker buttons; accessible labels/timecode.
 - Poster generation: draw the first frame into a canvas, `toBlob`, upload/keep `poster.png`.
-- Contact sheet: when submitting a video, group annotations by their unique `at`/range, seek a
-  cloned video element (or seek the main one sequentially), draw each frame into a grid with a
-  timecode label and annotations, then encode one PNG. Cap frame count (e.g. 12) and tile size;
-  the annotations JSON still has every timestamp.
+- Submit (video): group annotations by their unique `at`/range, seek a cloned video element (or
+  seek the main one sequentially), draw each frame into a grid with a timecode label and the
+  annotations, encode the contact sheet, and capture each unique annotated time as a
+  full-resolution PNG. Cap the unique frames at 20 and the total at ~60 MB; if the cap is hit,
+  keep the contact sheet and the first N frames and note it in `review.md`.
 - Browser codec support: MP4 H.264/AAC and WebM VP8/VP9 where the webview supports them; show a
-  clear error if `video.error`/`canPlayType` fails.
+  clear error if `video.error`/`canPlayType` fails. Audio is muted; no audio controls.
 
 ## 7. Agent output / MCP
 
@@ -261,48 +308,66 @@ Proposed `get_feedback` for video:
 }
 ```
 
-- v1: `annotated.png` is a labelled **contact sheet** of up to N annotated frames; this is the
-  visual reference an LLM can inspect directly.
+- **Contact sheet vs full frames.** They solve different needs:
+  - a **contact sheet** is one image with a grid of annotated moments, each tile labelled with a
+    timecode — quick for a human/LLM to see the whole story at a glance;
+  - a **full frame** is a full-resolution PNG of one annotated moment — exact pixels for reading
+    small text, checking a color, or seeing a detail the thumbnail hides.
+- v1 ships **both**: `annotated.png` is the labelled contact sheet, and `frames/<at>.png` contains
+  full-resolution frames for each unique annotated timestamp. Cap the number (e.g. 20 unique
+  timestamps) and total bytes (e.g. 60 MB) per submission; if the cap is exceeded, keep the
+  contact sheet and the first N frames, and say so in the response/review.md.
+- The frames are generated in the browser on submit (the video and annotations are already
+  there), not by ffmpeg on the server; this keeps the slim/desktop image dependency-free. The
+  upload uses the multipart submit path because multiple PNGs do not fit in the single base64
+  `png` field.
 - `review.md` contains the timecodes and the same annotations in Markdown.
 - The video URL is available for agents that can download and inspect it with their own tools.
-- Later: per-frame full-resolution PNG resources generated by the server (needs ffmpeg) or
-  uploaded by the browser; and a "frames" manifest for every unique timestamp.
+- Later: server-side ffmpeg extraction for every annotated frame at full resolution without a
+  browser submission, and a per-frame cache.
 - `post_round` accepts `video_path`/`video_base64`/`url`; `capture_round` remains image-only.
 - MCP tool naming: add `review_video` rather than overloading `review_screenshot`; keep the old
   tool for images. The instructions in `initialize` mention both.
 
 ## 8. Server-side vs client-side frames
 
-Option A (recommended v1): the browser creates the contact sheet on submit; no ffmpeg on the
-server; works in the existing `:browser` image and in the desktop local server. The agent gets one
-image with all annotated moments + JSON timecodes.
+Option A+ (chosen v1): the browser creates the contact sheet **and** the full-resolution frames
+for the unique annotated timestamps on submit; no ffmpeg on the server; works in the existing
+`:browser` image and in the desktop local server. The submit endpoint accepts a multipart form
+with the annotations JSON, contact sheet and frame files; the server stores them and exposes
+`redline://session/<id>/frames/<time>.png` resources. The caps in §7 keep the payload sane.
 
-Option B: server-side ffmpeg extracts full frames at every annotation time; requires ffmpeg in
-the runtime image (and a fallback for the slim image/desktop). Better for agents that need
-full-resolution detail, but a new runtime dependency and a second rendering path.
-
-Ask: is the contact sheet enough for the agent's first version, or is full-resolution per-frame
-output required immediately?
+Option B (later): server-side ffmpeg extracts frames from the video at annotation times; requires
+ffmpeg in the runtime image (and a fallback for the slim image/desktop). Useful for re-generating
+frames or for agents that submit videos without a browser, but a second rendering path and a new
+runtime dependency.
 
 ## 9. History and retention
 
 - Video files are large. **Move** the previous video to `history/<stamp>.mp4` when a new video
   round replaces it; do not copy on every annotation-only resubmit.
-- Keep the existing 20-round retention? A 20×200 MB history is 4 GB per session. Propose a
-  per-session video budget (e.g. 2 GB or 10 video rounds) and surface it in docs; ask for a limit.
-- Deleting a session deletes all videos; `Delete cancelled` and the rail delete use the same
-  recursive removal.
+- Keep the existing 20-round retention; no separate video cap in v1. Show the session's video
+  bytes in the UI/API and warn when a session grows large (the default budget is a warning, not a
+  deletion). The owner's filesystem remains the real limit; videos stay local.
+- Deleting a session deletes all videos, frames and posters; `Delete cancelled` and the rail
+  delete use the same recursive removal.
 - The dashboard gallery uses posters, never decodes videos.
 
 ## 10. Security / limits
 
 - Validate magic bytes, MIME and extension; reject HTML/SVG/executables.
+- **Limits (v1):** max 5 minutes, 250 MB per file, MP4 H.264/AAC and WebM VP8/VP9; 1080p
+  recommended, 4K accepted with a warning. Limits are configurable
+  (`REDLINE_MAX_VIDEO_BYTES`, `REDLINE_MAX_VIDEO_SECONDS`); the client checks duration/size before
+  upload, the server enforces bytes while streaming. No hard per-session cap; warn at 2 GB.
 - Stream uploads to a temp file; enforce max bytes while streaming; delete on failure.
 - Range requests must be path-safe and support only the session's media file.
-- Content-Type from a whitelist (`video/mp4`, `video/webm`, `video/quicktime` if supported).
+- Content-Type from a whitelist (`video/mp4`, `video/webm`; MOV/QuickTime only if the browser can
+  play it).
 - CSRF/auth: media is behind the existing token/cookie; `<video>` requests send the cookie.
 - Filename is generated server-side; never use the uploaded name for the path.
 - Privacy: videos contain screen content; retention/deletion policy; no external upload.
+- Audio is not exposed in v1; playback is muted.
 - Performance: cap resolution/duration; warn for 4K/long clips; the canvas draws at natural size
   (zoom does not upscale the decoded frame beyond the browser's decode).
 
@@ -322,77 +387,69 @@ Browser e2e:
 - fixture video (2 s, small WebM/MP4) in `desktop/scripts/fixtures/`;
 - New review accepts it, shows duration/poster, creates a session;
 - editor loads video, timeline appears, play/pause changes currentTime, seek marker;
+- timeline zoom: wheel/`+` changes the visible window, markers/rescale, Fit resets; overview
+  window follows;
+- ghost visibility: an annotation at another time is faint, then becomes full near its time and
+  fades back; the ghosts toggle hides it;
 - draw a rect at 1.2 s, assert `at` in the inspector and server JSON; pause on draw;
-- create a range annotation (if approved) and assert `until`;
-- contact sheet is uploaded and shows the timecode; `annotated.png` served;
-- submit, `get_feedback` includes media + timecoded annotations; history round plays/seeks;
+- create a range annotation and assert `until`;
+- contact sheet is uploaded and shows the timecode; full-resolution frames for unique timestamps
+  are stored and served; `annotated.png` served;
+- submit, `get_feedback` includes media + timecoded annotations + frame resources; history round
+  plays/seeks;
 - image reviews still pass the full existing suite;
 - codec error path (unsupported video) shows a clear message;
 - no uncaught JS errors.
 
-Visual: screenshot the editor paused at a timecode with the marker and annotation; contact sheet
-tile; poster card.
+Visual: screenshot the editor paused at a timecode with the marker and annotation; a zoomed
+timeline; the contact sheet tile; a full frame; the poster card.
 
 ## 12. Phased delivery (each phase = one branch/PR)
 
 0. **Plan/schema ADR** — this document + answers; add the fixture; no production code.
 1. **Server media core** — `media` model, upload/multipart, MIME/limits, poster, range serving,
    store/history, API/MCP read paths; Rust tests. No UI.
-2. **Editor playback** — video load/draw/fit, video bar, timeline markers, pause/draw, annotation
+2. **Editor playback** — video load/draw/fit, video bar, basic controls, zoomable timeline with
+   overview strip and markers, ghost/fade annotation visibility, pause/draw, annotation
    `at`/`until`, inspector timecodes; e2e with fixture.
-3. **Submit and agent output** — contact sheet, `review.md` timecodes, `annotated.png`, MCP
-   `review_video`/`get_feedback` frames, history viewer, poster cards.
+3. **Submit and agent output** — contact sheet + full-resolution frames for unique annotation
+   times, `review.md` timecodes, `annotated.png`, MCP `review_video`/`get_feedback` frames,
+   history viewer, poster cards.
 4. **Polish and release** — desktop upload/codec/limits, accessibility/touch, docs, full e2e,
    version bump/release.
 
 Estimated effort: phase 1–3 are each a multi-day change; phase 4 a day plus tests. The risky
-parts are the streaming upload, range serving, and timeline/annotation UX consistency.
+parts are the streaming upload, range serving, timeline zoom/ghost rendering, and the multi-image
+submit (contact sheet + full frames).
 
 ## 13. Risks
 
 - **Codec support** in WebView2 vs Chromium; MP4 H.264 is safest; document what works.
 - **Large files** and memory: never read a video through `serve_file`; stream and range.
-- **History disk**: videos multiply; move, cap, and document.
-- **Annotation clutter**: point-in-time visibility rules must be predictable; add a visible
-  "current time" filter and timeline markers.
+- **History disk**: videos multiply; move them, show usage, warn at 2 GB; no silent deletion.
+- **Annotation clutter**: ghosts + fade must be predictable; a ghosts toggle and timeline markers
+  keep the current frame readable.
 - **Seeking accuracy**: `currentTime` is approximate; step by a nominal frame (1/fps) and show
   ms; variable frame rate means frame count is a display hint, not truth.
-- **Agent visual context**: a contact sheet may miss detail; provide the video URL and later
-  full frames.
+- **Agent visual context**: a contact sheet may miss detail; ship full-resolution frames for the
+  unique annotated times as well.
 - **No-build UI**: keep the timeline CSS/JS dependency-free; test touch.
 
-## 14. Questions for the product owner
+## 14. Remaining questions
 
-Please answer these before phase 1 code. Recommended defaults are in parentheses.
+Two scope decisions are still worth confirming; everything else is settled in §0.
 
-1. **Annotation shape**: point-in-time only, time ranges only, or both? (both; `at` required,
-   `until` optional)
-2. **Video sources**: human file upload only, or also agent `video_path`/`video_base64`/URL? Is
-   a screen recording made by RedLine itself in scope? (human file + agent path/base64; no
-   recorder in v1)
-3. **Formats/limits**: which codecs/containers must work (MP4 H.264/AAC, WebM VP8/VP9, MOV?), and
-   what maximum duration/size/resolution? (MP4 + WebM, 5 min, 200 MB, 1080p)
-4. **New video in the same review or a new session?** (same review as a new round; move the old
-   video to history)
-5. **History budget**: how many video rounds and/or GB per session should be kept? (10 rounds /
-   2 GB; current video always kept)
-6. **Annotations during playback**: pause automatically when drawing (yes), show point
-   annotations only near their time and ranges during their range (yes), or show all annotations
-   always? (current-time visibility)
-7. **Timeline controls**: is play/pause + scrub + frame step + 0.5/1/2× enough for v1, or do you
-   need timeline zoom, speed >2×, loop, or frame-accurate stepping for VFR? (v1 as listed; zoom
-   later)
-8. **Agent output**: is one labelled contact sheet + JSON timecodes + a video download URL enough,
-   or do you need full-resolution PNGs for every annotated timestamp immediately? (contact sheet
-   in v1; full frames later/optional)
-9. **Audio**: play audio by default, mute toggle, or ignore audio entirely? (play with mute
-   toggle; no waveform)
-10. **Desktop**: must video work in the Windows WebView2 app, the browser UI, or both? Any
-    codec restrictions from the desktops you use? (both; MP4 H.264 baseline)
-11. **Time display**: `mm:ss.mmm` for humans and seconds in JSON, or frame numbers too? Is fps
-    metadata available from the files? (ms display, seconds JSON, fps optional)
-12. **Deletion/retention**: should deleting a review delete its videos immediately, and should
-    there be a separate "purge videos" action? (delete with the session; no separate purge v1)
+1. **“Agent can capture video” — what exactly?**
+   - (a) The agent uploads an existing clip (`video_path`/`video_base64`/URL) — covered by this
+     plan, recommended for v1.
+   - (b) RedLine itself records a browser session/URL to video (a new `capture_video` tool with a
+     recording duration and a headless Chromium/ffmpeg recorder) — a separate, larger feature.
+   Which one do you mean? I would ship (a) first and keep (b) as a follow-up.
 
-Once these are answered, I will turn the plan into phase 1 acceptance criteria and start the
-server media core.
+2. **Full-frame cap:** the submit can carry up to 20 unique annotated timestamps and ~60 MB of
+   full-resolution PNGs, with all frames plus the contact sheet. Is that enough, or do you expect
+   reviews with many more annotated moments? (If more, raise the cap or move frame extraction to
+   ffmpeg in phase 3.)
+
+With those answered, phase 1 (server media core) can start.
+

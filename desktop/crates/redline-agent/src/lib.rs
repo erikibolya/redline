@@ -342,7 +342,10 @@ fn path_segment(value: &str) -> String {
     if safe.is_empty() {
         "work".to_string()
     } else {
-        safe.chars().take(60).collect()
+        // Keep the path short: Git for Windows fails with "$GIT_DIR too big" once a worktree
+        // path crosses the legacy MAX_PATH budget. The hash appended by `worktree_name` is what
+        // makes it unique; the readable prefix is only a debugging aid.
+        safe.chars().take(8).collect()
     }
 }
 

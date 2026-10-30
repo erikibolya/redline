@@ -222,6 +222,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   refname (`refs/heads/dev`, `refs/remotes/origin/dev`) and peel to `^{commit}`; keep the short
   name only where git demands a branch name (`worktree add <path> <branch>`). Tags are not
   branches: a stray `dev` tag in a repo must never change where work starts.
+- **A session id is not a branch name.** The bridge's fallback when nobody declared a branch was
+  `session/<id>`, and the New review dialog never asked — so a human-made review ran on a
+  timestamp branch (the rail showed `session/20261030-…`) that an agent cannot push or merge as a
+  feature. A review now gets `feat/<title-slug>-<id-tail>` at creation, the dialog offers a
+  *Feature branch* field and the header renames it (`PUT /api/sessions/{id}/branch`, refused while
+  the round is submitted because the worktree already exists); v0.21's persisted fallback is read
+  back as the `feat/…` name and `Meta::work_key()` derives it instead of inventing a session
+  branch. A name that only says *when* is not a name for what is being built.
 - **The OpenCode project API is experimental.** `/api/project` is useful for display names and
   active projects, but discovery must still scan the repo root for `.git`; dedupe the same repo
   seen through two mounts (`/mnt/user/...` and `/mnt/c/...`).

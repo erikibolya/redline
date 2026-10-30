@@ -66,6 +66,18 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: the Agent settings dialog saves global + per-project values, and the rail shows the
   session's branch next to the relative time.
 
+## Feature branches (v0.22)
+
+- Rust `tests/store.rs`: `default_branch` folds Czech titles into a git-safe `feat/<slug>-<tail>`,
+  and a review created without a branch already carries one.
+- Rust `tests/api.rs`: a review created without a branch claims and lists on `feat/…` (never
+  `session/<id>`); renaming is `409` while submitted and persisted when accepted; a v0.21
+  `session/<id>` branch is read back as the derived `feat/…` name in both `GET /api/sessions` and
+  `GET /api/sessions/{id}`.
+- Browser e2e: the New review dialog suggests `feat/<title>` in the *Feature branch* placeholder,
+  creates a review through the dialog with the field left empty, and asserts the rail row and the
+  loaded meta carry `feat/<title>-<tail>`.
+
 ## Every UI control
 
 - A test must **click** the control, not only call the method or press the shortcut.

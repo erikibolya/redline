@@ -47,6 +47,77 @@ pub fn slugify(value: &str) -> String {
     }
 }
 
+/// The feature branch a review gets when nobody named one: `feat/<title>-<tail>`.
+///
+/// A review is one feature, so a review without a branch must not invent `session/<id>` — that
+/// name says nothing about what is being built and cannot be the branch an agent pushes and
+/// merges. The four-character tail of the session id keeps two features that share a title apart;
+/// the human can rename it in the New review dialog or from the review header (v0.22).
+pub fn default_branch(title: &str, id: &str) -> String {
+    let slug = slugify(&fold_latin(title));
+    let slug: String = slug.chars().take(48).collect();
+    let slug = slug.trim_end_matches('-');
+    let tail: String = id
+        .rsplit('-')
+        .next()
+        .unwrap_or(id)
+        .chars()
+        .take(4)
+        .collect();
+    if tail.is_empty() {
+        format!("feat/{slug}")
+    } else {
+        format!("feat/{slug}-{tail}")
+    }
+}
+
+/// `slugify` keeps ASCII only, so a Czech title would lose its letters (`Tlačítko` → `tla-tko`).
+/// A branch name is read by humans and typed in git commands, so fold the common Latin accents
+/// before slugifying it. Unknown characters are left to `slugify`.
+fn fold_latin(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| match ch {
+            'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' => 'a',
+            'č' | 'ç' => 'c',
+            'ď' => 'd',
+            'é' | 'è' | 'ë' | 'ê' | 'ě' => 'e',
+            'í' | 'ì' | 'ï' | 'î' | 'ı' => 'i',
+            'ň' | 'ñ' => 'n',
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => 'o',
+            'ř' => 'r',
+            'š' => 's',
+            'ť' => 't',
+            'ú' | 'ů' | 'ü' | 'ù' | 'û' => 'u',
+            'ý' | 'ÿ' => 'y',
+            'ž' => 'z',
+            other => other,
+        })
+        .collect()
+}
+
+/// Read v0.21's `session/<id>` fallback as the feature branch the review would get today.
+///
+/// Claiming an unnamed review used to persist `session/<id>` into `meta.branch`; that name is not
+/// a branch anybody chose, it is the absence of one. Normalise on read (like flat sessions
+/// becoming the Inbox) so the rail and the agent prompt show the feature, and let the next claim
+/// or rename write the real name (v0.22).
+fn normalize_branch(meta: &mut Meta) {
+    let legacy = meta
+        .branch
+        .as_deref()
+        .map(|branch| meta.is_legacy_session_branch(branch))
+        .unwrap_or(true);
+    if legacy {
+        meta.branch = Some(default_branch(&meta.title, &meta.id));
+    }
+}
+
+fn effective_branch(mut meta: Meta) -> Meta {
+    normalize_branch(&mut meta);
+    meta
+}
+
 /// RFC 3339 with second precision and a `+00:00` offset — byte-compatible with v0.1's
 /// `datetime.now(timezone.utc).isoformat(timespec="seconds")`.
 pub fn now() -> String {
@@ -491,7 +562,9 @@ impl Store {
 
     pub fn get(&self, id: &str) -> Result<Option<Meta>> {
         let dir = self.dir(id)?;
-        Ok(read_json(&dir.join("meta.json")).and_then(|value| serde_json::from_value(value).ok()))
+        Ok(read_json(&dir.join("meta.json"))
+            .and_then(|value| serde_json::from_value(value).ok())
+            .map(effective_branch))
     }
 
     pub fn require(&self, id: &str) -> Result<Meta> {
@@ -543,6 +616,7 @@ impl Store {
             if meta.project.is_none() {
                 meta.project = Some(INBOX.to_string());
             }
+            normalize_branch(meta);
         }
         metas.sort_by(|a, b| b.created_at.cmp(&a.created_at));
         Ok(metas)
@@ -666,13 +740,15 @@ impl Store {
         let extension = image_extension(image_name);
         write_atomic(&dir.join(format!("screenshot{extension}")), image)?;
 
+        let title = if title.is_empty() {
+            sid.clone()
+        } else {
+            title.to_string()
+        };
+        let branch = default_branch(&title, &sid);
         let meta = Meta {
             id: sid.clone(),
-            title: if title.is_empty() {
-                sid.clone()
-            } else {
-                title.to_string()
-            },
+            title,
             url: url.to_string(),
             note: note.to_string(),
             status: Status::Open,
@@ -691,7 +767,7 @@ impl Store {
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
-            branch: None,
+            branch: Some(branch),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         write_json(

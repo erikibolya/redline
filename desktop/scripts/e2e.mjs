@@ -1639,7 +1639,40 @@ const main = async () => {
   const remembered = await page.$eval("#f-project", (el) => el.value);
   check("a new review preselects the last used project after a reload",
     remembered === "e2e-repo", `project=${remembered}`);
-  await page.click("#new-cancel");
+
+  // A review the human creates without naming a branch must still belong to a feature: v0.21
+  // fell back to `session/<id>` at claim time, which is not a branch anyone can merge.
+  await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 200;
+    canvas.getContext("2d").fillRect(0, 0, 320, 200);
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], "image.png", { type: "image/png" }));
+    const event = new Event("paste", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: data });
+    window.dispatchEvent(event);
+  });
+  await page.waitForFunction(() => document.querySelector("#f-title").value === "Pasted screenshot", { timeout: 5000 });
+  await page.$eval("#f-title", (el) => {
+    el.value = "Branch check";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const suggestion = await page.$eval("#f-branch", (el) => el.placeholder);
+  check("the branch field suggests feat/<title> before it is typed",
+    suggestion === "feat/branch-check", suggestion);
+  await page.select("#f-project", "e2e");
+  await page.click("#new-submit");
+  await page.waitForFunction(() => window.redline?.meta?.branch, { timeout: 20000 });
+  const newBranch = await page.evaluate(() => window.redline.meta.branch);
+  check("a review created without a branch runs on feat/<title>, not session/<id>",
+    /^feat\/branch-check-[0-9a-f]{4}$/.test(newBranch), newBranch);
+  const railBranch = await page
+    .$eval('.session[aria-current="true"] .sub .branch', (el) => el.textContent.trim())
+    .catch(() => "");
+  check("the rail shows that feature branch", railBranch === newBranch, `${railBranch} vs ${newBranch}`);
+
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 
   await browser.close();

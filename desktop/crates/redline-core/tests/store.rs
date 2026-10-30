@@ -1,5 +1,5 @@
 use redline_core::model::{Annotation, Status, Submission};
-use redline_core::store::{valid_id, Store};
+use redline_core::store::{default_branch, valid_id, Store};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -285,4 +285,40 @@ fn repo_projects_are_idempotent_and_survive_agent_resync() {
         .find(|project| project.slug == repo.slug)
         .unwrap();
     assert_eq!(found.repo.as_deref(), Some("redline"));
+}
+
+#[test]
+fn a_default_branch_names_the_feature_not_the_session() {
+    // The title is what the human typed; the tail keeps two features of the same name apart.
+    assert_eq!(
+        default_branch("Wrong branches", "20261030-161714-wrong-branches-52e0"),
+        "feat/wrong-branches-52e0"
+    );
+    // Diacritics and punctuation cannot reach git, so they become dashes.
+    assert_eq!(
+        default_branch(
+            "Tlačítko: hover / disabled!",
+            "20261030-120000-tlacitko-9f1c"
+        ),
+        "feat/tlacitko-hover-disabled-9f1c"
+    );
+    // An untitled review still gets a usable branch.
+    assert_eq!(
+        default_branch("", "20261030-120000-x-abcd"),
+        "feat/review-abcd"
+    );
+    // Long titles are cut before they hit git's own length limits.
+    let long = default_branch(&"a".repeat(120), "20261030-120000-x-abcd");
+    assert!(long.len() <= 60, "{long}");
+}
+
+#[test]
+fn a_review_created_without_a_branch_already_has_its_feature_branch() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "shot.png", "Checkbox group", "", "", None, None, None)
+        .unwrap();
+    let branch = meta.branch.as_deref().unwrap_or_default();
+    assert!(branch.starts_with("feat/checkbox-group-"), "{branch}");
+    assert!(!branch.starts_with("session/"), "{branch}");
 }

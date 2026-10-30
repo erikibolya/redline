@@ -10,7 +10,7 @@ use axum::extract::{DefaultBodyLimit, Path as RoutePath, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
@@ -119,6 +119,7 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/{id}",
             get(get_session).delete(delete_session),
         )
+        .route("/api/sessions/{id}/branch", put(set_session_branch))
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/api/sessions/{id}/reopen", post(reopen))
@@ -904,6 +905,38 @@ async fn get_session(
     let meta = state.store.require(&id)?;
     let annotations = state.store.annotations(&id)?;
     Ok(Json(json!({ "meta": meta, "annotations": annotations })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BranchBody {
+    #[serde(default)]
+    branch: Option<String>,
+}
+
+/// Name the feature branch a review runs on.
+///
+/// A review created before v0.22 can still carry `session/<id>`, which is not a feature branch.
+/// Renaming is refused while the round is submitted: the agent's worktree was already created for
+/// the old name, so a rename would describe work that is happening somewhere else.
+async fn set_session_branch(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    Json(body): Json<BranchBody>,
+) -> Result<Json<Value>, Error> {
+    let meta = state.store.require(&id)?;
+    if meta.status == Status::Submitted {
+        return Err(Error::Conflict(
+            "stop the review before renaming its branch".to_string(),
+        ));
+    }
+    let branch = body
+        .branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    Ok(Json(json!({
+        "meta": state.store.set_branch(&id, branch)?,
+    })))
 }
 
 async fn create_session(

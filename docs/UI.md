@@ -180,9 +180,13 @@ Each session is one feature. The rail's row actions carry the human's decision; 
 - Settings live on the server (`/data/agent-settings.json`) and are shared by the desktop and web
   UI. Changing them applies to new claims; the bridge's worker count is
   `REDLINE_AGENT_WORKERS` (default 4), and the server's limits are the real cap.
-- A session can carry a `branch`. The rail shows it after the relative time in accent monospace
-  (`2h ago · feat/parallel-runs`); a missing branch falls back to `session/<id>` when an agent
-  claims the work.
+- A session can carry a `branch`. Every review has one from creation: the New review dialog's
+  optional *Feature branch* field, or the derived `feat/<title-slug>-<id-tail>`
+  (`feat/wrong-branches-52e0`). The rail shows it after the relative time in accent monospace
+  (`2h ago · feat/parallel-runs`) and the review header shows it beside the session id; clicking
+  it renames the branch (`PUT /api/sessions/{id}/branch`) — refused while the round is submitted,
+  because the agent's worktree already exists for the old name. v0.21's `session/<id>` fallback is
+  not produced any more and is read back as the `feat/…` name.
 - A running claim consumes a slot; a claim waiting for the human frees the slot but keeps the
   branch lock. One branch has one owner. The bridge runs up to four claim workers
   (`REDLINE_AGENT_WORKERS`), each in its own git worktree; the server enforces the limits.

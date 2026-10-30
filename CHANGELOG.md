@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **A review belongs to a feature, not to a session id.** A review the human created without
+  naming a branch (the New review dialog never asked) was claimed on the fallback
+  `session/<id>`: the rail showed `session/20261030-…`, and the agent was told to push a branch
+  named after a timestamp. Every review now carries a feature branch from the moment it is
+  created — `feat/<title-slug>-<id-tail>`, e.g. `feat/wrong-branches-52e0` — and the New review
+  dialog has an optional *Feature branch* field whose placeholder shows that name while you type
+  the title. The header shows the branch, and clicking it renames it through the new
+  `PUT /api/sessions/{id}/branch`; a submitted round keeps its name, because the agent's worktree
+  was already created for it. Sessions claimed by v0.21 with a persisted `session/<id>` are read
+  back as their `feat/…` name (no rewrite of old folders), and the bridge's `work_key` derives the
+  same name, so the claim, the prompt and the rail agree. Tests: the API creates without a branch
+  and asserts claim work key, rail row and rename; the store test pins the naming; the e2e creates
+  a review through the dialog and asserts the rail branch is `feat/…`.
+
 - **A tag named like the base branch no longer kills the run.** The bridge picked the worktree's
   start point with a short ref (`dev`, `main`, `origin/dev`, …). This repository also has a tag
   `dev`, so `git worktree add` answered `warning: refname 'dev' is ambiguous` and

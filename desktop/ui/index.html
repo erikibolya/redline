@@ -19,7 +19,11 @@ try {
     <div class="brand"><span class="brand-mark"><i></i></span> RedLine</div>
     <div class="title">
       <b id="session-title">Loading…</b>
-      <span id="session-sub"></span>
+      <div class="subline">
+        <span id="session-sub"></span>
+        <button class="branch-chip" id="branch-edit" type="button" hidden
+                title="Change the feature branch this review runs on"></button>
+      </div>
     </div>
     <div class="header-actions">
       <button class="btn icon" data-agent-settings title="Agent settings" aria-label="Agent settings">
@@ -192,6 +196,9 @@ try {
     </select>
     <input id="f-project-new" type="text" placeholder="New project name" aria-label="New project name" hidden />
     <p class="field-hint" id="project-hint">Repositories are synced from the agent. <b>+ New project…</b> creates a label without a repo.</p>
+    <label for="f-branch">Feature branch (optional)</label>
+    <input id="f-branch" type="text" placeholder="feat/my-feature" spellcheck="false" autocomplete="off" aria-describedby="branch-hint" />
+    <p class="field-hint" id="branch-hint">The branch the agent works in and pushes. Empty means RedLine names it <b>feat/&lt;title&gt;</b>.</p>
     <label for="f-url">Page URL (optional)</label>
     <input id="f-url" type="text" placeholder="http://localhost:5016/button" spellcheck="false" aria-describedby="url-hint" />
     <p class="field-hint" id="url-hint">The page in the screenshot. If you add no image, RedLine opens this URL and captures it.</p>

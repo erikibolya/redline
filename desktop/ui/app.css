@@ -146,6 +146,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .pill.open { color: #93c5fd; border-color: #1e3a5f; background: #12233a; }
 .pill.submitted { color: #86efac; border-color: #14532d; background: #10231a; }
 .pill.resolved { color: #c4b5fd; border-color: #4c1d95; background: #1c142f; }
+.pill.confirmed { color: #86efac; border-color: #14532d; background: #10231a; }
+.pill.cancelled { color: #fca5a5; border-color: #7f1d1d; background: #2a1115; }
 [hidden] { display: none !important; }
 .pill[hidden] { display: none; }
 .pill.agent { color: #fbbf24; border-color: #78350f; background: #231a08; }
@@ -164,6 +166,25 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .pill.agent.working { color: #93c5fd; border-color: #1e3a5f; background: #12233a; }
 .pill.agent.replied { color: #86efac; border-color: #14532d; background: #10231a; }
 
+/* A feature decision is consequential, so it gets a real dialog instead of a native confirm. */
+.feature-dialog {
+  padding: 0; width: min(440px, calc(100vw - 32px));
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
+}
+.feature-dialog::backdrop {
+  background: rgba(3, 7, 12, .6);
+  backdrop-filter: blur(2px);
+}
+.feature-card { display: flex; flex-direction: column; gap: 10px; padding: 22px; }
+.feature-card h2 { margin: 0; font-size: 16px; }
+.feature-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+.feature-actions {
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+  margin-top: 8px; flex-wrap: wrap;
+}
+
 /* ---------------------------------------------------------------- buttons */
 /* Keyboard users must always see where focus is. */
 :where(button, a, input, select, textarea, [role="button"], [tabindex]):focus-visible {
@@ -179,6 +200,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .btn:active { transform: translateY(1px); }
 .btn.primary { background: var(--ok); border-color: var(--ok); color: #fff; font-weight: 600; }
 .btn.primary:hover { background: #15803d; }
+.btn.danger { background: #dc2626; border-color: #b91c1c; color: #fff; font-weight: 600; }
+.btn.danger:hover { background: #ef4444; }
 .btn.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
 .btn.ghost { background: transparent; }
 /* Icon buttons are a fixed square whatever the glyph inside ("?" is narrower than "☀"). */
@@ -265,6 +288,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .session .dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 5px; flex: none; background: #3b82f6; }
 .session.submitted .dot { background: var(--ok); }
 .session.resolved .dot { background: #8b5cf6; }
+.session.feature-confirmed .dot { background: #22c55e; }
+.session.feature-cancelled .dot { background: #64748b; }
 .session .body { min-width: 0; flex: 1; }
 .session .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session .sub { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -276,7 +301,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   color: var(--muted); font-size: 11px; line-height: 1;
 }
 .session .act:hover { color: var(--text); background: var(--panel-3); border-color: var(--border); }
-.session .act[data-act="delete"]:hover { color: #fda4af; border-color: #7f1d1d; background: #2a1115; }
+.session .act[data-act="cancel-feature"]:hover { color: #fda4af; border-color: #7f1d1d; background: #2a1115; }
 .chip.danger { border-color: #7f1d1d; color: #fda4af; }
 .chip.danger:hover { background: #2a1115; color: #fecdd3; }
 .session .badge {
@@ -285,6 +310,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: var(--panel-3); color: var(--muted); border: 1px solid var(--border);
 }
 .session .badge.new { background: var(--accent); border-color: var(--accent); color: #fff; }
+.session .badge.confirmed { background: #10231a; border-color: #14532d; color: #86efac; }
+.session .badge.cancelled { background: #2a1115; border-color: #7f1d1d; color: #fca5a5; }
 .session .badge.work {
   display: inline-flex; align-items: center; gap: 5px; padding: 0 8px;
   background: var(--panel-2); border-color: var(--accent); color: var(--accent);

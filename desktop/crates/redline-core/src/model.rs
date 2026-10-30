@@ -28,6 +28,13 @@ pub struct Meta {
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_at: Option<String>,
+    /// When the human confirmed the feature is complete (v0.21). This is the signal agents map
+    /// to their own workflow — RedLine itself never opens a PR or merges anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_confirmed_at: Option<String>,
+    /// When the human cancelled the feature without shipping it (v0.21).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_cancelled_at: Option<String>,
     /// The prompt the human wrote when submitting a round (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -78,6 +85,20 @@ impl Status {
             Status::Open => "open",
             Status::Submitted => "submitted",
             Status::Resolved => "resolved",
+        }
+    }
+}
+
+impl Meta {
+    /// The human's feature decision: `confirmed`, `cancelled`, or `pending` when they have not
+    /// decided yet. A `resolved` status alone (the agent finished a round) is not a decision.
+    pub fn feature_state(&self) -> &'static str {
+        if self.feature_confirmed_at.is_some() {
+            "confirmed"
+        } else if self.feature_cancelled_at.is_some() {
+            "cancelled"
+        } else {
+            "pending"
         }
     }
 }

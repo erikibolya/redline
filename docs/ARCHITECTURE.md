@@ -78,9 +78,12 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   "title": "Button / default",
   "url": "http://localhost:5016/button",
   "note": "Check hover and disabled",
-  "status": "open | submitted",
+  "status": "open | submitted | resolved",
   "created_at": "2026-10-28T11:11:13+00:00",
   "submitted_at": null,
+  "resolved_at": null,
+  "feature_confirmed_at": null,
+  "feature_cancelled_at": null,
   "image": "screenshot.png",
   "image_width": 1440,
   "image_height": 900

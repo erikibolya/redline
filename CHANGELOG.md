@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Each session is one feature.** The rail's ✓ now asks for confirmation and records
+  `feature_confirmed_at`; the ✕ is **Cancel feature** and records `feature_cancelled_at` instead
+  of deleting the review. Both close the session (`resolved`), keep the screenshot/annotations,
+  and are undone by ↺ Reopen. Agents read the decision as `feature_state`
+  (`pending`/`confirmed`/`cancelled`) from `GET /api/sessions`, MCP `get_feedback`,
+  `wait_for_feedback` and `list_reviews`; RedLine itself never touches git. A new submission or
+  agent round makes the feature pending again. Bulk mode gained **Confirm**; data deletion stays
+  in bulk **Delete** and **Delete done**.
+
 ## 0.20.0 — 2026-10-30
 
 - **A locked canvas also freezes the view.** While a submitted review waits for the agent, the

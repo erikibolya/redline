@@ -106,6 +106,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/annotations", post(submit))
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/api/sessions/{id}/reopen", post(reopen))
+        .route("/api/sessions/{id}/confirm-feature", post(confirm_feature))
+        .route("/api/sessions/{id}/cancel-feature", post(cancel_feature))
         .route("/api/sessions/{id}/cancel", post(cancel))
         .route("/api/sessions/{id}/history", get(history))
         .route("/api/sessions/{id}/thread", get(agent_thread))
@@ -382,6 +384,7 @@ async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Err
             let mut value = serde_json::to_value(&meta).unwrap_or(Value::Null);
             if let Some(object) = value.as_object_mut() {
                 object.insert("annotation_count".to_string(), json!(count));
+                object.insert("feature_state".to_string(), json!(meta.feature_state()));
             }
             value
         })
@@ -632,6 +635,20 @@ async fn reopen(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     Ok(Json(json!({ "meta": state.store.reopen(&id)? })))
+}
+
+async fn confirm_feature(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(json!({ "meta": state.store.confirm_feature(&id)? })))
+}
+
+async fn cancel_feature(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(json!({ "meta": state.store.cancel_feature(&id)? })))
 }
 
 async fn history(

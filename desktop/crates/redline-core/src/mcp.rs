@@ -109,7 +109,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "get_feedback",
-            "description": "Read the human's annotations, review.md and annotated screenshot for a session. Non-blocking.",
+            "description": "Read the human's annotations, review.md and annotated screenshot for a session. Non-blocking. feature_state is pending until the human confirms or cancels the feature.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "session_id": { "type": "string" } },
@@ -118,7 +118,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "wait_for_feedback",
-            "description": "Block until the human submits the review (or the timeout elapses), then return the feedback.",
+            "description": "Block until the human submits the review, confirms/cancels the feature, or the timeout elapses, then return the feedback (including feature_state).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -130,7 +130,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "list_reviews",
-            "description": "List review sessions, newest first, optionally filtered by status or project.",
+            "description": "List review sessions, newest first, optionally filtered by status or project. Each item includes feature_state (pending, confirmed, cancelled).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -201,7 +201,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "resolve",
-            "description": "Mark a session resolved once its annotations have been implemented.",
+            "description": "Mark a session resolved once its annotations have been implemented. This closes the review round; it is not the human's feature confirmation (feature_state stays pending).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -468,6 +468,9 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
                 "session_id": meta.id,
                 "title": meta.title,
                 "status": meta.status.as_str(),
+                "feature_state": meta.feature_state(),
+                "feature_confirmed_at": meta.feature_confirmed_at,
+                "feature_cancelled_at": meta.feature_cancelled_at,
                 "created_at": meta.created_at,
                 "submitted_at": meta.submitted_at,
                 "project": meta.project,
@@ -656,6 +659,9 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
     json!({
         "session_id": meta.id,
         "status": meta.status.as_str(),
+        "feature_state": meta.feature_state(),
+        "feature_confirmed_at": meta.feature_confirmed_at,
+        "feature_cancelled_at": meta.feature_cancelled_at,
         "title": meta.title,
         "url": meta.url,
         "note": meta.note,

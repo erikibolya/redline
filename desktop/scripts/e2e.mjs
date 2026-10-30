@@ -604,35 +604,116 @@ const main = async () => {
     check("diff noticed the new annotations", diff.added.length > 0, `${diff.added.length} added`);
   }
 
-  // ---- rail actions: mark done, then reopen
+  // ---- rail actions: confirm, reopen, cancel, reopen
   const row = `.session[data-id="${id}"]`;
+  const clickChip = (label) => page.evaluate((text) => {
+    const chip = Array.from(document.querySelectorAll(".chip"))
+      .find((element) => element.textContent.trim().startsWith(text));
+    chip?.click();
+  }, label);
+
   await page.hover(row);
-  await page.click(`${row} [data-act="resolve"]`);
+  await page.click(`${row} [data-act="confirm"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  const confirmDialog = await page.evaluate(() => ({
+    title: document.querySelector("#feature-dialog-title").textContent,
+    body: document.querySelector("#feature-dialog-body").textContent,
+    accept: document.querySelector("#feature-accept").textContent,
+    primary: document.querySelector("#feature-accept").classList.contains("primary"),
+  }));
+  check("confirming a feature asks for agreement first",
+    confirmDialog.title === "Confirm this feature?"
+      && confirmDialog.accept === "Confirm feature"
+      && confirmDialog.body.includes("pull request")
+      && confirmDialog.primary,
+    JSON.stringify(confirmDialog));
+  await page.click("#feature-accept");
   let status = "";
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const meta = await api(`/api/sessions/${id}`);
     status = meta.meta.status;
-    if (status === "resolved") break;
+    if (status === "resolved" && meta.meta.feature_confirmed_at) break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  check("rail 'mark done' resolves the session", status === "resolved", status);
+  const confirmed = await page.evaluate(() => ({
+    stamped: Boolean(window.redline.meta?.feature_confirmed_at),
+    pill: document.querySelector("#session-status")?.textContent || "",
+  }));
+  check("rail 'confirm' closes the feature and records the decision",
+    status === "resolved" && confirmed.stamped && confirmed.pill === "confirmed",
+    JSON.stringify({ status, ...confirmed }));
 
-  // Resolved sessions leave the default 'Active' view, so reopen them from the 'Done' filter.
-  await page.evaluate(() => {
-    const chip = Array.from(document.querySelectorAll(".chip"))
-      .find((element) => element.textContent.trim().startsWith("Done"));
-    chip?.click();
-  });
+  // Resolved sessions leave the default 'Active' view, so check the badge and reopen them from
+  // the 'Done' filter.
+  await clickChip("Done");
+  await page.waitForSelector(row, { timeout: 5000 });
+  const confirmedRow = await page.evaluate((sessionId) => ({
+    badge: document.querySelector(`.session[data-id="${sessionId}"] .badge`)?.textContent || "",
+    row: Boolean(document.querySelector(`.session[data-id="${sessionId}"] [data-act="reopen"]`)),
+  }), id);
+  check("a confirmed feature shows a badge and a reopen action",
+    confirmedRow.badge.includes("confirmed") && confirmedRow.row, JSON.stringify(confirmedRow));
+  await page.hover(row);
+  await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
+  let reopened = {};
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const meta = await api(`/api/sessions/${id}`);
+    reopened = meta.meta;
+    if (reopened.status === "open") break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("rail 'reopen' clears the confirmation and puts it back in the queue",
+    reopened.status === "open" && !reopened.feature_confirmed_at
+      && !reopened.feature_cancelled_at,
+    JSON.stringify({ status: reopened.status, confirmed: reopened.feature_confirmed_at }));
+
+  await clickChip("Active");
+  await page.waitForSelector(row, { timeout: 5000 });
+  await page.hover(row);
+  await page.click(`${row} [data-act="cancel-feature"]`);
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  const cancelDialog = await page.evaluate(() => ({
+    title: document.querySelector("#feature-dialog-title").textContent,
+    body: document.querySelector("#feature-dialog-body").textContent,
+    accept: document.querySelector("#feature-accept").textContent,
+    danger: document.querySelector("#feature-accept").classList.contains("danger"),
+  }));
+  check("cancelling a feature asks first and says nothing is merged",
+    cancelDialog.title === "Cancel this feature?"
+      && cancelDialog.accept === "Cancel feature"
+      && cancelDialog.body.includes("Nothing will be merged")
+      && cancelDialog.danger,
+    JSON.stringify(cancelDialog));
+  await page.click("#feature-accept");
+  let cancelled = {};
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const meta = await api(`/api/sessions/${id}`);
+    cancelled = meta.meta;
+    if (cancelled.feature_cancelled_at) break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("rail 'cancel' records the cancelled feature without deleting the review",
+    cancelled.status === "resolved" && Boolean(cancelled.feature_cancelled_at)
+      && !cancelled.feature_confirmed_at,
+    JSON.stringify({ status: cancelled.status, cancelled: cancelled.feature_cancelled_at }));
+
+  await clickChip("Done");
   await page.waitForSelector(row, { timeout: 5000 });
   await page.hover(row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
+  let reopenedCancel = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const meta = await api(`/api/sessions/${id}`);
-    status = meta.meta.status;
-    if (status !== "resolved") break;
+    reopenedCancel = meta.meta;
+    if (reopenedCancel.status === "open") break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  check("rail 'reopen' puts it back in the queue", status !== "resolved", status);
+  check("reopening a cancelled feature clears both decisions",
+    reopenedCancel.status === "open" && !reopenedCancel.feature_cancelled_at
+      && !reopenedCancel.feature_confirmed_at,
+    JSON.stringify({ status: reopenedCancel.status }));
+  await clickChip("Active");
+  await page.waitForSelector(row, { timeout: 5000 });
 
   const annotated = await fetch(`${BASE}/sessions/${id}/annotated.png`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
@@ -877,7 +958,7 @@ const main = async () => {
     touch.width === "40px" && touch.height === "40px" && touch.opacity === "1",
     JSON.stringify(touch));
 
-  // ---- bulk resolve from the rail
+  // ---- bulk confirm from the rail
   // The rail may still be filtered to Done from the reopen test; new sessions are active.
   await page.evaluate(() => {
     const chip = [...document.querySelectorAll(".chip")]
@@ -905,12 +986,20 @@ const main = async () => {
   }, extra);
   const bulkSelected = await page.evaluate(() => window.redline.rail.selection.size);
   check("bulk mode selects sessions without opening them", bulkSelected === 2, `${bulkSelected}`);
-  await page.click("#bulk-resolve");
+  await page.click("#bulk-confirm");
+  await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  await page.click("#feature-accept");
   await page.waitForFunction(() => window.redline.rail.bulkMode === false, { timeout: 10000 });
   const bulkStatuses = [];
-  for (const id of extra) bulkStatuses.push((await api(`/api/sessions/${id}`)).meta.status);
-  check("bulk resolve marks every selected session done",
-    bulkStatuses.every((status) => status === "resolved"), bulkStatuses.join(","));
+  const bulkConfirmed = [];
+  for (const id of extra) {
+    const meta = (await api(`/api/sessions/${id}`)).meta;
+    bulkStatuses.push(meta.status);
+    bulkConfirmed.push(Boolean(meta.feature_confirmed_at));
+  }
+  check("bulk confirm marks every selected feature confirmed",
+    bulkStatuses.every((status) => status === "resolved")
+      && bulkConfirmed.every(Boolean), JSON.stringify({ bulkStatuses, bulkConfirmed }));
 
   // ---- accessible names and a live region
   const a11y = await page.evaluate(() => ({

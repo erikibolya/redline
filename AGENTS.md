@@ -232,6 +232,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   the round (`status == submitted`), not set by the last writer; the server refuses to revive a
   finished round, the UI checks both fields, and the card always shows the age of the last step so
   "is it really working?" has an answer that is not animation.
+- **A delete button is not a cancel button, and a UI badge is not a signal.** The rail's ✕ removed
+  the review folder, so "cancel this feature" had no non-destructive action; the ✓ only set
+  `resolved`, which told an agent nothing about shipping. Feature decisions now have their own
+  additive stamps (`feature_confirmed_at` / `feature_cancelled_at`) exposed as `feature_state` in
+  `GET /api/sessions`, `get_feedback`, `wait_for_feedback` and `list_reviews`; the ✓/✕ ask first,
+  ✕ keeps the files, and RedLine never touches git — the agent owns the PR/merge workflow. Keep
+  destructive actions out of the row people click by reflex, and make every human decision
+  readable by the agent, not just visible in the UI.
 
 ## 8. Working rules
 

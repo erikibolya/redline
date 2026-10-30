@@ -338,6 +338,78 @@ async fn sessions_can_be_resolved_and_reopened() {
 }
 
 #[tokio::test]
+async fn features_can_be_confirmed_cancelled_and_reopened() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "feature", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/confirm-feature"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["meta"]["status"], "resolved");
+    assert!(body["meta"]["feature_confirmed_at"].is_string());
+    assert_eq!(body["meta"]["feature_cancelled_at"], Value::Null);
+
+    let request = Request::builder()
+        .uri("/api/sessions")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, listed) = send(&h.app, request).await;
+    let item = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == id)
+        .unwrap();
+    assert_eq!(item["feature_state"], "confirmed");
+
+    let (_, _, body) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
+    )
+    .await;
+    assert_eq!(body["meta"]["status"], "open");
+    assert_eq!(body["meta"]["feature_confirmed_at"], Value::Null);
+    assert_eq!(body["meta"]["feature_cancelled_at"], Value::Null);
+
+    let (_, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/cancel-feature"),
+            json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(body["meta"]["status"], "resolved");
+    assert!(body["meta"]["feature_cancelled_at"].is_string());
+    assert_eq!(body["meta"]["feature_confirmed_at"], Value::Null);
+
+    let (_, _, body) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
+    )
+    .await;
+    assert_eq!(body["meta"]["feature_cancelled_at"], Value::Null);
+}
+
+#[tokio::test]
 async fn history_diff_reports_what_changed_between_rounds() {
     let h = harness();
     let (_, _, created) = send(

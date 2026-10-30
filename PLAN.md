@@ -98,17 +98,20 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
 - No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
 - Repo routing is single-agent: all agents watch the same queue; a claim/filter router is next.
+- **Feature confirmation is a signal, not a git action.** RedLine records `feature_state`; each
+  agent maps `confirmed` to its own workflow (this repo: feature branch → PR → required checks →
+  merge into `dev`). There is no server-side GitHub token.
 - No server-side pagination; the rail renders everything it gets.
 - Text notes have a fixed font family, one size per note.
-- The rail's per-session actions appear on hover, so they are invisible to touch users.
 
 ## Testing plan
 
-- `cargo test --workspace` — 58 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
-  capture error paths, history archival, diff semantics, path/config helpers, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 60 checks in real Chromium: tool clicks, coordinate mapping at 46 %
+- `cargo test --workspace` — 70 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+  capture error paths, history archival, diff semantics, feature confirmation/cancel, path/config
+  helpers, CLI end-to-end.
+- `desktop/scripts/e2e.sh` — 94 checks in real Chromium: tool clicks, coordinate mapping at 46 %
   zoom, drag, undo, inline text (diacritics), submit, multi-select, align, grouping, z-order, text
-  size, history, diff, rail resolve/reopen.
+  size, history, diff, feature confirm/cancel dialogs, rail reopen and bulk confirm.
 - CI runs both on every push; releases are cut from tags only after green.
 
 ## Definition of done

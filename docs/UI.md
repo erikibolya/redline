@@ -201,6 +201,18 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   branch lock. One branch has one owner. The bridge runs up to four claim workers
   (`REDLINE_AGENT_WORKERS`), each in its own git worktree; the server enforces the limits.
 
+## Agent presence (unreleased)
+
+- The header carries an agent chip next to the settings gear: green **N agents connected** or
+  amber **No agent connected**, with the agent ids in its tooltip. Clicking it opens the agent
+  panel.
+- When nobody is online the rail head shows **No agent connected. Reviews will wait until an
+  agent connects.** The warning is informational: creating, annotating and submitting a review
+  stays enabled, so a bridge can be connected afterwards without losing work.
+- Presence is the bridge's own heartbeat: repo sync every 60 s (and every `next`/claim call)
+  touches `last_seen`; an agent stays online for 180 s. The dashboard and the editor share the
+  same chip, fed by `GET /api/agent/status` every 10 s.
+
 ## Dialog frame (unreleased)
 
 Every popup is one shell: a fixed header with the title and a 32 × 32 px **X** at its right

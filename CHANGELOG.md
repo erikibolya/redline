@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The server says whether an agent is listening.** A submitted review with no bridge behind it
+  waited silently; nothing on screen explained why. `AgentControl` now records `last_seen` on
+  every agent-facing call (repo sync is the periodic 60 s heartbeat, `next`/claims touch it too),
+  persists `/data/agent-presence.json`, and `GET /api/agent/status` exposes `online` + the
+  per-agent rows (online for 180 s). The header chip on both pages says *N agents connected* or
+  *No agent connected*; when nobody is online the rail head shows a warning that reviews will
+  wait. Nothing is blocked: work can still be created, annotated and submitted. The e2e checks
+  both chip states, the warning, recovery after a poll, and the chip's panel. Rust tests cover
+  the online/offline expiry and the API status payload.
 - **Finishing the open review returns to the dashboard, and filters do not leave a ghost selected.**
   Confirming, cancelling or deleting the review currently on screen left the human staring at the
   same canvas (or a deleted session); a filter or search that no longer contained the open review

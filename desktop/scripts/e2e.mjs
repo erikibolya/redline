@@ -182,6 +182,49 @@ const main = async () => {
       && editorNewReview.background === editorNewReview.accent,
     JSON.stringify(editorNewReview));
 
+  // ---- agent presence is visible (header chip + rail warning) and never blocks the review
+  await page.waitForFunction(
+    () => document.querySelector("#agent-status")?.classList.contains("online"),
+    { timeout: 15000 },
+  );
+  const agentOnline = await page.evaluate(() => ({
+    label: document.querySelector("#agent-status .agent-label")?.textContent || "",
+    warningHidden: Boolean(document.querySelector("#agent-warning")?.hidden),
+    title: document.querySelector("#agent-status")?.title || "",
+    classes: document.querySelector("#agent-status")?.className || "",
+  }));
+  check("the header says an agent is connected",
+    agentOnline.classes.includes("online") && agentOnline.label.includes("connected")
+      && agentOnline.warningHidden,
+    JSON.stringify(agentOnline));
+
+  await page.evaluate(() => window.redlineAgentStatus.render({ online: 0, agents: [] }));
+  const agentOffline = await page.evaluate(() => ({
+    offline: document.querySelector("#agent-status")?.classList.contains("offline"),
+    label: document.querySelector("#agent-status .agent-label")?.textContent || "",
+    warningVisible: !document.querySelector("#agent-warning")?.hidden,
+    editorStillThere: Boolean(window.redline?.image),
+  }));
+  check("no agent shows a visible warning without blocking the editor",
+    agentOffline.offline && agentOffline.label === "No agent connected"
+      && agentOffline.warningVisible && agentOffline.editorStillThere,
+    JSON.stringify(agentOffline));
+  await page.evaluate(() => window.redlineAgentStatus.refresh());
+  await page.waitForFunction(
+    () => document.querySelector("#agent-status")?.classList.contains("online"),
+    { timeout: 5000 },
+  );
+  check("agent status recovers when a bridge polls", true);
+
+  await page.click("#agent-status");
+  await page.waitForSelector("#agent-settings-dialog[open]", { timeout: 5000 });
+  await page.click("#agent-settings-close");
+  await page.waitForFunction(
+    () => !document.querySelector("#agent-settings-dialog")?.open,
+    { timeout: 5000 },
+  );
+  check("the agent chip opens the agent panel", true);
+
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
   const chrome = await page.evaluate(() => {
     const header = document.querySelector(".header");
@@ -1739,6 +1782,15 @@ const main = async () => {
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
   check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
+  const listAgent = await page.evaluate(() => ({
+    chip: Boolean(document.querySelector("#agent-status")),
+    online: document.querySelector("#agent-status")?.classList.contains("online") || false,
+    label: document.querySelector("#agent-status .agent-label")?.textContent || "",
+    warningHidden: Boolean(document.querySelector("#agent-warning")?.hidden),
+  }));
+  check("the dashboard shows the same connected agent",
+    listAgent.chip && listAgent.online && listAgent.label.includes("connected")
+      && listAgent.warningHidden, JSON.stringify(listAgent));
 
   // A decided feature is finished work, not a review to resume: the gallery must not keep it.
   const galleryState = await page.evaluate(() => ({

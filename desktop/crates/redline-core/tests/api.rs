@@ -198,6 +198,32 @@ async fn api_responses_are_not_cached() {
 }
 
 #[tokio::test]
+async fn repo_sync_reports_an_online_agent() {
+    let h = harness();
+    let (status, _, synced) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/repos",
+            json!({ "agent_id": "holly", "repos": [] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+
+    let request = Request::builder()
+        .uri("/api/agent/status")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["online"], 1);
+    assert_eq!(body["agents"][0]["agent_id"], "holly");
+    assert_eq!(body["agents"][0]["online"], true);
+}
+
+#[tokio::test]
 async fn create_submit_and_read_back_round_trip() {
     let h = harness();
 

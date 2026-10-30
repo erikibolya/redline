@@ -215,6 +215,25 @@ POST /api/agent/claims/…/release     {"agent_id": "holly"}
 `{"claim": {…}, "session": {…}, "limits": {…}}`. The branch key is `session.branch`, or
 `session/<id>` when the agent did not declare one.
 
+### Agent presence
+
+Every agent-facing call records a `last_seen`: `POST /api/agent/repos` is the periodic heartbeat
+(the bridge calls it every 60 s), and `next`/claim calls update it too. `GET /api/agent/status`
+adds the presence list to the settings/claims payload:
+
+```json
+{
+  "online": 1,
+  "agents": [
+    {"agent_id": "holly", "last_seen": 1793000000, "online": true}
+  ]
+}
+```
+
+An agent is `online` for **180 s** after its last call (three missed repo-sync beats); the
+presence file keeps its last-seen row for seven days. Presence is informational: RedLine never
+blocks creating or submitting a review when no agent is connected.
+
 ### `GET /health`
 
 `{"ok": true}`.

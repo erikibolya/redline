@@ -149,6 +149,23 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 /* A hairline between the app tools and the two panel toggles: they act on the layout, not the
    review, and used to read as one row of mystery glyphs. */
 .header-sep { width: 1px; height: 20px; margin: 0 4px; background: var(--border); }
+/* Presence is words plus a dot, never colour alone: "No agent connected" must be readable. */
+.agent-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 32px; padding: 0 10px; border-radius: 999px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  font-size: 11.5px; white-space: nowrap;
+}
+.agent-chip:hover { background: var(--panel-3); color: var(--text); }
+.agent-chip .agent-dot {
+  width: 7px; height: 7px; border-radius: 50%; flex: none; background: #64748b;
+}
+.agent-chip.online { color: #86efac; border-color: #14532d; background: #10231a; }
+.agent-chip.online .agent-dot { background: #22c55e; box-shadow: 0 0 0 3px rgba(34,197,94,.16); }
+.agent-chip.offline { color: #fbbf24; border-color: #78350f; background: #231a08; }
+.agent-chip.offline .agent-dot { background: #f59e0b; }
+[data-theme="light"] .agent-chip.online { color: #047857; background: #ecfdf5; border-color: #a7f3d0; }
+[data-theme="light"] .agent-chip.offline { color: #b45309; background: #fffbeb; border-color: #fde68a; }
 [hidden] { display: none !important; }
 #submit.btn.stop { background: #dc2626; border-color: #b91c1c; color: #fff; }
 #submit.btn.stop:hover { background: #ef4444; }
@@ -299,6 +316,11 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   position: relative;
 }
 .rail-head { padding: 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--border-soft); }
+.agent-warning {
+  padding: 7px 9px; border-radius: 7px; font-size: 11px; line-height: 1.4;
+  color: #fbbf24; background: #231a08; border: 1px solid #78350f;
+}
+[data-theme="light"] .agent-warning { color: #92400e; background: #fffbeb; border-color: #fde68a; }
 .search {
   width: 100%; padding: 7px 10px; border-radius: var(--radius);
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
@@ -789,4 +811,7 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 @media (max-width: 900px) {
   .app { grid-template-columns: 0 minmax(0, 1fr) 0; }
   .app .rail, .app .inspector { display: none; }
+  /* The rail warning is gone on small screens; keep the header dot and hide only the words. */
+  .agent-chip .agent-label { display: none; }
+  .agent-chip { padding: 0 8px; }
 }

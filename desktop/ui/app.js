@@ -515,6 +515,60 @@ const AgentSettings = {
 
 const unfiltered = (query) => !query;
 
+/* ---------------------------------------------------------------- agent presence */
+
+/**
+ * "Is anybody listening?" One server endpoint feeds the header chip and the rail warning. The
+ * status is deliberately non-blocking: reviews can always be created and submitted, they just
+ * wait until a bridge connects.
+ */
+const AgentStatus = {
+  timer: null,
+  data: null,
+
+  start() {
+    this.refresh();
+    clearInterval(this.timer);
+    this.timer = setInterval(() => this.refresh(), 10000);
+  },
+
+  async refresh() {
+    try {
+      this.render(await api("/api/agent/status"));
+    } catch {
+      this.render(null);
+    }
+  },
+
+  render(data) {
+    this.data = data;
+    const agents = data?.agents || [];
+    const online = data ? (data.online || 0) : 0;
+    const label = !data
+      ? "Agent status unavailable"
+      : online
+        ? `${online} agent${online === 1 ? "" : "s"} connected`
+        : "No agent connected";
+    const title = !data
+      ? "Could not read the agent status from this server"
+      : online
+        ? `Connected: ${agents.filter((agent) => agent.online).map((agent) => agent.agent_id).join(", ")}`
+        : "No agent is polling this server — submitted reviews will wait";
+    $$("#agent-status").forEach((chip) => {
+      chip.classList.toggle("online", Boolean(data && online));
+      chip.classList.toggle("offline", Boolean(data && !online));
+      chip.classList.toggle("unknown", !data);
+      chip.title = title;
+      chip.setAttribute("aria-label", title);
+      const text = chip.querySelector(".agent-label");
+      if (text) text.textContent = label;
+    });
+    $$("#agent-warning").forEach((warning) => {
+      warning.hidden = !data || online > 0;
+    });
+  },
+};
+
 /* ------------------------------------------------------------------ theme */
 
 /// The toggle shows the theme it switches *to*, as an inline SVG: a glyph swap is not a promise
@@ -3331,6 +3385,10 @@ document.addEventListener("DOMContentLoaded", () => {
     button.addEventListener("click", () => Theme.toggle()));
   $$("[data-agent-settings]").forEach((button) =>
     button.addEventListener("click", () => AgentSettings.open()));
+  AgentStatus.start();
+  window.redlineAgentStatus = AgentStatus;
+  $$("#agent-status").forEach((chip) =>
+    chip.addEventListener("click", () => AgentSettings.open()));
   Help.wire();
   addEventListener("keydown", (event) => {
     if (event.key === "?" && document.body.dataset.page !== "editor") {

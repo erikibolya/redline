@@ -297,6 +297,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   history row the focus stays on the row, so the gesture silently died — arm space while the
   pointer hovers the stage, never while typing. Test the real gestures (drag, wheel, ctrl+wheel,
   space+drag under row focus), not only `viewing`/`locked` flags.
+- **A queue with no listener is a silent dead end.** A submitted review with no bridge behind it
+  looked exactly like one the agent was about to pick up; the human had no way to tell "nobody is
+  listening" from "be patient". Record presence from the bridge's existing periodic repo sync
+  (and every `next`/claim call), expose an online window (180 s), and put it where the human
+  already looks: a header chip with words, plus a rail warning when the count is zero. Keep it
+  non-blocking — never trap work behind a bridge that is down — but never let a dead queue look
+  alive.
 - **A submission is not automatically a new round.** Every `POST /annotations` archived its own
   copy, so *STOP* → *Submit again* with nothing changed left the same annotations and the same
   PNG twice in History, and a session the human thought of as "one task" read as two (2026-10-30).

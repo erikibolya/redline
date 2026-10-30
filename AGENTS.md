@@ -309,6 +309,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   finished. Move configuration into a dialog opened from the status chip, and leave only an
   invitation while the condition that needs it (no bridge online) is true. Test the dialog from
   both pages, the masked token, and the invitation appearing/disappearing with presence.
+- **A local page's back link is not a session link.** The Servers and Setup pages are served by
+  the desktop app's local server, but the window may be pointed at a remote profile. Their
+  `href="/"` returned to the local dashboard, which has no reviews and no agent presence — the
+  human saw "No agent connected" and had to switch servers twice to recover. Read the active
+  profile (`active_url`) from the local API and follow that origin; test the remote and local
+  cases, not only the headless page.
 - **A submission is not automatically a new round.** Every `POST /annotations` archived its own
   copy, so *STOP* → *Submit again* with nothing changed left the same annotations and the same
   PNG twice in History, and a session the human thought of as "one task" read as two (2026-10-30).

@@ -1773,7 +1773,7 @@ const main = async () => {
     css: getComputedStyle(document.body).backgroundColor,
   }));
   check("setup page goes back to the server list and has no duplicate standalone switch",
-    setup.back.startsWith("/") && setup.primary.includes("accent")
+    setup.back === `${BASE}/?t=${TOKEN}` && setup.primary.includes("accent")
       && setup.secondary.includes("btn") && setup.secondaryHref.includes("/servers")
       && !setup.localSwitch && setup.card !== "0px",
     JSON.stringify(setup));
@@ -1832,6 +1832,52 @@ const main = async () => {
       && removeButton.light.background === "rgba(0, 0, 0, 0)"
       && removeButton.dark.contrast >= 4.5 && removeButton.light.contrast >= 4.5,
     JSON.stringify(removeButton));
+
+  // The local Servers/Setup pages must send "Back to sessions" to the *active* server. The e2e
+  // server has no config file, so answer the profile endpoints like the desktop app would.
+  await page.setRequestInterception(true);
+  const profiles = (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path !== "/api/servers" && path !== "/api/setup") {
+      request.continue();
+      return;
+    }
+    const body = path === "/api/setup"
+      ? {
+        mode: "remote", remote_url: "http://remote.example:8788", active_name: "Remote",
+        servers: 1, local_url: BASE, active_url: `${BASE}/?t=remote-token`,
+      }
+      : {
+        servers: [{ id: "remote", name: "Remote", url: "http://remote.example:8788", has_token: true, active: true }],
+        active: "remote", local_url: BASE, active_name: "Remote",
+        active_url: `${BASE}/?t=remote-token`,
+      };
+    request.respond({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(body),
+    });
+  };
+  page.on("request", profiles);
+  await page.goto(`${BASE}/servers?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => document.querySelector("#back")?.href.endsWith("/?t=remote-token"),
+    { timeout: 5000 },
+  );
+  const serversBack = await page.$eval("#back", (el) => el.href);
+  check("servers Back to sessions returns to the active server",
+    serversBack === `${BASE}/?t=remote-token`, serversBack);
+
+  await page.goto(`${BASE}/setup?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => document.querySelector("#back")?.href.endsWith("/?t=remote-token"),
+    { timeout: 5000 },
+  );
+  const setupBack = await page.$eval("#back", (el) => el.href);
+  check("setup Back to sessions returns to the active server",
+    setupBack === `${BASE}/?t=remote-token`, setupBack);
+  page.off("request", profiles);
+  await page.setRequestInterception(false);
 
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });

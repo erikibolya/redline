@@ -124,6 +124,8 @@ async function loadStatus() {
     const response = await fetch(`/api/setup?t=${encodeURIComponent(localToken)}`);
     if (!response.ok) return;
     const state = await response.json();
+    // Back to sessions means the active server, not this local setup origin.
+    if (state.active_url) back.href = state.active_url;
     const current = document.getElementById("current");
     if (state.mode === "remote") {
       current.innerHTML = `Currently connected to <b>${state.active_name || state.remote_url}</b>

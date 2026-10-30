@@ -2211,7 +2211,18 @@ async fn switching_servers_keeps_every_profile_and_token() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["servers"].as_array().unwrap().len(), 2);
     assert_eq!(body["active"], "dev");
+    assert_eq!(body["active_url"], "https://dev.example/?t=d");
     assert!(body["servers"][0].get("token").is_none());
+
+    let request = Request::builder()
+        .uri("/api/setup")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, setup) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(setup["active_url"], "https://dev.example/?t=d");
+    assert_eq!(setup["remote_url"], "https://dev.example");
 
     let request = Request::builder()
         .method("POST")
@@ -2224,6 +2235,15 @@ async fn switching_servers_keeps_every_profile_and_token() {
     assert_eq!(body["open_url"], "https://prod.example/?t=p");
 
     let request = Request::builder()
+        .uri("/api/servers")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["active_url"], "https://prod.example/?t=p");
+
+    let request = Request::builder()
         .method("POST")
         .uri("/api/setup/disconnect")
         .header("authorization", format!("Bearer {TOKEN}"))
@@ -2231,6 +2251,19 @@ async fn switching_servers_keeps_every_profile_and_token() {
         .unwrap();
     let (status, _, _) = send(&h.app, request).await;
     assert_eq!(status, StatusCode::OK);
+
+    let request = Request::builder()
+        .uri("/api/setup")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, setup) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(setup["mode"], "local");
+    assert_eq!(
+        setup["active_url"],
+        format!("http://127.0.0.1:8788/?t={TOKEN}")
+    );
 
     let saved: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();

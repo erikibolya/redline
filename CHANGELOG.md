@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The dashboard gallery is for work in progress.** `renderGallery` listed the last twelve
+  sessions regardless of state, so a confirmed or cancelled feature kept a large screenshot card
+  on `/` even though it no longer needed the human. The gallery now keeps only sessions whose
+  feature decision is still pending, re-renders after a rail action/purge/bulk decision, and each
+  card carries `data-session` for the test. Decided reviews remain reachable through the rail's
+  All/Done filters. The e2e confirms and cancels two sessions, opens `/` with the All filter, and
+  asserts every card belongs to a pending session.
 - **A historical round is a viewer, not a dead image.** Opening a round from History left the
   canvas frozen: `pointerdown` returned early whenever `viewing` was set, so no pan or pinch
   survived, and the "Viewing round N" pill sat inside the stage without its own pointer guard.

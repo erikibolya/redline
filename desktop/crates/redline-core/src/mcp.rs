@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::model::{AnnotationSet, Meta, ShipStatus, Status};
-use crate::store::{ShipReport, Store};
+use crate::model::{AnnotationSet, HandoffStatus, Meta, Status};
+use crate::store::{HandoffReport, Store};
 use crate::MCP_PROTOCOL_VERSION;
 
 pub struct McpContext<'a> {
@@ -246,21 +246,20 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
-            "name": "ship_status",
-            "description": "Report the result of a confirmed feature's ship run: the pull request is open, merged, closed or could not be shipped. The human's rail shows this state. Only call it for a feature the human confirmed.",
+            "name": "handoff_status",
+            "description": "Report the result of a confirmed feature's handoff. Generic: the integration decides what 'done' means (merged PR, deployment, publication, …) and may attach a label, a URL and a detail message. The human's rail shows this state. Only call it for a feature the human confirmed.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "session_id": { "type": "string" },
                     "state": {
                         "type": "string",
-                        "enum": ["opened", "merged", "failed", "closed"],
-                        "description": "opened = PR created but not merged yet; merged = merged into the integration branch; failed/closed = no merge."
+                        "enum": ["done", "failed"],
+                        "description": "done = the integration finished its post-confirmation action; failed = it could not finish (the rail offers a retry)."
                     },
-                    "pr_url": { "type": "string", "description": "Full pull-request URL (required for opened/merged)." },
-                    "pr_number": { "type": "number" },
-                    "merge_commit": { "type": "string" },
-                    "message": { "type": "string", "description": "The failing check or reason when state=failed." }
+                    "label": { "type": "string", "description": "Short rail label chosen by the integration, e.g. merged, deployed, published." },
+                    "url": { "type": "string", "description": "Optional link to the PR/environment/document." },
+                    "message": { "type": "string", "description": "Detail or failure reason, shown in the rail's tooltip." }
                 },
                 "required": ["session_id", "state"]
             }
@@ -290,7 +289,7 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
         "progress" => progress(ctx, &args),
         "reply" => reply(ctx, &args),
         "resolve" => resolve(ctx, &args),
-        "ship_status" => ship_status(ctx, &args),
+        "handoff_status" => handoff_status(ctx, &args),
         "capture_review" => capture_review(ctx, &args).await,
         other => Err(format!("unknown tool: {other}")),
     };
@@ -637,7 +636,7 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
                 "feature_state": meta.feature_state(),
                 "feature_confirmed_at": meta.feature_confirmed_at,
                 "feature_cancelled_at": meta.feature_cancelled_at,
-                "ship": meta.ship,
+                "handoff": meta.handoff,
                 "created_at": meta.created_at,
                 "submitted_at": meta.submitted_at,
                 "project": meta.project,
@@ -880,64 +879,40 @@ fn resolve(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     )
 }
 
-/// The ship run's only write into RedLine: a PR URL plus a terminal state. The agent owns git;
-/// the server only records what happened so the rail can say "PR #46" or "merged".
-fn ship_status(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+/// The handoff's only write into RedLine: a generic status plus the integration's label, URL
+/// and message. The server never learns what git or a deployment is.
+fn handoff_status(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
     let state = string_arg(args, "state").ok_or("state is required")?;
     let status = match state.as_str() {
-        "opened" => ShipStatus::Opened,
-        "merged" => ShipStatus::Merged,
-        "failed" => ShipStatus::Failed,
-        "closed" => ShipStatus::Closed,
-        other => {
-            return Err(format!(
-                "state must be opened, merged, failed or closed, not {other:?}"
-            ))
-        }
+        "done" => HandoffStatus::Done,
+        "failed" => HandoffStatus::Failed,
+        other => return Err(format!("state must be done or failed, not {other:?}")),
     };
-    let pr_url = string_arg(args, "pr_url");
-    if status == ShipStatus::Opened && pr_url.is_none() {
-        return Err("pr_url is required when state is opened".to_string());
-    }
-    if status == ShipStatus::Merged && pr_url.is_none() {
-        // The opened report normally carried the URL; a merged follow-up may omit it.
-        let known = ctx
-            .store
-            .require(&id)
-            .ok()
-            .and_then(|meta| meta.ship)
-            .and_then(|ship| ship.pr_url)
-            .is_some();
-        if !known {
-            return Err("pr_url is required when state is merged".to_string());
-        }
-    }
-    if let Some(url) = pr_url.as_deref() {
+    let label = string_arg(args, "label");
+    let url = string_arg(args, "url");
+    if let Some(url) = url.as_deref() {
         if !(url.starts_with("https://") || url.starts_with("http://")) {
-            return Err("pr_url must be an http(s) URL".to_string());
+            return Err("url must be an http(s) URL".to_string());
         }
     }
-    let pr_number = args.get("pr_number").and_then(Value::as_u64);
-    let merge_commit = string_arg(args, "merge_commit");
     let message = string_arg(args, "message");
     let meta = ctx
         .store
-        .report_ship(
+        .report_handoff(
             &id,
-            ShipReport {
+            HandoffReport {
                 status,
-                pr_url,
-                pr_number,
-                merge_commit,
-                error: message,
+                label,
+                url,
+                message,
             },
         )
         .map_err(|err| err.to_string())?;
     Ok(json!({
         "session_id": meta.id,
         "feature_state": meta.feature_state(),
-        "ship": meta.ship,
+        "handoff": meta.handoff,
     }))
 }
 
@@ -966,7 +941,7 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         "feature_state": meta.feature_state(),
         "feature_confirmed_at": meta.feature_confirmed_at,
         "feature_cancelled_at": meta.feature_cancelled_at,
-        "ship": meta.ship,
+        "handoff": meta.handoff,
         "title": meta.title,
         "url": meta.url,
         "note": meta.note,

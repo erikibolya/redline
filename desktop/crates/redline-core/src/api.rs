@@ -138,7 +138,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/reopen", post(reopen))
         .route("/api/sessions/{id}/confirm-feature", post(confirm_feature))
         .route("/api/sessions/{id}/cancel-feature", post(cancel_feature))
-        .route("/api/sessions/{id}/ship", post(request_ship))
+        .route("/api/sessions/{id}/handoff", post(request_handoff))
+        // Pre-release v0.23 clients used this name; keep it as an alias while the field moves to
+        // the generic handoff vocabulary.
+        .route("/api/sessions/{id}/ship", post(request_handoff))
         .route("/api/sessions/{id}/cancel", post(cancel))
         .route("/api/sessions/{id}/history", get(history))
         .route("/api/sessions/{id}/thread", get(agent_thread))
@@ -535,7 +538,7 @@ async fn sync_agent_repos(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?
-        .touch(&agent);
+        .touch(&agent, None);
     if body.repos.len() > 200 {
         return Err(Error::BadRequest(
             "too many repositories (max 200)".to_string(),
@@ -599,8 +602,8 @@ struct AgentRelease {
 struct NextBody {
     agent_id: String,
     /// Job kinds this bridge understands. Older bridges omit it and only ever receive review
-    /// work; a new bridge sends `["review", "ship"]`, so a confirmed feature is not handed to a
-    /// client that would treat it as another annotation round.
+    /// work; a new bridge sends `["review", "handoff"]`, so a confirmed feature is not handed to
+    /// a client that would treat it as another annotation round.
     #[serde(default)]
     jobs: Option<Vec<String>>,
 }
@@ -753,7 +756,7 @@ async fn claim_session(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-    agent.touch(&body.agent_id);
+    agent.touch(&body.agent_id, None);
     let settings = agent.settings().clone();
     let max_parallel = project_max(&state, &project, &settings);
     let claim = agent
@@ -792,7 +795,7 @@ async fn claim_heartbeat(
             .agent
             .lock()
             .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-        agent.touch(&body.agent_id);
+        agent.touch(&body.agent_id, None);
         agent
             .heartbeat(&id, &body.agent_id, lease_seconds)
             .map_err(claim_error)?
@@ -813,7 +816,7 @@ async fn claim_state(
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
     let settings = agent.settings().clone();
     let max_parallel = project_max(&state, &project, &settings);
-    agent.touch(&body.agent_id);
+    agent.touch(&body.agent_id, None);
     let claim = agent
         .set_state(
             &id,
@@ -837,7 +840,7 @@ async fn claim_release(
             .agent
             .lock()
             .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-        agent.touch(&body.agent_id);
+        agent.touch(&body.agent_id, None);
         agent.release(&id, &body.agent_id).map_err(claim_error)?
     };
     Ok(Json(json!({ "ok": true, "claim": claim })))
@@ -863,12 +866,12 @@ async fn agent_next(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-    agent.touch(&body.agent_id);
+    agent.touch(&body.agent_id, body.jobs.as_deref());
     let settings = agent.settings().clone();
     let claims = agent.claims();
     let mut blocked = "empty";
 
-    // Review work first: a human waiting for a fix should not queue behind a shipment.
+    // Review work first: a human waiting for a fix should not queue behind a handoff.
     for mut meta in sessions {
         if let Some(claim) = claims.iter().find(|claim| claim.session_id == meta.id) {
             if claim.agent_id != body.agent_id {
@@ -912,26 +915,26 @@ async fn agent_next(
         }
     }
 
-    let can_ship = body
+    let can_handoff = body
         .jobs
         .as_ref()
-        .is_some_and(|jobs| jobs.iter().any(|job| job == "ship"));
-    if can_ship {
-        let mut ships = state.store.list()?;
-        ships.retain(|meta| {
+        .is_some_and(|jobs| jobs.iter().any(|job| job == "handoff"));
+    if can_handoff {
+        let mut handoffs = state.store.list()?;
+        handoffs.retain(|meta| {
             meta.feature_confirmed_at.is_some()
                 && meta
-                    .ship
+                    .handoff
                     .as_ref()
-                    .is_some_and(|ship| ship.status.claimable())
+                    .is_some_and(|handoff| handoff.status.claimable())
         });
-        ships.sort_by_key(|meta| {
-            meta.ship
+        handoffs.sort_by_key(|meta| {
+            meta.handoff
                 .as_ref()
-                .and_then(|ship| ship.requested_at.clone())
+                .and_then(|handoff| handoff.requested_at.clone())
                 .unwrap_or_else(|| meta.created_at.clone())
         });
-        for meta in ships {
+        for meta in handoffs {
             let existing = claims.iter().find(|claim| claim.session_id == meta.id);
             if let Some(claim) = existing {
                 if claim.agent_id != body.agent_id {
@@ -946,8 +949,8 @@ async fn agent_next(
             let project = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
             let max_parallel = project_max(&state, &project, &settings);
             // A waiting review claim carries the branch the agent actually worked on. It can be
-            // a v0.21 `session/<id>` name even when the meta now reads as `feat/...`; shipping
-            // must use the branch with the commits, not the derived label.
+            // a v0.21 `session/<id>` name even when the meta now reads as `feat/...`; the
+            // handoff must use the branch with the commits, not the derived label.
             let work_key = existing
                 .map(|claim| claim.work_key.clone())
                 .unwrap_or_else(|| meta.work_key());
@@ -963,14 +966,14 @@ async fn agent_next(
             };
             match agent.try_claim(request) {
                 Ok(claim) => {
-                    let meta = state.store.mark_ship_running(&meta.id).map_err(|err| {
+                    let meta = state.store.mark_handoff_running(&meta.id).map_err(|err| {
                         let _ = agent.release(&meta.id, &body.agent_id);
                         err
                     })?;
                     return Ok(Json(json!({
                         "session": meta,
                         "claim": claim,
-                        "job": "ship",
+                        "job": "handoff",
                         "limits": { "max_parallel": settings.max_parallel, "project_max": max_parallel },
                     })));
                 }
@@ -1056,9 +1059,9 @@ async fn set_session_branch(
             "stop the review before renaming its branch".to_string(),
         ));
     }
-    if meta.ship.is_some() {
+    if meta.handoff.is_some() {
         return Err(Error::Conflict(
-            "this feature already has a ship run; reopen it before renaming the branch".to_string(),
+            "this feature already has a handoff; reopen it before renaming the branch".to_string(),
         ));
     }
     let branch = body
@@ -1477,11 +1480,23 @@ async fn reopen(
     Ok(Json(json!({ "meta": state.store.reopen(&id)? })))
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+struct ConfirmBody {
+    /// Opt in to a post-confirmation handoff. Default false so a non-git integration (or a
+    /// human who only wants the decision recorded) is not handed a job it does not understand.
+    #[serde(default)]
+    handoff: bool,
+}
+
 async fn confirm_feature(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
+    body: Option<Json<ConfirmBody>>,
 ) -> Result<Json<Value>, Error> {
-    Ok(Json(json!({ "meta": state.store.confirm_feature(&id)? })))
+    let handoff = body.map(|Json(body)| body.handoff).unwrap_or(false);
+    Ok(Json(
+        json!({ "meta": state.store.confirm_feature(&id, handoff)? }),
+    ))
 }
 
 async fn cancel_feature(
@@ -1491,13 +1506,13 @@ async fn cancel_feature(
     Ok(Json(json!({ "meta": state.store.cancel_feature(&id)? })))
 }
 
-/// Queue (or retry) a ship run for a feature the human already confirmed. Used by the rail's
-/// retry action after a failed ship, and by scripts for features confirmed before v0.23.
-async fn request_ship(
+/// Queue (or retry) a handoff for a feature the human already confirmed. Used by the rail's
+/// retry action after a failed handoff, and by scripts for features confirmed before v0.23.
+async fn request_handoff(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    Ok(Json(json!({ "meta": state.store.request_ship(&id)? })))
+    Ok(Json(json!({ "meta": state.store.request_handoff(&id)? })))
 }
 
 async fn history(

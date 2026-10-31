@@ -103,7 +103,7 @@ Tools:
 | `list_reviews` | Sessions with status/title/timestamps, newest first. |
 | `reply` | Add an agent message to a session (question or "what did you mean here?") shown in the editor. |
 | `resolve` | Mark a review round done with an optional summary. This is not the human's feature confirmation; the review stays `pending` until they click ✓. |
-| `ship_status` | Report a confirmed feature's ship run: `opened`, `merged`, `failed` or `closed`, with the PR URL/number and merge commit. The rail shows the result. |
+| `handoff_status` | Report a confirmed feature's optional handoff: `done` or `failed`, with the integration's `label`, `url` and `message` (e.g. "merged" + a PR link, "deployed" + an environment). The rail shows the result. |
 | `prune` | Delete submitted sessions older than N days. |
 
 Resources: `redline://session/<id>/annotated.png`, `…/review.md`, `…/annotations.json`, so an

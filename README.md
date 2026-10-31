@@ -58,7 +58,7 @@ MCP over HTTP at `/mcp` (Bearer token):
 
 Tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`,
 `wait_for_feedback`, `list_reviews`, `list_projects`, `progress`, `reply`, `post_round`,
-`capture_round`, `resolve`, `ship_status`.
+`capture_round`, `resolve`, `handoff_status`.
 
 ## The loop
 
@@ -74,9 +74,11 @@ Tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`,
    in the *same* review. One task is one session, not a pile of them.
 5. **Repeat or close** — History is a read-only viewer of every submitted round; drafts survive
    switching between reviews; **STOP** takes a submission back and kills a running agent.
-6. **✓ Confirm ships it** — a review run never opens a PR. Confirming queues a separate ship run;
-   the agent opens/merges the PR and reports it through `ship_status`, and the rail shows
-   `PR #46`, `merged` or `ship failed ↻`.
+6. **✓ Confirm decides** — a review run never opens a PR. The confirm dialog offers an optional
+   handoff; if checked and an agent supports it, the integration performs its own
+   post-confirmation action (the reference bridge opens/merges a PR) and reports `handoff_status`.
+   The rail shows the integration's label/link (`merged`, `deployed`, …) or a retry; without a
+   handoff, the decision is just recorded.
 
 ## Features
 

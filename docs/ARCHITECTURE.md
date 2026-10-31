@@ -94,7 +94,7 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   "resolved_at": null,
   "feature_confirmed_at": null,
   "feature_cancelled_at": null,
-  "ship": null,
+  "handoff": null,
   "branch": "feat/button-hover",
   "image": "screenshot.png",
   "image_width": 1440,
@@ -102,10 +102,12 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
 }
 ```
 
-`ship` is present only after the human confirms a feature (v0.23). It records the ship run:
-`status` (`requested`, `running`, `opened`, `merged`, `failed`, `closed`), the PR URL/number,
-the merge commit and the agent's error. The review run never opens a PR; confirmation queues this
-record and the bridge's ship job fills it in.
+`handoff` is present only when the human confirms a feature with the optional handoff (v0.23). It
+records `status` (`requested`, `running`, `done`, `failed`) and the integration's `label`, `url`
+and `message` — "merged" + a PR URL for the reference git bridge, "deployed" + an environment URL
+for a deploy, or anything else. The server never runs git or deploys; confirmation queues the
+record and the integration's handoff job fills it in. A review run is not a handoff: it pushes and
+replies.
 
 `annotations.json` (written on submission):
 
@@ -134,9 +136,10 @@ the branch lock but does not consume an execution slot.
 The server is the authority. The bridge asks `POST /api/agent/next`, heartbeats, and marks
 `waiting` when the human has the ball. The branch key is `Meta::work_key()`: `meta.branch`, or
 the derived `feat/<title-slug>-<id-tail>` for a v0.21 `session/<id>` fallback; RedLine never
-touches git. The bridge advertises `jobs: ["review","ship"]` on `next`; the response's `job`
-selects the review prompt or the ship prompt. A ship claim reuses the waiting review claim's
-`work_key` (the branch the agent actually worked on) and marks `meta.ship.status=running`.
+touches git. The bridge advertises `jobs: ["review","handoff"]` on `next`; the response's `job`
+selects the review prompt or the handoff prompt. A handoff claim reuses the waiting review
+claim's `work_key` (the branch the agent actually worked on) and marks
+`meta.handoff.status=running`.
 `redline-agent` runs `REDLINE_AGENT_WORKERS` claim workers (default 4), each with its own worktree under
 `<repo_root>/.redline-worktrees/<repo>-<hash>/<branch>-<hash>`, and running heartbeats every
 `lease/3`. A resolved round releases the claim and removes a clean worktree; a dirty one is left

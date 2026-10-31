@@ -18,25 +18,30 @@
   round currently being viewed. The e2e measures the radius of every row and compares the live
   row's fill and border with a sibling's.
 
-- **A feature ships only after ✓ Confirm, and the rail says what happened.** The review prompt let
-  an agent follow its repository's shipping rules mid-review, so overnight runs opened and merged
-  PRs before the human confirmed anything; by morning every review was already shipped. A review
-  run now pushes its branch and replies but must not open a PR, merge or release. Confirming
-  queues a separate ship job (`ship.status=requested`) that the bridge claims only when it
-  advertises `jobs: ["review","ship"]`; a separate ship prompt grants the PR/merge and reports
-  through MCP `ship_status` (`opened`, `merged`, `failed`, `closed`, plus PR URL/number and merge
-  commit). The rail shows `ship queued`, `shipping`, `PR #46` (link), `merged` (link) or
-  `ship failed ↻` (retry). A failed/closed ship can be retried from the row menu or the badge;
-  reopening/cancelling clears it. Old bridges that send no `jobs` are never handed a ship job, and
-  pre-v0.23 confirmed features keep the plain `confirmed` badge. Rust tests cover the queue, the
-  capability gate, the MCP report and the state reset; the browser e2e confirms a feature, reports
-  the PR through MCP, checks the merged link, fails the ship and retries it. The e2e's cancel
-  dashboard check and two selection/z-order checks now poll instead of assuming an instant.
-- **A ship retry remembers the PR and the check that failed.** Retrying a failed or still-open
-  shipment used to discard `pr_url`/`pr_number` and the agent's error, so the next run had to
-  rediscover the pull request and did not know what broke. The retry keeps both: the rail prompt
-  and the ship prompt now say which PR to reuse and which check failed, and a merged follow-up may
-  omit the URL because the previous report still carries it.
+- **A feature is confirmed first, then optionally handed off — and the rail says what happened.**
+  The review prompt let an agent follow its repository's shipping rules mid-review, so overnight
+  runs opened and merged PRs before the human confirmed anything; by morning every review was
+  already touched. A review run now pushes its branch and replies but must not open a PR, merge or
+  release. The confirm dialog has an optional **handoff** checkbox (default on only when an online
+  bridge advertises `jobs: ["review","handoff"]`); confirming without it records only the decision.
+  With it, the server queues a generic `handoff` (`requested` → `running` → `done`/`failed`); the
+  integration performs its own post-confirmation action and reports a `label`, `url` and `message`
+  through MCP `handoff_status`. The reference git bridge opens/merges a PR and reports
+  `label=merged` + the PR URL; a deploy integration can report `label=deployed` + an environment;
+  an integration with no post-confirmation action simply confirms without a handoff. The rail
+  shows `handoff queued`, `handing off`, the integration's label with its link, or a red
+  `handoff failed` label with a row `↻` retry; a retry keeps the label/URL/message from the
+  failed attempt. Old bridges
+  that send no `jobs` are never handed a handoff job, and an old presence file is review-only.
+  Rust tests cover the opt-in queue, the capability gate, the generic MCP report and the state
+  reset; the browser e2e checks the review-only default, confirms with a handoff, reports
+  done/failed through MCP, follows the link and retries. The e2e's cancel dashboard check and two
+  selection/z-order checks now poll instead of assuming an instant.
+- **Feature details in `docs/INTEGRATIONS.md`.** The MCP contract is redocumented as a generic
+  decision (`feature_state`) plus an optional handoff (`requested`/`running`/`done`/`failed`,
+  `label`/`url`/`message`) and the `jobs` capability — with git, deploy and no-handoff examples.
+  RedLine still runs no git and holds no GitHub token; the git workflow lives in the reference
+  `redline-agent` bridge.
 - **Video media core.** The server can create a video session (MP4/WebM, magic-byte validation),
   store a poster and duration/dimensions, serve the clip with HTTP `Range` for seeking, and write
   timecoded annotations (`at`/`until`) into `annotations.json` and `review.md`. MCP gains

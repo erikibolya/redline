@@ -261,12 +261,26 @@ fn settings_are_validated_and_persisted() {
 #[test]
 fn presence_is_tracked_and_expires_after_three_missed_beats() {
     let (dir, mut control) = control();
-    control.touch("holly");
+    control.touch("holly", None);
     let live = control.status();
     assert_eq!(live.online, 1);
     assert_eq!(live.agents.len(), 1);
     assert_eq!(live.agents[0].agent_id, "holly");
+    assert_eq!(live.agents[0].jobs, vec!["review".to_string()]);
     assert!(live.agents[0].online);
+
+    // A bridge that advertises the post-confirmation handoff capability; a later repo sync that
+    // does not repeat the list must not downgrade it.
+    control.touch(
+        "holly",
+        Some(&["review".to_string(), "handoff".to_string()]),
+    );
+    control.touch("holly", None);
+    let capable = control.status();
+    assert_eq!(
+        capable.agents[0].jobs,
+        vec!["review".to_string(), "handoff".to_string()]
+    );
     drop(control);
 
     // A bridge that stopped beating: last seen older than the online window, but inside the
@@ -287,4 +301,5 @@ fn presence_is_tracked_and_expires_after_three_missed_beats() {
     assert_eq!(offline.agents.len(), 1);
     assert_eq!(offline.online, 0);
     assert!(!offline.agents[0].online);
+    assert_eq!(offline.agents[0].jobs, vec!["review".to_string()]);
 }

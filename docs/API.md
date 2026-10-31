@@ -1,5 +1,8 @@
 # HTTP API & data reference
 
+The agent-facing contract (confirmation, optional handoff, `jobs` capability) is described in
+[`INTEGRATIONS.md`](INTEGRATIONS.md). This file is the HTTP/data reference.
+
 Base URL: `http://127.0.0.1:8788` by default. All API responses are JSON; static pages are HTML;
 session images are served with the original content type. Authenticated data (everything under
 `/api/*` plus session images/history) is sent with `Cache-Control: no-store`: a rail poll or a
@@ -29,7 +32,7 @@ Editor page (HTML). The page reads the id from the path and calls the JSON API b
       "feature_state": "pending",
       "feature_confirmed_at": null,
       "feature_cancelled_at": null,
-      "ship": null,
+      "handoff": null,
       "branch": "feat/button-hover",
       "created_at": "2026-10-28T11:11:13+00:00",
       "submitted_at": null,
@@ -41,9 +44,10 @@ Editor page (HTML). The page reads the id from the path and calls the JSON API b
 
 Newest first by `created_at`. `feature_state` is derived: `confirmed` when
 `feature_confirmed_at` is set, `cancelled` when `feature_cancelled_at` is set, otherwise
-`pending`. A confirmed feature also carries `ship` (v0.23): the ship run's state and PR
-(`requested`, `running`, `opened`, `merged`, `failed` or `closed`), see
-[Ship a confirmed feature](#post-apisessionsidship).
+`pending`. A confirmed feature may also carry `handoff` (v0.23): the optional post-confirmation
+work's state (`requested`, `running`, `done`, `failed`) plus the integration's `label`, `url` and
+`message`. The server does not know what the work means; see
+[Handoff a confirmed feature](#post-apisessionsidhandoff).
 
 ### `GET /api/sessions/<id>`
 
@@ -73,35 +77,42 @@ Name the feature branch the review runs on.
 
 Returns `{ "meta": { … } }`. `{"branch": null}` (or an empty string) restores the derived
 default. `409` while the session is `submitted` (the agent's worktree was created for the old
-name) or has a ship run (the PR points at the shipped branch). A review created without a name
-already has a branch — `feat/<title-slug>-<id-tail>` — so `session/<id>` is no longer produced;
-sessions that v0.21 claimed under that fallback are read back under their `feat/…` name.
+name) or has a handoff record (the link points at the handed-off branch). A review created without
+a name already has a branch — `feat/<title-slug>-<id-tail>` — so `session/<id>` is no longer
+produced; sessions that v0.21 claimed under that fallback are read back under their `feat/…` name.
 
 ### `POST /api/sessions/<id>/confirm-feature`
+
 The human says the feature is complete. Sets `status=resolved`, `resolved_at` (if unset) and
-`feature_confirmed_at`, clears `feature_cancelled_at`, and queues a **ship run**
-(`ship.status=requested`) unless the feature is already merged. RedLine does not touch git: the
-agent bridge claims the ship job, opens/merges the PR, and reports it through the `ship_status`
-MCP tool. Repeating the request retries a failed or still-open shipment.
+`feature_confirmed_at`, clears `feature_cancelled_at`. The optional body asks for a handoff:
 
-### `POST /api/sessions/<id>/ship`
+```json
+{ "handoff": true }
+```
 
-Queue (or retry) a ship run for a feature that is already confirmed. Returns `{ "meta": { … } }`.
-`400` when the feature is not confirmed; a merged feature is returned unchanged. This is the
-retry path behind the rail's `ship failed ↻` badge and the way a pre-v0.23 confirmed feature can
-be shipped.
+Without it (or with `false`) the server records only the decision and clears a stale failed/queued
+handoff. With `true` it queues `handoff.status=requested` unless the handoff is already done.
+RedLine does not run git or deploy anything: the integration claims the handoff job, performs its
+own action, and reports it through the `handoff_status` MCP tool. Repeating the request retries a
+failed handoff.
+
+### `POST /api/sessions/<id>/handoff`
+
+Queue (or retry) a handoff for a feature that is already confirmed. Returns `{ "meta": { … } }`.
+`400` when the feature is not confirmed; a done handoff is returned unchanged. This is the retry
+path behind the rail's `handoff failed ↻` badge and the way a pre-v0.23 confirmed feature can be
+handed off. (The pre-release `/ship` spelling is kept as an alias.)
 
 ```json
 {
-  "ship": {
+  "handoff": {
     "status": "requested",
     "requested_at": "2026-10-31T10:00:00+00:00",
     "started_at": null,
     "finished_at": null,
-    "pr_url": null,
-    "pr_number": null,
-    "merge_commit": null,
-    "error": null
+    "label": null,
+    "url": null,
+    "message": null
   }
 }
 ```
@@ -109,13 +120,13 @@ be shipped.
 ### `POST /api/sessions/<id>/cancel-feature`
 
 The human abandons the feature. Sets `status=resolved`, `resolved_at` (if unset) and
-`feature_cancelled_at`, clears `feature_confirmed_at` and `ship`. Nothing is merged and the
+`feature_cancelled_at`, clears `feature_confirmed_at` and `handoff`. Nothing is handed off and the
 review files are kept.
 
 ### `POST /api/sessions/<id>/reopen`
 
 Undo: `status=open`, clears `resolved_at`, `feature_confirmed_at`, `feature_cancelled_at` and
-`ship`. A new submission or agent round also clears the feature stamps and the ship, so more
+`handoff`. A new submission or agent round also clears the feature stamps and the handoff, so more
 work makes the feature `pending` again.
 
 ### `GET /sessions/<id>/image`
@@ -313,23 +324,27 @@ GET /api/agent/settings
 `lease_seconds`, and a `projects` map of `slug -> number|null` (`null` inherits the default).
 
 ```http
-POST /api/agent/next       {"agent_id": "holly", "jobs": ["review", "ship"]}
+POST /api/agent/next       {"agent_id": "holly", "jobs": ["review", "handoff"]}
 POST /api/agent/claims     {"session_id": "…", "agent_id": "holly", "work_key": "feat/x"}
 POST /api/agent/claims/…/heartbeat   {"agent_id": "holly"}
 POST /api/agent/claims/…/state       {"agent_id": "holly", "state": "waiting"}
 POST /api/agent/claims/…/release     {"agent_id": "holly"}
 ```
 
-`next` returns `{"session": {…}, "claim": {…}, "job": "review|ship", "limits": {…}}` or
+`next` returns `{"session": {…}, "claim": {…}, "job": "review|handoff", "limits": {…}}` or
 `{"session": null, "reason": "empty|at_capacity|branch_locked|claimed"}`. A claim response is
 `{"claim": {…}, "session": {…}, "job": "review", "limits": {…}}`. The branch key is
 `session.branch`, or the derived `feat/…` when the agent did not declare one.
 
 `jobs` is the bridge's capability list. A bridge that omits it only receives `review` work, so
 an old client is never handed a confirmed feature and asked to treat it as an annotation round.
-`ship` jobs are sessions with a claimable `ship` and `feature_confirmed_at`; the response's
-`session.ship.status` is already `running`. The claim's `work_key` wins over `session.branch`:
+`handoff` jobs are sessions with a claimable `handoff` and `feature_confirmed_at`; the response's
+`session.handoff.status` is already `running`. The claim's `work_key` wins over `session.branch`:
 it is the branch the review actually worked on, including v0.21's `session/<id>` legacy name.
+
+The agent presence rows in `GET /api/agent/status` include `jobs` (default `["review"]`). A bridge
+that advertises `["review","handoff"]` is the one that can be given a handoff job; an old bridge
+that sends no `jobs` is review-only, and the UI says so in the status chip's tooltip.
 
 ### Agent presence
 
@@ -427,9 +442,9 @@ See `docs/ARCHITECTURE.md` § Storage schema. Fields:
 | `created_at` / `submitted_at` | UTC ISO-8601 timestamps. |
 | `resolved_at` | Present after resolve/confirm/cancel. |
 | `feature_confirmed_at` | The human confirmed the feature; agents map this to their own workflow. |
-| `feature_cancelled_at` | The human cancelled the feature; nothing should be merged. |
+| `feature_cancelled_at` | The human cancelled the feature; nothing should be handed off or merged. |
 | `feature_state` | Derived in `GET /api/sessions`: `pending`, `confirmed` or `cancelled`. |
-| `ship` | Present on a confirmed feature (v0.23): the ship run's `status`, PR URL/number, merge commit and error. `requested`/`running` are claimable; `opened`/`merged`/`failed`/`closed` are reported by the agent. Cleared by a new round, reopen or cancel. |
+| `handoff` | Optional post-confirmation work (v0.23): `status` (`requested`, `running`, `done` or `failed`) plus the integration's `label`, `url` and `message`. The server never runs git or deploys; `done`/`failed` are the integration's own report. Cleared by a new round, reopen or cancel. |
 | `branch` | The feature branch the review runs on. Every review has one: `feat/<title-slug>-<id-tail>` when nobody named it, and the branch-lock key. v0.21's `session/<id>` fallback is read back as that `feat/…` name. |
 | `image` | Screenshot filename inside the session. |
 | `image_width` / `image_height` | Present after submission; canvas dimensions. |

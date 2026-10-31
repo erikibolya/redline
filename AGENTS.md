@@ -69,7 +69,8 @@ desktop/
   install-unraid.sh       idempotent install/upgrade of the container
   docker-compose.example.yml
 docs/                     DESKTOP.md (ADR), UI.md (UI plan/status), API.md, ARCHITECTURE.md,
-                          WORKFLOW.md, TESTING.md (tool matrix + release gate), PLAN.md at the root
+                          WORKFLOW.md, TESTING.md (tool matrix + release gate),
+                          INTEGRATIONS.md (MCP contract for review/handoff agents), PLAN.md at the root
 static/, redline.py       v0.1 Python implementation, frozen; do not add features to it
 ```
 
@@ -86,10 +87,10 @@ REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per
 # Release gate: docs/TESTING.md — tool matrix, feature protocol and the checklist.
 
 # Ship a feature (dev is protected; never push it directly)
-# A review run is not a shipment: push the branch and reply, do NOT open a PR or merge.
-# The human's ✓ Confirm feature queues a ship job; the bridge then runs the ship prompt:
+# A review run is not a handoff: push the branch and reply, do NOT open a PR or merge.
+# The human's ✓ Confirm feature can queue a generic handoff; the bridge runs the handoff prompt:
 git push origin feat/my-feature
-feature-ready "what changed and why"   # only in the ship run, after the confirmation
+feature-ready "what changed and why"   # only in the handoff run, after the confirmation
 # draft PR -> ready -> required CI -> auto-merge -> dev build
 
 # Release (only after an explicit yes; main is protected)
@@ -154,8 +155,8 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - Auth: token from `/data/token`; `Authorization: Bearer`, `redline_token` cookie (set by
   `/s/<id>?t=…` → 307), or `?t=`. `Sec-Fetch-Site: cross-site` is refused.
 - MCP tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`, `wait_for_feedback`,
-  `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`.
-  Resources: `redline://session/<id>/{annotated.png,review.md}`.
+  `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`,
+  `handoff_status`. Resources: `redline://session/<id>/{annotated.png,review.md}`.
 - Agent state: `get_feedback` stamps `seen_by_agent_at` and sets `agent_state=received`;
   `progress` appends to `agent-events.jsonl` and sets `working`; `reply` sets `replied`.
   The editor polls meta + thread + events every 5 s and renders them as a conversation.
@@ -366,13 +367,15 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   repo's shipping rules during a review run, so overnight every review was already opened and
   merged into `dev` before the human woke up; by morning there was nothing left to confirm
   (2026-10-31). A review run must push the branch and reply, never open a PR or merge. The human's
-  ✓ queues a separate **ship** job (`ship.status=requested`); the bridge advertises
-  `jobs: ["review","ship"]` on `/api/agent/next`, claims it after the review claim is waiting or
-  released, and runs a prompt that explicitly grants the PR/merge. The agent reports through MCP
-  `ship_status`; the rail shows `PR #46` / `merged` / `ship failed ↻`. An old bridge that sends no
-  `jobs` is never handed a ship job. Test the review prompt *forbids* shipping, the confirm →
-  `next(job=ship)` path, the MCP report, and the rail badge; a status label that merely says
-  "confirmed" is not a ship.
+  ✓ optionally queues a **generic handoff** (`handoff.status=requested`); the bridge advertises
+  `jobs: ["review","handoff"]` on `/api/agent/next`, claims it after the review claim is waiting or
+  released, and runs a prompt that explicitly grants the post-confirmation action. The reference
+  git bridge opens/merges the PR and reports `handoff_status` with `state=done`, `label=merged`,
+  the PR `url` and a `message`; the rail shows that label + link or `handoff failed ↻`. Another
+  integration can use the same job for a deploy/publish, or confirm without a handoff. An old
+  bridge that sends no `jobs` is never handed a handoff job. Test the review prompt *forbids*
+  handing off, the confirm → `next(job=handoff)` path, the MCP report, and the rail badge; a
+  status label that merely says "confirmed" is not a handoff.
 
 ## 8. Working rules
 

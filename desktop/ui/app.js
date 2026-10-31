@@ -305,7 +305,7 @@ async function api(path, options = {}) {
  * looks different on every platform. This is a small `<dialog>` built on first use, shared by
  * the editor and the sessions page. It returns the chosen action value, or null when dismissed.
  */
-function askFeature({ title, body, actions }) {
+function askFeature({ title, body, actions, checkbox = null }) {
   return new Promise((resolve) => {
     let dialog = $("#feature-dialog");
     if (!dialog) {
@@ -333,7 +333,27 @@ function askFeature({ title, body, actions }) {
       return;
     }
     $("#feature-dialog-title").textContent = title;
-    $("#feature-dialog-body").textContent = body;
+    const bodyEl = $("#feature-dialog-body");
+    bodyEl.textContent = body;
+    // The dialog is shared: remove the previous optional checkbox/hint before adding a new one.
+    $("#feature-dialog-check-wrap")?.remove();
+    $("#feature-dialog-check-hint")?.remove();
+    if (checkbox) {
+      const wrap = document.createElement("label");
+      wrap.id = "feature-dialog-check-wrap";
+      wrap.className = "feature-check";
+      wrap.innerHTML = `<input type="checkbox" id="feature-dialog-check"${
+        checkbox.checked ? " checked" : ""
+      }><span>${escapeHtml(checkbox.label)}</span>`;
+      bodyEl.insertAdjacentElement("afterend", wrap);
+      if (checkbox.hint) {
+        const hint = document.createElement("p");
+        hint.id = "feature-dialog-check-hint";
+        hint.className = "field-hint";
+        hint.textContent = checkbox.hint;
+        wrap.insertAdjacentElement("afterend", hint);
+      }
+    }
     const container = $("#feature-actions");
     container.innerHTML = "";
     for (const action of actions) {
@@ -421,39 +441,65 @@ function askBranch(current, submitted = false) {
   });
 }
 
+/** True when an online bridge advertised the post-confirmation handoff capability. */
+const handoffCapableAgent = () => Boolean(
+  AgentStatus.data?.agents?.some((agent) =>
+    agent.online && (agent.jobs || ["review"]).includes("handoff")));
+
+/** The optional handoff opt-in shown in the confirm dialog. */
+function handoffCheckbox() {
+  const capable = handoffCapableAgent();
+  return {
+    checked: capable,
+    label: capable
+      ? "Hand off to the agent after confirming"
+      : "Hand off after confirming (no connected agent supports it yet)",
+    hint: capable
+      ? "The agent performs the integration's post-confirmation workflow (for example open and merge a PR)."
+      : "The review will just be confirmed; without a handoff-capable agent it stays in your hands.",
+  };
+}
+
 /**
- * Confirm, cancel, reopen or delete a feature. Returns the server response, `{deleted: true}`,
- * or `null` when the human dismissed the dialog.
+ * Confirm, cancel, reopen, hand off or delete a feature. Returns the server response,
+ * `{deleted: true}`, or `null` when the human dismissed the dialog.
  */
 async function featureAction(action, id, title, session = {}) {
   const path = `/api/sessions/${encodeURIComponent(id)}`;
   const state = session.feature_state
     || (session.feature_confirmed_at ? "confirmed"
       : session.feature_cancelled_at ? "cancelled" : "pending");
-  const ship = session.ship || null;
-  // A failed or opened ship can be retried; a queued/running one is already with an agent.
-  const canRetryShip = state === "confirmed"
-    && ship && ["failed", "opened", "closed"].includes(ship.status);
+  const handoff = session.handoff || null;
+  const canRetryHandoff = state === "confirmed" && handoff?.status === "failed";
+  const canHandoff = state === "confirmed" && !handoff;
   if (action === "confirm") {
     const choice = await askFeature({
       title: "Confirm this feature?",
-      body: `“${title}” will be marked as confirmed and closed. Your agent may now open a pull request and merge it into the integration branch.`,
+      body: `“${title}” will be marked as confirmed and closed. If you hand it off, the integration may finish the work (open a pull request, deploy, publish, …).`,
       actions: [
         { value: "keep", label: "Keep working" },
         { value: "confirm", label: "Confirm feature", kind: "primary" },
       ],
+      checkbox: handoffCheckbox(),
     });
     if (choice !== "confirm") return null;
-    return api(`${path}/confirm-feature`, { method: "POST" });
+    const handoffChecked = Boolean($("#feature-dialog-check")?.checked);
+    return api(`${path}/confirm-feature`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ handoff: handoffChecked }),
+    });
   }
   if (action === "menu") {
     const decided = state !== "pending";
-    const shipNote = ship
-      ? ` The last ship run is ${ship.status}${ship.error ? `: ${ship.error}` : ""}.`
+    const note = handoff
+      ? ` The last handoff is ${handoff.status}${handoff.message ? `: ${handoff.message}` : ""}.`
       : "";
     const actions = [{ value: "keep", label: "Keep working" }];
-    if (canRetryShip) {
-      actions.push({ value: "ship", label: "Retry ship", kind: "primary" });
+    if (canRetryHandoff) {
+      actions.push({ value: "handoff", label: "Retry handoff", kind: "primary" });
+    } else if (canHandoff) {
+      actions.push({ value: "handoff", label: "Hand off", kind: "primary" });
     }
     if (decided) {
       actions.push({ value: "reopen", label: "Reopen" });
@@ -464,11 +510,11 @@ async function featureAction(action, id, title, session = {}) {
     const choice = await askFeature({
       title: "What should happen to this feature?",
       body: decided
-        ? `“${title}” is ${state}.${shipNote} Reopen returns it to the queue; Delete files removes the screenshot and annotations permanently.`
+        ? `“${title}” is ${state}.${note} Reopen returns it to the queue; Delete files removes the screenshot and annotations permanently.`
         : `“${title}” has no decision yet. Cancel feature closes it without merging and keeps the screenshot and annotations; Delete files removes them permanently.`,
       actions,
     });
-    if (choice === "ship") return api(`${path}/ship`, { method: "POST" });
+    if (choice === "handoff") return api(`${path}/handoff`, { method: "POST" });
     if (choice === "reopen") return api(`${path}/reopen`, { method: "POST" });
     if (choice === "cancel-feature") return api(`${path}/cancel-feature`, { method: "POST" });
     if (choice === "delete") {
@@ -480,8 +526,8 @@ async function featureAction(action, id, title, session = {}) {
   if (action === "reopen") {
     return api(`${path}/reopen`, { method: "POST" });
   }
-  if (action === "ship") {
-    return api(`${path}/ship`, { method: "POST" });
+  if (action === "handoff") {
+    return api(`${path}/handoff`, { method: "POST" });
   }
   return null;
 }
@@ -490,37 +536,36 @@ const featureState = (session) => session.feature_state
   || (session.feature_confirmed_at ? "confirmed"
     : session.feature_cancelled_at ? "cancelled" : "pending");
 
-/** A PR link when there is one; a failed badge is a retry button, never a dead label. */
-function shipBadge(session) {
-  const ship = session.ship;
-  if (!ship) return "";
-  const status = ship.status;
-  const pr = ship.pr_url || "";
-  const number = ship.pr_number ? ` #${ship.pr_number}` : "";
-  const label = status === "opened"
-    ? (ship.pr_number ? `PR${number}` : "PR open")
-    : status === "merged" ? "merged"
-      : status === "closed" ? "PR closed" : "";
-  if (["opened", "merged", "closed"].includes(status)) {
-    const title = status === "merged"
-      ? `Merged${number}${ship.merge_commit ? ` as ${ship.merge_commit}` : ""}`
-      : `Pull request${number} is ${status}`;
-    return pr
-      ? `<a class="badge ship ${status} ship-link" href="${escapeHtml(pr)}" target="_blank"
-            rel="noopener" title="${escapeHtml(title)}">${escapeHtml(label)}</a>`
-      : `<span class="badge ship ${status}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
-  }
+/** A generic handoff badge: queued/running, the integration's label + link, or a retry. */
+function handoffBadge(session) {
+  const handoff = session.handoff;
+  if (!handoff) return "";
+  const status = handoff.status;
+  const url = handoff.url || "";
+  const label = handoff.label
+    || (status === "done" ? "done" : status === "failed" ? "handoff failed" : "");
+  const title = handoff.message || `Handoff ${status}`;
   if (status === "requested") {
-    return `<span class="badge ship requested" title="Waiting for an agent that supports shipping (v0.23+)">
-      ship queued</span>`;
+    return `<span class="badge handoff requested" title="Waiting for an agent that supports handoff">
+      handoff queued</span>`;
   }
   if (status === "running") {
-    return `<span class="badge ship running" title="The agent is opening the pull request">
-      <span class="spin" aria-hidden="true"></span>shipping</span>`;
+    return `<span class="badge handoff running" title="The agent is performing the handoff">
+      <span class="spin" aria-hidden="true"></span>handing off</span>`;
+  }
+  if (status === "done") {
+    return url
+      ? `<a class="badge handoff done handoff-link" href="${escapeHtml(url)}" target="_blank"
+            rel="noopener" title="${escapeHtml(title)}">${escapeHtml(label)}</a>`
+      : `<span class="badge handoff done" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
   }
   if (status === "failed") {
-    return `<button type="button" class="badge ship failed ship-retry"
-      title="${escapeHtml(ship.error || "The ship run failed")} — click to retry">ship failed ↻</button>`;
+    // The retry lives in the row actions (↻) and the feature menu; the badge keeps the label and
+    // link (a PR/environment the human may need to open) without pretending to be a button.
+    return url
+      ? `<a class="badge handoff failed handoff-link" href="${escapeHtml(url)}" target="_blank"
+            rel="noopener" title="${escapeHtml(title)}">${escapeHtml(label)}</a>`
+      : `<span class="badge handoff failed" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
   }
   return "";
 }
@@ -693,10 +738,14 @@ const AgentStatus = {
       : online
         ? `${online} agent${online === 1 ? "" : "s"} connected`
         : "No agent connected";
+    const handoffCapable = agents.some((agent) =>
+      agent.online && (agent.jobs || ["review"]).includes("handoff"));
     const title = !data
       ? "Could not read the agent status from this server"
       : online
-        ? `Connected: ${agents.filter((agent) => agent.online).map((agent) => agent.agent_id).join(", ")}`
+        ? `Connected: ${agents.filter((agent) => agent.online).map((agent) => agent.agent_id).join(", ")}${
+          handoffCapable ? "" : " — review only (no handoff capability)"
+        }`
         : "No agent is polling this server — submitted reviews will wait";
     $$("#agent-status").forEach((chip) => {
       chip.classList.toggle("online", Boolean(data && online));
@@ -1133,10 +1182,10 @@ class Rail {
                   : annotations
                     ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
                     : "";
-        // The ship badge sits beside the confirmation: "confirmed" is the decision, while
-        // "PR #46" / "merged" / "ship failed" is what happened to it.
-        const badge = feature === "confirmed" && session.ship
-          ? `${baseBadge}${shipBadge(session)}`
+        // The handoff badge sits beside the confirmation: "confirmed" is the decision, while
+        // "handoff queued" / "merged" / "handoff failed" is what the integration did with it.
+        const badge = feature === "confirmed" && session.handoff
+          ? `${baseBadge}${handoffBadge(session)}`
           : baseBadge;
         parts.push(`
           <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${
@@ -1166,6 +1215,9 @@ class Rail {
               ${decided
                 ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
                 : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>`}
+              ${session.handoff?.status === "failed"
+                ? `<button class="act" data-act="handoff" title="Retry handoff">↻</button>`
+                : ""}
               <button class="act" data-act="menu"
                       title="${decided ? "Feature actions (reopen or delete)" : "Feature actions (cancel or delete)"}">✕</button>
             </span>
@@ -1182,15 +1234,9 @@ class Rail {
         this.onAction?.(button.dataset.act, button.closest(".session").dataset.id);
       });
     });
-    // A PR link opens GitHub; a failed ship badge is the retry control. Neither may select the
-    // review row behind it.
-    $$(".session .ship-link, .session .ship-retry", this.body).forEach((control) => {
-      control.addEventListener("click", (event) => {
-        event.stopPropagation();
-        if (control.classList.contains("ship-retry")) {
-          this.onAction?.("ship", control.closest(".session").dataset.id);
-        }
-      });
+    // A handoff link opens the integration's URL; it may not select the review row behind it.
+    $$(".session .handoff-link", this.body).forEach((control) => {
+      control.addEventListener("click", (event) => event.stopPropagation());
     });
     $$(".rail-project", this.body).forEach((header) => {
       const toggle = () => {
@@ -1287,16 +1333,19 @@ class Editor {
       onAction: (action, id) => this.railAction(action, id),
       onPurge: (ids) => this.purgeSessions(ids),
       onBulk: async (action, ids) => {
+        let bulkHandoff = false;
         if (action === "confirm") {
           const choice = await askFeature({
             title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
-            body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
+            body: "Each selected session will be marked as confirmed and closed. A checked handoff lets the integration finish the work (open a pull request, deploy, publish, …).",
             actions: [
               { value: "keep", label: "Keep working" },
               { value: "confirm", label: "Confirm features", kind: "primary" },
             ],
+            checkbox: handoffCheckbox(),
           });
           if (choice !== "confirm") return;
+          bulkHandoff = Boolean($("#feature-dialog-check")?.checked);
         }
         if (action === "delete"
           && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
@@ -1305,7 +1354,11 @@ class Editor {
             if (action === "delete") {
               await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
             } else {
-              await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, { method: "POST" });
+              await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ handoff: bulkHandoff }),
+              });
             }
           }
         } catch (error) {
@@ -1353,8 +1406,8 @@ class Editor {
       const title = session?.title || id;
       const result = await featureAction(action, id, title, session || {});
       if (!result) return;
-      // A ship retry does not close the review; the confirmed stamp is already there.
-      const finished = action !== "ship" && (result.deleted
+      // A handoff retry does not close the review; the confirmed stamp is already there.
+      const finished = action !== "handoff" && (result.deleted
         || Boolean(result.meta?.feature_confirmed_at)
         || Boolean(result.meta?.feature_cancelled_at));
       if (id === this.sessionId && finished) {
@@ -4366,16 +4419,19 @@ async function bootList() {
       await refresh();
     },
     onBulk: async (action, ids) => {
+      let bulkHandoff = false;
       if (action === "confirm") {
         const choice = await askFeature({
           title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
-          body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
+          body: "Each selected session will be marked as confirmed and closed. A checked handoff lets the integration finish the work (open a pull request, deploy, publish, …).",
           actions: [
             { value: "keep", label: "Keep working" },
             { value: "confirm", label: "Confirm features", kind: "primary" },
           ],
+          checkbox: handoffCheckbox(),
         });
         if (choice !== "confirm") return;
+        bulkHandoff = Boolean($("#feature-dialog-check")?.checked);
       }
       if (action === "delete"
         && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
@@ -4384,7 +4440,11 @@ async function bootList() {
           if (action === "delete") {
             await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
           } else {
-            await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, { method: "POST" });
+            await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ handoff: bulkHandoff }),
+            });
           }
         }
       } catch (error) {

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- **A failed run no longer looks like a working one, and no longer keeps the round locked.** The
+  bridge reports "I could not run this" through `reply {state:"failed"}` instead of a normal
+  answer; the server sets `agent_state=failed` and hands the review back (`status=open`,
+  annotations and history intact), the rail shows a red **agent failed** badge and the run card
+  turns red. Before, a bridge that could not start OpenCode left the round `submitted` behind a
+  *replied* label: the canvas was locked, the working indicator was gone and nothing said the
+  agent was never coming back (reported as *"the UI is blocked… the working label is not present,
+  is it a bug?"*).
+- **A live claim outranks the last message, so the working label survives a mid-run reply.**
+  `GET /api/sessions` now returns `agent_running`, derived from the bridge's claim while its lease
+  is alive; the rail shows **working** for it even when `agent_state` already says `replied`, and
+  drops the spinner when the claim is released or expires. `agent_state` alone only records who
+  spoke last, so an answer during a long run used to erase the only sign of activity.
+- **The agent's own output is one click away.** The conversation header has an **output** toggle
+  that shows the lines the bridge streams from the OpenCode process (`progress {state:"log"}`,
+  throttled to one line every 2 s, ANSI stripped, ≤ 400 chars, last line of a short run kept) in a
+  monospace tail with the time of the last line. Off by default and remembered per browser, so a
+  wall of tool output never buries the conversation. Requested as *"a button that would show
+  realtime output from the agent, like in a regular opencode window"*.
+
 ## 0.24.0 — 2026-10-31
 
 - **"Install latest dev build…" offers the newest dev build again.** Dev builds were versioned

@@ -875,6 +875,24 @@ impl Store {
         Ok(meta)
     }
 
+    /// The agent could not run this round. That is neither "working" (nothing is running) nor
+    /// "replied" (the agent has no answer to give), and it must not leave the review locked:
+    /// a human who cannot edit a round nobody is working on is stuck (2026-10-31). The round goes
+    /// back to the human, the annotations stay, and `agent_state=failed` keeps the reason visible.
+    pub fn fail_round(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        if meta.status == Status::Submitted {
+            meta.status = Status::Open;
+        }
+        meta.agent_state = Some("failed".to_string());
+        if meta.seen_by_agent_at.is_none() {
+            meta.seen_by_agent_at = Some(now());
+        }
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
     /// Set or clear the feature branch shown in the rail and used as the branch-lock key.
     pub fn set_branch(&self, id: &str, branch: Option<&str>) -> Result<Meta> {
         let dir = self.dir(id)?;

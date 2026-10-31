@@ -428,6 +428,21 @@ async fn health() -> Json<Value> {
 async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Error> {
     // The rail wants a badge per session; computing it here saves N round-trips from the UI.
     let sessions = state.store.list()?;
+    // `agent_state` records the last thing an agent *said*; a claim with a live lease is the only
+    // evidence that a run is still going. A reply lands mid-run, so the rail must be able to tell
+    // "the agent answered and kept working" from "the run is over" (2026-10-31).
+    let running: std::collections::HashSet<String> = state
+        .agent
+        .lock()
+        .map(|mut agent| {
+            agent
+                .claims()
+                .into_iter()
+                .filter(|claim| claim.state == ClaimState::Running)
+                .map(|claim| claim.session_id)
+                .collect()
+        })
+        .unwrap_or_default();
     let items: Vec<Value> = sessions
         .into_iter()
         .map(|meta| {
@@ -440,6 +455,10 @@ async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Err
             if let Some(object) = value.as_object_mut() {
                 object.insert("annotation_count".to_string(), json!(count));
                 object.insert("feature_state".to_string(), json!(meta.feature_state()));
+                object.insert(
+                    "agent_running".to_string(),
+                    json!(running.contains(&meta.id)),
+                );
             }
             value
         })

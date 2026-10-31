@@ -112,12 +112,11 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Testing plan
 
-- `cargo test --workspace` — 104 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+- `cargo test --workspace` — 109 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
-<<<<<<< HEAD
-  helpers, video media/limits/timecodes, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 192 checks in real Chromium: every drawing tool is actually drawn
+  helpers, video media/limits/frames/rounds/timecodes, CLI end-to-end.
+- `desktop/scripts/e2e.sh` — 204 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the
@@ -125,18 +124,8 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
   MCP `ship_status` merged/failed, the rail's PR link and `ship failed ↻` retry, row delete,
   cancelled-only purge, the All filter, agent settings/branch display, rail reopen and bulk
   confirm, and the whole video path (recorded WebM upload, playback, timecoded draw, ghost
-  opacity, range, timeline zoom and submit).
-=======
-  helpers, video media/limits/frames/rounds/timecodes, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 194 checks in real Chromium: every drawing tool is actually drawn
-  (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
-  pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
-  undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the
-  replied-but-still-running state, feature confirm/cancel/delete menus, row delete, cancelled-only
-  purge, the All filter, agent settings/branch display, rail reopen and bulk confirm, and the
-  whole video path (recorded WebM upload, playback, timecoded draw, ghost opacity, range,
-  timeline zoom, contact sheet + two frames, new video round, archived history playback).
->>>>>>> 01e8948 (feat(video): capture frames, compose contact sheets and round the clip)
+  opacity, range, timeline zoom, contact sheet + two frames, new video round, archived history
+  playback).
 - CI runs both on every push; releases are cut from tags only after green. The tool matrix,
   feature/bug protocol and release checklist live in `docs/TESTING.md`.
 

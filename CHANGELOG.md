@@ -64,7 +64,7 @@
   `video_base64`/`video_path`. The live `/media` URL is cache-busted so a replaced clip cannot be
   served from the previous round. Rust tests cover frame storage/limit/archive, new-round
   archiving and MCP video rounds; browser e2e covers the composed sheet, two timecoded frames,
-  the new-video flow and history playback (194 checks).
+  the new-video flow and history playback (204 checks).
 
 ## 0.22.0 — 2026-10-31
 

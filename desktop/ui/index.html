@@ -16,7 +16,7 @@ try {
 <div class="app" id="app" data-session-id="">
 
   <header class="header">
-    <div class="brand"><span class="brand-mark"><i></i></span> RedLine</div>
+    <div class="brand"><span class="brand-mark" role="img" aria-label="RedLine"><i></i></span></div>
     <div class="title">
       <b id="session-title">Loading…</b>
       <div class="subline">
@@ -188,6 +188,8 @@ try {
       <div class="conv-head">
         <span>Conversation</span>
         <span class="conv-activity" id="conv-activity"></span>
+        <button class="conv-verbose" id="conv-verbose" type="button" aria-pressed="false"
+                title="Show the agent's own output while it works">output</button>
         <button class="conv-new" id="conv-new" hidden></button>
       </div>
       <div class="conv-log" id="conv-log" aria-live="polite" aria-label="Conversation"></div>

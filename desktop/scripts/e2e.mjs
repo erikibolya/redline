@@ -253,6 +253,47 @@ const main = async () => {
     { timeout: 5000 },
   );
 
+  // ---- the brand is the icon alone, and as tall as the two-line title beside it (review LOGO,
+  // 2026-10-31, second round). A wordmark printed "RedLine" beside the session title as if it were
+  // a second heading. Sized to one 13 px font line the mark still read as a chip floating next to
+  // the title, so measure it against the *block* of text it stands beside — title plus subtitle —
+  // not against a font size. The block is the union of the two text lines, never the subline that
+  // also carries the branch chip.
+  const brandState = () => page.evaluate(() => {
+    const brand = document.querySelector(".header .brand");
+    const mark = brand?.querySelector(".brand-mark");
+    const title = document.querySelector(".header .title b");
+    const sub = document.querySelector(".header .title span");
+    if (!mark || !title || !sub) return null;
+    const markBox = mark.getBoundingClientRect();
+    const titleBox = title.getBoundingClientRect();
+    const block = Math.round(sub.getBoundingClientRect().bottom - titleBox.top);
+    const headerBox = document.querySelector(".header").getBoundingClientRect();
+    return {
+      text: (brand.textContent || "").trim(),
+      words: [...brand.childNodes].filter((node) => node.nodeType === 3 && node.textContent.trim()).length,
+      marks: brand.querySelectorAll(".brand-mark").length,
+      label: mark.getAttribute("aria-label") || "",
+      height: Math.round(markBox.height),
+      width: Math.round(markBox.width),
+      fontSize: Math.round(parseFloat(getComputedStyle(title).fontSize)),
+      block,
+      centre: Math.round(markBox.top + markBox.height / 2),
+      headerCentre: Math.round(headerBox.top + headerBox.height / 2),
+      aboveTitle: Math.round(titleBox.top) >= Math.round(markBox.top),
+    };
+  });
+  const brandEditor = await brandState();
+  check("the header brand is the icon alone — the wordmark is gone, the name is still announced",
+    brandEditor && brandEditor.words === 0 && brandEditor.text === ""
+      && brandEditor.marks === 1 && brandEditor.label === "RedLine",
+    JSON.stringify(brandEditor));
+  check("the brand icon is as tall as the two-line text block beside it, not a chip on one line",
+    brandEditor && brandEditor.height >= brandEditor.fontSize * 2 - 1
+      && Math.abs(brandEditor.height - brandEditor.block) <= 2
+      && Math.abs(brandEditor.centre - brandEditor.headerCentre) <= 1,
+    JSON.stringify(brandEditor));
+
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
   const chrome = await page.evaluate(() => {
     const header = document.querySelector(".header");
@@ -883,6 +924,36 @@ const main = async () => {
   check("the rail says replied, not waiting for agent, on an answered open round",
     idleRail.badge === "replied", idleRail.badge);
 
+  // A reply can land while the run keeps going. The bridge's claim (with its heartbeat) is the
+  // evidence that someone is still working, so the rail must show the spinner again instead of
+  // leaving the human with "replied" and no idea whether anything is happening (2026-10-31).
+  await api("/api/agent/claims", {
+    method: "POST",
+    body: JSON.stringify({ session_id: id, agent_id: "e2e", state: "running" }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const claimedRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    spin: Boolean(document.querySelector('.session[aria-current="true"] .badge.work .spin')),
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim() || "",
+    project: Boolean(document.querySelector(".rail-project .pworking")),
+  }));
+  check("a live claim restores the working label after a reply",
+    claimedRail.row && claimedRail.spin && claimedRail.badge === "working" && claimedRail.project,
+    JSON.stringify(claimedRail));
+  // Releasing the claim is the end of the run: no spinner without evidence.
+  await api(`/api/agent/claims/${id}/release`, {
+    method: "POST",
+    body: JSON.stringify({ agent_id: "e2e" }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const releasedRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim() || "",
+  }));
+  check("the working label clears again when the run releases its claim",
+    !releasedRail.row && releasedRail.badge === "replied", JSON.stringify(releasedRail));
+
   // `reply` is a message, not the finish line: the round is still submitted and STOP is still
   // armed, so the card must not claim "Run finished". It says the agent answered and the run has
   // not finished, with the age of the last step so an idle agent is distinguishable from a busy one.
@@ -1008,6 +1079,15 @@ const main = async () => {
       .filter((row) => row.dataset.round !== "current").length);
   check("history draws one row per round", rowsForRounds === repeated,
     `${rowsForRounds} rows, ${repeated} rounds`);
+  // Every version says what it cost: an earlier round ends where the next one was submitted
+  // (2026-10-31 — "every version should show how long it ran").
+  const historyTimes = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list .history-row .label span")]
+      .map((span) => span.textContent.trim()));
+  check("history rows say how long the round ran",
+    historyTimes.length > 0 && historyTimes.every((text) => text.includes("·")) &&
+      historyTimes.some((text) => /· took \d+[smh]/.test(text)),
+    JSON.stringify(historyTimes));
   const opened = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#history-list [data-round]")];
     // The newest round is still the canvas: clicking it returns to the live view, so open an
@@ -2115,6 +2195,58 @@ const main = async () => {
     !remaining.has(cancelMeId) && extra.every((id) => remaining.has(id)),
     JSON.stringify({ cancelMeId, extras: extra.map((id) => remaining.has(id)) }));
 
+  // ---- a finished review says so instead of showing no label at all, and the rail says how long
+  // its last run took (2026-10-31: done rows looked like they were still in progress).
+  const seenByThisBrowser = (sessionId) => page.evaluate((id) => {
+    const map = JSON.parse(localStorage.getItem("redline:seen") || "{}");
+    map[id] = new Date().toISOString();
+    localStorage.setItem("redline:seen", JSON.stringify(map));
+  }, sessionId);
+  const finishedReview = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "finished one", image_base64: makePng() }),
+  });
+  const finishedId = finishedReview.meta.id;
+  await api(`/api/sessions/${finishedId}/annotations`, {
+    method: "POST",
+    body: JSON.stringify({
+      annotations: [{ id: "f1", type: "rect", start: { x: 4, y: 4 }, end: { x: 40, y: 40 } }],
+    }),
+  });
+  await api(`/api/sessions/${finishedId}/resolve`, { method: "POST" });
+  // The rail's unread marker outranks every other badge; mark the rows looked-at so this test
+  // asserts the labels they keep *after* the human has seen them (the reported case).
+  await seenByThisBrowser(finishedId);
+  const openReview = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "open one", image_base64: makePng() }),
+  });
+  const openId = openReview.meta.id;
+  await seenByThisBrowser(openId);
+  await clickChip("All");
+  await page.evaluate(() => window.redline.rail.load());
+  await page.waitForFunction(
+    (ids) => ids.every((id) => document.querySelector(`.session[data-id="${id}"]`)),
+    { timeout: 5000 }, [finishedId, openId]);
+  const labels = await page.evaluate((ids) => ids.map((id) => {
+    const row = document.querySelector(`.session[data-id="${id}"]`);
+    const badge = row?.querySelector(".badge");
+    return {
+      badge: badge?.textContent.trim() || "",
+      className: badge?.className || "",
+      colour: badge ? getComputedStyle(badge).color : "",
+      sub: row?.querySelector(".sub")?.textContent || "",
+    };
+  }), [finishedId, openId]);
+  check("a finished review keeps a label in the rail",
+    labels[0].badge === "done" && labels[0].className.includes("done") && labels[0].colour !== "",
+    JSON.stringify(labels[0]));
+  check("the rail says how long the last run took",
+    /took \d+[smh]/.test(labels[0].sub), labels[0].sub);
+  check("a row with nothing drawn on it still says whose turn it is",
+    labels[1].badge === "open" && labels[1].className.includes("open"),
+    JSON.stringify(labels[1]));
+
   // ---- accessible names and a live region
   const a11y = await page.evaluate(() => ({
     canvas: document.querySelector("#canvas")?.getAttribute("role") === "img",
@@ -2489,6 +2621,12 @@ const main = async () => {
   check("the dashboard rail keeps the editor width",
     listBefore.handle && Math.abs(listBefore.rail - restored.rail) <= 2,
     `${restored.rail}px editor → ${listBefore.rail}px dashboard`);
+  const brandList = await brandState();
+  check("the dashboard carries the same icon-only brand as the editor",
+    brandList && brandList.words === 0 && brandList.text === ""
+      && brandList.marks === 1 && brandList.label === "RedLine"
+      && brandList.height === brandEditor.height,
+    JSON.stringify(brandList));
   const listHandle = await handleAt("#rail-resizer");
   await drag(page, listHandle, { x: listHandle.x + 40, y: listHandle.y });
   const listDragged = await listRail();
@@ -3156,6 +3294,133 @@ const main = async () => {
   check("deleting the open review returns to the dashboard",
     deletedOpen.status === 404 && !deleteDashboard.selected && !deleteDashboard.card,
     JSON.stringify({ status: deletedOpen.status, ...deleteDashboard }));
+
+  // ---- a run that cannot start must not leave the review locked behind the word "replied"
+  // (reported 2026-10-31: "the UI is blocked, so I can't edit it but the working label is not
+  // present — is it a bug?"). The failure is a state of its own: unlocked, labelled, and readable.
+  const broken = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "could not run", image_base64: makePng(), project: "e2e" }),
+  });
+  const brokenId = broken.meta.id;
+  await page.goto(`${BASE}/s/${brokenId}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  await page.evaluate(() => window.redline.mutate(() => {
+    window.redline.annotations.push({
+      id: "broken-1", type: "rect", color: "#e11d48", width: 3,
+      start: { x: 100, y: 120 }, end: { x: 200, y: 200 }, note: "please fix",
+    });
+  }));
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  const lockedBefore = await page.evaluate(() => ({
+    locked: window.redline.locked,
+    tool: document.querySelector('.tool[data-tool="rect"]')?.disabled,
+  }));
+  check("a submitted round is locked while the agent owns it",
+    lockedBefore.locked === true && lockedBefore.tool === true, JSON.stringify(lockedBefore));
+
+  // The bridge picks the round up and then cannot start the run (a dead opencode server, a broken
+  // repo, …): the pickup is the last thing it manages to report.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 11, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: brokenId, message: "Picked up by the agent bridge", state: "thinking",
+      } },
+    }),
+  });
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 12, method: "tools/call",
+      params: { name: "reply", arguments: {
+        session_id: brokenId,
+        message: "The agent run failed: Server at http://opencode:4096 rejected the password",
+        state: "failed",
+      } },
+    }),
+  });
+  const brokenMeta = (await api(`/api/sessions/${brokenId}`)).meta;
+  check("a failed run hands the round back on the server",
+    brokenMeta.status === "open" && brokenMeta.agent_state === "failed",
+    JSON.stringify({ status: brokenMeta.status, state: brokenMeta.agent_state }));
+
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const brokenUi = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return {
+      locked: window.redline.locked,
+      tool: document.querySelector('.tool[data-tool="rect"]')?.disabled,
+      composer: document.querySelector("#composer-text")?.disabled,
+      submit: document.querySelector("#submit")?.textContent.trim(),
+      badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim(),
+      failedBadge: Boolean(document.querySelector('.session[aria-current="true"] .badge.failed')),
+      card: card?.textContent || "",
+      cardFailed: Boolean(card?.classList.contains("failed")),
+      notice: document.querySelector("#conv-log")?.textContent || "",
+    };
+  });
+  check("a failed run unlocks the canvas instead of a dead end",
+    brokenUi.locked === false && brokenUi.tool === false && brokenUi.composer === false
+      && brokenUi.submit !== "STOP", JSON.stringify(brokenUi));
+  check("the rail and the conversation say the agent could not run this round",
+    brokenUi.failedBadge && brokenUi.badge === "agent failed"
+      && brokenUi.cardFailed && brokenUi.card.includes("could not run this round")
+      && brokenUi.notice.includes("It is yours again")
+      && brokenUi.notice.includes("rejected the password"),
+    JSON.stringify({ badge: brokenUi.badge, card: brokenUi.card }));
+
+  // ---- the agent's own output is one click away, off by default, and remembered
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 13, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: brokenId, message: "edited src/lib.rs", state: "log",
+      } },
+    }),
+  });
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const outputOff = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output")),
+    leak: (document.querySelector("#conv-log")?.textContent || "").includes("edited src/lib.rs"),
+  }));
+  check("agent output stays out of the conversation until asked for",
+    outputOff.pressed === "false" && !outputOff.block && !outputOff.leak,
+    JSON.stringify(outputOff));
+
+  await page.click("#conv-verbose");
+  const outputOn = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    body: document.querySelector("#conv-log .conv-output-body")?.textContent || "",
+    stored: localStorage.getItem("redline:convVerbose"),
+  }));
+  check("the Output button reveals the agent's realtime output",
+    outputOn.pressed === "true" && outputOn.body.includes("edited src/lib.rs")
+      && outputOn.stored === "true",
+    JSON.stringify(outputOn));
+
+  await page.reload({ waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  const outputRemembered = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output-body")),
+  }));
+  check("the Output choice survives a reload",
+    outputRemembered.pressed === "true" && outputRemembered.block,
+    JSON.stringify(outputRemembered));
+  await page.click("#conv-verbose");
+  const outputHidden = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output")),
+  }));
+  check("the Output button closes the tail again",
+    outputHidden.pressed === "false" && !outputHidden.block,
+    JSON.stringify(outputHidden));
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

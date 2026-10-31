@@ -49,6 +49,17 @@ work's state (`requested`, `running`, `done`, `failed`) plus the integration's `
 `message`. The server does not know what the work means; see
 [Handoff a confirmed feature](#post-apisessionsidhandoff).
 
+Every row also carries `agent_running` (2026-10-31): `true` while a bridge holds a **running**
+claim on the session whose lease has not expired. It is the evidence that a run is still going —
+`agent_state` only records what the agent said last, and a `reply` can land mid-run. A `waiting`
+claim (branch held, run slot free) is not a run and reads `false`; so does a claim whose lease
+expired because the bridge died. The rail shows **working** for either a running claim or
+`agent_state=working` on a still-submitted round, and the spinner disappears with the claim.
+
+`agent_state` is `received`, `working`, `replied` or `failed`. **`failed`** means the run could not
+happen: the server has already handed the round back (`status=open`, annotations intact) so the
+human can fix the problem and resubmit. It is not a reply, and it never leaves the round locked.
+
 ### `GET /api/sessions/<id>`
 
 ```json
@@ -247,6 +258,33 @@ Response `200`:
 
 `GET /api/sessions/<id>` also returns `disk_bytes`, the recursive size of the session folder
 (including videos and history) for the 2 GB warning.
+
+### `GET /api/sessions/<id>/history`
+
+```json
+{
+  "submissions": [
+    {
+      "stamp": "2026-10-31T17-56-35-00-00",
+      "round": 3,
+      "current": false,
+      "annotations": 1,
+      "png": true,
+      "source": true,
+      "frames": 0,
+      "started_at": "2026-10-31T17:56:35+00:00",
+      "finished_at": "2026-10-31T18:04:12+00:00",
+      "duration_secs": 457
+    }
+  ]
+}
+```
+
+Newest first; `round` numbers oldest = 1. `started_at` is the submission stamp and `finished_at`
+the moment the round left the agent's hands — the agent's next picture (`post_round`), the next
+human submission, or `resolve` — so `duration_secs` is what the round actually cost. Both are
+omitted while a round is still being worked on, and for v0.1 archives that carry no
+`submitted_at`. The fields are additive: older clients ignore them.
 
 Errors:
 

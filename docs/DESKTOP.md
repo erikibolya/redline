@@ -459,7 +459,8 @@ loop — the agent reconnects by service name on the next submission.
 `dev` is the integration branch. Stable releases still come from `v*` tags on `main`; every push
 to `dev` publishes a rolling prerelease under the moving **`dev`** tag
 (`.github/workflows/dev.yml`), versioned `<next-minor>-dev.<run number>` (bump `DEV_BASE_VERSION` in the
-workflow when a new stable minor ships).
+workflow when a new stable minor ships; the workflow refuses to build unless the base sorts above
+the latest stable, so a `0.23.0-dev.N` can never be hidden behind an installed `0.23.0`).
 
 The same workflow publishes the browser image for the dev server:
 

@@ -180,6 +180,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: #1c142f; border: 1px solid #4c1d95; color: #c4b5fd; font-size: 11px;
 }
 .viewing-bar:hover { background: #241a3d; }
+[data-theme="light"] .viewing-bar { background: #f5f3ff; border-color: #c4b5fd; color: #5b21b6; }
+[data-theme="light"] .viewing-bar:hover { background: #ede9fe; }
 
 /* A feature decision is consequential, so it gets a real dialog instead of a native confirm. */
 .feature-dialog {
@@ -277,6 +279,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .settings-claim span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-empty { padding: 6px 0; color: var(--muted); font-size: 11px; }
 .settings-error { margin: 0; color: #fda4af; font-size: 12px; }
+[data-theme="light"] .settings-error { color: #be123c; }
 .settings-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* ---------------------------------------------------------------- buttons */
@@ -435,8 +438,11 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 }
 .session .act:hover { color: var(--text); background: var(--panel-3); border-color: var(--border); }
 .session .act[data-act="menu"]:hover { color: #fda4af; border-color: #7f1d1d; background: #2a1115; }
+[data-theme="light"] .session .act[data-act="menu"]:hover { color: #be123c; border-color: #fda4af; background: #ffe4e6; }
 .chip.danger { border-color: #7f1d1d; color: #fda4af; }
 .chip.danger:hover { background: #2a1115; color: #fecdd3; }
+[data-theme="light"] .chip.danger { border-color: #fda4af; color: #be123c; }
+[data-theme="light"] .chip.danger:hover { background: #ffe4e6; color: #9f1239; }
 .session .badge {
   flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
   display: grid; place-items: center; font-size: 11px; font-weight: 600;
@@ -534,13 +540,15 @@ body.touch .btn { min-height: 38px; }
 body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 
 /* ---------------------------------------------------------------- stage */
-/* A light scrim over the screenshot while the agent has the round. It stays below the toolbar
-   and the status pill, and pointer-events are off so only the explicit guards block input. */
+/* A scrim over the screenshot while the agent has the round. It stays below the toolbar and
+   the status pill, and pointer-events are off so only the explicit guards block input. It has
+   to be dark enough to read as "locked" at a glance: the first pass (`.18` dark, `.10` light)
+   was invisible on the light stage. */
 .stage-dim {
   position: absolute; inset: 0; z-index: 4; pointer-events: none;
-  background: rgba(5, 9, 14, .18); transition: opacity .15s ease;
+  background: rgba(5, 9, 14, .28); transition: opacity .15s ease;
 }
-[data-theme="light"] .stage-dim { background: rgba(15, 23, 42, .10); }
+[data-theme="light"] .stage-dim { background: rgba(15, 23, 42, .18); }
 .stage-status {
   position: absolute; z-index: 6;
   /* Centred in the stage: the submitted lock used to be a dimming modal here, which hid the
@@ -551,6 +559,12 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   background: rgba(15, 23, 42, .9); border: 1px solid #334155;
   color: #e2e8f0; font-size: 12px; line-height: 1.4;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+/* The pill floats over the screenshot, so it is chrome, not a dark-mode surface: on the light
+   stage a black capsule read as a hole in the picture. */
+[data-theme="light"] .stage-status {
+  background: rgba(255, 255, 255, .95); border-color: #cbd5e1;
+  color: #1e293b; box-shadow: 0 8px 24px rgba(30, 41, 59, .18);
 }
 .stage {
   grid-area: stage;
@@ -742,14 +756,43 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   border-radius: 5px; font-size: 12px; line-height: 1;
 }
 .ann-row .end:hover { background: var(--accent); color: #fff; }
+/* Video annotations are grouped by the moment they belong to. The header is a seek control, not
+   a label: it carries the timecode and the group's count, and the group holding the playhead gets
+   an accent dot. A hairline + gap separates groups without turning each one into a heavy card. */
+.ann-group { margin: 0 0 8px; }
+.ann-group + .ann-group {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-soft);
+}
+.ann-group-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 8px 5px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 11px; text-align: left; cursor: pointer;
+}
+.ann-group-head.static { cursor: default; }
+.ann-group-head:not(.static):hover { background: var(--panel-2); color: var(--text); }
+.ann-group-head .group-dot {
+  width: 6px; height: 6px; flex: none; border-radius: 50%;
+  background: var(--muted); opacity: .55;
+}
+.ann-group-head .group-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums; letter-spacing: .01em;
+}
+.ann-group-head .group-count { margin-left: auto; font-size: 10px; color: var(--muted); }
+.ann-group.active .ann-group-head { color: var(--text); }
+.ann-group.active .ann-group-head .group-dot {
+  background: var(--accent); opacity: 1; box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
-/* History rounds are a list of small, bounded rows — no dead space around them. */
-#history-list .history-row.selected { border-color: var(--accent); background: var(--panel-3); }
 /* The live round is not a different kind of card: it keeps the same fill and border as the
-   archived rounds, and only its glyph turns green so it stands out. When it is the row being
-   viewed (the normal live state) it must not also wear the selection outline. */
-#history-list .history-row.live,
-#history-list .history-row.live.selected { background: var(--panel-2); border-color: var(--border); }
+   archived rounds, and only its glyph turns green so it stands out. Selection — which round the
+   canvas is showing — is a separate signal and belongs to the live row too; the current round is
+   the one normally selected, so without the outline it was indistinguishable from an idle card. */
+#history-list .history-row.live { background: var(--panel-2); border-color: var(--border); }
+/* History rounds are a list of small, bounded rows — no dead space around them. Declared after
+   the live-row default so the outline wins on the row being viewed, live or not. */
+#history-list .history-row.selected,
+#history-list .history-row.live.selected { border-color: var(--accent); background: var(--panel-3); }
 #history-list .history-row.live .glyph {
   background: rgba(22, 163, 74, .16); border-color: rgba(22, 163, 74, .45); color: var(--ok);
 }
@@ -920,8 +963,10 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .modal .drop-preview[hidden] { display: none; }
 .modal .drop-label { font-size: 12px; }
 .modal .drop.over { border-color: var(--accent); color: var(--text); background: #12233a; }
+[data-theme="light"] .modal .drop.over { background: #e0f2fe; }
 .modal .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .modal .error { color: #fda4af; font-size: 12px; min-height: 18px; margin-top: 8px; }
+[data-theme="light"] .modal .error { color: #be123c; }
 
 /* ---------------------------------------------------------------- help */
 .help-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin-top: 10px; font-size: 12.5px; }

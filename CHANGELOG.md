@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.24.0 — 2026-10-31
+
+- **"Install latest dev build…" offers the newest dev build again.** Dev builds were versioned
+  `0.23.0-dev.N` after stable `0.23.0` had shipped; semver correctly treats that as an *older*
+  prerelease, so the updater refused it and the menu looked broken. The dev base is now `0.24.0`,
+  and the dev workflow fails unless `DEV_BASE_VERSION` sorts above the latest stable release. The
+  next dev build (`0.24.0-dev.<run>`) is offered to an installed `0.23.0` (and to
+  `0.23.0-dev.68`).
+- **Unsent video work survives leaving the review.** Drafts were an in-memory `Map`, so a rail
+  switch kept them but a dashboard round-trip, a reload or the desktop webview navigating started
+  a new document and threw away every timecoded shape. Drafts now live in `localStorage` per
+  session, autosave on a 400 ms debounce and flush on `pagehide`/hidden; submit clears the draft,
+  a new agent round discards a stale one, and at most 20 drafts / 30 days are kept. The e2e draws
+  three shapes, leaves for the dashboard, returns and asserts the `at` values and groups, then
+  checks that submit removed the stored draft.
+- **Moving the playhead hides the annotations that belong to another moment.** A freshly drawn
+  shape stayed selected, and `annotationOpacity` returned `1` for selected rows — so an old
+  annotation stayed fully visible until another drawing stole the selection. Selection now only
+  draws the outline; the playhead decides visibility. Ghosts are opt-in (the old 12 % ghost
+  became the *Ghosts* toggle, remembered per browser), so the canvas shows exactly the current
+  frame unless the human asks for context. Timeline markers still show every annotation.
+- **Video annotations are grouped by timestamp.** The inspector splits a video's rows into
+  chronological sections with a timecode/count header; clicking a header seeks there, the group
+  under the playhead is marked, a range group stays active to its end, and read-only history
+  rounds use the same shape. A second shape on the same moment stays in one group rather than
+  making a duplicate header. Image sessions keep the flat list.
+- **The dashboard gallery follows the rail's poll and empties when it hides.** The `/` gallery was
+  painted only at boot and on a back-forward restore, so a review cancelled elsewhere (or restored
+  from the back-forward cache before the refresh landed) could keep its card while the rail itself
+  was already current. Worse, when the last pending review was cancelled, `renderGallery` set
+  `hidden` but left the old card in the DOM. The rail's 8 s session poll now hands the same list to
+  the gallery, and the empty state clears the shell. The e2e cancels a review through the API,
+  calls that poll, and asserts no card remains and the gallery is empty.
+- **The working scrim is dark enough to read, and the chrome over the stage follows the theme.**
+  While a round is submitted the canvas carries a scrim, but at `.18` (dark) and `.10` (light) it
+  was invisible on a light stage, so nothing said the canvas was locked. It is now `.28`/`.18`.
+  The centred *"Agent is working — …"* pill and the read-only round bar hard-coded a near-black
+  capsule; on a white screenshot that read as a hole in the picture. Both get a light-theme card
+  (white fill, slate text). The same sweep covers the other surfaces that only had dark colours:
+  the *Delete cancelled* chip, the row-menu hover, the new-review drop zone's drag state, form
+  errors, and the amber banners on the Servers and Setup pages. The e2e reads the computed
+  colours of the pill, the round bar and the scrim in both themes instead of trusting the class.
+
 ## 0.23.0 — 2026-10-31
 
 - **A history glyph belongs to the round's title, not to the middle of the card.** A history row

@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.23.0.** Live in production on holly:
+**Current release: v0.24.0.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -171,7 +171,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform
   (`scale/x/y`) applied in `render()`, so zoom is crisp and pointer mapping is `(screen - view)/scale`.
   A video session draws `<video>` into the same canvas via `loadMedia()`; `annotationOpacity()`
-  makes other moments ghosts and `videoWindow` drives the zoomable timeline. A video submit
+  hides other moments by default (the Ghosts toggle shows them) and `videoWindow` drives the
+  zoomable timeline; the inspector groups video rows by timestamp. Unsent work is a per-session
+  draft in `localStorage` (`Drafts`), flushed on `pagehide` and cleared by submit. A video submit
   captures `frames/` and a contact sheet; a new clip is a new round whose predecessor lives under
   `history/<stamp>/video.*` and replays read-only.
 
@@ -191,6 +193,22 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   buffered end once (`currentTime = 1e101`, wait for `durationchange`), then reset to 0; the
   upload's poster/duration must wait for the resolved value too. A 250 MB cap is not a length
   cap: the server also rejects a declared duration over five minutes.
+- **A Map in one document is not a save.** Drafts lived in `Editor.drafts`, so switching reviews
+  in the rail kept them but clicking a review on the dashboard (or reloading, or the desktop
+  webview navigating) started a new document and lost every shape. Persist per session in
+  `localStorage`, save while editing and flush on `pagehide`/hidden; clear on submit, and invalidate
+  a draft when the media fingerprint changes so old coordinates cannot land on a new round. Test
+  the full navigation, not only `openSession`.
+- **A selection is not a time filter.** `annotationOpacity` returned `1` for selected rows, and a
+  freshly drawn shape stays selected — so an annotation from another moment remained fully
+  visible until a new drawing stole the selection. Selection draws an outline; the playhead (and
+  the Ghosts toggle) decides whether the shape is visible. Test the selected case, not only an
+  unselected ghost.
+- **A flat list is not a timeline.** Video annotations are rows with timecodes; a long round read
+  as an undifferentiated stack and the moment was only in tiny text. Group the inspector by
+  timestamp, make the group header a seek control, mark the group under the playhead, and keep
+  the group shape in the read-only history viewer. Test the same-moment group (one header) and
+  the range that stays active.
 - **Text entry**: `pointerdown` must `preventDefault()` (else mousedown focus-steals and the empty
   editor commits), focus synchronously, and `commit()` must be idempotent (removal fires `blur`).
 - **`RunEvent::ExitRequested` is vetoed** to keep the tray app alive; a quit/restart must set a
@@ -199,6 +217,10 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `TAURI_SIGNING_PRIVATE_KEY`, in `desktop.yml` too.
 - **Release job ordering**: the Linux-binary job needs `needs: windows` (the release is created by
   the Windows job).
+- **A prerelease of the current stable is older, not newer.** Dev builds were versioned
+  `0.23.0-dev.N` while stable was already `0.23.0`, so the updater correctly refused to install
+  one; "Install latest dev build…" looked broken. `DEV_BASE_VERSION` must be the *next* minor
+  (now 0.24.0); the dev workflow now fails if the base does not sort above the latest stable.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).
@@ -273,7 +295,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - **A highlight is not the only way to mark a live row.** The live history row tinted its fill and
   border blue, so it read as a different kind of card; the human asked for the same card as every
   other round with only the glyph green. Colour the smallest marker that has to stand out, and keep
-  selection (which round you are viewing) a separate signal.
+  selection (which round you are viewing) a separate signal. Then keep *both* signals working:
+  dropping the outline from the live row too left `Current` looking like an idle card, and the
+  human could not tell which round the canvas was showing (2026-10-31). The live *default* is a
+  plain card; selection is the accent outline on whichever row is shown, live or archived. Test
+  the unselected live row against a sibling's look and the selected one against the accent.
 
 - **A centred icon is not an aligned icon.** A history row is two lines (title + timestamp) and
   `.ann-row` centres its glyph on the whole row, so the round number and the live bullet floated
@@ -344,6 +370,18 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   finished. Move configuration into a dialog opened from the status chip, and leave only an
   invitation while the condition that needs it (no bridge online) is true. Test the dialog from
   both pages, the masked token, and the invitation appearing/disappearing with presence.
+- **A poll that updates the rail does not update the gallery.** The rail already re-read the
+  session list every 8 s, but the `/` gallery was painted only at boot and on a back-forward
+  restore. A review cancelled elsewhere (or a restore whose refresh did not land) kept its card
+  for as long as the dashboard stayed open; the e2e saw it as an intermittent failure of the
+  cancel flow. Treat every derived view as a subscriber of the one poll — hand the fresh list to
+  the gallery — and test the poll, not only a reload. A list that is right in the rail and stale
+  beside it is still wrong.
+- **Hiding a list is not emptying it.** When the last pending review was cancelled, the dashboard
+  set `#gallery.hidden = true` and left the old card in the DOM. The screen looked right, but
+  `querySelector` still found the card, so the e2e's "cancelled review is gone" check failed
+  intermittently depending on whether another pending review kept the gallery visible. Clear the
+  container when you hide it; a visual empty state and an empty DOM are two different claims.
 - **A local page's back link is not a session link.** The Servers and Setup pages are served by
   the desktop app's local server, but the window may be pointed at a remote profile. Their
   `href="/"` returned to the local dashboard, which has no reviews and no agent presence — the

@@ -135,17 +135,23 @@ same path a human does: upload, play, draw, range, zoom, submit.
   path/base64, poster, `get_feedback.media` + tokenised `video_url`).
 - Browser e2e: the dialog previews the recorded clip; the upload stores duration/dimensions and a
   poster; `/image` is PNG and `/media` answers `206`; the editor loads muted with the video bar;
-  play turns the control into pause; drawing stamps `at`; the inspector prints the timecode; a
-  far annotation is a 0.12 ghost and the current one is full; the ⏱ button sets `until`; zoom
-  narrows the window and Fit restores it; the timeline shows a marker and a range band; `K`
-  pauses and `.` steps a frame; the submit persists `at`/`until`; `review.md` prints the range.
+  play turns the control into pause; drawing stamps `at`; the inspector prints the timecode and
+  groups rows under chronological timestamp headers; a group header seeks; a range group stays
+  active to its end; other moments are hidden by default, a selected annotation still obeys the
+  playhead, Ghosts shows a 0.12 ghost, and the current annotation is full; the ⏱ button sets
+  `until`; zoom narrows the window and Fit restores it; the timeline shows a marker and a range
+  band; `K` pauses and `.` steps a frame; a second shape at the same moment stays in one group; a
+  third at another moment gets its own frame and group; the draft is autosaved to localStorage,
+  survives a dashboard round-trip with its `at` values and groups, and is cleared by submit; a
+  draft left over an agent `post_round` is discarded and says so; the submit persists
+  `at`/`until`; `review.md` prints the range.
 - Frames and rounds: two annotated moments produce two `frames/*.png` files served as PNG, a
   1014×394 contact sheet (not the current frame), and `### Frames` entries in `review.md`; the
   history entry records `frames: 2`. STOP after `get_feedback` keeps the round, **New video**
   asks first, a second recorded clip becomes the live 0.63 s round with empty annotations, the
   previous clip answers `200 video/webm` under `history/<stamp>/video`, and clicking the history
-  row plays that clip read-only with its two annotations; *Back to current* restores the new
-  live clip and the New video control.
+  row plays that clip read-only with its three annotations and two timestamp groups; *Back to
+  current* restores the new live clip and the New video control.
 - Rust `tests/api.rs` also covers `multipart` submit dedupe/limits, `POST
   /api/sessions/{id}/video` + archived-range, and MCP `post_round` video in `tests/mcp.rs`.
 
@@ -166,8 +172,10 @@ same path a human does: upload, play, draw, range, zoom, submit.
 - [ ] `desktop/scripts/e2e.sh` green (see `PLAN.md` for the current count)
 - [ ] the tool matrix covers rectangle, ellipse, arrow, pen, select/move, note, undo, submit
 - [ ] video: upload a real clip, pause on a frame, draw a point and a range, scrub to another
-      time (ghost), zoom the timeline, submit, check the agent feedback timecodes/frames/contact
-      sheet, post a new clip and replay the previous round from History
+      time (hidden by default; Ghosts shows it), check the timestamp groups and group seek, zoom
+      the timeline, submit, check the agent feedback timecodes/frames/contact sheet, post a new
+      clip and replay the previous round from History; leave the review and come back before
+      submitting to prove the draft survives
 - [ ] agent concurrency: settings save, branch shown in the rail, claim limits/branch locks green,
       and two claims run in separate worktrees
 - [ ] every changed UI control was clicked by the e2e; every changed endpoint has a Rust test

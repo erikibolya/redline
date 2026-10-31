@@ -2,7 +2,8 @@
 
 Status: **shipped in v0.23.0** (server media core, browser upload, canvas
 playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full frames,
-new video rounds/history playback and agent `post_round` video). Phase 4 is the release pass.
+new video rounds/history playback and agent `post_round` video). The annotation feedback fixes —
+persistent drafts, timestamp groups, hidden-by-default other moments — shipped in **v0.24.0**.
 
 ## 0. Decisions from the product owner (2026-10-31)
 
@@ -15,8 +16,10 @@ new video rounds/history playback and agent `post_round` video). Phase 4 is the 
 4. **New video:** a new round in the same review; the previous video moves to history.
 5. **History:** keep the existing 20-round retention; no separate video cap in v1, show size and
    warn for large sessions. Videos stay local.
-6. **Annotation visibility:** current-time annotations full; other annotations are ghosts at low
-   opacity and fade in/out as their time is approached (timeline markers always visible).
+6. **Annotation visibility:** current-time annotations full; other annotations are **hidden by
+   default**. The `Ghosts` toggle shows them at low opacity and fades them in as their time is
+   approached (timeline markers always visible). Selection is an outline, never a visibility
+   override.
 7. **Timeline:** basic controls plus a zoomable timeline (wheel/zoom + overview strip).
 8. **Agent output:** contact sheet **and** full-resolution frames for the unique annotated
    timestamps; the cap is confirmed at **20 unique timestamps / ~60 MB per submission** (see §7).
@@ -102,15 +105,23 @@ detail timeline (zoomable window; scrubber, markers, time ruler)
 - Annotation markers (colour = annotation colour, clustered when close) live on both strips.
   Hover shows time and count; click seeks.
 - Annotation visibility: the annotation(s) at the current time are full opacity. Other
-  annotations are ghosts at low opacity (proposal: 12–15%) so the geometry is visible without
-  clutter; as playback approaches an annotation's `at` (within ~350 ms), it fades to full, and a
-  finished point annotation fades back to ghost. Range annotations are full between `at` and
-  `until` and ghost outside, with a short fade at both boundaries. A "ghosts" toggle can hide
-  them entirely; timeline markers always show every annotation.
+  annotations are hidden by default; the **Ghosts** toggle brings them back at low opacity
+  (12–15 %) so the geometry is visible without clutter. As playback approaches a ghost's `at`
+  (within ~350 ms), it fades to full, and a finished point annotation fades back to ghost. Range
+  annotations are full between `at` and `until` and ghost outside, with a short fade at both
+  boundaries. Selection is an outline, not a visibility override: a selected annotation from
+  another moment is still not drawn. Timeline markers always show every annotation, including
+  hidden ones.
 - Drawing: pointerdown on the canvas pauses the video first, then starts the shape at the current
   frame. The annotation gets the current `at` (and `until` if the user creates a range).
 - Selecting an annotation seeks to its `at`; the inspector row shows `00:02.340` (or
   `00:02.340–00:02.600`).
+- The inspector groups video rows by timestamp, chronologically: a header with the timecode and
+  count, then that moment's rows. Clicking the header seeks there; the group at the playhead is
+  marked. Image sessions keep the flat list.
+- Unsent work is a per-session draft in `localStorage`, so a reload, a dashboard round-trip or
+  the desktop webview navigating does not lose it. A new agent round (different media) discards
+  the stale draft and says so; submit clears it.
 - Keyboard: `Space` is already pan; use `K` play/pause, `,`/`.` step frame, `J`/`L` jump 1 s.
   Timeline zoom uses the `−`/`+` buttons or the wheel over the timeline (over the canvas,
   Ctrl+wheel still zooms the image). Keep the existing shortcuts; document the conflict.
@@ -406,8 +417,10 @@ Browser e2e:
 - editor loads video, timeline appears, play/pause changes currentTime, seek marker;
 - timeline zoom: wheel/`+` changes the visible window, markers/rescale, Fit resets; overview
   window follows;
-- ghost visibility: an annotation at another time is faint, then becomes full near its time and
-  fades back; the ghosts toggle hides it;
+- annotation visibility: other moments hidden by default; Ghosts shows a faint annotation, it
+  becomes full near its time and fades back; a selected annotation still obeys the playhead;
+- the inspector groups rows by timestamp, a group header seeks, and a range group stays active;
+- a video draft survives leaving to the dashboard and coming back; submit clears it;
 - draw a rect at 1.2 s, assert `at` in the inspector and server JSON; pause on draw;
 - create a range annotation and assert `until`;
 - contact sheet is uploaded and shows the timecode; full-resolution frames for unique timestamps

@@ -31,8 +31,8 @@
   an integration with no post-confirmation action simply confirms without a handoff. The rail
   shows `handoff queued`, `handing off`, the integration's label with its link, or a red
   `handoff failed` label with a row `↻` retry; a retry keeps the label/URL/message from the
-  failed attempt. Old bridges
-  that send no `jobs` are never handed a handoff job, and an old presence file is review-only.
+  failed attempt. Old bridges that send no `jobs` are never handed a handoff job, and an old
+  presence file is review-only.
   Rust tests cover the opt-in queue, the capability gate, the generic MCP report and the state
   reset; the browser e2e checks the review-only default, confirms with a handoff, reports
   done/failed through MCP, follows the link and retries. The e2e's cancel dashboard check and two

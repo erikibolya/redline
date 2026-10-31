@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **A stopped or timed-out run now kills its process tree, not just `opencode`.** A killed agent
+  could leave a `docker build` grandchild running for hours; one orphaned `redline:logo-merge`
+  build blocked Docker's legacy builder and made every later build hang at `COPY` (2026-11-01).
+  The child is spawned as its own process group and the timeout/STOP path sends `SIGKILL` to the
+  group, so shell commands and Docker builds die with the run. The Unix test proves a fake
+  `opencode`'s background `sleep` does not survive the idle timeout.
+
 ## 0.26.0 — 2026-10-31
 
 - **A handoff result can always be reported.** The human can confirm a feature while the agent is

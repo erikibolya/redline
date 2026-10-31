@@ -709,6 +709,22 @@ fn human_duration(duration: Duration) -> String {
     }
 }
 
+/// Kill the run and everything it spawned. `opencode` launches shell commands and Docker builds;
+/// killing only the direct child left those grandchildren running (a four-hour orphaned
+/// `docker build` blocked the legacy builder in 2026-11-01). On Unix the child is its own process
+/// group leader (`process_group(0)`), so a negative PID kills the whole tree.
+fn kill_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id() as i32;
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Run one `opencode run` to completion. `Ok(true)` means the process exited successfully.
 fn run_opencode(
     config: &AgentConfig,
@@ -737,6 +753,14 @@ fn run_opencode(
         .env("REDLINE_TOKEN", &config.token)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // A new process group lets the timeout/STOP path kill shell commands and Docker builds,
+        // not just the `opencode` wrapper.
+        command.process_group(0);
+    }
 
     let mut child = command
         .spawn()
@@ -784,8 +808,7 @@ fn run_opencode(
             None => {}
         }
         if now_millis().saturating_sub(activity.load(Ordering::Relaxed)) >= idle_ms {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Err(RunError::new(
                 "timeout_idle",
                 format!(
@@ -795,8 +818,7 @@ fn run_opencode(
             ));
         }
         if started.elapsed() >= config.timeout {
-            let _ = child.kill();
-            let _ = child.wait();
+            kill_tree(&mut child);
             return Err(RunError::new(
                 "timeout_hard",
                 format!(
@@ -817,8 +839,7 @@ fn run_opencode(
                     value["meta"]["status"].as_str() == Some("submitted")
                 };
                 if !alive {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_tree(&mut child);
                     return Err(RunError::new("stopped", "stopped by the human"));
                 }
             }
@@ -1489,12 +1510,48 @@ mod tests {
         let mut config = AgentConfig::new("http://127.0.0.1:1", "t", &root);
         config.idle_timeout = Duration::from_secs(2);
         config.timeout = Duration::from_secs(30);
-        config.opencode_bin = fake_opencode(&root, "idle", "sleep 30")
+        let pid_file = root.join("grandchild.pid");
+        let idle_body = format!("sleep 30 & echo $! > {}; wait", pid_file.display());
+        config.opencode_bin = fake_opencode(&root, "idle", &idle_body)
             .to_string_lossy()
             .to_string();
         let idle = run_opencode(&config, "idle", "prompt", &root, false).unwrap_err();
         assert_eq!(idle.code, "timeout_idle");
         assert!(idle.message.contains("no output"), "{}", idle.message);
+        #[cfg(target_os = "linux")]
+        {
+            // The shell spawned `sleep` as a grandchild. It must die with the process group, not
+            // survive the bridge and hold the Docker builder (the 2026-11-01 orphan). A killed
+            // grandchild may remain in /proc as a zombie until the container's init reaps it;
+            // that is dead, not running.
+            let pid = std::fs::read_to_string(&pid_file)
+                .expect("grandchild pid")
+                .trim()
+                .to_string();
+            let dead = |pid: &str| {
+                let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+                if stat.is_empty() {
+                    return true;
+                }
+                let state = stat
+                    .rsplit_once(") ")
+                    .map(|(_, rest)| rest)
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("");
+                state == "Z"
+            };
+            let mut gone = false;
+            for _ in 0..30 {
+                if dead(&pid) {
+                    gone = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            assert!(gone, "grandchild {pid} survived the process-group kill");
+        }
 
         config.opencode_bin = fake_opencode(
             &root,

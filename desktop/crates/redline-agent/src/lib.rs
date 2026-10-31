@@ -673,6 +673,7 @@ fn run_opencode(
     command.arg(prompt);
     command
         .current_dir(repo)
+        .env("PWD", repo)
         .env("REDLINE_URL", &config.url)
         .env("REDLINE_TOKEN", &config.token)
         .stdout(Stdio::piped())

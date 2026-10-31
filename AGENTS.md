@@ -392,6 +392,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   cancel flow. Treat every derived view as a subscriber of the one poll — hand the fresh list to
   the gallery — and test the poll, not only a reload. A list that is right in the rail and stale
   beside it is still wrong.
+- **A poll that repaints one field leaves the others stale.** The rail's 8 s poll redrew only when
+  the *working* set changed, so a run that failed without ever being "working" (the bridge reports
+  `thinking`, then `failed`) kept its row saying **waiting for agent** — the one badge that had to
+  explain the dead end was the one that never repainted, and CI's e2e caught it while the review
+  was being handed off. Compare a fingerprint of the fields a row actually paints (status,
+  `agent_state`, `agent_running`, counts, feature/handoff state) rather than a proxy for them, and
+  keep the "unchanged queue does not rebuild the list" guarantee with that fingerprint.
 - **Hiding a list is not emptying it.** When the last pending review was cancelled, the dashboard
   set `#gallery.hidden = true` and left the old card in the DOM. The screen looked right, but
   `querySelector` still found the card, so the e2e's "cancelled review is gone" check failed

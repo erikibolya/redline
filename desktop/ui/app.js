@@ -1025,13 +1025,28 @@ const Theme = {
 
 /* ------------------------------------------------------------------ rail */
 
-/// Which sessions an agent is running right now; the rail polls for this and redraws only when
-/// the set changes, so a live indicator does not rebuild the list every few seconds.
-const workingIds = (sessions) => (sessions || [])
-  .filter(agentWorking)
-  .map((session) => session.id)
-  .sort()
-  .join("\n");
+/** Everything a rail row paints, as one comparable string. The poll used to redraw only when the
+ *  *working* set changed, so a run that failed without ever being "working" (the bridge's pickup
+ *  is `thinking`, then `failed`) kept its row saying "waiting for agent" until a manual refresh —
+ *  the badge that has to explain the dead end was the one that stayed stale (2026-10-31). Compare
+ *  the painted fields instead of the whole list, so an unchanged queue still never rebuilds it. */
+const railFingerprint = (sessions) => (sessions || []).map((session) => [
+  session.id,
+  session.title || "",
+  session.project || "",
+  session.status,
+  session.created_at || "",
+  session.annotation_count || 0,
+  session.agent_state || "",
+  session.agent_running ? 1 : 0,
+  session.seen_by_agent_at ? 1 : 0,
+  session.branch || "",
+  featureState(session),
+  session.handoff?.status || "",
+  session.handoff?.label || "",
+  session.handoff?.url || "",
+  session.handoff?.message || "",
+].join("\u0001")).join("\n");
 
 // "Active" is the default so finished sessions drop out of the way; "All" is the archive view
 // and "Done" is the resolved-only view.
@@ -1158,10 +1173,10 @@ class Rail {
     } catch {
       return;
     }
-    const before = workingIds(this.sessions);
+    const beforeRows = railFingerprint(this.sessions);
     const beforeData = JSON.stringify(this.sessions);
     this.sessions = sessions;
-    if (workingIds(sessions) !== before) this.render();
+    if (railFingerprint(sessions) !== beforeRows) this.render();
     // The dashboard gallery is derived from the same list. It used to be painted only at boot
     // and on a back-forward restore, so a review cancelled elsewhere could keep its card for as
     // long as the page stayed open; let the dashboard re-render it with the poll.

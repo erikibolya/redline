@@ -195,7 +195,24 @@ fn a_new_round_clears_the_feature_decision() {
         opened.ship.as_ref().map(|ship| ship.status),
         Some(ShipStatus::Opened)
     );
-    // A retry keeps the PR identity; the agent can reuse the same pull request.
+    let failed = store
+        .report_ship(
+            &meta.id,
+            ShipReport {
+                status: ShipStatus::Failed,
+                pr_url: None,
+                pr_number: None,
+                merge_commit: None,
+                error: Some("checks are red".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        failed.ship.as_ref().and_then(|ship| ship.error.as_deref()),
+        Some("checks are red")
+    );
+    // A retry keeps the PR identity and the failing check; the agent can reuse the same PR and
+    // knows what the last attempt hit.
     let retried = store.request_ship(&meta.id).unwrap();
     let retried_ship = retried.ship.unwrap();
     assert_eq!(retried_ship.status, ShipStatus::Requested);
@@ -204,6 +221,7 @@ fn a_new_round_clears_the_feature_decision() {
         retried_ship.pr_url.as_deref(),
         Some("https://github.com/o/r/pull/7")
     );
+    assert_eq!(retried_ship.error.as_deref(), Some("checks are red"));
 
     store.mark_ship_running(&meta.id).unwrap();
     let merged = store

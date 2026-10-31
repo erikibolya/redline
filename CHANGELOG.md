@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **A round cannot end at the previous round's hand-back.** A human submits the next round in the
+  same second the agent posts its answer, and the derivation took that hand-back as the new
+  round's end — so a round that had not started yet read `took 0s` (and a round nobody had picked
+  up looked finished). The hand-back belongs to a round only when it lands inside that round's own
+  window; the newest round may be a genuinely sub-second run, but only once an agent has been on
+  it (`seen_by_agent_at`, a reply or a posted round). Caught by the screenshot demo of this
+  feature: Round 2 showed `took 0s` for a 48-second run. Rust tests
+  `a_round_does_not_end_at_the_previous_rounds_hand_back`,
+  `a_round_no_agent_read_has_no_duration` and
+  `a_round_the_agent_handed_back_knows_when_it_ended`.
+- **The run time leads the row.** `took 48s · 10/31/2026 18:39 · 2 annotations · image`: the cost
+  was the last segment of the second line, and a 300 px inspector ends that line in an ellipsis, so
+  the one number the human asked for was the first thing to disappear. Same for the rail's
+  `8m ago · took 52s · feat/…`. The e2e asserts the duration is the first thing on the line.
 - **A finished review says `done` in the rail, and every round says how long it ran.** A resolved
   session that was neither `working` nor decided showed no badge at all, so finished tasks looked
   like they were still in progress (2026-10-31). Resolved rows now carry a `done` badge and

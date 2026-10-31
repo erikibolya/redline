@@ -1390,12 +1390,12 @@ class Rail {
             <div class="body">
               <div class="name">${escapeHtml(session.title || session.id)}</div>
               <div class="sub">${escapeHtml(relativeTime(session.submitted_at || session.created_at))}${
+                ran !== null ? ` · took ${durationLabel(ran)}` : ""
+              }${
                 session.branch
                   ? ` · <span class="branch" title="${escapeHtml(session.branch)}">${escapeHtml(session.branch)}</span>`
                   : ""
-              }${ran !== null ? ` · took ${durationLabel(ran)}` : ""}${
-                session.note ? " · " + escapeHtml(session.note) : ""
-              }</div>
+              }${session.note ? " · " + escapeHtml(session.note) : ""}</div>
             </div>
             <span class="row-actions">
               ${decided
@@ -3659,11 +3659,11 @@ class Editor {
           <span class="glyph">${round.round}</span>
           <span class="label">
             <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
-            <span>${escapeHtml(stampTime(round.stamp))} · ${plural(round.annotations, "annotation")}${
+            <span>${round.duration_secs !== undefined && round.duration_secs !== null
+              ? `took ${durationLabel(round.duration_secs)} · `
+              : ""}${escapeHtml(stampTime(round.stamp))} · ${plural(round.annotations, "annotation")}${
               round.media?.kind === "video" ? " · video" : round.source ? " · image" : ""
-            }${round.duration_secs !== undefined && round.duration_secs !== null
-              ? ` · took ${durationLabel(round.duration_secs)}`
-              : ""}</span>
+            }</span>
           </span>
         </div>`);
       }

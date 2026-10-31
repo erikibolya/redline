@@ -282,9 +282,12 @@ Response `200`:
 
 Newest first; `round` numbers oldest = 1. `started_at` is the submission stamp and `finished_at`
 the moment the round left the agent's hands — the agent's next picture (`post_round`), the next
-human submission, or `resolve` — so `duration_secs` is what the round actually cost. Both are
-omitted while a round is still being worked on, and for v0.1 archives that carry no
-`submitted_at`. The fields are additive: older clients ignore them.
+human submission, or `resolve` — so `duration_secs` is what the round actually cost. A hand-back
+belongs to a round only when it is the round's own: the previous round's answer can land in the
+same second as the next submission, so an older round's end must be *later* than its start, and a
+round no agent has touched has no end at all. Both fields are omitted while a round is still being
+worked on, for rounds nobody picked up, and for v0.1 archives that carry no `submitted_at`. The
+fields are additive: older clients ignore them.
 
 Errors:
 

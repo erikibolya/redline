@@ -1801,9 +1801,23 @@ impl Store {
             };
             let next_submit = index.checked_sub(1).and_then(|newer| starts[newer].clone());
             let mut ends: Vec<String> = Vec::new();
-            // `>=`: a submit and a hand-back in the same second is a real (zero-second) round.
+            // A hand-back belongs to this round only if it lands inside the round's own window. The
+            // previous round's hand-back can fall in the same second as this submit (the human
+            // submits right after the agent answers), so an *older* round needs a strictly later
+            // stamp — otherwise every round that follows a fast agent reads "took 0s" (2026-10-31).
+            // The newest round may be a genuinely sub-second run, but only once an agent has been on
+            // it: a round nobody picked up has no end at all.
+            let picked_up = index == 0
+                && (meta.seen_by_agent_at.is_some() || meta.agent_state.is_some());
+            let after_start = |at: &&String| {
+                if picked_up {
+                    **at >= started
+                } else {
+                    **at > started
+                }
+            };
             if let Some(at) = handed_back.iter().find(|at| {
-                **at >= started && next_submit.as_ref().map_or(true, |next| **at <= *next)
+                after_start(at) && next_submit.as_ref().map_or(true, |next| **at <= *next)
             }) {
                 ends.push(at.clone());
             }

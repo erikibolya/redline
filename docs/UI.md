@@ -91,8 +91,9 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   **done** once the review is resolved, **open** when the round is back in the human's hands with
   nothing drawn on it yet, otherwise a **new** marker for anything this browser has not looked at
   (tracked per session in `localStorage`) or the annotation count. No row is left without a word.
-  A resolved row also says how long its last run took (`· took 4m 12s`), from the submission stamp
-  to `resolve`.
+  A resolved row also says how long its last run took (`8m ago · took 52s · feat/…`), from the
+  submission stamp to `resolve`. The cost sits right after the age, because everything after the
+  branch is what a narrow rail truncates.
 - Selected row is highlighted; clicking loads that session into the canvas without a page reload.
 - Groups by day (`Today`, `Yesterday`, older) when more than ~15 sessions.
 
@@ -355,10 +356,13 @@ do not move; it also clicks every close X.
   marks the round currently being viewed — including `Current`, which is the selected row whenever
   the live canvas is on screen. An unselected live row (while a round is previewed) is an ordinary
   card.
-- **Every round says what it cost**: the row subtitle prints `· took 4m 12s` from the server's
-  `duration_secs`, which is the submission stamp to the moment the round left the agent's hands
-  (its next picture, the next human submission, or `resolve`). The conversation's run summary
-  prints the same for the last run. A round the agent still holds has no duration yet.
+- **Every round says what it cost**: the row subtitle leads with `took 4m 12s` (then the stamp,
+  the annotation count and the media kind) from the server's `duration_secs`, which is the
+  submission stamp to the moment the round left the agent's hands (its next picture, the next human
+  submission, or `resolve`). It leads the line on purpose: a 300 px inspector ends the line in an
+  ellipsis, and the number the human asked for must not be the first thing to disappear. The
+  conversation's run summary prints the same for the last run. A round the agent still holds, or
+  that no agent ever picked up, has no duration.
 - The ghost (`◫`), diff (`Δ`) and open-PNG (`↗`) buttons and the `Ghost · …` chip were removed;
   the diff endpoint remains for agents.
 - The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History

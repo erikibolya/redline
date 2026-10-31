@@ -53,9 +53,13 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   the round on the canvas is one *Round N (current)* row with no extra *Current*.
 - Round cost (2026-10-31): Rust `tests/api.rs` `every_round_reports_how_long_it_ran` — an older
   round ends where the next submission begins, the newest submitted round has no end yet, and
-  `resolve` is the end of the round the agent had. The browser e2e asserts a History row prints
-  `· took …`. In the rail, a resolved review keeps a `done` badge plus `· took …`, and an open row
-  with nothing drawn on it says `open` instead of staying blank.
+  `resolve` is the end of the round the agent had. `tests/store.rs` adds
+  `a_round_the_agent_handed_back_knows_when_it_ended` (the agent's posted picture ends the round),
+  `a_round_does_not_end_at_the_previous_rounds_hand_back` (a submit in the same second as the
+  previous hand-back must not read `took 0s`) and `a_round_no_agent_read_has_no_duration` (an
+  untouched round has no end). The browser e2e asserts a History row *starts* with `took …`, so a
+  narrow inspector cannot hide it. In the rail, a resolved review keeps a `done` badge plus
+  `took …`, and an open row with nothing drawn on it says `open` instead of staying blank.
 
 ## Run state and agent output (2026-10-31)
 

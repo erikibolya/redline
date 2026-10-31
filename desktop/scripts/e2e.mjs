@@ -1053,13 +1053,15 @@ const main = async () => {
   check("history draws one row per round", rowsForRounds === repeated,
     `${rowsForRounds} rows, ${repeated} rounds`);
   // Every version says what it cost: an earlier round ends where the next one was submitted
-  // (2026-10-31 — "every version should show how long it ran").
+  // (2026-10-31 — "every version should show how long it ran"). The cost leads the row's second
+  // line: an inspector is ~300 px, so anything after the timestamp is the first thing the
+  // ellipsis eats, and the one number the human asked for must never be the one that is cut.
   const historyTimes = await page.evaluate(() =>
     [...document.querySelectorAll("#history-list .history-row .label span")]
       .map((span) => span.textContent.trim()));
   check("history rows say how long the round ran",
-    historyTimes.length > 0 && historyTimes.every((text) => text.includes("·")) &&
-      historyTimes.some((text) => /· took \d+[smh]/.test(text)),
+    historyTimes.length > 0 &&
+      historyTimes.some((text) => /^took \d+[smh]/.test(text)),
     JSON.stringify(historyTimes));
   const opened = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#history-list [data-round]")];

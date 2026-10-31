@@ -691,3 +691,148 @@ fn a_pre_release_ship_record_is_read_as_a_generic_handoff() {
         Some(HandoffStatus::Running)
     );
 }
+
+/// A round ends where the agent hands it back. `post_round` writes the next picture and stamps the
+/// thread; that hand-back is the honest end of the round, and History has to see it — a submission
+/// stamp alone answered "when", never "how long" (2026-10-31).
+#[test]
+fn a_round_the_agent_handed_back_knows_when_it_ended() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "shot.png", "Timing", "", "", None, None, None)
+        .unwrap();
+    let submission = Submission {
+        note: None,
+        annotations: Vec::new(),
+        png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
+        width: None,
+        height: None,
+    };
+    store.submit(&meta.id, &submission).unwrap();
+
+    // The round is still the agent's: nobody has handed it back, so it has no cost yet.
+    let fresh = store.history(&meta.id).unwrap();
+    assert_eq!(fresh.len(), 1);
+    assert!(fresh[0].started_at.is_some(), "a round knows when it started");
+    assert_eq!(fresh[0].finished_at, None);
+    assert_eq!(fresh[0].duration_secs, None);
+
+    // The agent reads the round, then answers with a new picture.
+    store.set_agent_state(&meta.id, "working", true).unwrap();
+    let handed = store
+        .post_round(&meta.id, Some(PNG), "shot.png", "next round", None, None)
+        .unwrap();
+    assert_eq!(handed.status, Status::Open);
+
+    let rounds = store.history(&meta.id).unwrap();
+    let round = &rounds[0];
+    let finished = round
+        .finished_at
+        .clone()
+        .expect("the hand-back ends the round");
+    assert!(
+        finished >= round.started_at.clone().unwrap(),
+        "a round cannot end before it started: {round:?}"
+    );
+    // These two stamps land in the same second, which is a real (zero-second) round.
+    assert_eq!(round.duration_secs, Some(0), "{round:?}");
+}
+
+/// The previous round's hand-back can land in the same second as the next submission, so a round
+/// must not borrow it as its own end: that made every round after a fast agent read "took 0s"
+/// instead of "still the agent's" (2026-10-31, caught in the screenshot demo of this feature).
+#[test]
+fn a_round_does_not_end_at_the_previous_rounds_hand_back() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "shot.png", "Timing", "", "", None, None, None)
+        .unwrap();
+    let submission = Submission {
+        note: None,
+        annotations: Vec::new(),
+        png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
+        width: None,
+        height: None,
+    };
+    store.submit(&meta.id, &submission).unwrap();
+    store.set_agent_state(&meta.id, "working", true).unwrap();
+    store
+        .post_round(&meta.id, Some(PNG), "shot.png", "first pass", None, None)
+        .unwrap();
+
+    // The human submits the next round in the same second as that hand-back. It carries a mark, so
+    // it is a different round rather than a duplicate the history collapses.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    let marked = Submission {
+        note: None,
+        annotations: vec![Annotation {
+            kind: "rect".into(),
+            fields: serde_json::from_value(json!({
+                "start": {"x": 10, "y": 20}, "end": {"x": 100, "y": 60},
+                "color": "#e11d48", "width": 3
+            }))
+            .unwrap(),
+        }],
+        png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
+        width: None,
+        height: None,
+    };
+    store.submit(&meta.id, &marked).unwrap();
+
+    let rounds = store.history(&meta.id).unwrap();
+    let live = &rounds[0];
+    assert_eq!(live.round, 2);
+    assert_eq!(
+        live.finished_at, None,
+        "round 2 is the agent's round; round 1's hand-back is not its end: {live:?}"
+    );
+    assert_eq!(live.duration_secs, None);
+    let previous = &rounds[1];
+    assert_eq!(previous.finished_at, Some(rounds[0].started_at.clone().unwrap()));
+    assert!(
+        previous.duration_secs.is_some(),
+        "round 1 still ends at its own hand-back: {previous:?}"
+    );
+}
+
+/// A round nobody has picked up has no run time — not even a zero-second one. The newest round is
+/// the one that lies: its only nearby hand-back belongs to the round before it (2026-10-31).
+#[test]
+fn a_round_no_agent_read_has_no_duration() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "shot.png", "Nobody home", "", "", None, None, None)
+        .unwrap();
+    let submission = Submission {
+        note: None,
+        annotations: Vec::new(),
+        png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
+        width: None,
+        height: None,
+    };
+    store.submit(&meta.id, &submission).unwrap();
+    store
+        .post_round(&meta.id, Some(PNG), "shot.png", "first pass", None, None)
+        .unwrap();
+    let marked = Submission {
+        note: None,
+        annotations: vec![Annotation {
+            kind: "rect".into(),
+            fields: serde_json::from_value(json!({
+                "start": {"x": 13, "y": 21}, "end": {"x": 101, "y": 61},
+                "color": "#e11d48", "width": 3
+            }))
+            .unwrap(),
+        }],
+        png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
+        width: None,
+        height: None,
+    };
+    store.submit(&meta.id, &marked).unwrap();
+
+    let rounds = store.history(&meta.id).unwrap();
+    let live = &rounds[0];
+    assert_eq!(live.round, 2);
+    assert_eq!(live.duration_secs, None, "{live:?}");
+    assert_eq!(live.finished_at, None, "{live:?}");
+}

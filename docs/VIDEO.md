@@ -5,8 +5,9 @@ Status: **proposal**, waiting for product answers. Nothing in this document is i
 ## 0. Decisions from the product owner (2026-10-31)
 
 1. **Annotation model:** both point-in-time and time ranges (`at`, optional `until`).
-2. **Sources:** human upload and agent-supplied video; whether RedLine itself records a browser
-   session is still open (see §14 Q1).
+2. **Sources:** human upload and agent-supplied video. The agent uploads an **existing clip**
+   (`video_path`/`video_base64`/URL); RedLine itself does not record a browser session in v1
+   (that is a separate `capture_video` follow-up).
 3. **Limits:** delegated to engineering. Proposal: 5 min, 250 MB, 1080p recommended (4K accepted
    with a warning); no hard per-session cap in v1 — show disk usage instead.
 4. **New video:** a new round in the same review; the previous video moves to history.
@@ -16,7 +17,7 @@ Status: **proposal**, waiting for product answers. Nothing in this document is i
    opacity and fade in/out as their time is approached (timeline markers always visible).
 7. **Timeline:** basic controls plus a zoomable timeline (wheel/zoom + overview strip).
 8. **Agent output:** contact sheet **and** full-resolution frames for the unique annotated
-   timestamps (see the explanation in §7); capped to keep the payload sane.
+   timestamps; the cap is confirmed at **20 unique timestamps / ~60 MB per submission** (see §7).
 9. **Audio:** no audio controls in v1; playback is muted.
 10. **Desktop:** both the Windows WebView2 app and the browser UI.
 11. **Time:** `mm:ss.mmm` for humans, seconds in JSON, fps optional when the file provides it.
@@ -435,21 +436,14 @@ submit (contact sheet + full frames).
   unique annotated times as well.
 - **No-build UI**: keep the timeline CSS/JS dependency-free; test touch.
 
-## 14. Remaining questions
+## 14. Open questions
 
-Two scope decisions are still worth confirming; everything else is settled in §0.
+None. The product owner confirmed:
 
-1. **“Agent can capture video” — what exactly?**
-   - (a) The agent uploads an existing clip (`video_path`/`video_base64`/URL) — covered by this
-     plan, recommended for v1.
-   - (b) RedLine itself records a browser session/URL to video (a new `capture_video` tool with a
-     recording duration and a headless Chromium/ffmpeg recorder) — a separate, larger feature.
-   Which one do you mean? I would ship (a) first and keep (b) as a follow-up.
+- the agent uploads an existing clip in v1; a RedLine-owned `capture_video` recorder is a
+  follow-up feature;
+- the 20 unique timestamps / ~60 MB full-frame cap is sufficient.
 
-2. **Full-frame cap:** the submit can carry up to 20 unique annotated timestamps and ~60 MB of
-   full-resolution PNGs, with all frames plus the contact sheet. Is that enough, or do you expect
-   reviews with many more annotated moments? (If more, raise the cap or move frame extraction to
-   ffmpeg in phase 3.)
+The plan is locked; the next step is phase 1 (server media core).
 
-With those answered, phase 1 (server media core) can start.
 

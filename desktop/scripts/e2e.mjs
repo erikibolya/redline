@@ -883,7 +883,12 @@ const main = async () => {
   const second = at(700, 485);
   await page.mouse.click(second.x, second.y);
   await page.keyboard.up("Shift");
-  const selected = await page.evaluate(() => window.redline.selected.size);
+  let selected = 0;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    selected = await page.evaluate(() => window.redline.selected.size);
+    if (selected === 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   check("shift-click builds a multi-selection", selected === 2, `${selected} selected`);
 
   const alignVisible = await page.$eval('[data-align="left"]', (el) => !el.classList.contains("hidden"));
@@ -1075,10 +1080,15 @@ const main = async () => {
   // ---- z-order
   await page.mouse.click(rectA.x, rectA.y);
   await page.click('[data-layer="front"]');
-  const last = await page.evaluate(() => {
-    const list = window.redline.annotations;
-    return { type: list[list.length - 1].type, x: list[list.length - 1].start?.x };
-  });
+  let last = { type: "", x: 0 };
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    last = await page.evaluate(() => {
+      const list = window.redline.annotations;
+      return { type: list[list.length - 1].type, x: list[list.length - 1].start?.x };
+    });
+    if (last.type === "rect") break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   check("bring to front moves the selection last in paint order", last.type === "rect", JSON.stringify(last));
 
   // ---- diff between the archived round and now
@@ -1272,7 +1282,9 @@ const main = async () => {
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
   await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
   let cancelDashboard = {};
-  for (let attempt = 0; attempt < 25; attempt += 1) {
+  // The dashboard may be restored from the back-forward cache and refresh asynchronously; a
+  // loaded CI runner needed more than the old 5 s budget.
+  for (let attempt = 0; attempt < 60; attempt += 1) {
     cancelDashboard = await page.evaluate((sessionId) => ({
       selected: Boolean(document.querySelector('.session[aria-current="true"]')),
       card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),

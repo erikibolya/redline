@@ -12,3 +12,7 @@ desktop/app/tauri.dev.conf.json
 
 # Parallel agent worktrees (when repo_root is this checkout)
 .redline-worktrees/
+
+# Local visual-proof screenshots (never commit review content)
+.shots/
+.e2e-shot.png

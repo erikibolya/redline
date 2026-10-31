@@ -379,4 +379,70 @@ fn video_sessions_keep_media_metadata_and_timecoded_annotations() {
     .unwrap();
     assert_eq!(saved["media"]["kind"], "video");
     assert_eq!(saved["media"]["duration_ms"], 5000);
+
+    // The clip lives inside the session folder, so deleting the review deletes the video too.
+    let folder = store.dir(&meta.id).unwrap();
+    assert!(folder.join("video.mp4").is_file());
+    store.remove(&meta.id).expect("remove video session");
+    assert!(!folder.exists());
+}
+
+#[test]
+fn video_uploads_are_bounded_before_they_are_read() {
+    let (dir, store) = store();
+    let path = dir.path().join("huge.webm");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(redline_core::MAX_VIDEO_BYTES as u64 + 1)
+        .unwrap();
+    let error = store
+        .create_video_from_path(
+            &path, "Huge", "", "", None, None, None, None, None, None, None,
+        )
+        .expect_err("oversized video must be refused");
+    assert!(error.to_string().contains("250 MB"), "{error}");
+}
+
+#[test]
+fn a_heic_image_is_not_accepted_as_an_mp4() {
+    let (_dir, store) = store();
+    let heic = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic";
+    let error = store
+        .create_video_from_bytes(
+            heic,
+            "Not a video",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("an image container must not become a video session");
+    assert!(error.to_string().contains("unsupported video"), "{error}");
+}
+
+#[test]
+fn a_video_longer_than_five_minutes_is_refused() {
+    let (_dir, store) = store();
+    let error = store
+        .create_video_from_bytes(
+            MP4,
+            "Too long",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(redline_core::MAX_VIDEO_DURATION_MS + 1),
+            None,
+            None,
+            None,
+        )
+        .expect_err("a six minute clip must not create a review");
+    assert!(error.to_string().contains("5 minute"), "{error}");
 }

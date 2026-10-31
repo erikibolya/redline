@@ -167,11 +167,21 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `app.css` the design tokens incl. light theme. Served from the binary at `/static/*`.
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform
   (`scale/x/y`) applied in `render()`, so zoom is crisp and pointer mapping is `(screen - view)/scale`.
+  A video session draws `<video>` into the same canvas via `loadMedia()`; `annotationOpacity()`
+  makes other moments ghosts and `videoWindow` drives the zoomable timeline.
 
 ## 7. Lessons already paid for (do not relearn)
 
 - **Pointer capture in the stage swallows clicks** on children (options bar). Guard:
-  `if (event.target.closest(".options, .text-editor")) return;`.
+  `if (event.target.closest(".options, .text-editor, .viewing-bar, .video-bar")) return;`.
+  The video bar was added inside the stage and its play button did nothing until it joined that
+  guard; the timeline wheel also needs `stopPropagation()` or it zooms the canvas while zooming
+  the ruler.
+- **A MediaRecorder WebM has no duration until it is seeked.** `video.duration` is `Infinity`
+  straight after metadata, which collapses the timeline to a zero-length window. Seek past the
+  buffered end once (`currentTime = 1e101`, wait for `durationchange`), then reset to 0; the
+  upload's poster/duration must wait for the resolved value too. A 250 MB cap is not a length
+  cap: the server also rejects a declared duration over five minutes.
 - **Text entry**: `pointerdown` must `preventDefault()` (else mousedown focus-steals and the empty
   editor commits), focus synchronously, and `commit()` must be idempotent (removal fires `blur`).
 - **`RunEvent::ExitRequested` is vetoed** to keep the tray app alive; a quit/restart must set a

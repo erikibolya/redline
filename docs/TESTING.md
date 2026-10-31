@@ -96,7 +96,32 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 5. Add a §7 lesson to `AGENTS.md` if the bug exposed a process gap.
 6. Keep the test forever; it is the regression fence.
 
+## Video reviews (phase 2)
+
+The e2e records a real WebM in Chromium (`canvas.captureStream` + `MediaRecorder`) and drives the
+same path a human does: upload, play, draw, range, zoom, submit.
+
+- Rust `tests/store.rs`: `video_sessions_keep_media_metadata_and_timecoded_annotations` (media,
+  poster, `at`/`until` survive submit and `review.md` prints `00:01.250–00:02.500`);
+  `video_uploads_are_bounded_before_they_are_read` (250 MB sparse file rejected);
+  `a_video_longer_than_five_minutes_is_refused`; `a_heic_image_is_not_accepted_as_an_mp4`.
+- Rust `tests/api.rs`: `video_sessions_are_created_and_served_with_range_requests` (create,
+  metadata, poster on `/image`, `206` with `Content-Range`, invalid range `416`, non-video
+  `400`), `video_sessions_accept_a_multipart_browser_upload`.
+- Rust `tests/mcp.rs`: `review_video_creates_a_session_with_media_and_a_video_url` (tool listed,
+  path/base64, poster, `get_feedback.media` + tokenised `video_url`).
+- Browser e2e: the dialog previews the recorded clip; the upload stores duration/dimensions and a
+  poster; `/image` is PNG and `/media` answers `206`; the editor loads muted with the video bar;
+  play turns the control into pause; drawing stamps `at`; the inspector prints the timecode; a
+  far annotation is a 0.12 ghost and the current one is full; the ⏱ button sets `until`; zoom
+  narrows the window and Fit restores it; the timeline shows a marker and a range band; `K`
+  pauses and `.` steps a frame; the submit persists `at`/`until`; `review.md` prints the range.
+
+Contact sheet, full-resolution frames, video rounds in history and `post_round` video are phase 3
+and are not covered yet.
+
 ## Feature protocol
+
 
 1. Write the acceptance criteria as observable states (DOM, JSON, canvas pixels).
 2. Add the feature's row to the tool/feature matrix **before or with** the implementation.
@@ -111,6 +136,8 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - [ ] `cargo test --workspace` green
 - [ ] `desktop/scripts/e2e.sh` green (see `PLAN.md` for the current count)
 - [ ] the tool matrix covers rectangle, ellipse, arrow, pen, select/move, note, undo, submit
+- [ ] video: upload a real clip, pause on a frame, draw a point and a range, scrub to another
+      time (ghost), zoom the timeline, submit, and check the agent feedback timecodes
 - [ ] agent concurrency: settings save, branch shown in the rail, claim limits/branch locks green,
       and two claims run in separate worktrees
 - [ ] every changed UI control was clicked by the e2e; every changed endpoint has a Rust test

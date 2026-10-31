@@ -6,9 +6,19 @@
   store a poster and duration/dimensions, serve the clip with HTTP `Range` for seeking, and write
   timecoded annotations (`at`/`until`) into `annotations.json` and `review.md`. MCP gains
   `review_video` (server path or base64) and `get_feedback` returns `media` plus a tokenised
-  `video_url`. The editor, browser multipart upload, contact sheet/full frames and history video
-  rounds are the next phases. Rust tests cover the media model, range response, poster and
-  timecoded Markdown; the existing image path is unchanged and the browser e2e stays green.
+  `video_url`. Limits: 250 MB, five minutes when declared, 8 MB poster; HEIC/AVIF are rejected as
+  videos. Rust tests cover the media model, range 206/416, poster and timecoded Markdown.
+- **Video reviews in the editor.** The New review dialog accepts a dropped, picked or pasted
+  video, shows a muted preview and uploads the clip with its first-frame poster
+  (`POST /api/sessions/video`). The canvas plays the video with play/pause, frame stepping,
+  speed, a full-duration overview and a zoomable timeline with a time ruler and annotation
+  markers/range bands. Drawing pauses playback and stamps the annotation with `at`; the inspector
+  adds an optional `until` range and shows `mm:ss.mmm` timecodes. Annotations from other moments
+  render as ~12 % ghosts that fade in near their time, with a Ghosts toggle. Keyboard `K` play/
+  pause, `J`/`L` ±1 s, `,`/`.` frame step. Gallery cards use the poster and a `▶ mm:ss` chip.
+  Contact sheets, full-resolution frames, video rounds in history and `post_round` video are the
+  next phase. Browser e2e covers the real upload, playback, timecoded draw, ghost opacity, range,
+  zoom and persisted submit (182 checks).
 
 ## 0.22.0 — 2026-10-31
 

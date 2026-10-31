@@ -27,6 +27,14 @@ pub use error::{Error, Result};
 
 /// Hard cap for request bodies (screenshots + composited PNG). Matches v0.1.
 pub const MAX_BODY_BYTES: usize = 60 * 1024 * 1024;
+/// Video upload cap (250 MB). The multipart create route has its own body limit; JSON/base64
+/// video uploads stay bounded by `MAX_BODY_BYTES`.
+pub const MAX_VIDEO_BYTES: usize = 250 * 1024 * 1024;
+/// Poster/thumbnail cap. A poster is a first frame, not a second video.
+pub const MAX_POSTER_BYTES: usize = 8 * 1024 * 1024;
+/// Product limit for a review clip. The UI checks the browser's duration and the server rejects a
+/// declared duration over the limit; a client that omits duration is bounded by the byte cap.
+pub const MAX_VIDEO_DURATION_MS: u64 = 5 * 60 * 1000;
 
 /// Protocol version reported to MCP clients.
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";

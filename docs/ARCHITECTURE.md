@@ -57,8 +57,10 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
 1. Agent captures a screenshot and runs `redline.py open`.
 2. Session folder is created; `meta.json` stores title/url/note/status.
 3. Agent opens `http://127.0.0.1:8788/s/<id>` (browser tool or human).
-4. Editor fetches `/api/sessions/<id>`, then loads `/sessions/<id>/image`.
-5. Human draws; canvas keeps an in-memory annotation array.
+4. Editor fetches `/api/sessions/<id>`, then loads `/sessions/<id>/image` (a poster for a video
+   session; the clip itself comes from `/sessions/<id>/media` with `Range`).
+5. Human draws; canvas keeps an in-memory annotation array. A video frame is drawn into the same
+   canvas and drawing pauses playback, so each annotation carries `at` (and optional `until`).
 6. Submit sends `{annotations, width, height, png}` to the server.
 7. Server validates the session id, writes the three output files, returns the updated meta.
 8. Agent polls/reads the folder; turns text notes into changes.

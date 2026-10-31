@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Path as RoutePath, Request, State};
+use axum::extract::{DefaultBodyLimit, Multipart, Path as RoutePath, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -23,6 +23,7 @@ use crate::mcp::{self, McpContext};
 use crate::model::{NewSession, Status, Submission};
 use crate::store::Store;
 use crate::MAX_BODY_BYTES;
+use crate::MAX_VIDEO_BYTES;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -105,6 +106,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/servers/{id}/probe", get(probe_server))
         .route("/api/servers/{id}", delete(remove_server))
         .route("/api/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/api/sessions/video",
+            post(create_video_session).layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES + 1024 * 1024)),
+        )
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/agent/repos", post(sync_agent_repos))
         .route(
@@ -981,6 +986,89 @@ async fn create_session(
     })))
 }
 
+/// Browser video upload: multipart form with the video (`video`/`file`), optional `poster`, and
+/// the same metadata fields as `POST /api/sessions`. The route has its own body limit; JSON
+/// uploads stay bounded by `MAX_BODY_BYTES`.
+async fn create_video_session(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> Result<Json<Value>, Error> {
+    let mut fields = BTreeMap::<String, String>::new();
+    let mut video: Option<Vec<u8>> = None;
+    let mut poster: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| Error::BadRequest(format!("invalid multipart upload: {err}")))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        if name == "video" || name == "file" {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|err| Error::BadRequest(format!("cannot read video field: {err}")))?;
+            if bytes.len() > MAX_VIDEO_BYTES {
+                return Err(Error::BadRequest(format!(
+                    "video is larger than {} MB",
+                    MAX_VIDEO_BYTES / (1024 * 1024)
+                )));
+            }
+            video = Some(bytes.to_vec());
+        } else if name == "poster" {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|err| Error::BadRequest(format!("cannot read poster field: {err}")))?;
+            if bytes.len() > crate::MAX_POSTER_BYTES {
+                return Err(Error::BadRequest(format!(
+                    "poster is larger than {} MB",
+                    crate::MAX_POSTER_BYTES / (1024 * 1024)
+                )));
+            }
+            poster = Some(bytes.to_vec());
+        } else {
+            let value = field
+                .text()
+                .await
+                .map_err(|err| Error::BadRequest(format!("cannot read {name}: {err}")))?;
+            fields.insert(name, value);
+        }
+    }
+    let video = video.ok_or_else(|| Error::BadRequest("provide a video file".to_string()))?;
+    let field = |name: &str| {
+        fields
+            .get(name)
+            .map(String::as_str)
+            .filter(|v| !v.trim().is_empty())
+    };
+    let title = field("title").unwrap_or("Video review");
+    let meta = state.store.create_video_from_bytes(
+        &video,
+        title,
+        field("url").unwrap_or_default(),
+        field("note").unwrap_or_default(),
+        None,
+        field("agent"),
+        field("project"),
+        poster.as_deref(),
+        field("duration_ms").and_then(|value| value.parse::<u64>().ok()),
+        field("width").and_then(|value| value.parse::<u32>().ok()),
+        field("height").and_then(|value| value.parse::<u32>().ok()),
+        field("fps").and_then(|value| value.parse::<f64>().ok()),
+    )?;
+    let meta = if let Some(branch) = field("branch") {
+        state.store.set_branch(&meta.id, Some(branch))?
+    } else {
+        meta
+    };
+    let review_url = state.review_url(&meta.id);
+    Ok(Json(json!({
+        "meta": meta,
+        "review_url": review_url,
+        "dir": state.store.dir(&meta.id)?.display().to_string(),
+    })))
+}
+
 /// Shared by `POST /api/sessions` and the MCP `review_screenshot` tool.
 pub fn create_from_request(
     state: &AppState,
@@ -1000,9 +1088,24 @@ pub fn create_from_request(
                     .decode(raw.trim())
                     .map_err(|err| Error::BadRequest(format!("invalid video_base64: {err}")))?
             }
-            (None, Some(path)) => std::fs::read(path)?,
+            (None, Some(path)) => {
+                let size = std::fs::metadata(path)?.len();
+                if size as usize > crate::MAX_VIDEO_BYTES {
+                    return Err(Error::BadRequest(format!(
+                        "video is larger than {} MB",
+                        crate::MAX_VIDEO_BYTES / (1024 * 1024)
+                    )));
+                }
+                std::fs::read(path)?
+            }
             (None, None) => unreachable!(),
         };
+        if bytes.len() > crate::MAX_VIDEO_BYTES {
+            return Err(Error::BadRequest(format!(
+                "video is larger than {} MB",
+                crate::MAX_VIDEO_BYTES / (1024 * 1024)
+            )));
+        }
         let poster = match body.poster_base64.as_deref() {
             Some(encoded) => {
                 let raw = encoded

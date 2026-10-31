@@ -93,6 +93,35 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   historical round (read-only viewer) the main button also drags the picture.
 - Image is centred; the stage has a dark checkerboard so transparent PNGs read correctly.
 
+## Video reviews (unreleased)
+
+- **New review** accepts `video/*` from the picker, drag & drop and paste. The drop zone shows a
+  muted `<video>` preview, the file name/size, and warns when the clip is 4K. The dialog reads
+  duration, width and height, renders the first frame as the poster, and uploads with
+  `POST /api/sessions/video` (multipart). Limits: 5 minutes, 250 MB.
+- **Stage**: a video is drawn into the same canvas as a screenshot, so zoom, pan, tools, grouping
+  and the history viewer keep working. The video is muted; there are no audio controls in v1.
+- **Video bar**: play/pause, `mm:ss.mmm / mm:ss.mmm`, previous/next frame, 0.5×/1×/1.5×/2×, a
+  Ghosts toggle, timeline zoom `−`/`+`, and `Fit`. Clicking the canvas pauses playback before a
+  shape starts, so an annotation always belongs to the frame the human saw.
+- **Timeline**: an overview strip shows the full duration and the zoom window; the detail slider
+  has a time ruler that adapts to the zoom (tenths for a short window, minutes for a long one).
+  Wheel over the timeline zooms around the pointer, `Fit` restores the whole clip. Annotation
+  markers use the annotation colour; a range draws a band between `at` and `until`. Clicking a
+  marker seeks to it and selects the row.
+- **Timecoded annotations**: each annotation gets `at` (seconds) when it is drawn or typed, and
+  an optional `until` set from the ⏱ button in the inspector (clicking it while parked on the
+  annotation gives a one-second default instead of a zero-length range). The inspector shows
+  `rect · 00:02.340–00:02.900`; clicking a row seeks there.
+- **Visibility**: the current moment is full opacity; annotations from other times stay as ~12 %
+  ghosts and fade to full within 350 ms of their time. Ranges are full between their boundaries.
+  The selected annotation stays full while it is being edited; `Ghosts` hides everything that is
+  not current.
+- **Keyboard**: `K` play/pause, `J`/`L` jump one second, `,`/`.` step one frame. Space remains
+  canvas pan, not play.
+- **Gallery**: a video card uses the poster and shows a `▶ mm:ss` chip; a poster-less agent video
+  falls back to a `▶ video` placeholder instead of a broken image.
+
 ## Tools and interaction
 
 | Key | Tool | Notes |

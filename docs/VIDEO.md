@@ -1,8 +1,9 @@
 # Video reviews — design and delivery plan
 
-Status: **phase 1 implemented in `feat/video-media-core`** (server media core: media model,
-agent `review_video` path/base64, poster, Range serving, timecoded annotations/review.md). The
-editor, human multipart upload and frames/contact sheet are phase 2–3.
+Status: **phase 2 implemented in `feat/video-editor`** (server media core + browser upload, canvas
+playback, timecoded annotations and ranges, ghost visibility, zoomable timeline with overview,
+ruler and markers). Contact sheet/full frames, video rounds in history and `post_round` video are
+phase 3.
 
 ## 0. Decisions from the product owner (2026-10-31)
 
@@ -95,9 +96,9 @@ detail timeline (zoomable window; scrubber, markers, time ruler)
 - The video frame is drawn into the existing canvas at natural resolution; zoom/pan, fit and
   history viewer pan/zoom keep working.
 - The timeline has two levels: a full-duration overview strip showing the viewport window, and a
-  zoomable detail ruler. Wheel over the timeline zooms around the pointer; drag pans the window;
-  `Fit` returns to the full duration. Marker positions, the scrubber and the time labels all
-  respect the current window. Basic controls stay usable without zooming.
+  zoomable detail ruler. Wheel over the timeline zooms around the pointer; `Fit` returns to the
+  full duration. Marker positions, the scrubber and the time labels all respect the current
+  window. Basic controls stay usable without zooming.
 - Annotation markers (colour = annotation colour, clustered when close) live on both strips.
   Hover shows time and count; click seeks.
 - Annotation visibility: the annotation(s) at the current time are full opacity. Other
@@ -111,8 +112,8 @@ detail timeline (zoomable window; scrubber, markers, time ruler)
 - Selecting an annotation seeks to its `at`; the inspector row shows `00:02.340` (or
   `00:02.340–00:02.600`).
 - Keyboard: `Space` is already pan; use `K` play/pause, `,`/`.` step frame, `J`/`L` jump 1 s.
-  Timeline zoom uses `+`/`-` or Ctrl+wheel when the pointer is over the timeline (not the canvas,
-  where Ctrl+wheel still zooms the image). Keep the existing shortcuts; document the conflict.
+  Timeline zoom uses the `−`/`+` buttons or the wheel over the timeline (over the canvas,
+  Ctrl+wheel still zooms the image). Keep the existing shortcuts; document the conflict.
 - Audio is not exposed in v1: playback is muted, no waveform or mute control.
 - When the video ends, pause at the last frame (do not loop by default).
 - A still image session behaves exactly as today; the video bar is absent.
@@ -222,20 +223,23 @@ session disk usage (warning at 2 GB) rather than silently deleting videos.
 
 ### 5.1 Upload
 
-The current `MAX_BODY_BYTES` is 60 MB and the JSON path base64-encodes everything. Phase 1 ships
-the agent path/base64 path; phase 2 adds the streaming browser upload:
+The current `MAX_BODY_BYTES` is 60 MB and the JSON path base64-encodes everything.
 
-- `POST /api/sessions` with `video_base64`/`video_path` (phase 1) creates a video session;
-  `video_base64` is limited by the JSON body limit, `video_path` is for agents on the server.
-- `POST /api/sessions/{id}/media` with `multipart/form-data` (field `file`) streams to a temp file
-  (phase 2, browser): validates magic bytes/MIME/extension, moves it into the session, writes
-  `media`/`poster`.
-- `POST /api/sessions` for a video can return an upload URL (two-step) in phase 2; small
-  `video_base64` stays for compatibility.
-- MCP: `review_video` accepts a **path on the server** (`video_path`), a small `video_base64`, or
-  a `url` fetched with a size/time limit; returns the session id and an upload URL if needed.
-- The browser New review dialog uploads the file with `FormData` after creating the session (or
-  in one multipart create request). Progress is shown; cancel removes the temp file.
+- `POST /api/sessions` with `video_base64`/`video_path` creates a video session for agents and
+  local clients; `video_base64` is bounded by the JSON body limit, `video_path` by the 250 MB cap.
+- `POST /api/sessions/video` with `multipart/form-data` is the browser path: fields `video` (or
+  `file`), `poster`, and the metadata text fields (`title`, `note`, `project`, `branch`,
+  `duration_ms`, `width`, `height`, `fps`). The route has a 251 MB body limit; the parser
+  currently buffers the file before the store writes it (streaming to a temp file is a known
+  follow-up, the byte/duration caps are enforced either way).
+- Validation: MP4/WebM magic bytes (HEIC/AVIF brands are rejected as images), 250 MB per video,
+  5 minutes when the client declares `duration_ms`, 8 MB poster. A file without a declared
+  duration is bounded only by bytes; nothing on the server decodes video in v1.
+- MCP: `review_video` accepts a **path on the server** (`video_path`) or `video_base64`. A `url`
+  source is not implemented yet (it would add an outbound fetch and its SSRF/size policy); the
+  agent can download the clip itself and pass a path.
+- The New review dialog reads duration/dimensions/first frame in the browser before uploading;
+  the poster and metadata travel with the video in the same request.
 
 ### 5.2 Submit
 
@@ -414,12 +418,12 @@ timeline; the contact sheet tile; a full frame; the poster card.
 
 0. **Plan/schema ADR** — this document + answers; add the fixture; no production code.
 1. **Server media core** — `media` model, agent video path/base64 (`review_video`), MIME/limits,
-   poster, Range serving, timecoded annotations/`review.md`; Rust tests. No UI. *(implemented in
-   `feat/video-media-core`; browser multipart upload moves to phase 2)*
-2. **Editor and browser upload** — multipart streaming upload from the New review dialog, video
+   poster, Range serving, timecoded annotations/`review.md`; Rust tests. No UI. *(merged as
+   `feat/video-media-core`, PR #61)*
+2. **Editor and browser upload** — multipart upload from the New review dialog, video
    load/draw/fit, video bar, basic controls, zoomable timeline with overview strip and markers,
    ghost/fade annotation visibility, pause/draw, annotation `at`/`until`, inspector timecodes;
-   e2e with fixture.
+   e2e with a recorded fixture. *(implemented in `feat/video-editor`)*
 3. **Submit and agent output** — contact sheet + full-resolution frames for unique annotation
    times, `review.md` timecodes, `annotated.png`, MCP `review_video`/`get_feedback` frames,
    history viewer, poster cards.

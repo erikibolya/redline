@@ -69,10 +69,17 @@ const uid = () =>
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
-/** An agent is working only while the round is submitted. A late narration line used to leave
- *  `agent_state=working` on a review that had already been handed back, so the spinner ran
- *  forever and the human could not tell a live agent from a dead one. */
-const agentWorking = (meta) => meta?.status === "submitted" && meta.agent_state === "working";
+/** An agent is working while the round is submitted and either it says so or a bridge holds a
+ *  live claim (with a heartbeat). The claim is the evidence: `agent_state=replied` is a message,
+ *  not the end of the run, so a reply that lands mid-run must not hide the working label
+ *  (2026-10-31). A late narration line used to leave `agent_state=working` on a review that had
+ *  already been handed back, so the round status still gates both signals. */
+const agentWorking = (meta) => meta?.status === "submitted" &&
+  (meta.agent_state === "working" || meta.agent_running === true);
+
+/** A run that could not do the work. The server hands the round back, so it is not a reply and
+ *  it must not spin: it is a visible dead end the human can fix and resubmit. */
+const agentFailed = (meta) => meta?.agent_state === "failed";
 
 
 /** "edit, shell and run" → "Edit, Shell and Run", the way a person lists tools. */
@@ -1274,6 +1281,7 @@ class Rail {
         const annotations = session.annotation_count || 0;
         const fresh = seen.isNew(session);
         const working = agentWorking(session);
+        const failed = agentFailed(session);
         const feature = featureState(session);
         const decided = feature !== "pending";
         // A submitted round belongs to the agent, so its badge says who has the ball: a round
@@ -1290,15 +1298,23 @@ class Rail {
             ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
             : feature === "cancelled"
               ? `<span class="badge cancelled" title="Feature cancelled by the human">cancelled</span>`
-              : queued && session.agent_state === "replied"
-                ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
-                : queued
-                  ? `<span class="badge waiting" title="Waiting for an agent — nobody has picked this round up yet">waiting for agent</span>`
-                  : fresh
-                  ? `<span class="badge new" title="new since you last looked">new</span>`
-                  : annotations
-                    ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
-                    : "";
+              : failed
+                // The run could not happen and the round came back: the human must not read this
+                // as an agent still working on it, and must know why nothing is happening.
+                ? `<span class="badge failed" title="The agent could not run this round — it is yours again">agent failed</span>`
+                : queued && session.agent_state === "replied"
+                  ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
+                  : queued
+                    ? `<span class="badge waiting" title="${
+                      session.seen_by_agent_at
+                        ? "No agent is working on this round right now"
+                        : "Waiting for an agent — nobody has picked this round up yet"
+                    }">waiting for agent</span>`
+                    : fresh
+                    ? `<span class="badge new" title="new since you last looked">new</span>`
+                    : annotations
+                      ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
+                      : "";
         // The handoff badge sits beside the confirmation: "confirmed" is the decision, while
         // "handoff queued" / "merged" / "handoff failed" is what the integration did with it.
         const badge = feature === "confirmed" && session.handoff
@@ -1306,14 +1322,17 @@ class Rail {
           : baseBadge;
         parts.push(`
           <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${
-            decided ? ` feature-${feature}` : ""
+            failed ? " failed" : ""
+          }${decided ? ` feature-${feature}` : ""
           }${this.bulkMode ? " bulk" : ""}"
                role="button" tabindex="0"
                data-id="${escapeHtml(session.id)}"
                aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}${
                  decided ? `, feature ${feature}` : ""
                }${session.branch ? `, branch ${escapeHtml(session.branch)}` : ""}${
-                 queued && !working ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
+                 working ? ", working"
+                   : failed ? ", agent failed"
+                     : queued ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
                }"
                aria-current="${session.id === this.selectedId}"
                ${this.bulkMode ? `aria-pressed="${this.selection.has(session.id)}"` : ""}>
@@ -1427,6 +1446,8 @@ class Editor {
     // an undefined list (a fresh load of a submitted session renders the header first).
     this.events = [];
     this.thread = [];
+    // The agent's raw output starts closed: it is diagnosis, not the conversation.
+    this.verbose = prefs.get("convVerbose", false);
     this.selected = new Set();
     this.marquee = null;
     this.tool = "select";
@@ -2021,7 +2042,18 @@ class Editor {
       : "Session size on disk";
   }
 
+  /// The Output toggle mirrors the remembered choice, so a reload keeps the tail open.
+  syncVerbose() {
+    const button = $("#conv-verbose");
+    if (!button) return;
+    button.setAttribute("aria-pressed", this.verbose ? "true" : "false");
+    button.title = this.verbose
+      ? "Hide the agent's own output"
+      : "Show the agent's own output while it works";
+  }
+
   renderHeader() {
+    this.syncVerbose();
     $("#session-title").textContent = this.meta.title || this.meta.id;
     const bits = [this.meta.id, this.meta.image_width && this.meta.image_height
       ? `${this.meta.image_width}×${this.meta.image_height}` : null,
@@ -2116,6 +2148,12 @@ class Editor {
       });
       $("#conv-new")?.addEventListener("click", () => this.seenConversation());
     }
+    $("#conv-verbose")?.addEventListener("click", () => {
+      this.verbose = !this.verbose;
+      prefs.set("convVerbose", this.verbose);
+      this.syncVerbose();
+      this.renderConversation();
+    });
     $("#viewing-bar")?.addEventListener("click", () => this.showCurrent());
     const syncPanels = () => {
       const app = $("#app");
@@ -3817,7 +3855,15 @@ class Editor {
       || (this.thread || []).filter((message) => message.image).map((message) => message.at).pop()
       || "";
     const round = start ? events.filter((event) => String(event.at || "") >= String(start)) : events;
-    if (!round.length) return "";
+    const failed = agentFailed(this.meta);
+    if (!round.length) {
+      // A run that died before logging anything is still a state the human must see.
+      return failed
+        ? `<div class="conv-run failed"><span class="conv-run-mark" aria-hidden="true"></span><div>`
+          + `<div class="conv-run-title">The agent could not run this round</div>`
+          + `<div class="conv-run-sub">The run never started.</div></div></div>`
+        : "";
+    }
 
     const toolEvents = round.filter((event) => event.state === "tool");
     // Older agents narrate without `state`; counting their lines is closer than showing nothing.
@@ -3839,20 +3885,39 @@ class Editor {
     const submitted = this.meta?.status === "submitted";
     const title = working
       ? "Working"
-      : replied && submitted
-        ? "Agent replied — waiting for it to finish"
-        : replied
-          ? "Run finished"
-          : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
+      : failed
+        // A dead end, not a slow run: the round is back in the human's hands.
+        ? "The agent could not run this round"
+        : replied && submitted
+          ? "Agent replied — waiting for it to finish"
+          : replied
+            ? "Run finished"
+            : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
     // How long ago the last step was is the honest answer to "is it still working?": a spinner
     // must never be the only evidence.
     const age = relativeTime(last.at);
     const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}`;
-    const state = working ? " working" : replied && submitted ? " pending" : "";
+    const state = working ? " working" : failed ? " failed" : replied && submitted ? " pending" : "";
     return `<div class="conv-run${state}">`
       + `<span class="conv-run-mark" aria-hidden="true"></span><div>`
       + `<div class="conv-run-title">${title}</div>`
       + `<div class="conv-run-sub">${sub}</div></div></div>`;
+  }
+
+  /// The agent's own output, the way its terminal shows it. Off by default — a wall of tool lines
+  /// must never bury the conversation — but "what is it doing right now?" needs an answer that is
+  /// not a spinner (2026-10-31).
+  outputBlock() {
+    if (!this.verbose) return "";
+    const lines = (this.events || []).filter((event) => event.state === "log");
+    const last = lines[lines.length - 1];
+    const body = lines.length
+      ? lines.map((event) => escapeHtml(event.message || "")).join("\n")
+      : "No output from this run yet.";
+    return `<div class="conv-output${agentWorking(this.meta) ? " live" : ""}">`
+      + `<div class="conv-output-head">Agent output${
+        last ? ` · ${escapeHtml(relativeTime(last.at))}` : ""
+      }</div><pre class="conv-output-body">${body}</pre></div>`;
   }
 
   renderConversation() {
@@ -3866,6 +3931,7 @@ class Editor {
       items.push({ at: this.meta.submitted_at || "", kind: "human", text: this.meta.prompt });
     }
     for (const event of this.events || []) {
+      if (event.state === "log") continue;
       items.push({ at: event.at || "", kind: "event", text: event.message || "", state: event.state });
     }
     for (const message of this.thread || []) {
@@ -3883,6 +3949,11 @@ class Editor {
     if (this.draftNotice) {
       status.push(`<div class="conv-wait"><b>Draft discarded.</b> This review's round changed, `
         + `so the canvas starts fresh.</div>`);
+    }
+    if (agentFailed(this.meta)) {
+      // The round came back from a run that never happened: say so, and say it is actionable.
+      status.push(`<div class="conv-wait failed"><b>The agent could not run this round.</b> `
+        + `It is yours again — fix the problem and submit to retry.</div>`);
     }
     if (this.meta?.status === "submitted") {
       if (!this.meta.seen_by_agent_at) {
@@ -3910,7 +3981,7 @@ class Editor {
         <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
-    const html = rendered + status.join("") + this.runSummary();
+    const html = rendered + status.join("") + this.runSummary() + this.outputBlock();
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     this.convCount = items.length + status.length;
     // Only touch the DOM when something changed, and only follow the tail when the reader is

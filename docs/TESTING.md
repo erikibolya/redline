@@ -52,6 +52,24 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   row, that a row opens read-only while *Current* returns to the live canvas, and that after STOP
   the round on the canvas is one *Round N (current)* row with no extra *Current*.
 
+## Run state and agent output (2026-10-31)
+
+- Rust `tests/api.rs`: `the_sessions_list_exposes_only_a_live_run_as_working` — no claim reads
+  `agent_running=false`, a running claim `true`, a `waiting` claim `false` again, a released claim
+  `false`.
+- Rust `tests/mcp.rs`: `a_failed_run_hands_the_round_back_and_says_so` — `reply` with
+  `state="failed"` reopens the submitted round, keeps `agent_state=failed` and the message in
+  `agent-thread.jsonl`; an unknown state is an error; the default stays an ordinary `replied` with
+  the round still submitted.
+- `redline-agent` tests: `log_line` strips terminal colours, drops blank lines and bounds the
+  length; the two-worktree bridge integration test asserts the fake agent's own stdout line
+  arrives in the review as a `state="log"` event.
+- Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
+  project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
+  tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours
+  again" notice with the bridge's message; the **output** toggle is off by default (no `log` line
+  in the conversation), shows the streamed line when clicked, survives a reload and closes again.
+
 ## Agent concurrency (v0.22)
 
 - Rust `tests/agent.rs`: global/project capacity, waiting frees a run slot but keeps the branch,

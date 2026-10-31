@@ -562,3 +562,90 @@ async fn resolve_and_list_reflect_status_changes() {
         std::fs::read_to_string(store.dir(&id).unwrap().join("agent-thread.jsonl")).unwrap();
     assert!(thread.contains("which button?"));
 }
+
+/// A failed run is not an answer: it must not leave the review locked behind an agent that will
+/// never come back (reported 2026-10-31: "the UI is blocked, so I can't edit it").
+#[tokio::test]
+async fn a_failed_run_hands_the_round_back_and_says_so() {
+    let (_dir, store) = setup();
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({"title": "Cannot run", "image_base64": PNG_B64}),
+        )
+        .await,
+    );
+    let id = created["session_id"].as_str().unwrap().to_string();
+    store
+        .submit(
+            &id,
+            &redline_core::model::Submission {
+                note: None,
+                annotations: Vec::new(),
+                png: None,
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(store.require(&id).unwrap().status.as_str(), "submitted");
+
+    // Unknown states are refused instead of silently becoming a reply.
+    let refused = call(
+        &store,
+        "reply",
+        json!({"session_id": id, "message": "hm", "state": "maybe"}),
+    )
+    .await;
+    assert_eq!(refused["isError"], true);
+
+    payload(
+        &call(
+            &store,
+            "reply",
+            json!({
+                "session_id": id,
+                "message": "The agent run failed: opencode rejected the password",
+                "state": "failed",
+            }),
+        )
+        .await,
+    );
+    let meta = store.require(&id).unwrap();
+    assert_eq!(
+        meta.status.as_str(),
+        "open",
+        "the human must be able to edit again"
+    );
+    assert_eq!(meta.agent_state.as_deref(), Some("failed"));
+    let thread =
+        std::fs::read_to_string(store.dir(&id).unwrap().join("agent-thread.jsonl")).unwrap();
+    assert!(thread.contains("rejected the password"));
+    assert!(thread.contains("\"state\":\"failed\""));
+
+    // The default is still an ordinary reply: the run may keep going, so the round stays submitted.
+    store
+        .submit(
+            &id,
+            &redline_core::model::Submission {
+                note: None,
+                annotations: Vec::new(),
+                png: None,
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    payload(
+        &call(
+            &store,
+            "reply",
+            json!({"session_id": id, "message": "looking at it"}),
+        )
+        .await,
+    );
+    let meta = store.require(&id).unwrap();
+    assert_eq!(meta.status.as_str(), "submitted");
+    assert_eq!(meta.agent_state.as_deref(), Some("replied"));
+}

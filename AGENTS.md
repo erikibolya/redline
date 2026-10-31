@@ -339,6 +339,21 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   submitted, say the agent replied and the run has not finished, and let a later `progress` (real
   evidence the process is alive) turn the indicator back to "Working". Never print "finished" and
   "STOP" in the same breath.
+- **A failed run is not a reply, and a locked round is not a queue.** The bridge's failure path
+  called `reply` like any answer, so a run that never started (a rejected OpenCode password, a
+  broken repo) left the review `submitted` behind a *replied* label: the canvas locked, the
+  working indicator gone, and nothing telling the human that nobody was coming back — *"I don't
+  know if the task is being worked on or not… is it a bug?"* (2026-10-31). A failure is its own
+  state: `reply {state:"failed"}` reopens the round (annotations and history stay) so the human can
+  fix it and resubmit, and the rail/card say **agent failed** in red. And the inverse of the
+  previous lesson: `agent_state` records who spoke last, not whether a process is alive, so the
+  rail must take **working** from a live claim (lease + heartbeat, exposed as `agent_running`)
+  as well — a mid-run reply must not erase the only sign of activity.
+- **A live tail is not a conversation.** The agent's own lines are what the human asked for
+  ("realtime output… like a regular opencode window"), but every line in the timeline buries the
+  messages that need reading. Stream them into the same event log under `state: "log"` (throttled,
+  ANSI stripped, bounded), render them only behind an explicit **output** toggle that remembers its
+  state, and never render a `log` event as a conversation message.
 - **A delete button is not a cancel button, and a UI badge is not a signal.** The rail's ✕ removed
   the review folder, so "cancel this feature" had no non-destructive action; the ✓ only set
   `resolved`, which told an agent nothing about shipping. Feature decisions now have their own

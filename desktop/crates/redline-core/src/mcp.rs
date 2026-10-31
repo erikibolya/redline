@@ -223,12 +223,17 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "reply",
-            "description": "Attach an agent message or question to a session so the human sees it in the editor.",
+            "description": "Attach an agent message or question to a session so the human sees it in the editor. `state=failed` means the run could not do the work: the round goes back to the human, unlocked, instead of looking like an answer.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "session_id": { "type": "string" },
-                    "message": { "type": "string" }
+                    "message": { "type": "string" },
+                    "state": {
+                        "type": "string",
+                        "enum": ["replied", "failed"],
+                        "description": "replied (default): the agent answered and may still be working. failed: the run could not happen; hand the round back to the human."
+                    }
                 },
                 "required": ["session_id", "message"]
             }
@@ -849,6 +854,10 @@ fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
 fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
     let message = string_arg(args, "message").ok_or("message is required")?;
+    let state = string_arg(args, "state").unwrap_or_else(|| "replied".to_string());
+    if state != "replied" && state != "failed" {
+        return Err(format!("state must be replied or failed, not {state:?}"));
+    }
     ctx.store.require(&id).map_err(|err| err.to_string())?;
     // Agent messages live beside the human's data but never inside it: annotations.json stays
     // the human's, agent-thread.jsonl is ours.
@@ -857,7 +866,7 @@ fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
         .dir(&id)
         .map_err(|err| err.to_string())?
         .join("agent-thread.jsonl");
-    let line = json!({ "at": crate::store::now(), "message": message });
+    let line = json!({ "at": crate::store::now(), "message": message, "state": state });
     use std::io::Write as _;
     let mut file = std::fs::OpenOptions::new()
         .create(true)
@@ -865,10 +874,21 @@ fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
         .open(&path)
         .map_err(|err| format!("cannot write {}: {err}", path.display()))?;
     writeln!(file, "{line}").map_err(|err| err.to_string())?;
-    ctx.store
-        .set_agent_state(&id, "replied", true)
-        .map_err(|err| err.to_string())?;
-    Ok(json!({ "session_id": id, "appended": true }))
+    // A failure is not an answer: the run is over, so the round goes back to the human instead of
+    // staying locked behind an agent that will never come back (2026-10-31).
+    let meta = if state == "failed" {
+        ctx.store.fail_round(&id).map_err(|err| err.to_string())?
+    } else {
+        ctx.store
+            .set_agent_state(&id, "replied", true)
+            .map_err(|err| err.to_string())?
+    };
+    Ok(json!({
+        "session_id": id,
+        "appended": true,
+        "state": meta.agent_state,
+        "status": meta.status.as_str(),
+    }))
 }
 
 fn resolve(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {

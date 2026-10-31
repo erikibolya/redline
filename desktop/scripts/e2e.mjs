@@ -856,6 +856,36 @@ const main = async () => {
   check("the rail says replied, not waiting for agent, on an answered open round",
     idleRail.badge === "replied", idleRail.badge);
 
+  // A reply can land while the run keeps going. The bridge's claim (with its heartbeat) is the
+  // evidence that someone is still working, so the rail must show the spinner again instead of
+  // leaving the human with "replied" and no idea whether anything is happening (2026-10-31).
+  await api("/api/agent/claims", {
+    method: "POST",
+    body: JSON.stringify({ session_id: id, agent_id: "e2e", state: "running" }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const claimedRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    spin: Boolean(document.querySelector('.session[aria-current="true"] .badge.work .spin')),
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim() || "",
+    project: Boolean(document.querySelector(".rail-project .pworking")),
+  }));
+  check("a live claim restores the working label after a reply",
+    claimedRail.row && claimedRail.spin && claimedRail.badge === "working" && claimedRail.project,
+    JSON.stringify(claimedRail));
+  // Releasing the claim is the end of the run: no spinner without evidence.
+  await api(`/api/agent/claims/${id}/release`, {
+    method: "POST",
+    body: JSON.stringify({ agent_id: "e2e" }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const releasedRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim() || "",
+  }));
+  check("the working label clears again when the run releases its claim",
+    !releasedRail.row && releasedRail.badge === "replied", JSON.stringify(releasedRail));
+
   // `reply` is a message, not the finish line: the round is still submitted and STOP is still
   // armed, so the card must not claim "Run finished". It says the agent answered and the run has
   // not finished, with the age of the last step so an idle agent is distinguishable from a busy one.
@@ -3077,6 +3107,133 @@ const main = async () => {
   check("deleting the open review returns to the dashboard",
     deletedOpen.status === 404 && !deleteDashboard.selected && !deleteDashboard.card,
     JSON.stringify({ status: deletedOpen.status, ...deleteDashboard }));
+
+  // ---- a run that cannot start must not leave the review locked behind the word "replied"
+  // (reported 2026-10-31: "the UI is blocked, so I can't edit it but the working label is not
+  // present — is it a bug?"). The failure is a state of its own: unlocked, labelled, and readable.
+  const broken = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "could not run", image_base64: makePng(), project: "e2e" }),
+  });
+  const brokenId = broken.meta.id;
+  await page.goto(`${BASE}/s/${brokenId}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  await page.evaluate(() => window.redline.mutate(() => {
+    window.redline.annotations.push({
+      id: "broken-1", type: "rect", color: "#e11d48", width: 3,
+      start: { x: 100, y: 120 }, end: { x: 200, y: 200 }, note: "please fix",
+    });
+  }));
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  const lockedBefore = await page.evaluate(() => ({
+    locked: window.redline.locked,
+    tool: document.querySelector('.tool[data-tool="rect"]')?.disabled,
+  }));
+  check("a submitted round is locked while the agent owns it",
+    lockedBefore.locked === true && lockedBefore.tool === true, JSON.stringify(lockedBefore));
+
+  // The bridge picks the round up and then cannot start the run (a dead opencode server, a broken
+  // repo, …): the pickup is the last thing it manages to report.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 11, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: brokenId, message: "Picked up by the agent bridge", state: "thinking",
+      } },
+    }),
+  });
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 12, method: "tools/call",
+      params: { name: "reply", arguments: {
+        session_id: brokenId,
+        message: "The agent run failed: Server at http://opencode:4096 rejected the password",
+        state: "failed",
+      } },
+    }),
+  });
+  const brokenMeta = (await api(`/api/sessions/${brokenId}`)).meta;
+  check("a failed run hands the round back on the server",
+    brokenMeta.status === "open" && brokenMeta.agent_state === "failed",
+    JSON.stringify({ status: brokenMeta.status, state: brokenMeta.agent_state }));
+
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const brokenUi = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return {
+      locked: window.redline.locked,
+      tool: document.querySelector('.tool[data-tool="rect"]')?.disabled,
+      composer: document.querySelector("#composer-text")?.disabled,
+      submit: document.querySelector("#submit")?.textContent.trim(),
+      badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim(),
+      failedBadge: Boolean(document.querySelector('.session[aria-current="true"] .badge.failed')),
+      card: card?.textContent || "",
+      cardFailed: Boolean(card?.classList.contains("failed")),
+      notice: document.querySelector("#conv-log")?.textContent || "",
+    };
+  });
+  check("a failed run unlocks the canvas instead of a dead end",
+    brokenUi.locked === false && brokenUi.tool === false && brokenUi.composer === false
+      && brokenUi.submit !== "STOP", JSON.stringify(brokenUi));
+  check("the rail and the conversation say the agent could not run this round",
+    brokenUi.failedBadge && brokenUi.badge === "agent failed"
+      && brokenUi.cardFailed && brokenUi.card.includes("could not run this round")
+      && brokenUi.notice.includes("It is yours again")
+      && brokenUi.notice.includes("rejected the password"),
+    JSON.stringify({ badge: brokenUi.badge, card: brokenUi.card }));
+
+  // ---- the agent's own output is one click away, off by default, and remembered
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 13, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: brokenId, message: "edited src/lib.rs", state: "log",
+      } },
+    }),
+  });
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const outputOff = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output")),
+    leak: (document.querySelector("#conv-log")?.textContent || "").includes("edited src/lib.rs"),
+  }));
+  check("agent output stays out of the conversation until asked for",
+    outputOff.pressed === "false" && !outputOff.block && !outputOff.leak,
+    JSON.stringify(outputOff));
+
+  await page.click("#conv-verbose");
+  const outputOn = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    body: document.querySelector("#conv-log .conv-output-body")?.textContent || "",
+    stored: localStorage.getItem("redline:convVerbose"),
+  }));
+  check("the Output button reveals the agent's realtime output",
+    outputOn.pressed === "true" && outputOn.body.includes("edited src/lib.rs")
+      && outputOn.stored === "true",
+    JSON.stringify(outputOn));
+
+  await page.reload({ waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  const outputRemembered = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output-body")),
+  }));
+  check("the Output choice survives a reload",
+    outputRemembered.pressed === "true" && outputRemembered.block,
+    JSON.stringify(outputRemembered));
+  await page.click("#conv-verbose");
+  const outputHidden = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output")),
+  }));
+  check("the Output button closes the tail again",
+    outputHidden.pressed === "false" && !outputHidden.block,
+    JSON.stringify(outputHidden));
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

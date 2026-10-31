@@ -1,10 +1,11 @@
 # RedLine
 
-**Mark the screenshot. The agent writes the fix.**
+**Mark the screenshot — or the frame. The agent writes the fix.**
 
-RedLine is a local visual review loop for humans and AI agents. An agent shows you a screen; you
-draw on it and write what should change; the agent reads that as structured data and comes back
-with the next round — in the same review, with a new screenshot.
+RedLine is a local visual review loop for humans and AI agents. An agent shows you a screen or a
+short recording; you draw on it, pause the video at the moment that is wrong, and write what
+should change. The agent reads that as structured data and comes back with the next round — in
+the same review, with a new screenshot or clip.
 
 No accounts, no cloud, no JS build step. The server is a single static binary; the UI is a few
 plain files served from it.
@@ -55,14 +56,17 @@ MCP over HTTP at `/mcp` (Bearer token):
 }
 ```
 
-Tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`,
-`list_projects`, `progress`, `reply`, `post_round`, `capture_round`, `resolve`, `ship_status`.
+Tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`,
+`wait_for_feedback`, `list_reviews`, `list_projects`, `progress`, `reply`, `post_round`,
+`capture_round`, `resolve`, `ship_status`.
 
 ## The loop
 
-1. **An agent opens a review** — `review_screenshot` (an image) or `capture_review` (a URL).
+1. **An agent opens a review** — `review_screenshot` (an image), `review_video` (a clip) or
+   `capture_review` (a URL).
 2. **You mark it up** — rectangles, ellipses, arrows, freehand; every mark carries a note
-   ("this button is too small") written in the panel, not on the canvas.
+   ("this button is too small") written in the panel, not on the canvas. On a video, pause on the
+   frame (or mark a range) and the annotation keeps its timecode.
 3. **Submit** — the canvas locks, the agent is notified through its own runtime (MCP polling or
    the webhook/bridge), and the conversation shows *received* → *working* with a live activity
    feed → the reply.
@@ -79,7 +83,9 @@ Tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback
 | | |
 |---|---|
 | **Projects = repositories** | the agent syncs the git repos it can see; the rail groups reviews by repo and the agent runs each review in that project's repo |
-| **Rounds** | every submit is archived with its source screenshot and annotations; the canvas switches between rounds |
+| **Rounds** | every submit is archived with its source screenshot or clip and annotations; the canvas switches between rounds |
+| **Video** | upload a clip or let an agent post one; scrub and pause in the canvas, annotate a moment or range, and submit a contact sheet plus full-resolution frames |
+| **Video rounds** | a new clip is a new round; the previous clip, frames and annotations replay read-only from History |
 | **Notes, not text on the canvas** | numbers tie a shape on the canvas to a paragraph in the panel, `annotated.png` and `review.md` |
 | **Conversation** | request, prompt, agent activity (`progress`), replies and state (`received`/`working`/`replied`), polled every 5 s |
 | **Drafts** | unsent annotations and the composer survive switching sessions; quitting warns first |

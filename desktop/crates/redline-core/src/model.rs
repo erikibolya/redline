@@ -117,11 +117,13 @@ pub struct Handoff {
     /// Human-readable outcome chosen by the integration, e.g. "merged", "deployed", "PR #46".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// Optional link: a pull request, a deployment, a published document.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Optional link: a pull request, a deployment, a published document. `pr_url` is the
+    /// pre-release v0.23 spelling, accepted so old meta files still load.
+    #[serde(default, alias = "pr_url", skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// Detail or failure reason, shown in the rail's tooltip.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Detail or failure reason, shown in the rail's tooltip. `error` is the pre-release v0.23
+    /// spelling, accepted so old meta files still load.
+    #[serde(default, alias = "error", skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }
 
@@ -129,8 +131,14 @@ pub struct Handoff {
 #[serde(rename_all = "lowercase")]
 pub enum HandoffStatus {
     Requested,
+    /// `opened` is the pre-release v0.23 spelling for a handoff still in progress.
+    #[serde(alias = "opened")]
     Running,
+    /// `merged` is the pre-release v0.23 spelling for a finished handoff.
+    #[serde(alias = "merged")]
     Done,
+    /// `closed` is the pre-release v0.23 spelling for a failed handoff (a closed PR).
+    #[serde(alias = "closed")]
     Failed,
 }
 

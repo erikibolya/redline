@@ -645,3 +645,49 @@ fn a_screenshot_round_is_refused_on_a_video_session() {
         .expect_err("a video review cannot take a screenshot round");
     assert!(error.to_string().contains("post the next video"), "{error}");
 }
+
+#[test]
+fn a_pre_release_ship_record_is_read_as_a_generic_handoff() {
+    use redline_core::model::Meta;
+    let meta: Meta = serde_json::from_value(json!({
+        "id": "legacy",
+        "title": "Legacy feature",
+        "status": "resolved",
+        "created_at": "2026-10-31T10:00:00+00:00",
+        "image": "screenshot.png",
+        "feature_confirmed_at": "2026-10-31T10:00:00+00:00",
+        "ship": {
+            "status": "merged",
+            "requested_at": "2026-10-31T10:00:00+00:00",
+            "started_at": "2026-10-31T10:01:00+00:00",
+            "finished_at": "2026-10-31T10:02:00+00:00",
+            "pr_url": "https://github.com/o/r/pull/46",
+            "pr_number": 46,
+            "merge_commit": "abc123",
+            "error": "merge commit abc123"
+        }
+    }))
+    .unwrap();
+    let handoff = meta.handoff.expect("legacy ship must become a handoff");
+    assert_eq!(handoff.status, HandoffStatus::Done);
+    assert_eq!(
+        handoff.url.as_deref(),
+        Some("https://github.com/o/r/pull/46")
+    );
+    assert_eq!(handoff.message.as_deref(), Some("merge commit abc123"));
+
+    let opened: Meta = serde_json::from_value(json!({
+        "id": "legacy-open",
+        "title": "Legacy open",
+        "status": "resolved",
+        "created_at": "2026-10-31T10:00:00+00:00",
+        "image": "screenshot.png",
+        "feature_confirmed_at": "2026-10-31T10:00:00+00:00",
+        "ship": { "status": "opened" }
+    }))
+    .unwrap();
+    assert_eq!(
+        opened.handoff.map(|handoff| handoff.status),
+        Some(HandoffStatus::Running)
+    );
+}

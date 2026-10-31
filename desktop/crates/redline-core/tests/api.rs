@@ -469,6 +469,17 @@ async fn video_submissions_carry_a_contact_sheet_and_full_frames() {
         .expect("archived frames");
     assert!(archived.path().join("1.000.png").is_file());
     assert!(archived.path().join("2.000.png").is_file());
+
+    // The archived stills are served for the history viewer, not only present on disk.
+    let rounds = h.store.history(&id).unwrap();
+    let stamp = &rounds[0].stamp;
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/history/{stamp}/frames/1.000.png"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

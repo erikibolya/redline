@@ -626,3 +626,28 @@ fn replacing_a_video_before_any_submission_does_not_add_history() {
     assert!(store.history(&meta.id).unwrap().is_empty());
     assert!(store.dir(&meta.id).unwrap().join("video.webm").is_file());
 }
+
+#[test]
+fn a_screenshot_round_is_refused_on_a_video_session() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Video",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let error = store
+        .post_round(&meta.id, Some(PNG), "screenshot.png", "a fix", None, None)
+        .expect_err("a video review cannot take a screenshot round");
+    assert!(error.to_string().contains("post the next video"), "{error}");
+}

@@ -249,9 +249,11 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   agent), `handing off` (run active), the integration's `label` with its `url` (`merged` + PR
   link for the reference bridge; `deployed` + environment link for a deploy), or a red
   `handoff failed` label/link whose retry is the row's `↻` action (also **Retry handoff** in the
-  feature menu), calling `POST /api/sessions/<id>/handoff`. The review run itself never opens a
-  PR, so a feature cannot sneak into `dev` overnight; the handoff run is a separate bridge job. A
-  pre-v0.23 confirmed feature has no `handoff` record and keeps the plain `confirmed` badge.
+  feature menu), calling `POST /api/sessions/<id>/handoff`. A `running` handoff whose bridge claim
+  is gone is derived as **handoff stale** (API `handoff_stale`) with the same retry action; it
+  never spins forever. The review run itself never opens a PR, so a feature cannot sneak into
+  `dev` overnight; the handoff run is a separate bridge job. A pre-v0.23 confirmed feature has no
+  `handoff` record and keeps the plain `confirmed` badge.
 - **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
   **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
   with `feature_cancelled_at`, nothing is handed off or merged, and the screenshot/annotations

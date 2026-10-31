@@ -33,6 +33,13 @@
   `meta.agent_failure { code, message, at }`; the rail badge reads **agent timed out** (or
   **agent failed** for other codes) and the card/message keep the exact limit. `get_feedback`/
   `wait_for_feedback` expose the same reason. A new run/reply clears the stored failure.
+- **A handoff can no longer read "handing off" after its agent is gone.** A stopped/crashed handoff
+  released its claim but left `handoff.status=running` forever; `GET /api/sessions` now derives
+  `handoff_stale` when a running handoff has no live claim, and the rail shows **handoff stale**
+  with the retry action. The bridge also reports `failed` when a handoff stops while the feature is
+  still confirmed. The handoff prompt now pushes a **draft PR first**, lets GitHub run the full
+  suite, and only then marks it ready; local preflight uses `REDLINE_BIN` to mount a fresh server
+  binary into the published browser image instead of rebuilding the ~768 MB image.
 - **A review run does not build the release.** The bridge prompt used to permit build/deploy; an
   agent spent its whole run on a full image build. Review prompts now say to run focused checks
   only and not to build/publish the release/browser image or run the release pipeline; the same

@@ -1239,6 +1239,58 @@ async fn the_sessions_list_exposes_only_a_live_run_as_working() {
 }
 
 #[tokio::test]
+async fn a_running_handoff_without_a_live_claim_is_exposed_as_stale() {
+    let h = harness();
+    let id = submitted_session(&h, "p1", "feat/stale-handoff").await;
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/confirm-feature"),
+            json!({"handoff": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["meta"]["handoff"]["status"], "requested");
+
+    h.store.mark_handoff_running(&id).unwrap();
+    let (status, _, body) = send(&h.app, authed("GET", "/api/sessions", json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let row = body["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == id)
+        .expect("handoff row");
+    assert_eq!(row["handoff"]["status"], "running");
+    assert_eq!(row["agent_running"], json!(false));
+    assert_eq!(
+        row["handoff_stale"],
+        json!(true),
+        "a running handoff with no live claim must not read as in progress"
+    );
+
+    // Re-queueing the stale handoff turns it back into a request; it is no longer stale.
+    let (status, _, body) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/handoff"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["meta"]["handoff"]["status"], "requested");
+    let (_, _, body) = send(&h.app, authed("GET", "/api/sessions", json!({}))).await;
+    let row = body["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == id)
+        .expect("handoff row");
+    assert_eq!(row["handoff_stale"], json!(false));
+}
+
+#[tokio::test]
 async fn agent_claims_enforce_limits_and_waiting_releases_the_slot() {
     let h = harness();
     let a = submitted_session(&h, "p1", "feat/a").await;

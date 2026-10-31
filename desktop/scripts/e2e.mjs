@@ -1496,6 +1496,54 @@ const main = async () => {
     document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff.requested`)),
     { timeout: 5000 }, id);
 
+  // A handoff claim can disappear (stopped/crashed) while the meta still says running. The rail
+  // must not spin forever: the API derives `handoff_stale` from the live claim set.
+  const staleClaim = await api("/api/agent/next", {
+    method: "POST",
+    body: JSON.stringify({ agent_id: "e2e-stale", jobs: ["handoff"] }),
+  });
+  check("the handoff claim starts as running",
+    staleClaim.session?.id === id && staleClaim.session?.handoff?.status === "running",
+    JSON.stringify(staleClaim.session?.handoff || null));
+  await api(`/api/agent/claims/${id}/release`, {
+    method: "POST",
+    body: JSON.stringify({ agent_id: "e2e-stale" }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  await page.waitForFunction((sessionId) => {
+    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff`);
+    return badge?.textContent.includes("handoff stale");
+  }, { timeout: 5000 }, id);
+  const staleHandoff = await page.evaluate((sessionId) => {
+    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff`);
+    const retry = document.querySelector(`.session[data-id="${sessionId}"] [data-act="handoff"]`);
+    return {
+      badge: badge?.textContent.trim() || "",
+      title: badge?.getAttribute("title") || "",
+      retry: retry?.getAttribute("title") || "",
+      stale: Boolean(window.redline.rail.sessions.find((s) => s.id === sessionId)?.handoff_stale),
+    };
+  }, id);
+  check("a handoff whose claim vanished is marked stale and offers a retry",
+    staleHandoff.stale && staleHandoff.badge === "handoff stale"
+      && staleHandoff.title.includes("stopped without reporting")
+      && staleHandoff.retry === "Retry handoff",
+    JSON.stringify(staleHandoff));
+  await page.hover(`.session[data-id="${id}"]`);
+  await page.click(`.session[data-id="${id}"] [data-act="handoff"]`);
+  let retriedStale = {};
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const meta = await api(`/api/sessions/${id}`);
+    retriedStale = meta.meta;
+    if (retriedStale.handoff?.status === "requested") break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("retrying a stale handoff queues it again",
+    retriedStale.handoff?.status === "requested", JSON.stringify(retriedStale.handoff));
+  await page.waitForFunction((sessionId) => Boolean(
+    document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff.requested`)),
+    { timeout: 5000 }, id);
+
   // "All" is the only view that keeps a finished session alongside active work.
   await clickChip("All");
   await page.waitForSelector(row, { timeout: 5000 });
@@ -3330,7 +3378,9 @@ const main = async () => {
     JSON.stringify(historyPlaying));
   await page.click("#viewing-bar");
   await page.waitForFunction(
-    () => !window.redline.viewing && (window.redline.video?.src || "").includes("/media"),
+    () => !window.redline.viewing
+      && (window.redline.video?.src || "").includes("/media")
+      && !document.querySelector("#video-new")?.hidden,
     { timeout: 15000 },
   );
   const backLive = await page.evaluate(() => ({

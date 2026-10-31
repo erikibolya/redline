@@ -1,6 +1,6 @@
 # Video reviews — design and delivery plan
 
-Status: **phase 3 implemented in `feat/video-frames`** (server media core, browser upload, canvas
+Status: **shipped in v0.23.0** (server media core, browser upload, canvas
 playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full frames,
 new video rounds/history playback and agent `post_round` video). Phase 4 is the release pass.
 

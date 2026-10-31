@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.23.0 — 2026-10-31
 
 - **A history glyph belongs to the round's title, not to the middle of the card.** A history row
   is two lines (title + timestamp), and `.ann-row` centres its glyph on the whole row, so the
@@ -69,7 +69,7 @@
   `video_base64`/`video_path`. The live `/media` URL is cache-busted so a replaced clip cannot be
   served from the previous round. Rust tests cover frame storage/limit/archive, new-round
   archiving and MCP video rounds; browser e2e covers the composed sheet, two timecoded frames,
-  the new-video flow and history playback, plus the 2 GB session-size warning (206 checks).
+  the new-video flow and history playback, plus the 2 GB session-size warning (207 checks).
 
 ## 0.22.0 — 2026-10-31
 

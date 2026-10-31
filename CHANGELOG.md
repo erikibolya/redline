@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **The agent's output is a popup, and the stage toast narrates a step instead of a command.** The
+  bridge streams the agent's own terminal lines into the event log as `state: "log"`, and two
+  places printed the newest event whatever it was: the stage toast read **Agent is working — $ cd
+  … && $ sed -n …** and the inspector's output tail sat under the messages, taking the little
+  height a short window had. The **output** button now opens a centred popup (monospace, scrolling,
+  following the tail while the run is live, closed by the button, `Esc` or the backdrop, not
+  reopened by a reload), and the toast plus the conversation's activity label use the last
+  narrated step, one short line, with the full text on hover. The e2e asserts the toast never
+  prints a log line, the popup's centre and that it is not inside the inspector, that a poll keeps
+  feeding it, and every way to close it.
+
 ## 0.25.0 — 2026-10-31
 
 - **A history round stays the round you opened.** A live conversation poll that was already in

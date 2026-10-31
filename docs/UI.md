@@ -501,13 +501,17 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.
-- **Agent output** (2026-10-31): the conversation header carries an **output** toggle. It reveals
-  the agent's own lines — `progress` events with `state: "log"`, which the bridge streams from the
+- **Agent output** (2026-10-31): the conversation header carries an **output** button. It opens the
+  agent's own lines — `progress` events with `state: "log"`, which the bridge streams from the
   OpenCode process (throttled to one line every two seconds, ANSI stripped, ≤ 400 chars, and the
-  last line of a short run is always kept) — in a monospace, scrollable tail with the time of the
-  last line. It is off by default so a wall of tool output never buries the conversation, the
-  choice is remembered per browser (`redline:convVerbose`), and `log` events are never rendered as
-  conversation lines.
+  last line of a short run is always kept) — in a **centred popup**, in monospace with the time of
+  the last line, following the tail while the run is live. It is not in the conversation and not
+  in the inspector: a tail wedged under the messages took the little height a short window had.
+  The button closes the popup again, `Esc` and the backdrop do the same, and a reload does not
+  reopen it. `log` events are never rendered as conversation lines, and the stage toast and the
+  activity label take the last *step*, never a `log` line — a shell command in place of a status
+  read as a stuck agent.
+
 
 ## Status bar
 

@@ -81,6 +81,26 @@ const agentWorking = (meta) => meta?.status === "submitted" &&
  *  it must not spin: it is a visible dead end the human can fix and resubmit. */
 const agentFailed = (meta) => meta?.agent_state === "failed";
 
+/** The last line the agent actually narrated. Its own terminal output also lands in the event
+ *  log (`state: "log"`) and is a shell transcript, not a step — the stage toast and the activity
+ *  label must never print a command where a status belongs (2026-10-31). */
+const latestStep = (events) => {
+  const list = events || [];
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const event = list[index];
+    if (event.state !== "log" && String(event.message || "").trim()) return event;
+  }
+  return null;
+};
+
+/** One short line: a `progress` message can be a paragraph and the toast is a pill. The full text
+ *  stays reachable through its `title`. */
+const stepLabel = (message, limit = 80) => {
+  const line = String(message || "").split(/\r?\n/).find((part) => part.trim()) || "";
+  const clean = line.trim();
+  return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
+};
+
 
 /** "edit, shell and run" → "Edit, Shell and Run", the way a person lists tools. */
 function listNames(names) {
@@ -1521,8 +1541,6 @@ class Editor {
     // an undefined list (a fresh load of a submitted session renders the header first).
     this.events = [];
     this.thread = [];
-    // The agent's raw output starts closed: it is diagnosis, not the conversation.
-    this.verbose = prefs.get("convVerbose", false);
     this.selected = new Set();
     this.marquee = null;
     this.tool = "select";
@@ -1694,6 +1712,8 @@ class Editor {
     this.viewing = null;
     this.roundLoad = 0;
     this.live = null;
+    // The popup shows one session's run; keeping it open over another review would lie.
+    this.closeOutput();
     this.updateViewingBar();
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
@@ -2118,14 +2138,16 @@ class Editor {
       : "Session size on disk";
   }
 
-  /// The Output toggle mirrors the remembered choice, so a reload keeps the tail open.
+  /// The output button mirrors the popup: it is a window onto the run, not a mode that would
+  /// reopen by itself on the next load.
   syncVerbose() {
     const button = $("#conv-verbose");
     if (!button) return;
-    button.setAttribute("aria-pressed", this.verbose ? "true" : "false");
-    button.title = this.verbose
-      ? "Hide the agent's own output"
-      : "Show the agent's own output while it works";
+    const open = this.outputOpen();
+    button.setAttribute("aria-pressed", open ? "true" : "false");
+    button.title = open
+      ? "Close the agent's own output"
+      : "Open the agent's own output in a popup";
   }
 
   renderHeader() {
@@ -2165,14 +2187,18 @@ class Editor {
       // hover over an archived screenshot.
       stageStatus.hidden = !submitted || Boolean(this.viewing);
       if (submitted && !this.viewing) {
-        const last = (this.events || [])[this.events.length - 1];
+        // The step, not the transcript: the toast sits over the canvas and must stay one short
+        // line even while the agent's shell prints a wall of output.
+        const last = latestStep(this.roundEvents());
+        const step = last ? stepLabel(last.message) : "";
         stageStatus.textContent = agentWorking(this.meta) && last
-          ? `Agent is working — ${last.message}`
+          ? `Agent is working — ${step}`
           : this.meta.agent_state === "replied"
             // The answer can land before `resolve`; "waiting for the agent" would contradict
             // the reply sitting in the conversation.
             ? "The agent replied — read it in the conversation"
             : "Waiting for the agent…";
+        stageStatus.title = step;
       }
     }
     this.applyTitle();
@@ -2225,11 +2251,24 @@ class Editor {
       $("#conv-new")?.addEventListener("click", () => this.seenConversation());
     }
     $("#conv-verbose")?.addEventListener("click", () => {
-      this.verbose = !this.verbose;
-      prefs.set("convVerbose", this.verbose);
-      this.syncVerbose();
-      this.renderConversation();
+      if (this.outputOpen()) this.closeOutput();
+      else this.openOutput();
     });
+    const outputDialog = $("#output-dialog");
+    if (outputDialog) {
+      $("#output-close")?.addEventListener("click", () => this.closeOutput());
+      // Esc and the form's own close path both end in `close`, so the button follows the popup.
+      outputDialog.addEventListener("close", () => this.syncVerbose());
+      // A click on the backdrop is the dialog element itself, the same as every other popup.
+      outputDialog.addEventListener("click", (event) => {
+        if (event.target === outputDialog) this.closeOutput();
+      });
+      const outputBody = $("#output-body");
+      outputBody?.addEventListener("scroll", () => {
+        outputBody.dataset.pinned = String(
+          outputBody.scrollHeight - outputBody.scrollTop - outputBody.clientHeight < 40);
+      });
+    }
     $("#viewing-bar")?.addEventListener("click", () => this.showCurrent());
     const syncPanels = () => {
       const app = $("#app");
@@ -3935,17 +3974,22 @@ class Editor {
     }
   }
 
+  /// The events of the round on screen. A round starts at the submission, or — once the agent has
+  /// posted the next screenshot — at that post. An earlier round's lines would inflate the tool
+  /// count and put another run's output in this round's popup.
+  roundEvents() {
+    const events = this.events || [];
+    const start = this.meta?.submitted_at
+      || (this.thread || []).filter((message) => message.image).map((message) => message.at).pop()
+      || "";
+    return start ? events.filter((event) => String(event.at || "") >= String(start)) : events;
+  }
+
   /// The step lines say *what* the agent did; this says *how much* and *whether it is still
   /// going* — the question a human asks while staring at a submitted review. Modelled on the
   /// run summary an interactive agent shows in its own chat ("Used 12 tools: Edit, Shell and Run").
   runSummary() {
-    const events = this.events || [];
-    // Only this round: an earlier round's steps would inflate the count. A round starts at the
-    // submission, or — once the agent has posted the next screenshot — at that post.
-    const start = this.meta?.submitted_at
-      || (this.thread || []).filter((message) => message.image).map((message) => message.at).pop()
-      || "";
-    const round = start ? events.filter((event) => String(event.at || "") >= String(start)) : events;
+    const round = this.roundEvents();
     const failed = agentFailed(this.meta);
     if (!round.length) {
       // A run that died before logging anything is still a state the human must see.
@@ -4007,20 +4051,50 @@ class Editor {
       + `<div class="conv-run-sub">${sub}</div></div></div>`;
   }
 
-  /// The agent's own output, the way its terminal shows it. Off by default — a wall of tool lines
-  /// must never bury the conversation — but "what is it doing right now?" needs an answer that is
-  /// not a spinner (2026-10-31).
-  outputBlock() {
-    if (!this.verbose) return "";
-    const lines = (this.events || []).filter((event) => event.state === "log");
+  /// The agent's own output, the way its terminal shows it. It streams into a centred popup
+  /// instead of the inspector: a wall of tool lines must never bury the conversation, and a tail
+  /// wedged under the messages stole the little height a short window had (2026-10-31).
+  outputOpen() {
+    return Boolean($("#output-dialog")?.open);
+  }
+
+  renderOutput() {
+    const dialog = $("#output-dialog");
+    if (!dialog || !dialog.open) return;
+    const body = $("#output-body");
+    if (!body) return;
+    const lines = this.roundEvents().filter((event) => event.state === "log");
     const last = lines[lines.length - 1];
-    const body = lines.length
-      ? lines.map((event) => escapeHtml(event.message || "")).join("\n")
+    body.textContent = lines.length
+      ? lines.map((event) => event.message || "").join("\n")
       : "No output from this run yet.";
-    return `<div class="conv-output${agentWorking(this.meta) ? " live" : ""}">`
-      + `<div class="conv-output-head">Agent output${
-        last ? ` · ${escapeHtml(relativeTime(last.at))}` : ""
-      }</div><pre class="conv-output-body">${body}</pre></div>`;
+    dialog.classList.toggle("live", agentWorking(this.meta));
+    const meta = $("#output-meta");
+    if (meta) {
+      meta.textContent = agentWorking(this.meta)
+        ? `Still running${last ? ` — last line ${relativeTime(last.at)}` : ""}. This follows the run.`
+        : last
+          ? `From this round's run — last line ${relativeTime(last.at)}.`
+          : "The agent has not printed anything in this round yet.";
+    }
+    // Follow the tail, unless the reader scrolled back to read something.
+    if (body.dataset.pinned !== "false") body.scrollTop = body.scrollHeight;
+  }
+
+  openOutput() {
+    const dialog = $("#output-dialog");
+    if (!dialog) return;
+    const body = $("#output-body");
+    if (body) body.dataset.pinned = "true";
+    if (!dialog.open) dialog.showModal();
+    this.syncVerbose();
+    this.renderOutput();
+  }
+
+  closeOutput() {
+    const dialog = $("#output-dialog");
+    if (dialog?.open) dialog.close();
+    this.syncVerbose();
   }
 
   renderConversation() {
@@ -4044,8 +4118,10 @@ class Editor {
 
     const activity = $("#conv-activity");
     if (activity) {
-      const last = (this.events || [])[this.events.length - 1];
-      activity.textContent = agentWorking(this.meta) && last ? `${last.message}…` : "";
+      const last = latestStep(this.roundEvents());
+      activity.textContent = agentWorking(this.meta) && last
+        ? `${stepLabel(last.message, 48)}…`
+        : "";
     }
 
     const status = [];
@@ -4070,6 +4146,7 @@ class Editor {
     }
     if (!items.length && !status.length) {
       log.innerHTML = `<div class="inspector-empty">No messages yet.<br>Write a prompt below, or just annotate and submit.</div>`;
+      this.renderOutput();
       return;
     }
     const rendered = items.map((item) => {
@@ -4084,9 +4161,12 @@ class Editor {
         <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
-    const html = rendered + status.join("") + this.runSummary() + this.outputBlock();
+    const html = rendered + status.join("") + this.runSummary();
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     this.convCount = items.length + status.length;
+    // The output popup is a view of the same run: a poll that lands while it is open must keep it
+    // following the tail instead of freezing on the lines it opened with.
+    this.renderOutput();
     // Only touch the DOM when something changed, and only follow the tail when the reader is
     // already there — otherwise a 5 s poll yanks them back down mid-sentence.
     if (log.innerHTML !== html) {

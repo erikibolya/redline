@@ -416,6 +416,14 @@ new one.
   rail's All/Done filters, not on the dashboard. The gallery is re-derived from the rail's 8 s
   session poll, so a review decided in another tab or before a back-forward restore loses its
   card without a reload. The start screen below it is unchanged.
+- **The dashboard opens with its content, not blank.** Clicking a filter that no longer contains
+  the open review reloads `/` (see "A decision closes the screen that showed the review"); the
+  chips, rail rows and gallery used to wait for `/api/sessions`, so the page sat empty and then
+  popped in and pushed "Start a review" down (2026-10-31). The chip row is painted immediately
+  (its counts wait for the data), the last list this tab rendered is kept in `sessionStorage` and
+  painted at boot, and with no cache the gallery paints one placeholder card of the real card's
+  shape so its row is already reserved. The first response replaces the cached list in place, so
+  nothing moves. A failed request keeps what the tab already painted rather than blanking it.
 - **Diff overlay**: in the History disclosure, the `◫` button ghosts that round's annotations
   behind the current ones at 35 % opacity; a `Ghost · <stamp>` chip in the header clears it.
   The `Δ` button still prints the textual diff.

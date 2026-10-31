@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+- **The dashboard opens with its content, not empty.** Clicking a filter that no longer contains
+  the open review sends the human back to `/`; that full load painted the chip row, the rail and
+  the gallery only after `/api/sessions` answered, so the page sat blank and then everything
+  popped in and pushed "Start a review" ~200 px down (2026-10-31). The rail now paints the filter
+  chips immediately (counts once the data is there), and the last list this tab rendered is kept
+  in `sessionStorage` and painted at boot before the request lands; with no cache the gallery
+  paints one placeholder card of the real card's shape, so the row its cards will take is already
+  reserved. The first response replaces the cached list in place, and a failed request keeps what
+  the tab already painted. The e2e holds `/api/sessions` on a reload of `/`, asserts chips + rail
+  rows + gallery cards are already painted, then releases it and asserts the page does not move;
+  it repeats the measurement with the cache cleared, against the placeholder.
+
 ## 0.25.0 — 2026-10-31
 
 - **A history round stays the round you opened.** A live conversation poll that was already in

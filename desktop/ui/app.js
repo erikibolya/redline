@@ -173,6 +173,19 @@ async function readVideoFile(file) {
   }
 }
 
+/// Human-readable byte count for the session-size warning.
+function formatBytes(bytes) {
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = Number(bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
 /// `mm:ss.mmm` (or `hh:mm:ss.mmm`) for video timecodes.
 function timecode(seconds) {
   const total = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
@@ -1409,6 +1422,7 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
+      this.showSessionSize(data.disk_bytes || 0);
       lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
       this.serverAnnotations = JSON.stringify(server);
@@ -1797,6 +1811,19 @@ class Editor {
       this.stage.appendChild(box);
     }
     box.innerHTML = `<div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p></div>`;
+  }
+
+  /// Files stay on disk, including every video round, so the History summary carries the real
+  /// size and turns red past 2 GB instead of letting the archive grow silently.
+  showSessionSize(bytes) {
+    const label = $("#session-size");
+    if (!label) return;
+    label.textContent = formatBytes(bytes);
+    const warn = bytes > 2 * 1024 * 1024 * 1024;
+    label.classList.toggle("warn", warn);
+    label.title = warn
+      ? "Over 2 GB. Videos are kept in history; delete old rounds you no longer need."
+      : "Session size on disk";
   }
 
   renderHeader() {

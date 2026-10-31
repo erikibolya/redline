@@ -131,6 +131,9 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   `/sessions/<id>/history/<stamp>/video`. *Back to current* restores the live clip.
 - **Gallery**: a video card uses the poster and shows a `▶ mm:ss` chip; a poster-less agent video
   falls back to a `▶ video` placeholder instead of a broken image.
+- **Disk use**: the History summary shows the session's real folder size and turns red past 2 GB.
+  RedLine keeps every round (20 max) and never deletes a video silently; the warning tells the
+  human which reviews are worth pruning.
 
 ## Tools and interaction
 

@@ -234,6 +234,9 @@ Response `200`:
 }
 ```
 
+`GET /api/sessions/<id>` also returns `disk_bytes`, the recursive size of the session folder
+(including videos and history) for the 2 GB warning.
+
 Errors:
 
 - `400` — invalid JSON / body too large (`{"error": "…"}`).

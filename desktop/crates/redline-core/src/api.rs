@@ -1028,7 +1028,10 @@ async fn get_session(
 ) -> Result<Json<Value>, Error> {
     let meta = state.store.require(&id)?;
     let annotations = state.store.annotations(&id)?;
-    Ok(Json(json!({ "meta": meta, "annotations": annotations })))
+    let disk_bytes = state.store.session_size(&id).unwrap_or(0);
+    Ok(Json(
+        json!({ "meta": meta, "annotations": annotations, "disk_bytes": disk_bytes }),
+    ))
 }
 
 #[derive(Debug, serde::Deserialize)]

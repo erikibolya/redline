@@ -2454,11 +2454,14 @@ const main = async () => {
     muted: window.redline.video.muted,
     bar: !document.querySelector("#video-bar").hidden,
     play: document.querySelector("#video-play").textContent,
+    size: document.querySelector("#session-size")?.textContent || "",
   }));
   check("the editor loads the clip muted with the video bar and timeline",
     videoState.kind === "video" && videoState.duration > 0.5
       && videoState.muted && videoState.bar && videoState.play === "▶",
     JSON.stringify(videoState));
+  check("the History summary reports the session's disk use",
+    /[KMG]B/.test(videoState.size), videoState.size);
 
   await page.click("#video-play");
   await page.waitForFunction(() => window.redline.video.currentTime > 0.1, { timeout: 5000 });

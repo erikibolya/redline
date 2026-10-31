@@ -116,7 +116,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
   helpers, video media/limits/frames/rounds/timecodes, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 204 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 205 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

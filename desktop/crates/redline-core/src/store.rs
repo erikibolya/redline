@@ -1747,6 +1747,25 @@ impl Store {
         Ok(entries.into_iter().map(|(entry, _, _)| entry).collect())
     }
 
+    /// Total bytes of a session folder (screenshots, videos, history). Used to warn before the
+    /// archive grows into tens of gigabytes; RedLine never deletes rounds silently.
+    pub fn session_size(&self, id: &str) -> Result<u64> {
+        fn walk(path: &Path) -> std::io::Result<u64> {
+            let mut total = 0;
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                let meta = entry.metadata()?;
+                total += if meta.is_dir() {
+                    walk(&entry.path())?
+                } else {
+                    meta.len()
+                };
+            }
+            Ok(total)
+        }
+        Ok(walk(&self.dir(id)?)?)
+    }
+
     pub fn history_file(&self, id: &str, name: &str) -> Result<PathBuf> {
         if name.contains('/') || name.contains('\\') || name.contains("..") {
             return Err(Error::BadRequest("invalid history file".to_string()));

@@ -217,7 +217,7 @@ sessions/<id>/
 
 Policy: **move** the old video into history when a new video is posted (no duplicate bytes);
 keep the current video on annotation-only resubmits; keep the existing 20-round retention and show
-session disk usage (warning at 2 GB) rather than silently deleting videos.
+session disk usage in the History summary (red past 2 GB) rather than silently deleting videos.
 
 ## 5. Server and API
 

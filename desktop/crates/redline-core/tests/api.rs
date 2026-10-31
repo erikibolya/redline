@@ -678,6 +678,7 @@ async fn create_submit_and_read_back_round_trip() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(session["meta"]["status"], "submitted");
+    assert!(session["disk_bytes"].as_u64().unwrap() > 0, "{session}");
     assert_eq!(
         session["annotations"]["annotations"][0]["text"],
         "Move this up"

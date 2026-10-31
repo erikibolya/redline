@@ -1689,6 +1689,8 @@ const main = async () => {
   const afterSwitch = await page.evaluate(() => window.redline.annotations.length);
   check("unsent annotations survive a session switch", afterSwitch === beforeSwitch,
     `${beforeSwitch} → ${afterSwitch}`);
+  const imageGroups = await page.$$eval("#ann-list .ann-group", (nodes) => nodes.length);
+  check("image sessions keep the flat annotation list", imageGroups === 0, String(imageGroups));
 
   // ---- submitting locks the canvas; STOP takes the submission back
   // A second annotation, so the read-only list below has a row *pair* to measure a separator on.
@@ -2598,25 +2600,48 @@ const main = async () => {
     window.redline.seekTo(at);
     return window.redline.annotationOpacity(window.redline.annotations[0], 0);
   }, seconds);
-  const ghostFar = await opacityAt(0);
-  const ghostNear = await opacityAt(0.5);
-  check("an annotation from another moment is a faint ghost, current time is full",
-    ghostFar < 0.5 && ghostNear === 1, `${ghostFar} → ${ghostNear}`);
+  const defaultGhosts = await page.evaluate(() => ({
+    ghosts: window.redline.ghosts,
+    pressed: document.querySelector("#video-ghosts").getAttribute("aria-pressed"),
+  }));
+  // The regression: the just-drawn annotation stays selected, and selection used to force full
+  // opacity at every later time. The old annotation must disappear with the playhead, not only
+  // when another drawing steals the selection. Check this before anything clears the selection.
+  const selectedFar = await page.evaluate(() => {
+    window.redline.seekTo(0);
+    return {
+      selected: [...window.redline.selected],
+      opacity: window.redline.annotationOpacity(window.redline.annotations[0], 0),
+    };
+  });
+  check("a selected annotation still obeys the playhead",
+    selectedFar.selected.includes(0) && selectedFar.opacity === 0,
+    JSON.stringify(selectedFar));
+  check("other moments are hidden by default, not left as permanent ghosts",
+    defaultGhosts.ghosts === false && defaultGhosts.pressed === "false"
+      && await opacityAt(0) === 0,
+    JSON.stringify(defaultGhosts));
+  const ghostNear = await opacityAt(videoAnnotation.at);
+  check("the annotation at the current time is full opacity", ghostNear === 1, String(ghostNear));
 
   await page.evaluate(() => {
     window.redline.selected.clear();
     window.redline.seekTo(0);
   });
   await page.click("#video-ghosts");
-  const ghostsOff = await page.evaluate(() => ({
+  const ghostsOn = await page.evaluate(() => ({
     ghosts: window.redline.ghosts,
     pressed: document.querySelector("#video-ghosts").getAttribute("aria-pressed"),
     opacity: window.redline.annotationOpacity(window.redline.annotations[0], 0),
   }));
+  check("Ghosts brings other moments back as faint context",
+    ghostsOn.ghosts === true && ghostsOn.pressed === "true"
+      && ghostsOn.opacity > 0 && ghostsOn.opacity < 0.5,
+    JSON.stringify(ghostsOn));
   await page.click("#video-ghosts");
-  check("the Ghosts toggle hides and restores the other moments",
-    ghostsOff.ghosts === false && ghostsOff.pressed === "false" && ghostsOff.opacity === 0,
-    JSON.stringify(ghostsOff));
+  const ghostOff = await opacityAt(0);
+  check("turning Ghosts off hides the other moments again",
+    ghostOff === 0, String(ghostOff));
 
   await page.evaluate(() => window.redline.seekTo(1.2));
   await page.click('.ann-row .end[data-end="0"]');
@@ -2664,6 +2689,15 @@ const main = async () => {
     Math.abs(overviewSeek - videoState.duration / 2) < 0.35,
     `${overviewSeek.toFixed(3)} vs ${(videoState.duration / 2).toFixed(3)}`);
 
+  // A second shape on the same moment: the inspector must keep one group, not two.
+  await page.evaluate(() => window.redline.seekTo(0.5));
+  await page.evaluate(() => window.redline.setTool("rect"));
+  await drag(
+    page,
+    { x: stageRect.x + stageRect.w * 0.55, y: stageRect.y + stageRect.h * 0.55 },
+    { x: stageRect.x + stageRect.w * 0.68, y: stageRect.y + stageRect.h * 0.66 },
+  );
+
   // A second moment: the agent must receive one full frame per unique annotated time, not one
   // picture of the frame that happened to be on the canvas at submit time.
   await page.evaluate(() => window.redline.seekTo(1.15));
@@ -2677,9 +2711,83 @@ const main = async () => {
   check("a second drawing gets its own timecode", Math.abs(secondMoment - 1.15) < 0.25,
     String(secondMoment));
 
+  // ---- the inspector groups video annotations by the moment they belong to
+  const groups = await page.evaluate(() => [...document.querySelectorAll("#ann-list .ann-group")].map((group) => ({
+    at: Number(group.dataset.at),
+    time: group.querySelector(".group-time")?.textContent || "",
+    count: group.querySelectorAll(".ann-row").length,
+    active: group.classList.contains("active"),
+  })));
+  check("video annotations are grouped by timestamp, chronologically",
+    groups.length === 2
+      && Math.abs(groups[0].at - 0.5) < 0.001 && groups[0].count === 2
+      && Math.abs(groups[1].at - 1.15) < 0.001 && groups[1].count === 1,
+    JSON.stringify(groups));
+  check("each group header prints its timecode",
+    groups[0]?.time === timecodeText(0.5) && groups[1]?.time === timecodeText(1.15),
+    groups.map((group) => group.time).join(" | "));
+  const rangeActive = await page.evaluate(() => {
+    window.redline.seekTo(0.8);
+    return [...document.querySelectorAll("#ann-list .ann-group")]
+      .map((group) => ({ at: Number(group.dataset.at), active: group.classList.contains("active") }));
+  });
+  check("a range group stays active until its end, without lighting the next moment",
+    rangeActive.length === 2
+      && rangeActive[0].active === true && rangeActive[1].active === false,
+    JSON.stringify(rangeActive));
+  const groupSeek = await page.evaluate(() => {
+    const head = document.querySelector('#ann-list .ann-group[data-at="0.5"] .ann-group-head');
+    head.click();
+    return {
+      time: window.redline.video.currentTime,
+      active: [...document.querySelectorAll("#ann-list .ann-group.active")]
+        .map((group) => Number(group.dataset.at)),
+    };
+  });
+  check("clicking a timestamp group seeks the clip there",
+    Math.abs(groupSeek.time - 0.5) < 0.05
+      && groupSeek.active.length === 1 && Math.abs(groupSeek.active[0] - 0.5) < 0.001,
+    JSON.stringify(groupSeek));
+
+  // ---- the draft is in localStorage, not only in the in-memory Map
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  const draftKey = `redline:draft:${videoId}`;
+  const storedDraft = await page.evaluate((key) => {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const draft = JSON.parse(raw);
+    return { count: draft.annotations?.length || 0, at: (draft.annotations || []).map((a) => a.at) };
+  }, draftKey);
+  check("video work is autosaved to localStorage while editing",
+    storedDraft?.count === 3 && storedDraft.at.every((at) => typeof at === "number"),
+    JSON.stringify(storedDraft));
+
+  // The reported path: go back to the dashboard, open the review again, and the work is there.
+  await page.goto(`${BASE}/?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForSelector(`a.card[data-session="${videoId}"]`, { timeout: 10000 });
+  await page.click(`a.card[data-session="${videoId}"]`);
+  await page.waitForFunction(
+    () => window.redline?.video?.readyState >= 2 && window.redline.annotations.length === 3,
+    { timeout: 20000 },
+  );
+  const restoredDraft = await page.evaluate(() => ({
+    count: window.redline.annotations.length,
+    at: window.redline.annotations.map((annotation) => annotation.at),
+    groups: document.querySelectorAll("#ann-list .ann-group").length,
+    rows: document.querySelectorAll("#ann-list .ann-row").length,
+  }));
+  check("a video draft survives leaving for the dashboard and coming back",
+    restoredDraft.count === 3
+      && Math.abs(restoredDraft.at[0] - 0.5) < 0.001
+      && Math.abs(restoredDraft.at[2] - 1.15) < 0.001
+      && restoredDraft.groups === 2 && restoredDraft.rows === 3,
+    JSON.stringify(restoredDraft));
+
   await page.evaluate(() => window.redline.seekTo(0.5));
   await page.click("#submit");
   await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 30000 });
+  const storedAfterSubmit = await page.evaluate((key) => localStorage.getItem(key), draftKey);
+  check("submitting clears the stored draft", storedAfterSubmit === null, String(storedAfterSubmit));
   const submitted = await api(`/api/sessions/${videoId}`);
   const annotations = submitted.annotations?.annotations || [];
   const frames = submitted.annotations?.frames || [];
@@ -2687,10 +2795,11 @@ const main = async () => {
     headers: { Authorization: `Bearer ${TOKEN}` },
   })).text().catch(() => "");
   check("submitting a video review stores the at/until timecodes",
-    annotations.length === 2
+    annotations.length === 3
       && Math.abs(annotations[0].at - 0.5) < 0.25
       && Math.abs(annotations[0].until - 1.2) < 0.25
-      && Math.abs(annotations[1].at - 1.15) < 0.25,
+      && Math.abs(annotations[1].at - 0.5) < 0.25
+      && Math.abs(annotations[2].at - 1.15) < 0.25,
     JSON.stringify(annotations.map((annotation) => ({ at: annotation.at, until: annotation.until }))));
   check("review.md prints the annotated range as a timecode",
     /@ 00:00\.\d{3}–00:01\.\d{3}/.test(markdown),
@@ -2828,6 +2937,8 @@ const main = async () => {
     stamp: window.redline.viewing?.stamp,
     duration: window.redline.video?.duration,
     annotations: window.redline.annotations.length,
+    groups: document.querySelectorAll("#ann-list .ann-group").length,
+    groupRows: document.querySelectorAll("#ann-list .ann-group .ann-row").length,
     src: window.redline.video?.src || "",
     nextHidden: document.querySelector("#video-new").hidden,
     readonly: Boolean(document.querySelector(".ann-row.readonly")),
@@ -2835,9 +2946,24 @@ const main = async () => {
   }));
   check("a history video round plays read-only with its own clip and annotations",
     archivedView.stamp === previous.stamp && archivedView.duration > 1.0
-      && archivedView.annotations === 2 && archivedView.src.includes("/history/")
+      && archivedView.annotations === 3 && archivedView.src.includes("/history/")
       && archivedView.nextHidden && archivedView.readonly && archivedView.submitDisabled,
     JSON.stringify(archivedView));
+  check("the read-only history round keeps the timestamp groups",
+    archivedView.groups === 2 && archivedView.groupRows === 3,
+    JSON.stringify({ groups: archivedView.groups, rows: archivedView.groupRows }));
+  const historyGroupSeek = await page.evaluate(() => {
+    const head = document.querySelector('#ann-list .ann-group[data-at="0.5"] .ann-group-head');
+    head.click();
+    return {
+      time: window.redline.video.currentTime,
+      active: [...document.querySelectorAll("#ann-list .ann-group.active")]
+        .map((group) => Number(group.dataset.at)),
+    };
+  });
+  check("a read-only history group still seeks the archived clip",
+    Math.abs(historyGroupSeek.time - 0.5) < 0.05 && historyGroupSeek.active.includes(0.5),
+    JSON.stringify(historyGroupSeek));
   await page.click("#video-play");
   await page.waitForFunction(() => window.redline.video.currentTime > 0.1, { timeout: 5000 });
   const historyPlaying = await page.evaluate(() => ({
@@ -2860,6 +2986,52 @@ const main = async () => {
   check("back to current restores the live clip and the new-video control",
     backLive.duration < 1.2 && backLive.nextHidden === false,
     JSON.stringify(backLive));
+
+  // ---- a stale draft does not land on an agent's new round
+  const stale = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "stale draft", image_base64: makePng(), project: "e2e" }),
+  });
+  await page.goto(`${BASE}/s/${stale.meta.id}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  await page.evaluate(() => window.redline.mutate(() => {
+    window.redline.annotations.push({
+      id: "stale-1", type: "rect", color: "#e11d48", width: 3,
+      start: { x: 120, y: 160 }, end: { x: 260, y: 240 }, note: "drawn before the round",
+    });
+  }));
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  await page.goto(`${BASE}/?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: {
+        name: "post_round",
+        arguments: { session_id: stale.meta.id, note: "new round while away", image_base64: makePng(900, 600) },
+      },
+    }),
+  });
+  await page.goto(`${BASE}/s/${stale.meta.id}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => window.redline?.image && String(window.redline.meta.image || "").startsWith("screenshot-"),
+    { timeout: 15000 },
+  );
+  await page.waitForFunction(
+    () => (document.querySelector("#conv-log")?.textContent || "").includes("Draft discarded"),
+    { timeout: 5000 },
+  );
+  const staleState = await page.evaluate(() => ({
+    count: window.redline.annotations.length,
+    notice: document.querySelector("#conv-log")?.textContent || "",
+    draft: localStorage.getItem(`redline:draft:${window.redline.sessionId}`),
+  }));
+  check("a stale draft is discarded when the agent posts a new round",
+    staleState.count === 0 && staleState.notice.includes("Draft discarded")
+      && staleState.draft === null,
+    JSON.stringify(staleState));
 
   // ---- deleting the review that is open also returns to the dashboard
   const openDelete = await api("/api/sessions", {

@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Unsent video work survives leaving the review.** Drafts were an in-memory `Map`, so a rail
+  switch kept them but a dashboard round-trip, a reload or the desktop webview navigating started
+  a new document and threw away every timecoded shape. Drafts now live in `localStorage` per
+  session, autosave on a 400 ms debounce and flush on `pagehide`/hidden; submit clears the draft,
+  a new agent round discards a stale one, and at most 20 drafts / 30 days are kept. The e2e draws
+  three shapes, leaves for the dashboard, returns and asserts the `at` values and groups, then
+  checks that submit removed the stored draft.
+- **Moving the playhead hides the annotations that belong to another moment.** A freshly drawn
+  shape stayed selected, and `annotationOpacity` returned `1` for selected rows — so an old
+  annotation stayed fully visible until another drawing stole the selection. Selection now only
+  draws the outline; the playhead decides visibility. Ghosts are opt-in (the old 12 % ghost
+  became the *Ghosts* toggle, remembered per browser), so the canvas shows exactly the current
+  frame unless the human asks for context. Timeline markers still show every annotation.
+- **Video annotations are grouped by timestamp.** The inspector splits a video's rows into
+  chronological sections with a timecode/count header; clicking a header seeks there, the group
+  under the playhead is marked, a range group stays active to its end, and read-only history
+  rounds use the same shape. A second shape on the same moment stays in one group rather than
+  making a duplicate header. Image sessions keep the flat list.
 - **The working scrim is dark enough to read, and the chrome over the stage follows the theme.**
   While a round is submitted the canvas carries a scrim, but at `.18` (dark) and `.10` (light) it
   was invisible on a light stage, so nothing said the canvas was locked. It is now `.28`/`.18`.

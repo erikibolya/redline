@@ -147,6 +147,9 @@ fn requested_ship(meta: &Meta, at: String) -> Ship {
         ship.pr_url = previous.pr_url.clone();
         ship.pr_number = previous.pr_number;
         ship.merge_commit = previous.merge_commit.clone();
+        // Keep the failing check in the retry prompt; the requested badge does not show it, but
+        // the agent should know what the last attempt hit.
+        ship.error = previous.error.clone();
     }
     ship
 }

@@ -590,6 +590,20 @@ fn ship_prompt_for(session: &Value, repo: &Path, branch: &str) -> String {
         .as_str()
         .or_else(|| session["note"].as_str())
         .unwrap_or("(none)");
+    let ship = &session["ship"];
+    let pr_url = ship["pr_url"].as_str().unwrap_or("");
+    let previous = if let Some(error) = ship["error"].as_str().filter(|error| !error.is_empty()) {
+        let reuse = if pr_url.is_empty() {
+            String::new()
+        } else {
+            format!(" Reuse the existing PR: {pr_url}")
+        };
+        format!("A previous ship attempt reported: {error}.{reuse}")
+    } else if !pr_url.is_empty() {
+        format!("A previous attempt opened the PR; reuse it: {pr_url}")
+    } else {
+        String::new()
+    };
     format!(
         r#"You are shipping a feature the human has already confirmed in RedLine. This is not a
 review round: do not redo the annotations, do not create a new review and do not post a round.
@@ -599,6 +613,7 @@ Project: {project}
 Feature branch: {branch}
 Worktree: {repo}
 The original request was: {prompt}
+{previous}
 
 The human confirmed this feature. Nobody is watching; do not ask questions.
 
@@ -630,6 +645,7 @@ report failed with the reason."#,
         branch = branch,
         repo = repo.display(),
         prompt = prompt,
+        previous = previous,
     )
 }
 
@@ -1245,6 +1261,11 @@ mod tests {
             "id": "20260101-120000-ship",
             "project": "RedLine UI",
             "prompt": "make it green",
+            "ship": {
+                "status": "failed",
+                "error": "checks are red",
+                "pr_url": "https://github.com/o/r/pull/7",
+            },
         });
         let prompt = ship_prompt_for(&session, Path::new("/tmp/repo"), "feat/ship-test");
         assert!(prompt.contains("already confirmed"));
@@ -1253,6 +1274,8 @@ mod tests {
         assert!(prompt.contains("feature-ready"));
         assert!(prompt.contains("ship_status"));
         assert!(prompt.contains("\"state\":\"merged\""));
+        assert!(prompt.contains("checks are red"));
+        assert!(prompt.contains("https://github.com/o/r/pull/7"));
     }
 
     #[test]

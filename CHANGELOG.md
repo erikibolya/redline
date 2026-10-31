@@ -32,6 +32,11 @@
   capability gate, the MCP report and the state reset; the browser e2e confirms a feature, reports
   the PR through MCP, checks the merged link, fails the ship and retries it. The e2e's cancel
   dashboard check and two selection/z-order checks now poll instead of assuming an instant.
+- **A ship retry remembers the PR and the check that failed.** Retrying a failed or still-open
+  shipment used to discard `pr_url`/`pr_number` and the agent's error, so the next run had to
+  rediscover the pull request and did not know what broke. The retry keeps both: the rail prompt
+  and the ship prompt now say which PR to reuse and which check failed, and a merged follow-up may
+  omit the URL because the previous report still carries it.
 - **Video media core.** The server can create a video session (MP4/WebM, magic-byte validation),
   store a poster and duration/dimensions, serve the clip with HTTP `Range` for seeking, and write
   timecoded annotations (`at`/`until`) into `annotations.json` and `review.md`. MCP gains

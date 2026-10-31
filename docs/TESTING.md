@@ -51,6 +51,29 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: open History, assert one row per round, that an unchanged resubmission adds no
   row, that a row opens read-only while *Current* returns to the live canvas, and that after STOP
   the round on the canvas is one *Round N (current)* row with no extra *Current*.
+- Round cost (2026-10-31): Rust `tests/api.rs` `every_round_reports_how_long_it_ran` — an older
+  round ends where the next submission begins, the newest submitted round has no end yet, and
+  `resolve` is the end of the round the agent had. The browser e2e asserts a History row prints
+  `· took …`. In the rail, a resolved review keeps a `done` badge plus `· took …`, and an open row
+  with nothing drawn on it says `open` instead of staying blank.
+
+## Run state and agent output (2026-10-31)
+
+- Rust `tests/api.rs`: `the_sessions_list_exposes_only_a_live_run_as_working` — no claim reads
+  `agent_running=false`, a running claim `true`, a `waiting` claim `false` again, a released claim
+  `false`.
+- Rust `tests/mcp.rs`: `a_failed_run_hands_the_round_back_and_says_so` — `reply` with
+  `state="failed"` reopens the submitted round, keeps `agent_state=failed` and the message in
+  `agent-thread.jsonl`; an unknown state is an error; the default stays an ordinary `replied` with
+  the round still submitted.
+- `redline-agent` tests: `log_line` strips terminal colours, drops blank lines and bounds the
+  length; the two-worktree bridge integration test asserts the fake agent's own stdout line
+  arrives in the review as a `state="log"` event.
+- Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
+  project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
+  tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours
+  again" notice with the bridge's message; the **output** toggle is off by default (no `log` line
+  in the conversation), shows the streamed line when clicked, survives a reload and closes again.
 
 ## Agent concurrency (v0.22)
 
@@ -95,11 +118,14 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   label/url/message; a legacy session branch with the commits wins over a `feat/...` name with
   none.
 - Browser e2e: the confirm dialog starts the handoff checkbox off for a review-only agent; tick
-  it → rail shows `confirmed` + `handoff queued`; call MCP `handoff_status` done with label
-  "merged" + URL → reload → rail shows the label and link; report failed with a URL + message →
-  rail shows the link and the row `↻` retry; hover and click it → `/handoff` queues it again and
-  the badge returns to `handoff queued`. The e2e also asserts the retry does not select or close
-  the review.
+  it → rail shows `confirmed` + `handoff queued`; a queued/failed/running handoff keeps the review
+  in **Active**, not **Done** (asserted right after the confirmation and after the retry); call
+  MCP `handoff_status` done with label "merged" + URL → the rail's refresher shows the label and
+  link from Done; report failed with a URL + message → the poll moves it back into Active and
+  marks the chip, the rail shows the link and the row `↻` retry; hover and click
+  it → `/handoff` queues it again and the badge returns to `handoff queued`. The e2e also asserts
+  the retry does not select or close the review, that the rail offers exactly
+  `All`/`Active`/`Done`, and that a stored `submitted` preference migrates to `Active`.
 
 ## Every UI control
 
@@ -109,6 +135,20 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Dialogs: every button plus Escape/cancel.
 - Destructive actions: assert the confirmation and the state after it.
 - If the control is visual, measure it. A border is not a separator just because the class exists.
+
+## The header brand
+
+The shell header carries the icon alone — no `RedLine` wordmark, because the app name printed next
+to the session title read as a second heading. The mark is as tall as the **two-line text block**
+it stands beside (title + subtitle), not the title's font size: sized to one 13 px line it read as a
+chip floating next to the title, and the human had to draw the rectangle they wanted.
+
+The e2e measures the brand on the editor **and** on the dashboard: no text node, exactly one
+`.brand-mark` with `aria-label="RedLine"`, a mark at least twice the title's font size (so it cannot
+regress to a one-line chip) and within 2 px of the title-block height, centred in the header row.
+The block is the union of the title and subtitle lines, never the `.subline` that also carries the
+branch chip. Text is not a substitute for geometry here: "the wordmark is gone" and "it is on par
+with the text" are measurements, not class names.
 
 ## Bug-fix protocol
 

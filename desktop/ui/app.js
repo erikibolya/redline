@@ -69,10 +69,17 @@ const uid = () =>
 
 const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
 
-/** An agent is working only while the round is submitted. A late narration line used to leave
- *  `agent_state=working` on a review that had already been handed back, so the spinner ran
- *  forever and the human could not tell a live agent from a dead one. */
-const agentWorking = (meta) => meta?.status === "submitted" && meta.agent_state === "working";
+/** An agent is working while the round is submitted and either it says so or a bridge holds a
+ *  live claim (with a heartbeat). The claim is the evidence: `agent_state=replied` is a message,
+ *  not the end of the run, so a reply that lands mid-run must not hide the working label
+ *  (2026-10-31). A late narration line used to leave `agent_state=working` on a review that had
+ *  already been handed back, so the round status still gates both signals. */
+const agentWorking = (meta) => meta?.status === "submitted" &&
+  (meta.agent_state === "working" || meta.agent_running === true);
+
+/** A run that could not do the work. The server hands the round back, so it is not a reply and
+ *  it must not spin: it is a visible dead end the human can fix and resubmit. */
+const agentFailed = (meta) => meta?.agent_state === "failed";
 
 
 /** "edit, shell and run" → "Edit, Shell and Run", the way a person lists tools. */
@@ -95,6 +102,26 @@ function relativeTime(iso) {
   const days = Math.round(hours / 24);
   if (days < 7) return `${days}d ago`;
   return new Date(then).toLocaleDateString();
+}
+
+/** How long something took, in words: `46s`, `4m 12s`, `1h 05m`. A round's own cost, not a
+ *  wall clock — a duration is not a timestamp and must never be rendered from a sliced ISO. */
+function durationLabel(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${String(total % 60).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/** Seconds between two stamps the server wrote, or null when either is missing. */
+function ranFor(startedAt, finishedAt) {
+  if (!startedAt || !finishedAt) return null;
+  const start = new Date(startedAt).getTime();
+  const end = new Date(finishedAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
+  return Math.round((end - start) / 1000);
 }
 
 /** Wall-clock time in the viewer's timezone: the API sends UTC, people read their own clock. */
@@ -1018,23 +1045,50 @@ const Theme = {
 
 /* ------------------------------------------------------------------ rail */
 
-/// Which sessions an agent is running right now; the rail polls for this and redraws only when
-/// the set changes, so a live indicator does not rebuild the list every few seconds.
-const workingIds = (sessions) => (sessions || [])
-  .filter(agentWorking)
-  .map((session) => session.id)
-  .sort()
-  .join("\n");
+/** Everything a rail row paints, as one comparable string. The poll used to redraw only when the
+ *  *working* set changed, so a run that failed without ever being "working" (the bridge's pickup
+ *  is `thinking`, then `failed`) kept its row saying "waiting for agent" until a manual refresh —
+ *  the badge that has to explain the dead end was the one that stayed stale (2026-10-31). Compare
+ *  the painted fields instead of the whole list, so an unchanged queue still never rebuilds it.
+ *
+ *  A handoff's state is part of that fingerprint for the same reason: queued → running → failed
+ *  changes both the row badge and which view the review belongs to, and a failure that stayed in
+ *  the old list (or under Done) was invisible from the default view (2026-10-31). */
+const railFingerprint = (sessions) => (sessions || []).map((session) => [
+  session.id,
+  session.title || "",
+  session.project || "",
+  session.status,
+  session.created_at || "",
+  session.annotation_count || 0,
+  session.agent_state || "",
+  session.agent_running ? 1 : 0,
+  session.seen_by_agent_at ? 1 : 0,
+  session.branch || "",
+  featureState(session),
+  session.handoff?.status || "",
+  session.handoff?.label || "",
+  session.handoff?.url || "",
+  session.handoff?.message || "",
+].join("\u0001")).join("\n");
 
-// "Active" is the default so finished sessions drop out of the way; "All" is the archive view
-// and "Done" is the resolved-only view.
+// Three views are enough: work that is not finished, work that is, and everything. "Active" is
+// the default, so it must hold *every* review that still needs a human — and a confirmed feature
+// whose handoff is queued, running or failed is not finished. Those reviews are resolved, so a
+// failed handoff or an offline worker used to show up only in "Done", the one place nobody looks
+// for work (2026-10-31).
+const handoffUnfinished = (session) =>
+  Boolean(session.handoff) && session.handoff.status !== "done";
+
 const FILTERS = [
   { id: "all", label: "All", test: () => true },
-  { id: "active", label: "Active", test: (s) => s.status !== "resolved" },
-  { id: "open", label: "Open", test: (s) => s.status === "open" },
-  { id: "submitted", label: "Submitted", test: (s) => s.status === "submitted" },
-  { id: "resolved", label: "Done", test: (s) => s.status === "resolved" },
+  { id: "active", label: "Active", test: (s) => s.status !== "resolved" || handoffUnfinished(s) },
+  { id: "done", label: "Done", test: (s) => s.status === "resolved" && !handoffUnfinished(s) },
 ];
+
+// Views that were folded into Active/Done. A stored preference for them must land on the view
+// that still contains those reviews, not reset to the default.
+const LEGACY_FILTERS = { open: "active", submitted: "active", resolved: "done" };
 
 class Rail {
   constructor({
@@ -1057,13 +1111,14 @@ class Rail {
     this.sessions = [];
     this.projects = [];
     this.collapsed = new Set(prefs.get("collapsedProjects", []));
-    this.filter = prefs.get("filter", "active");
-    // Drop preferences for removed filters (the old "mine") instead of rendering an unpressed
-    // chip row with no matching view.
+    const stored = prefs.get("filter", "active");
+    this.filter = LEGACY_FILTERS[stored] || stored;
+    // Drop preferences for views that no longer exist instead of rendering an unpressed chip
+    // row with no matching list.
     if (!FILTERS.some((filter) => filter.id === this.filter)) {
       this.filter = "active";
-      prefs.set("filter", this.filter);
     }
+    if (this.filter !== stored) prefs.set("filter", this.filter);
     this.query = "";
     this.agentTimer = null;
     this.wire();
@@ -1151,10 +1206,14 @@ class Rail {
     } catch {
       return;
     }
-    const before = workingIds(this.sessions);
+    const beforeRows = railFingerprint(this.sessions);
     const beforeData = JSON.stringify(this.sessions);
     this.sessions = sessions;
-    if (workingIds(sessions) !== before) this.render();
+    // Anything a row or a chip *says* belongs to the same fingerprint: a handoff that failed (or
+    // went from queued to merged) changes which view the review belongs to, and the row badge
+    // that explains it. Comparing only the working set left a failed handoff hidden in the old
+    // view until a reload (2026-10-31).
+    if (railFingerprint(sessions) !== beforeRows) this.render();
     // The dashboard gallery is derived from the same list. It used to be painted only at boot
     // and on a back-forward restore, so a review cancelled elsewhere could keep its card for as
     // long as the page stayed open; let the dashboard re-render it with the poll.
@@ -1194,13 +1253,18 @@ class Rail {
       this.purge.hidden = cancelled === 0;
       this.purge.textContent = `Delete cancelled (${cancelled})`;
     }
-    this.chips.innerHTML = FILTERS.map(
-      (filter) => `
-        <button class="chip" type="button" data-filter="${filter.id}"
-                aria-pressed="${this.filter === filter.id}">
+    // A failed handoff is an error, not a finished feature: say so on the default view, where one
+    // red badge on a single row is easy to scroll past.
+    const failed = this.sessions.filter((session) => session.handoff?.status === "failed").length;
+    this.chips.innerHTML = FILTERS.map((filter) => {
+      const attention = filter.id === "active" && failed > 0;
+      return `
+        <button class="chip${attention ? " attention" : ""}" type="button"
+                data-filter="${filter.id}" aria-pressed="${this.filter === filter.id}"
+                ${attention ? `title="${plural(failed, "review")} with a failed handoff"` : ""}>
           ${filter.label}<b>${counts[filter.id]}</b>
-        </button>`,
-    ).join("");
+        </button>`;
+    }).join("");
     $$(".chip", this.chips).forEach((chip) =>
       chip.addEventListener("click", () => {
         this.filter = chip.dataset.filter;
@@ -1274,8 +1338,14 @@ class Rail {
         const annotations = session.annotation_count || 0;
         const fresh = seen.isNew(session);
         const working = agentWorking(session);
+        const failed = agentFailed(session);
         const feature = featureState(session);
         const decided = feature !== "pending";
+        // "How long did the last task run?" — a resolved row can answer it from the two stamps
+        // the server wrote; a round the agent still holds has no cost yet (2026-10-31).
+        const ran = session.status === "resolved"
+          ? ranFor(session.submitted_at, session.resolved_at)
+          : null;
         // A submitted round belongs to the agent, so its badge says who has the ball: a round
         // nobody has picked up yet used to read "new" (unread by the human), which is a lie
         // about the state. Only a review that is back in the human's hands can be "new".
@@ -1290,15 +1360,31 @@ class Rail {
             ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
             : feature === "cancelled"
               ? `<span class="badge cancelled" title="Feature cancelled by the human">cancelled</span>`
-              : queued && session.agent_state === "replied"
-                ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
-                : queued
-                  ? `<span class="badge waiting" title="Waiting for an agent — nobody has picked this round up yet">waiting for agent</span>`
-                  : fresh
-                  ? `<span class="badge new" title="new since you last looked">new</span>`
-                  : annotations
-                    ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
-                    : "";
+              : failed
+                // The run could not happen and the round came back: the human must not read this
+                // as an agent still working on it, and must know why nothing is happening.
+                ? `<span class="badge failed" title="The agent could not run this round — it is yours again">agent failed</span>`
+                : queued && session.agent_state === "replied"
+                  ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
+                  : queued
+                    ? `<span class="badge waiting" title="${
+                      session.seen_by_agent_at
+                        ? "No agent is working on this round right now"
+                        : "Waiting for an agent — nobody has picked this round up yet"
+                    }">waiting for agent</span>`
+                    : fresh
+                    ? `<span class="badge new" title="new since you last looked">new</span>`
+                    // A finished review is not a decision, but it still needs a word: a row with
+                    // no badge at all read as "still in progress" (2026-10-31).
+                    : session.status === "resolved"
+                      ? `<span class="badge done" title="Finished — the agent resolved this review">done</span>`
+                      : annotations
+                        ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
+                        // The other end of "waiting for agent": the round is back in the human's
+                        // hands and nobody has drawn on it yet. A blank row read as nothing to do.
+                        : session.status === "open"
+                          ? `<span class="badge open" title="Back in your hands — no annotations yet">open</span>`
+                          : "";
         // The handoff badge sits beside the confirmation: "confirmed" is the decision, while
         // "handoff queued" / "merged" / "handoff failed" is what the integration did with it.
         const badge = feature === "confirmed" && session.handoff
@@ -1306,14 +1392,17 @@ class Rail {
           : baseBadge;
         parts.push(`
           <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${
-            decided ? ` feature-${feature}` : ""
+            failed ? " failed" : ""
+          }${decided ? ` feature-${feature}` : ""
           }${this.bulkMode ? " bulk" : ""}"
                role="button" tabindex="0"
                data-id="${escapeHtml(session.id)}"
                aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}${
                  decided ? `, feature ${feature}` : ""
                }${session.branch ? `, branch ${escapeHtml(session.branch)}` : ""}${
-                 queued && !working ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
+                 working ? ", working"
+                   : failed ? ", agent failed"
+                     : queued ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
                }"
                aria-current="${session.id === this.selectedId}"
                ${this.bulkMode ? `aria-pressed="${this.selection.has(session.id)}"` : ""}>
@@ -1326,7 +1415,9 @@ class Rail {
                 session.branch
                   ? ` · <span class="branch" title="${escapeHtml(session.branch)}">${escapeHtml(session.branch)}</span>`
                   : ""
-              }${session.note ? " · " + escapeHtml(session.note) : ""}</div>
+              }${ran !== null ? ` · took ${durationLabel(ran)}` : ""}${
+                session.note ? " · " + escapeHtml(session.note) : ""
+              }</div>
             </div>
             <span class="row-actions">
               ${decided
@@ -1420,6 +1511,9 @@ class Editor {
     this.locked = false;
     this.serverAnnotations = "[]";
     this.viewing = null;
+    // Bumped when a history round starts loading. A conversation poll that was already in flight
+    // must not finish and paint the live clip over the archived one (or the new session's meta).
+    this.roundLoad = 0;
     this.live = null;
     this.historyEntries = [];
     this.draftNotice = null;
@@ -1427,6 +1521,8 @@ class Editor {
     // an undefined list (a fresh load of a submitted session renders the header first).
     this.events = [];
     this.thread = [];
+    // The agent's raw output starts closed: it is diagnosis, not the conversation.
+    this.verbose = prefs.get("convVerbose", false);
     this.selected = new Set();
     this.marquee = null;
     this.tool = "select";
@@ -1596,6 +1692,7 @@ class Editor {
     clearTimeout(this.draftTimer);
     $("#stage").classList.remove("hidden");
     this.viewing = null;
+    this.roundLoad = 0;
     this.live = null;
     this.updateViewingBar();
     try {
@@ -2021,7 +2118,18 @@ class Editor {
       : "Session size on disk";
   }
 
+  /// The Output toggle mirrors the remembered choice, so a reload keeps the tail open.
+  syncVerbose() {
+    const button = $("#conv-verbose");
+    if (!button) return;
+    button.setAttribute("aria-pressed", this.verbose ? "true" : "false");
+    button.title = this.verbose
+      ? "Hide the agent's own output"
+      : "Show the agent's own output while it works";
+  }
+
   renderHeader() {
+    this.syncVerbose();
     $("#session-title").textContent = this.meta.title || this.meta.id;
     const bits = [this.meta.id, this.meta.image_width && this.meta.image_height
       ? `${this.meta.image_width}×${this.meta.image_height}` : null,
@@ -2116,6 +2224,12 @@ class Editor {
       });
       $("#conv-new")?.addEventListener("click", () => this.seenConversation());
     }
+    $("#conv-verbose")?.addEventListener("click", () => {
+      this.verbose = !this.verbose;
+      prefs.set("convVerbose", this.verbose);
+      this.syncVerbose();
+      this.renderConversation();
+    });
     $("#viewing-bar")?.addEventListener("click", () => this.showCurrent());
     const syncPanels = () => {
       const app = $("#app");
@@ -3573,7 +3687,9 @@ class Editor {
             <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
             <span>${escapeHtml(stampTime(round.stamp))} · ${plural(round.annotations, "annotation")}${
               round.media?.kind === "video" ? " · video" : round.source ? " · image" : ""
-            }</span>
+            }${round.duration_secs !== undefined && round.duration_secs !== null
+              ? ` · took ${durationLabel(round.duration_secs)}`
+              : ""}</span>
           </span>
         </div>`);
       }
@@ -3610,12 +3726,15 @@ class Editor {
   async viewRound(stamp) {
     if (this.viewing?.stamp === stamp) return;
     this.saveDraft();
+    const sessionId = this.sessionId;
+    const load = ++this.roundLoad;
     try {
       const response = await fetch(
-        `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(`${stamp}.json`)}`,
+        `/sessions/${encodeURIComponent(sessionId)}/history/${encodeURIComponent(`${stamp}.json`)}`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const set = await response.json();
+      if (this.roundLoad !== load || sessionId !== this.sessionId) return;
       const round = (this.historyEntries || []).find((entry) => entry.stamp === stamp);
       if (!this.viewing) {
         this.live = {
@@ -3632,14 +3751,17 @@ class Editor {
       let image;
       if (historyVideo) {
         image = await this.loadVideoFrom(
-          `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(stamp)}/video`,
+          `/sessions/${encodeURIComponent(sessionId)}/history/${encodeURIComponent(stamp)}/video`,
         );
       } else {
         const file = round?.source ? `${stamp}-source.png` : `${stamp}.png`;
         image = await this.loadImageFrom(
-          `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(file)}`,
+          `/sessions/${encodeURIComponent(sessionId)}/history/${encodeURIComponent(file)}`,
         );
       }
+      // A poll or another round may have taken over while the media loaded; never paint this
+      // round over the newer state.
+      if (this.roundLoad !== load || sessionId !== this.sessionId) return;
       if (!image) return;
       this.viewing = {
         stamp,
@@ -3659,11 +3781,14 @@ class Editor {
       this.loadHistory();
     } catch (error) {
       console.warn("round view failed", error);
+    } finally {
+      if (this.roundLoad === load) this.roundLoad = 0;
     }
   }
 
   async showCurrent() {
     this.viewing = null;
+    this.roundLoad = 0;
     this.live = null;
     this.updateViewingBar();
     try {
@@ -3762,18 +3887,22 @@ class Editor {
   async loadConversation({ quiet = false } = {}) {
     const log = $("#conv-log");
     if (!log) return;
+    const sessionId = this.sessionId;
     // A historical round is a viewer; the live poll must not overwrite it.
-    if (this.viewing) return;
+    if (this.viewing || this.roundLoad) return;
     if (!quiet && !log.childElementCount) {
       log.innerHTML = `<div class="inspector-empty">Loading…</div>`;
     }
     try {
-      const id = encodeURIComponent(this.sessionId);
+      const id = encodeURIComponent(sessionId);
       const [session, thread, events] = await Promise.all([
         api(`/api/sessions/${id}`),
         api(`/api/sessions/${id}/thread`),
         api(`/api/sessions/${id}/events`),
       ]);
+      // The poll may have started before the human opened a history round or switched sessions;
+      // its response must not paint the live clip or the old session over the newer state.
+      if (sessionId !== this.sessionId || this.viewing || this.roundLoad) return;
       const previousImage = this.meta?.image;
       const previousMedia = mediaIdentity(this.meta);
       this.meta = session.meta;
@@ -3817,7 +3946,15 @@ class Editor {
       || (this.thread || []).filter((message) => message.image).map((message) => message.at).pop()
       || "";
     const round = start ? events.filter((event) => String(event.at || "") >= String(start)) : events;
-    if (!round.length) return "";
+    const failed = agentFailed(this.meta);
+    if (!round.length) {
+      // A run that died before logging anything is still a state the human must see.
+      return failed
+        ? `<div class="conv-run failed"><span class="conv-run-mark" aria-hidden="true"></span><div>`
+          + `<div class="conv-run-title">The agent could not run this round</div>`
+          + `<div class="conv-run-sub">The run never started.</div></div></div>`
+        : "";
+    }
 
     const toolEvents = round.filter((event) => event.state === "tool");
     // Older agents narrate without `state`; counting their lines is closer than showing nothing.
@@ -3839,20 +3976,51 @@ class Editor {
     const submitted = this.meta?.status === "submitted";
     const title = working
       ? "Working"
-      : replied && submitted
-        ? "Agent replied — waiting for it to finish"
-        : replied
-          ? "Run finished"
-          : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
+      : failed
+        // A dead end, not a slow run: the round is back in the human's hands.
+        ? "The agent could not run this round"
+        : replied && submitted
+          ? "Agent replied — waiting for it to finish"
+          : replied
+            ? "Run finished"
+            : `Last step ${escapeHtml(relativeTime(last.at) || clockTime(last.at))}`;
     // How long ago the last step was is the honest answer to "is it still working?": a spinner
     // must never be the only evidence.
     const age = relativeTime(last.at);
-    const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}`;
-    const state = working ? " working" : replied && submitted ? " pending" : "";
+    // "How long did the last task run?" — the round left the agent's hands at `resolve`, so the
+    // gap between the submission and that stamp is the run's cost. A round still submitted has
+    // no cost yet, and History carries every earlier round's own (2026-10-31).
+    const ran = submitted ? null : ranFor(this.meta?.submitted_at, this.meta?.resolved_at);
+    const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}${
+      ran !== null ? ` · took ${durationLabel(ran)}` : ""
+    }`;
+    const state = working
+      ? " working"
+      : failed
+        ? " failed"
+        : replied && submitted
+          ? " pending"
+          : "";
     return `<div class="conv-run${state}">`
       + `<span class="conv-run-mark" aria-hidden="true"></span><div>`
       + `<div class="conv-run-title">${title}</div>`
       + `<div class="conv-run-sub">${sub}</div></div></div>`;
+  }
+
+  /// The agent's own output, the way its terminal shows it. Off by default — a wall of tool lines
+  /// must never bury the conversation — but "what is it doing right now?" needs an answer that is
+  /// not a spinner (2026-10-31).
+  outputBlock() {
+    if (!this.verbose) return "";
+    const lines = (this.events || []).filter((event) => event.state === "log");
+    const last = lines[lines.length - 1];
+    const body = lines.length
+      ? lines.map((event) => escapeHtml(event.message || "")).join("\n")
+      : "No output from this run yet.";
+    return `<div class="conv-output${agentWorking(this.meta) ? " live" : ""}">`
+      + `<div class="conv-output-head">Agent output${
+        last ? ` · ${escapeHtml(relativeTime(last.at))}` : ""
+      }</div><pre class="conv-output-body">${body}</pre></div>`;
   }
 
   renderConversation() {
@@ -3866,6 +4034,7 @@ class Editor {
       items.push({ at: this.meta.submitted_at || "", kind: "human", text: this.meta.prompt });
     }
     for (const event of this.events || []) {
+      if (event.state === "log") continue;
       items.push({ at: event.at || "", kind: "event", text: event.message || "", state: event.state });
     }
     for (const message of this.thread || []) {
@@ -3883,6 +4052,11 @@ class Editor {
     if (this.draftNotice) {
       status.push(`<div class="conv-wait"><b>Draft discarded.</b> This review's round changed, `
         + `so the canvas starts fresh.</div>`);
+    }
+    if (agentFailed(this.meta)) {
+      // The round came back from a run that never happened: say so, and say it is actionable.
+      status.push(`<div class="conv-wait failed"><b>The agent could not run this round.</b> `
+        + `It is yours again — fix the problem and submit to retry.</div>`);
     }
     if (this.meta?.status === "submitted") {
       if (!this.meta.seen_by_agent_at) {
@@ -3910,7 +4084,7 @@ class Editor {
         <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
-    const html = rendered + status.join("") + this.runSummary();
+    const html = rendered + status.join("") + this.runSummary() + this.outputBlock();
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     this.convCount = items.length + status.length;
     // Only touch the DOM when something changed, and only follow the tail when the reader is

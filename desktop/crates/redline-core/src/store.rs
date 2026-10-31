@@ -442,6 +442,25 @@ pub struct HistoryEntry {
     /// This entry is the submission the session is currently parked on.
     #[serde(default)]
     pub current: bool,
+    /// When the human submitted this round. Missing on v0.1 archives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    /// When the round left the agent's hands: its next picture, the next human submission, or
+    /// `resolve`. Missing while this is still the round being worked on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    /// How long the agent had this round, in seconds (2026-10-31: every version should say how
+    /// long it ran). Derived, never stored — the archive keeps the stamps it is built from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<u64>,
+}
+
+/// Seconds between two stamps from this server's own clock. A stamp it cannot parse (a
+/// hand-edited round, an older client) yields `None` rather than a wrong duration.
+fn seconds_between(start: &str, end: &str) -> Option<u64> {
+    let start = chrono::DateTime::parse_from_rfc3339(start).ok()?;
+    let end = chrono::DateTime::parse_from_rfc3339(end).ok()?;
+    (end - start).num_seconds().try_into().ok()
 }
 
 fn safe_stamp(stamp: &str) -> String {
@@ -869,6 +888,24 @@ impl Store {
         let mut meta = self.require(id)?;
         meta.agent_state = Some(state.to_string());
         if seen && meta.seen_by_agent_at.is_none() {
+            meta.seen_by_agent_at = Some(now());
+        }
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The agent could not run this round. That is neither "working" (nothing is running) nor
+    /// "replied" (the agent has no answer to give), and it must not leave the review locked:
+    /// a human who cannot edit a round nobody is working on is stuck (2026-10-31). The round goes
+    /// back to the human, the annotations stay, and `agent_state=failed` keeps the reason visible.
+    pub fn fail_round(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        if meta.status == Status::Submitted {
+            meta.status = Status::Open;
+        }
+        meta.agent_state = Some("failed".to_string());
+        if meta.seen_by_agent_at.is_none() {
             meta.seen_by_agent_at = Some(now());
         }
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -1705,6 +1742,7 @@ impl Store {
                 .and_then(|image| image.file.clone());
             let media = set.as_ref().and_then(|set| set.media.clone());
             let frames = set.as_ref().map(|set| set.frames.len()).unwrap_or(0);
+            let started_at = set.as_ref().and_then(|set| set.submitted_at.clone());
             entries.push((
                 HistoryEntry {
                     png: history.join(format!("{stamp}.png")).is_file(),
@@ -1715,6 +1753,9 @@ impl Store {
                     frames,
                     round: 0,
                     current: false,
+                    started_at,
+                    finished_at: None,
+                    duration_secs: None,
                 },
                 marks,
                 picture,
@@ -1741,12 +1782,69 @@ impl Store {
             (*marks == live_marks && *picture == Some(meta.image.clone()))
                 .then(|| entry.stamp.clone())
         });
+        // How long each round ran. A round starts when the human submitted it and ends when the
+        // agent handed it back: the agent's own next picture (`post_round`), the human's next
+        // submission, or `resolve`. Older rounds have no `resolved_at` of their own, so the next
+        // submission is their only end.
+        let starts: Vec<Option<String>> = entries
+            .iter()
+            .map(|(entry, _, _)| entry.started_at.clone())
+            .collect();
+        let handed_back = self.agent_picture_times(id)?;
+        let resolved_at = meta.resolved_at.clone();
         for (index, (entry, _, _)) in entries.iter_mut().enumerate() {
             // Newest first, but numbered oldest = 1.
             entry.round = total - index;
             entry.current = current.as_deref() == Some(entry.stamp.as_str());
+            let Some(started) = starts[index].clone() else {
+                continue;
+            };
+            let next_submit = index.checked_sub(1).and_then(|newer| starts[newer].clone());
+            let mut ends: Vec<String> = Vec::new();
+            // `>=`: a submit and a hand-back in the same second is a real (zero-second) round.
+            if let Some(at) = handed_back.iter().find(|at| {
+                **at >= started && next_submit.as_ref().map_or(true, |next| **at <= *next)
+            }) {
+                ends.push(at.clone());
+            }
+            if let Some(next) = next_submit {
+                ends.push(next);
+            }
+            // Only the newest round can have been resolved: `resolve` acts on the live round.
+            if index == 0 {
+                if let Some(resolved) = resolved_at.clone().filter(|at| *at >= started) {
+                    ends.push(resolved);
+                }
+            }
+            if let Some(finished) = ends.into_iter().min() {
+                entry.duration_secs = seconds_between(&started, &finished);
+                entry.finished_at = Some(finished);
+            }
         }
         Ok(entries.into_iter().map(|(entry, _, _)| entry).collect())
+    }
+
+    /// Timestamps of the pictures the agent posted back with `post_round` (newest last). They are
+    /// the honest end of a run: `reply` is a message, not the finish line.
+    fn agent_picture_times(&self, id: &str) -> Result<Vec<String>> {
+        let path = self.dir(id)?.join("agent-thread.jsonl");
+        let mut times = Vec::new();
+        if path.is_file() {
+            for line in fs::read_to_string(&path)?.lines() {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                if let Ok(value) = serde_json::from_str::<Value>(line) {
+                    if value.get("image").is_some_and(|image| !image.is_null()) {
+                        if let Some(at) = value.get("at").and_then(|at| at.as_str()) {
+                            times.push(at.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(times)
     }
 
     /// Total bytes of a session folder (screenshots, videos, history). Used to warn before the

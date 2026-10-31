@@ -6,7 +6,7 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.24.0` on holly — `https://redline.ibolya.cz`, container
+**Shipped and in production:** `v0.25.0` on holly — `https://redline.ibolya.cz`, container
 `ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
 
 ## What exists today
@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 111 Rust tests, 229-check browser E2E in CI on Linux + Windows |
+| Tests | 115 Rust tests, 250-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -114,11 +114,11 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Testing plan
 
-- `cargo test --workspace` — 111 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+- `cargo test --workspace` — 115 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
   helpers, video media/limits/frames/rounds/timecodes, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 229 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 250 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the
@@ -130,7 +130,9 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
   groups, hidden-by-default moments with opt-in ghosts, drafts surviving a dashboard round-trip,
   a stale draft discarded when the agent posts a new round, range, timeline zoom, contact sheet +
   two frames, new video round, archived history playback), plus the dashboard gallery dropping a
-  cancelled review when the rail poll runs.
+  cancelled review when the rail poll runs, rail `done`/`open` and duration labels, the agent-failed
+  badge/hand-back, the live-claim working label, the opt-in agent output tail, and the icon-only
+  header measured against the title block.
 - CI runs both on every push; releases are cut from tags only after green. The tool matrix,
   feature/bug protocol and release checklist live in `docs/TESTING.md`.
 

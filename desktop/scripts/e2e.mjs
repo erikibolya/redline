@@ -253,6 +253,47 @@ const main = async () => {
     { timeout: 5000 },
   );
 
+  // ---- the brand is the icon alone, and as tall as the two-line title beside it (review LOGO,
+  // 2026-10-31, second round). A wordmark printed "RedLine" beside the session title as if it were
+  // a second heading. Sized to one 13 px font line the mark still read as a chip floating next to
+  // the title, so measure it against the *block* of text it stands beside — title plus subtitle —
+  // not against a font size. The block is the union of the two text lines, never the subline that
+  // also carries the branch chip.
+  const brandState = () => page.evaluate(() => {
+    const brand = document.querySelector(".header .brand");
+    const mark = brand?.querySelector(".brand-mark");
+    const title = document.querySelector(".header .title b");
+    const sub = document.querySelector(".header .title span");
+    if (!mark || !title || !sub) return null;
+    const markBox = mark.getBoundingClientRect();
+    const titleBox = title.getBoundingClientRect();
+    const block = Math.round(sub.getBoundingClientRect().bottom - titleBox.top);
+    const headerBox = document.querySelector(".header").getBoundingClientRect();
+    return {
+      text: (brand.textContent || "").trim(),
+      words: [...brand.childNodes].filter((node) => node.nodeType === 3 && node.textContent.trim()).length,
+      marks: brand.querySelectorAll(".brand-mark").length,
+      label: mark.getAttribute("aria-label") || "",
+      height: Math.round(markBox.height),
+      width: Math.round(markBox.width),
+      fontSize: Math.round(parseFloat(getComputedStyle(title).fontSize)),
+      block,
+      centre: Math.round(markBox.top + markBox.height / 2),
+      headerCentre: Math.round(headerBox.top + headerBox.height / 2),
+      aboveTitle: Math.round(titleBox.top) >= Math.round(markBox.top),
+    };
+  });
+  const brandEditor = await brandState();
+  check("the header brand is the icon alone — the wordmark is gone, the name is still announced",
+    brandEditor && brandEditor.words === 0 && brandEditor.text === ""
+      && brandEditor.marks === 1 && brandEditor.label === "RedLine",
+    JSON.stringify(brandEditor));
+  check("the brand icon is as tall as the two-line text block beside it, not a chip on one line",
+    brandEditor && brandEditor.height >= brandEditor.fontSize * 2 - 1
+      && Math.abs(brandEditor.height - brandEditor.block) <= 2
+      && Math.abs(brandEditor.centre - brandEditor.headerCentre) <= 1,
+    JSON.stringify(brandEditor));
+
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
   const chrome = await page.evaluate(() => {
     const header = document.querySelector(".header");
@@ -522,6 +563,33 @@ const main = async () => {
     return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
   });
   const at = (dx, dy) => ({ x: canvas.x + dx, y: canvas.y + dy });
+
+  /** Where a shape is on screen in the *current* view. `at()` assumes the fitted top-left
+   *  origin; a shape clicked after panning or zooming must be mapped, not guessed — the old
+   *  hard-coded points silently missed and the z-order/pen checks flaked under load. */
+  const onScreen = (pick) => page.evaluate((picked) => {
+    const editor = window.redline;
+    const list = editor.annotations;
+    const annotation = picked.type
+      ? [...list].reverse().find((item) => item.type === picked.type)
+      : list[picked.index < 0 ? list.length + picked.index : picked.index];
+    if (!annotation) return null;
+    const points = annotation.type === "pen" ? annotation.points || [] : [];
+    let point = points[picked.point ?? 0];
+    if (!point && picked.centre && annotation.start && annotation.end) {
+      point = {
+        x: (annotation.start.x + annotation.end.x) / 2,
+        y: (annotation.start.y + annotation.end.y) / 2,
+      };
+    }
+    point = point || annotation.start;
+    if (!point) return null;
+    const box = editor.canvas.getBoundingClientRect();
+    return {
+      x: box.x + editor.view.x + point.x * editor.view.scale,
+      y: box.y + editor.view.y + point.y * editor.view.scale,
+    };
+  }, pick);
 
   /** Open a fresh session so a tool test cannot inherit another tool's annotations. */
   const freshSession = async (title) => {
@@ -856,6 +924,36 @@ const main = async () => {
   check("the rail says replied, not waiting for agent, on an answered open round",
     idleRail.badge === "replied", idleRail.badge);
 
+  // A reply can land while the run keeps going. The bridge's claim (with its heartbeat) is the
+  // evidence that someone is still working, so the rail must show the spinner again instead of
+  // leaving the human with "replied" and no idea whether anything is happening (2026-10-31).
+  await api("/api/agent/claims", {
+    method: "POST",
+    body: JSON.stringify({ session_id: id, agent_id: "e2e", state: "running" }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const claimedRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    spin: Boolean(document.querySelector('.session[aria-current="true"] .badge.work .spin')),
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim() || "",
+    project: Boolean(document.querySelector(".rail-project .pworking")),
+  }));
+  check("a live claim restores the working label after a reply",
+    claimedRail.row && claimedRail.spin && claimedRail.badge === "working" && claimedRail.project,
+    JSON.stringify(claimedRail));
+  // Releasing the claim is the end of the run: no spinner without evidence.
+  await api(`/api/agent/claims/${id}/release`, {
+    method: "POST",
+    body: JSON.stringify({ agent_id: "e2e" }),
+  });
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const releasedRail = await page.evaluate(() => ({
+    row: Boolean(document.querySelector(".session.working")),
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim() || "",
+  }));
+  check("the working label clears again when the run releases its claim",
+    !releasedRail.row && releasedRail.badge === "replied", JSON.stringify(releasedRail));
+
   // `reply` is a message, not the finish line: the round is still submitted and STOP is still
   // armed, so the card must not claim "Run finished". It says the agent answered and the run has
   // not finished, with the age of the last step so an idle agent is distinguishable from a busy one.
@@ -981,6 +1079,15 @@ const main = async () => {
       .filter((row) => row.dataset.round !== "current").length);
   check("history draws one row per round", rowsForRounds === repeated,
     `${rowsForRounds} rows, ${repeated} rounds`);
+  // Every version says what it cost: an earlier round ends where the next one was submitted
+  // (2026-10-31 — "every version should show how long it ran").
+  const historyTimes = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list .history-row .label span")]
+      .map((span) => span.textContent.trim()));
+  check("history rows say how long the round ran",
+    historyTimes.length > 0 && historyTimes.every((text) => text.includes("·")) &&
+      historyTimes.some((text) => /· took \d+[smh]/.test(text)),
+    JSON.stringify(historyTimes));
   const opened = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#history-list [data-round]")];
     // The newest round is still the canvas: clicking it returns to the live view, so open an
@@ -1112,19 +1219,25 @@ const main = async () => {
     window.redline.annotations.filter((a) => a.group).length);
   check("shift+g ungroups", ungrouped === 0, `${ungrouped} still grouped`);
 
-  // ---- z-order
-  await page.mouse.click(rectA.x, rectA.y);
+  // ---- z-order: select one rectangle where it actually is, then move it to the front.
+  // Escape first: a leftover multi-selection keeps its members when a click hits one of them.
+  await page.keyboard.press("Escape");
+  const rectSpot = await onScreen({ type: "rect", centre: true });
+  await page.mouse.click(rectSpot.x, rectSpot.y);
+  const zSelected = await page.evaluate(() =>
+    [...window.redline.selected].map((index) => window.redline.annotations[index].id));
   await page.click('[data-layer="front"]');
-  let last = { type: "", x: 0 };
+  let last = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
     last = await page.evaluate(() => {
       const list = window.redline.annotations;
-      return { type: list[list.length - 1].type, x: list[list.length - 1].start?.x };
+      return { id: list[list.length - 1].id, type: list[list.length - 1].type };
     });
-    if (last.type === "rect") break;
+    if (zSelected.includes(last.id)) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  check("bring to front moves the selection last in paint order", last.type === "rect", JSON.stringify(last));
+  check("bring to front moves the selection last in paint order",
+    zSelected.length === 1 && zSelected[0] === last.id, JSON.stringify({ zSelected, last }));
 
   // ---- diff between the archived round and now
   const rounds = await api(`/api/sessions/${id}/history`);
@@ -1201,7 +1314,7 @@ const main = async () => {
   }
   // A decision on the review that is open finishes it: back to the dashboard, no selection.
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
-  await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="done"]', { timeout: 10000 });
   await page.waitForFunction((sessionId) => !document.querySelector(`#gallery .card[data-session="${sessionId}"]`),
     { timeout: 5000 }, id);
   const confirmDashboard = await page.evaluate((sessionId) => ({
@@ -1212,8 +1325,31 @@ const main = async () => {
     status === "resolved" && !confirmDashboard.selected && !confirmDashboard.card,
     JSON.stringify({ status, ...confirmDashboard }));
 
-  // Reopen it from the Done filter to check the decision and the reopen path.
+  // The rail has three views: Active, Done and All. A confirmed feature whose handoff is queued,
+  // running or failed is unfinished work, so it belongs in the default view — the old Done-only
+  // home hid a failed handoff and an offline worker from the human (2026-10-31).
+  const chips = await page.evaluate(() => ({
+    filters: [...document.querySelectorAll("#chips .chip")].map((chip) => chip.dataset.filter),
+  }));
+  check("the rail offers Active, Done and All",
+    chips.filters.join("|") === "all|active|done", JSON.stringify(chips));
+  // A preference stored for a removed view lands on the view that still contains those reviews.
+  await page.evaluate(() => localStorage.setItem("redline:filter", '"submitted"'));
+  await page.reload();
+  await page.waitForSelector('#chips [data-filter="active"][aria-pressed="true"]',
+    { timeout: 10000 });
+  const migrated = await page.evaluate(() => ({
+    filter: window.redlineRail.filter,
+    stored: JSON.parse(localStorage.getItem("redline:filter")),
+  }));
+  check("a stored Open/Submitted preference migrates to Active",
+    migrated.filter === "active" && migrated.stored === "active", JSON.stringify(migrated));
   await clickChip("Done");
+  const queuedInDone = await page.evaluate((sessionId) =>
+    Boolean(document.querySelector(`.session[data-id="${sessionId}"]`)), id);
+  check("a confirmed feature with a queued handoff is not in Done", !queuedInDone);
+
+  await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
   await page.$eval(row, (el) => el.click());
   await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
@@ -1225,8 +1361,8 @@ const main = async () => {
     selected: Boolean(document.querySelector('.session[aria-current="true"]')),
     filter: window.redline.rail.filter,
   }));
-  check("the confirmed feature opens from Done with its decision stamped",
-    confirmed.stamped && confirmed.selected && confirmed.filter === "resolved",
+  check("the confirmed feature opens from Active with its decision stamped",
+    confirmed.stamped && confirmed.selected && confirmed.filter === "active",
     JSON.stringify(confirmed));
   const confirmedBadge = await badgeStyles(".session .badge.confirmed");
   check("confirmed badge is a green tint, not a black pill",
@@ -1269,9 +1405,12 @@ const main = async () => {
   check("handoff_status records the integration's result",
     handoffPayload.handoff.status === "done" && handoffPayload.handoff.label === "merged",
     JSON.stringify(handoffPayload.handoff));
-  await page.reload();
-  await page.waitForFunction(() => window.redline?.meta?.handoff?.status === "done",
-    { timeout: 10000 });
+  // A done handoff is finished work, so the review moves out of Active into Done; the rail shows
+  // the integration's label + link where the human looks for finished features.
+  await page.goto(`${BASE}/`);
+  await page.waitForSelector("#chips .chip", { timeout: 10000 });
+  await clickChip("Done");
+  await page.waitForSelector(`.session[data-id="${id}"] .badge.handoff.done`, { timeout: 5000 });
   const mergedHandoff = await page.evaluate((sessionId) => {
     const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff.done`);
     return {
@@ -1286,7 +1425,10 @@ const main = async () => {
       && mergedHandoff.title.includes("merge commit 456a2c5"),
     JSON.stringify(mergedHandoff));
 
-  // A failed handoff keeps its link and is a retry control, not a dead label.
+  // A failed handoff keeps its link and is a retry control, not a dead label. It is also an
+  // error, so the review leaves Done: the dashboard poll must move it into Active and mark the
+  // default view *without* a reload (the poll used to redraw only when the working set changed,
+  // which left the failure in the old list until F5).
   await api("/mcp", {
     method: "POST",
     body: JSON.stringify({
@@ -1296,14 +1438,30 @@ const main = async () => {
         arguments: {
           session_id: id,
           state: "failed",
-          label: "PR #46 open",
+          label: "airlock-worker-offline",
           url: "https://github.com/erikibolya/redline/pull/46",
           message: "browser e2e is red",
         },
       },
     }),
   });
-  await page.reload();
+  await page.evaluate(() => window.redlineRail.refreshAgentState());
+  await page.waitForFunction((sessionId) => !document.querySelector(`.session[data-id="${sessionId}"]`),
+    { timeout: 5000 }, id);
+  const failedDone = await page.evaluate((sessionId) => ({
+    inDone: Boolean(document.querySelector(`.session[data-id="${sessionId}"]`)),
+    attention: Boolean(document.querySelector('#chips .chip[data-filter="active"].attention')),
+    title: document.querySelector('#chips .chip[data-filter="active"]')?.getAttribute("title") || "",
+  }), id);
+  check("a failed handoff leaves Done on the poll and marks Active",
+    !failedDone.inDone && failedDone.attention && failedDone.title.includes("failed handoff"),
+    JSON.stringify(failedDone));
+  await clickChip("Active");
+  await page.waitForSelector(row, { timeout: 5000 });
+  // Back into the editor: the rest of the flow (reopen, cancel, filters) runs there.
+  await page.$eval(row, (el) => el.click());
+  await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
+    { timeout: 10000 }, id);
   await page.waitForFunction(() => window.redline?.meta?.handoff?.status === "failed",
     { timeout: 10000 });
   const failedHandoff = await page.evaluate((sessionId) => {
@@ -1316,7 +1474,7 @@ const main = async () => {
     };
   }, id);
   check("a failed handoff keeps its link and offers a retry",
-    failedHandoff.label === "PR #46 open"
+    failedHandoff.label === "airlock-worker-offline"
       && failedHandoff.href === "https://github.com/erikibolya/redline/pull/46"
       && failedHandoff.retry === "Retry handoff",
     JSON.stringify(failedHandoff));
@@ -1350,9 +1508,9 @@ const main = async () => {
     allFilter.filter === "all" && allFilter.visible && !allFilter.mine,
     JSON.stringify(allFilter));
 
-  // Resolved sessions leave the default 'Active' view, so check the badge and reopen them from
-  // the 'Done' filter.
-  await clickChip("Done");
+  // The retry put the handoff back in the queue, so this confirmed feature is still in Active
+  // (Done only holds work that really finished). Check the badge and reopen it from there.
+  await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
   const confirmedRow = await page.evaluate((sessionId) => ({
     badge: document.querySelector(`.session[data-id="${sessionId}"] .badge`)?.textContent || "",
@@ -1424,7 +1582,7 @@ const main = async () => {
     JSON.stringify({ status: cancelled.status, cancelled: cancelled.feature_cancelled_at }));
 
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
-  await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="done"]', { timeout: 10000 });
   let cancelDashboard = {};
   // The dashboard may be restored from the back-forward cache and refresh asynchronously; a
   // loaded CI runner needed more than the old 5 s budget.
@@ -1493,7 +1651,7 @@ const main = async () => {
   await page.waitForSelector(row, { timeout: 5000 });
 
   // ---- a filter that hides the open review sends the human back to the dashboard
-  await clickChip("Submitted");
+  await clickChip("Done");
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
   await page.waitForSelector('#chips [data-filter="active"]', { timeout: 10000 });
   const filteredOut = await page.evaluate(() => ({
@@ -1501,7 +1659,7 @@ const main = async () => {
     filter: JSON.parse(localStorage.getItem("redline:filter") || '"active"'),
   }));
   check("a filter that hides the open review returns to the dashboard",
-    !filteredOut.selected && filteredOut.filter === "submitted", JSON.stringify(filteredOut));
+    !filteredOut.selected && filteredOut.filter === "done", JSON.stringify(filteredOut));
   await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
   await page.$eval(row, (el) => el.click());
@@ -1901,7 +2059,8 @@ const main = async () => {
   // The pen has its own move path (`translateAnnotation` shifts `points`) and bounds/hit test.
   const penBefore = await page.evaluate(() => window.redline.annotations[0].points[0]);
   await page.keyboard.press("v");
-  await drag(page, at(410, 270), at(440, 290));
+  const penGrip = await onScreen({ type: "pen", point: 1 });
+  await drag(page, penGrip, { x: penGrip.x + 30, y: penGrip.y + 20 });
   const penMoved = await page.evaluate(() => ({
     point: window.redline.annotations[0].points[0],
     scale: window.redline.view.scale,
@@ -2035,6 +2194,58 @@ const main = async () => {
   check("Delete cancelled removes only cancelled features",
     !remaining.has(cancelMeId) && extra.every((id) => remaining.has(id)),
     JSON.stringify({ cancelMeId, extras: extra.map((id) => remaining.has(id)) }));
+
+  // ---- a finished review says so instead of showing no label at all, and the rail says how long
+  // its last run took (2026-10-31: done rows looked like they were still in progress).
+  const seenByThisBrowser = (sessionId) => page.evaluate((id) => {
+    const map = JSON.parse(localStorage.getItem("redline:seen") || "{}");
+    map[id] = new Date().toISOString();
+    localStorage.setItem("redline:seen", JSON.stringify(map));
+  }, sessionId);
+  const finishedReview = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "finished one", image_base64: makePng() }),
+  });
+  const finishedId = finishedReview.meta.id;
+  await api(`/api/sessions/${finishedId}/annotations`, {
+    method: "POST",
+    body: JSON.stringify({
+      annotations: [{ id: "f1", type: "rect", start: { x: 4, y: 4 }, end: { x: 40, y: 40 } }],
+    }),
+  });
+  await api(`/api/sessions/${finishedId}/resolve`, { method: "POST" });
+  // The rail's unread marker outranks every other badge; mark the rows looked-at so this test
+  // asserts the labels they keep *after* the human has seen them (the reported case).
+  await seenByThisBrowser(finishedId);
+  const openReview = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "open one", image_base64: makePng() }),
+  });
+  const openId = openReview.meta.id;
+  await seenByThisBrowser(openId);
+  await clickChip("All");
+  await page.evaluate(() => window.redline.rail.load());
+  await page.waitForFunction(
+    (ids) => ids.every((id) => document.querySelector(`.session[data-id="${id}"]`)),
+    { timeout: 5000 }, [finishedId, openId]);
+  const labels = await page.evaluate((ids) => ids.map((id) => {
+    const row = document.querySelector(`.session[data-id="${id}"]`);
+    const badge = row?.querySelector(".badge");
+    return {
+      badge: badge?.textContent.trim() || "",
+      className: badge?.className || "",
+      colour: badge ? getComputedStyle(badge).color : "",
+      sub: row?.querySelector(".sub")?.textContent || "",
+    };
+  }), [finishedId, openId]);
+  check("a finished review keeps a label in the rail",
+    labels[0].badge === "done" && labels[0].className.includes("done") && labels[0].colour !== "",
+    JSON.stringify(labels[0]));
+  check("the rail says how long the last run took",
+    /took \d+[smh]/.test(labels[0].sub), labels[0].sub);
+  check("a row with nothing drawn on it still says whose turn it is",
+    labels[1].badge === "open" && labels[1].className.includes("open"),
+    JSON.stringify(labels[1]));
 
   // ---- accessible names and a live region
   const a11y = await page.evaluate(() => ({
@@ -2410,6 +2621,12 @@ const main = async () => {
   check("the dashboard rail keeps the editor width",
     listBefore.handle && Math.abs(listBefore.rail - restored.rail) <= 2,
     `${restored.rail}px editor → ${listBefore.rail}px dashboard`);
+  const brandList = await brandState();
+  check("the dashboard carries the same icon-only brand as the editor",
+    brandList && brandList.words === 0 && brandList.text === ""
+      && brandList.marks === 1 && brandList.label === "RedLine"
+      && brandList.height === brandEditor.height,
+    JSON.stringify(brandList));
   const listHandle = await handleAt("#rail-resizer");
   await drag(page, listHandle, { x: listHandle.x + 40, y: listHandle.y });
   const listDragged = await listRail();
@@ -3077,6 +3294,133 @@ const main = async () => {
   check("deleting the open review returns to the dashboard",
     deletedOpen.status === 404 && !deleteDashboard.selected && !deleteDashboard.card,
     JSON.stringify({ status: deletedOpen.status, ...deleteDashboard }));
+
+  // ---- a run that cannot start must not leave the review locked behind the word "replied"
+  // (reported 2026-10-31: "the UI is blocked, so I can't edit it but the working label is not
+  // present — is it a bug?"). The failure is a state of its own: unlocked, labelled, and readable.
+  const broken = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "could not run", image_base64: makePng(), project: "e2e" }),
+  });
+  const brokenId = broken.meta.id;
+  await page.goto(`${BASE}/s/${brokenId}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  await page.evaluate(() => window.redline.mutate(() => {
+    window.redline.annotations.push({
+      id: "broken-1", type: "rect", color: "#e11d48", width: 3,
+      start: { x: 100, y: 120 }, end: { x: 200, y: 200 }, note: "please fix",
+    });
+  }));
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  const lockedBefore = await page.evaluate(() => ({
+    locked: window.redline.locked,
+    tool: document.querySelector('.tool[data-tool="rect"]')?.disabled,
+  }));
+  check("a submitted round is locked while the agent owns it",
+    lockedBefore.locked === true && lockedBefore.tool === true, JSON.stringify(lockedBefore));
+
+  // The bridge picks the round up and then cannot start the run (a dead opencode server, a broken
+  // repo, …): the pickup is the last thing it manages to report.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 11, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: brokenId, message: "Picked up by the agent bridge", state: "thinking",
+      } },
+    }),
+  });
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 12, method: "tools/call",
+      params: { name: "reply", arguments: {
+        session_id: brokenId,
+        message: "The agent run failed: Server at http://opencode:4096 rejected the password",
+        state: "failed",
+      } },
+    }),
+  });
+  const brokenMeta = (await api(`/api/sessions/${brokenId}`)).meta;
+  check("a failed run hands the round back on the server",
+    brokenMeta.status === "open" && brokenMeta.agent_state === "failed",
+    JSON.stringify({ status: brokenMeta.status, state: brokenMeta.agent_state }));
+
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const brokenUi = await page.evaluate(() => {
+    const card = document.querySelector("#conv-log .conv-run");
+    return {
+      locked: window.redline.locked,
+      tool: document.querySelector('.tool[data-tool="rect"]')?.disabled,
+      composer: document.querySelector("#composer-text")?.disabled,
+      submit: document.querySelector("#submit")?.textContent.trim(),
+      badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim(),
+      failedBadge: Boolean(document.querySelector('.session[aria-current="true"] .badge.failed')),
+      card: card?.textContent || "",
+      cardFailed: Boolean(card?.classList.contains("failed")),
+      notice: document.querySelector("#conv-log")?.textContent || "",
+    };
+  });
+  check("a failed run unlocks the canvas instead of a dead end",
+    brokenUi.locked === false && brokenUi.tool === false && brokenUi.composer === false
+      && brokenUi.submit !== "STOP", JSON.stringify(brokenUi));
+  check("the rail and the conversation say the agent could not run this round",
+    brokenUi.failedBadge && brokenUi.badge === "agent failed"
+      && brokenUi.cardFailed && brokenUi.card.includes("could not run this round")
+      && brokenUi.notice.includes("It is yours again")
+      && brokenUi.notice.includes("rejected the password"),
+    JSON.stringify({ badge: brokenUi.badge, card: brokenUi.card }));
+
+  // ---- the agent's own output is one click away, off by default, and remembered
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 13, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: brokenId, message: "edited src/lib.rs", state: "log",
+      } },
+    }),
+  });
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const outputOff = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output")),
+    leak: (document.querySelector("#conv-log")?.textContent || "").includes("edited src/lib.rs"),
+  }));
+  check("agent output stays out of the conversation until asked for",
+    outputOff.pressed === "false" && !outputOff.block && !outputOff.leak,
+    JSON.stringify(outputOff));
+
+  await page.click("#conv-verbose");
+  const outputOn = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    body: document.querySelector("#conv-log .conv-output-body")?.textContent || "",
+    stored: localStorage.getItem("redline:convVerbose"),
+  }));
+  check("the Output button reveals the agent's realtime output",
+    outputOn.pressed === "true" && outputOn.body.includes("edited src/lib.rs")
+      && outputOn.stored === "true",
+    JSON.stringify(outputOn));
+
+  await page.reload({ waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  const outputRemembered = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output-body")),
+  }));
+  check("the Output choice survives a reload",
+    outputRemembered.pressed === "true" && outputRemembered.block,
+    JSON.stringify(outputRemembered));
+  await page.click("#conv-verbose");
+  const outputHidden = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output")),
+  }));
+  check("the Output button closes the tail again",
+    outputHidden.pressed === "false" && !outputHidden.block,
+    JSON.stringify(outputHidden));
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

@@ -673,6 +673,7 @@ fn run_opencode(
     command.arg(prompt);
     command
         .current_dir(repo)
+        .env("PWD", repo)
         .env("REDLINE_URL", &config.url)
         .env("REDLINE_TOKEN", &config.token)
         .stdout(Stdio::piped())
@@ -685,6 +686,30 @@ fn run_opencode(
     let started = Instant::now();
     let mut last_check = Instant::now();
     let mut last_heartbeat = Instant::now();
+    // The agent's own output is the "regular opencode window" a human asked for: stream a live
+    // tail into the review (throttled, ANSI stripped) while the run is going, instead of only
+    // showing the first line when it fails (2026-10-31).
+    let sink = Arc::new(Mutex::new(String::new()));
+    let posted = Arc::new(AtomicBool::new(false));
+    let mut readers = Vec::new();
+    if let Some(stream) = child.stdout.take() {
+        readers.push(stream_output(
+            config,
+            session_id,
+            stream,
+            sink.clone(),
+            posted.clone(),
+        ));
+    }
+    if let Some(stream) = child.stderr.take() {
+        readers.push(stream_output(
+            config,
+            session_id,
+            stream,
+            sink.clone(),
+            posted.clone(),
+        ));
+    }
     let status = loop {
         match child
             .wait_timeout(Duration::from_millis(500))
@@ -722,19 +747,129 @@ fn run_opencode(
         }
     };
 
-    let mut output = String::new();
-    if let Some(mut stdout) = child.stdout.take() {
-        let _ = stdout.read_to_string(&mut output);
+    // The readers drain both pipes until the child closes them; joining them gives the complete
+    // output the failure path quotes. The full transcript stays local except for the live tail.
+    for reader in readers {
+        let _ = reader.join();
     }
-    if let Some(mut stderr) = child.stderr.take() {
-        let mut errors = String::new();
-        let _ = stderr.read_to_string(&mut errors);
-        if !errors.trim().is_empty() {
-            output.push('\n');
-            output.push_str(&errors);
+    let output = sink.lock().map(|text| text.clone()).unwrap_or_default();
+    if !posted.load(Ordering::Relaxed) {
+        // A run whose output never crossed the throttle (short runs, buffered pipes) still gets
+        // one line into the review, so "no output" never means "the agent said nothing".
+        if let Some(line) = output.lines().rev().find(|line| !log_line(line).is_empty()) {
+            let _ = mcp(
+                config,
+                "progress",
+                json!({ "session_id": session_id, "message": log_line(line), "state": "log" }),
+            );
         }
     }
     Ok((status.success(), output))
+}
+
+/// How often the bridge forwards a line of the agent's own output. A live tail, not a transcript:
+/// the point is seeing that something is happening and what it is.
+const LOG_LINE_EVERY: Duration = Duration::from_secs(2);
+const LOG_LINE_MAX_CHARS: usize = 400;
+
+/// Forward one stream of the agent's own output (stdout or stderr) to the review while it runs.
+/// The stream is also collected locally, so the failure message and the bridge log keep their
+/// `first_line`/`tail` behaviour.
+fn stream_output<R: Read + Send + 'static>(
+    config: &AgentConfig,
+    session_id: &str,
+    stream: R,
+    sink: Arc<Mutex<String>>,
+    posted: Arc<AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    let config = config.clone();
+    let id = session_id.to_string();
+    std::thread::spawn(move || {
+        use std::io::BufRead as _;
+        let mut reader = std::io::BufReader::new(stream);
+        let mut next = Instant::now();
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            if let Ok(mut text) = sink.lock() {
+                text.push_str(&line);
+                // Keep the tail only: an agent can print megabytes and the bridge only quotes the
+                // first line and the last 400 characters.
+                if text.len() > 64_000 {
+                    let cut = text.len() - 32_000;
+                    let keep = text[cut..].to_string();
+                    text.clear();
+                    text.push_str(&keep);
+                }
+            }
+            if Instant::now() >= next {
+                let message = log_line(&line);
+                if !message.is_empty()
+                    && mcp(
+                        &config,
+                        "progress",
+                        json!({
+                            "session_id": id,
+                            "message": message,
+                            "state": "log",
+                        }),
+                    )
+                    .is_ok()
+                {
+                    posted.store(true, Ordering::Relaxed);
+                    next = Instant::now() + LOG_LINE_EVERY;
+                }
+            }
+            line.clear();
+        }
+    })
+}
+
+/// One line of agent output as it should appear in the review: terminal colour codes removed, the
+/// length bounded, and nothing at all for blank lines.
+fn log_line(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' {
+            // CSI sequence: ESC [ … final byte in @..~
+            if chars.peek() == Some(&'[') {
+                chars.next();
+                for next in chars.by_ref() {
+                    if ('@'..='~').contains(&next) {
+                        break;
+                    }
+                }
+            }
+            continue;
+        }
+        if ch == '\r' || ch == '\n' {
+            continue;
+        }
+        out.push(ch);
+    }
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    trimmed.chars().take(LOG_LINE_MAX_CHARS).collect()
+}
+
+#[cfg(test)]
+mod live_output_tests {
+    use super::*;
+
+    #[test]
+    fn agent_output_lines_lose_terminal_colours_and_stay_short() {
+        assert_eq!(
+            log_line("\u{1b}[32m✓ edited src/lib.rs\u{1b}[0m\r\n"),
+            "✓ edited src/lib.rs"
+        );
+        assert_eq!(log_line("   \n"), "");
+        assert_eq!(
+            log_line(&"x".repeat(900)).chars().count(),
+            LOG_LINE_MAX_CHARS
+        );
+    }
 }
 
 fn fail_claim(
@@ -743,10 +878,12 @@ fn fail_claim(
     owned: &Arc<Mutex<HashSet<String>>>,
     message: String,
 ) {
+    // `state: failed` is not an answer: the server hands the round back to the human, unlocked and
+    // labelled, instead of leaving it submitted behind a run that is already gone (2026-10-31).
     let _ = mcp(
         config,
         "reply",
-        json!({ "session_id": id, "message": message }),
+        json!({ "session_id": id, "message": message, "state": "failed" }),
     );
     let _ = claim_release(config, id);
     if let Ok(mut set) = owned.lock() {
@@ -1609,11 +1746,12 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
 
-        // The fake agent proves it ran in a directory of its own; dirty worktrees are kept.
+        // The fake agent proves it ran in a directory of its own; dirty worktrees are kept. It
+        // also prints a line, which must reach the review as live output the human can open.
         let script = root.join("fake-opencode");
         std::fs::write(
             &script,
-            "#!/bin/sh\npwd > .redline-marker\nsleep 1\nexit 0\n",
+            "#!/bin/sh\npwd > .redline-marker\necho 'edited src/lib.rs'\nsleep 1\nexit 0\n",
         )
         .unwrap();
         {
@@ -1660,6 +1798,18 @@ mod tests {
             count_markers(&root.join(".redline-worktrees")),
             2,
             "each claim must get its own worktree"
+        );
+        // The agent's own output is visible in the review while it runs, not only on failure.
+        let logged = session_ids.iter().any(|id| {
+            store
+                .agent_events(id)
+                .unwrap_or_default()
+                .iter()
+                .any(|event| event["state"] == "log" && event["message"] == "edited src/lib.rs")
+        });
+        assert!(
+            logged,
+            "the run's output must reach the review as a log event"
         );
         let _ = std::fs::remove_dir_all(&root);
     }

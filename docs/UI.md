@@ -93,7 +93,7 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   historical round (read-only viewer) the main button also drags the picture.
 - Image is centred; the stage has a dark checkerboard so transparent PNGs read correctly.
 
-## Video reviews (unreleased)
+## Video reviews (v0.23, annotation feedback v0.24)
 
 - **New review** accepts `video/*` from the picker, drag & drop and paste. The drop zone shows a
   muted `<video>` preview, the file name/size, and warns when the clip is 4K. The dialog reads
@@ -113,10 +113,16 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   an optional `until` set from the ⏱ button in the inspector (clicking it while parked on the
   annotation gives a one-second default instead of a zero-length range). The inspector shows
   `rect · 00:02.340–00:02.900`; clicking a row seeks there.
-- **Visibility**: the current moment is full opacity; annotations from other times stay as ~12 %
-  ghosts and fade to full within 350 ms of their time. Ranges are full between their boundaries.
-  The selected annotation stays full while it is being edited; `Ghosts` hides everything that is
-  not current.
+- **Grouped by moment**: a video's annotation list is split into chronological timestamp sections
+  (`● 00:02.340 · 2 annotations`), with legacy/no-timecode rows last. The header is a seek button;
+  the section holding the playhead gets an accent dot, and a range section stays active until its
+  end. Image sessions keep the flat list.
+- **Visibility**: the current moment is full opacity and other moments are hidden by default, so
+  moving the playhead shows exactly that frame. The `Ghosts` toggle brings the other moments back
+  as ~12 % ghosts (fading in within 350 ms of their time); the choice is remembered. Ranges are
+  full between their boundaries. Selection no longer keeps an annotation on screen: it draws the
+  dashed outline, and the playhead still decides whether the annotation is visible. Timeline
+  markers always show every annotation.
 - **Keyboard**: `K` play/pause, `J`/`L` jump one second, `,`/`.` step one frame. Space remains
   canvas pan, not play.
 - **Submit** captures one full-resolution frame per unique annotated time (20 / ~60 MB cap, JPEG
@@ -340,10 +346,13 @@ do not move; it also clicks every close X.
   the diff endpoint remains for agents.
 - The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History
   own the pictures.
-- **Drafts** live in memory per session: unsent annotations and composer text survive switching
-  sessions. A new agent round discards the draft (wrong coordinates) and says so in the
-  conversation. The window title is prefixed with `•` while drafts exist, and the desktop shell
-  asks before quitting.
+- **Drafts** are stored in `localStorage` per session (`redline:draft:<id>`), so unsent
+  annotations and composer text survive switching sessions **and** a reload, a dashboard
+  round-trip or the desktop app navigating. Editing saves on a 400 ms debounce and flushes on
+  `pagehide`/hidden; submit clears the draft. A new agent round discards the draft (wrong
+  coordinates) and says so in the conversation. The window title is prefixed with `•` while
+  drafts exist, and the desktop shell asks before quitting. At most 20 drafts / 30 days are kept;
+  a quota error evicts the oldest rather than blocking the canvas.
 
 ## Rounds: one task, one session (v0.14)
 
@@ -380,7 +389,9 @@ new one.
   Works on the editor and on the start page; drops still work the same way.
 - **Gallery on `/`**: the last twelve *active* reviews as cards with their screenshot, project,
   relative time and status. Confirmed and cancelled features are finished work and stay in the
-  rail's All/Done filters, not on the dashboard. The start screen below it is unchanged.
+  rail's All/Done filters, not on the dashboard. The gallery is re-derived from the rail's 8 s
+  session poll, so a review decided in another tab or before a back-forward restore loses its
+  card without a reload. The start screen below it is unchanged.
 - **Diff overlay**: in the History disclosure, the `◫` button ghosts that round's annotations
   behind the current ones at 35 % opacity; a `Ghost · <stamp>` chip in the header clears it.
   The `Δ` button still prints the textual diff.

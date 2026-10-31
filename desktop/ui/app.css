@@ -756,6 +756,33 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   border-radius: 5px; font-size: 12px; line-height: 1;
 }
 .ann-row .end:hover { background: var(--accent); color: #fff; }
+/* Video annotations are grouped by the moment they belong to. The header is a seek control, not
+   a label: it carries the timecode and the group's count, and the group holding the playhead gets
+   an accent dot. A hairline + gap separates groups without turning each one into a heavy card. */
+.ann-group { margin: 0 0 8px; }
+.ann-group + .ann-group {
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-soft);
+}
+.ann-group-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 8px 5px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--muted); font: inherit; font-size: 11px; text-align: left; cursor: pointer;
+}
+.ann-group-head.static { cursor: default; }
+.ann-group-head:not(.static):hover { background: var(--panel-2); color: var(--text); }
+.ann-group-head .group-dot {
+  width: 6px; height: 6px; flex: none; border-radius: 50%;
+  background: var(--muted); opacity: .55;
+}
+.ann-group-head .group-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums; letter-spacing: .01em;
+}
+.ann-group-head .group-count { margin-left: auto; font-size: 10px; color: var(--muted); }
+.ann-group.active .ann-group-head { color: var(--text); }
+.ann-group.active .ann-group-head .group-dot {
+  background: var(--accent); opacity: 1; box-shadow: 0 0 0 3px var(--accent-soft);
+}
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
 /* The live round is not a different kind of card: it keeps the same fill and border as the
    archived rounds, and only its glyph turns green so it stands out. Selection — which round the

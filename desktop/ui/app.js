@@ -239,6 +239,111 @@ const prefs = {
   },
 };
 
+/**
+ * Unsent canvas work per session. v0.16 kept this in a Map, so it survived a rail switch but not
+ * a real navigation/reload — a video round with dozens of timecoded shapes vanished when the
+ * human went back to the dashboard. localStorage keeps the same small interface and makes a
+ * draft survive the document; the current annotations still live in memory while editing.
+ */
+const DRAFT_PREFIX = "redline:draft:";
+const DRAFT_MAX = 20;
+const DRAFT_TTL = 30 * 24 * 60 * 60 * 1000;
+
+/** What a draft was drawn on. A changed media means the agent posted a new round, so the old
+ *  coordinates no longer describe the picture. */
+function mediaIdentity(meta) {
+  if (!meta) return "";
+  return [
+    meta.image || "",
+    meta.media?.kind || "image",
+    meta.media?.duration_ms ?? "",
+    meta.media?.width ?? meta.image_width ?? "",
+    meta.media?.height ?? meta.image_height ?? "",
+    meta.poster || "",
+  ].join("|");
+}
+
+function mediaFingerprint(meta) {
+  if (!meta) return "";
+  return `${mediaIdentity(meta)}|${
+    // A new video round reuses `video.webm`; the round stamp is what changes when the agent
+    // replaces the clip, so drafts can tell the two rounds apart.
+    meta?.media?.kind === "video" ? meta.round_stamp || "" : ""
+  }`;
+}
+
+class Drafts {
+  constructor() {
+    this.entries = new Map();
+    this.restore();
+  }
+
+  get size() { return this.entries.size; }
+
+  get(id) { return this.entries.get(id); }
+
+  delete(id) {
+    this.entries.delete(id);
+    try { localStorage.removeItem(`${DRAFT_PREFIX}${id}`); } catch { /* private mode */ }
+  }
+
+  set(id, draft) {
+    this.entries.set(id, draft);
+    try {
+      localStorage.setItem(`${DRAFT_PREFIX}${id}`, JSON.stringify(draft));
+    } catch {
+      // A full quota must not cost the work on screen: make room by dropping the oldest other
+      // draft and retry once. If it still fails, the entry stays in memory.
+      this.prune(id);
+      try {
+        localStorage.setItem(`${DRAFT_PREFIX}${id}`, JSON.stringify(draft));
+      } catch { /* memory-only for this session */ }
+    }
+    this.prune(id);
+  }
+
+  /// Drop expired entries and keep the newest `DRAFT_MAX`; `protect` is the draft just written.
+  prune(protect = null) {
+    try {
+      const rows = [...this.entries.entries()]
+        .sort((a, b) => (a[1].savedAt || 0) - (b[1].savedAt || 0));
+      const now = Date.now();
+      for (const [id, draft] of rows) {
+        const expired = !draft.savedAt || now - draft.savedAt > DRAFT_TTL;
+        if (expired && id !== protect) this.delete(id);
+      }
+      const remaining = [...this.entries.entries()]
+        .sort((a, b) => (a[1].savedAt || 0) - (b[1].savedAt || 0));
+      while (this.entries.size > DRAFT_MAX && remaining.length) {
+        const [id] = remaining.shift();
+        if (id !== protect) this.delete(id);
+      }
+    } catch { /* private mode */ }
+  }
+
+  restore() {
+    try {
+      const broken = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (!key?.startsWith(DRAFT_PREFIX)) continue;
+        try {
+          const draft = JSON.parse(localStorage.getItem(key));
+          if (!draft || !Array.isArray(draft.annotations)) {
+            broken.push(key);
+            continue;
+          }
+          this.entries.set(key.slice(DRAFT_PREFIX.length), draft);
+        } catch {
+          broken.push(key);
+        }
+      }
+      for (const key of broken) localStorage.removeItem(key);
+      this.prune();
+    } catch { /* private mode */ }
+  }
+}
+
 /** The project the human last worked in, so a new review starts there instead of at the placeholder. */
 const lastProject = {
   get() { return prefs.get("project", ""); },
@@ -932,7 +1037,10 @@ const FILTERS = [
 ];
 
 class Rail {
-  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk, onViewChange }) {
+  constructor({
+    body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk, onViewChange,
+    onSessions,
+  }) {
     this.body = body;
     this.chips = chips;
     this.search = search;
@@ -943,6 +1051,7 @@ class Rail {
     this.onPurge = onPurge;
     this.onBulk = onBulk;
     this.onViewChange = onViewChange;
+    this.onSessions = onSessions;
     this.bulkMode = false;
     this.selection = new Set();
     this.sessions = [];
@@ -1023,6 +1132,9 @@ class Rail {
     this.projects = projects.projects || [];
     this.render();
     this.watchAgentState();
+    // Every view derived from the session list (today the dashboard gallery) is refreshed from
+    // the same load; the editor passes no callback.
+    this.onSessions?.(this);
   }
 
   /// The rail is the one screen that must say "an agent is busy here" without opening the review,
@@ -1040,8 +1152,13 @@ class Rail {
       return;
     }
     const before = workingIds(this.sessions);
+    const beforeData = JSON.stringify(this.sessions);
     this.sessions = sessions;
     if (workingIds(sessions) !== before) this.render();
+    // The dashboard gallery is derived from the same list. It used to be painted only at boot
+    // and on a back-forward restore, so a review cancelled elsewhere could keep its card for as
+    // long as the page stayed open; let the dashboard re-render it with the poll.
+    if (JSON.stringify(sessions) !== beforeData) this.onSessions?.(this);
   }
 
   setSelected(id) {
@@ -1292,12 +1409,14 @@ class Editor {
     this.video = null;
     this.videoBar = $("#video-bar");
     this.videoWindow = { start: 0, end: 0 };
-    this.ghosts = true;
+    // Ghosts are context, not the default: the canvas shows the frame the playhead is on, and
+    // the toggle brings other moments back at low opacity. Remember the human's choice.
+    this.ghosts = prefs.get("videoGhosts", false);
     this.videoFrame = null;
     this.annotations = [];
     this.history = [];
     this.future = [];
-    this.drafts = new Map();
+    this.drafts = new Drafts();
     this.locked = false;
     this.serverAnnotations = "[]";
     this.viewing = null;
@@ -1389,6 +1508,12 @@ class Editor {
     this.bindCanvas();
     this.bindVideoBar();
     this.bindKeyboard();
+    // A reload/navigation gets one last synchronous save. `pagehide` also fires for the
+    // back-forward cache; `visibilitychange` covers the desktop webview being hidden first.
+    addEventListener("pagehide", () => this.saveDraft());
+    addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") this.saveDraft();
+    });
     this.syncToolButtons();
     $("#color").value = this.color;
     const sizeSelect = $("#text-size");
@@ -1468,6 +1593,7 @@ class Editor {
   }
 
   async load(id) {
+    clearTimeout(this.draftTimer);
     $("#stage").classList.remove("hidden");
     this.viewing = null;
     this.live = null;
@@ -1479,7 +1605,16 @@ class Editor {
       lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
       this.serverAnnotations = JSON.stringify(server);
-      const draft = this.drafts.get(id);
+      // A draft belongs to the picture it was drawn on. A new agent round (a different image,
+      // poster, clip length or dimensions) invalidates the coordinates, so drop it and say so.
+      const stored = this.drafts.get(id);
+      const stale = stored && (
+        stored.media !== mediaFingerprint(this.meta)
+        || this.meta.status === "submitted"
+      );
+      if (stale) this.drafts.delete(id);
+      const draft = stale ? null : stored;
+      this.draftNotice = stale || null;
       this.annotations = draft ? draft.annotations : server;
       const composer = $("#composer-text");
       if (composer) composer.value = draft ? draft.prompt || "" : "";
@@ -1494,6 +1629,9 @@ class Editor {
       this.loadHistory();
       this.startConversationPolling();
       await this.loadMedia(this.meta);
+      // The video element only exists after `loadMedia`, and the inspector chooses the grouped
+      // timeline layout from `isVideo`. Render it again or a video session opens as a flat list.
+      this.renderInspector();
       this.fit();
       this.render();
     } catch (error) {
@@ -1633,6 +1771,8 @@ class Editor {
     if (speed) speed.value = String(video.playbackRate || 1);
     const next = $("#video-new");
     if (next) next.hidden = !video || this.locked || Boolean(this.viewing);
+    const ghosts = $("#video-ghosts");
+    if (ghosts) ghosts.setAttribute("aria-pressed", String(this.ghosts));
     const overview = $("#timeline-window");
     if (overview && duration > 0) {
       overview.style.left = `${(window.start / duration) * 100}%`;
@@ -1640,6 +1780,7 @@ class Editor {
     }
     this.renderTimelineMarks();
     this.renderTimelineTicks();
+    this.updateGroupActive();
   }
 
   /// A ruler under the detail slider. The step follows the zoom window, so a 1 s window shows
@@ -1810,6 +1951,7 @@ class Editor {
     const ghosts = $("#video-ghosts");
     ghosts?.addEventListener("click", () => {
       this.ghosts = !this.ghosts;
+      prefs.set("videoGhosts", this.ghosts);
       ghosts.setAttribute("aria-pressed", String(this.ghosts));
       this.render();
     });
@@ -1943,6 +2085,7 @@ class Editor {
         this.annotations[index].note = noteField.value;
         this.renderInspector();
         this.render();
+        this.scheduleDraft();
       });
       noteField.addEventListener("keydown", (event) => {
         if (event.key === "Escape") {
@@ -1959,6 +2102,10 @@ class Editor {
       });
     }
     $("#submit").addEventListener("click", () => this.submit());
+    const composerInput = $("#composer-text");
+    if (composerInput) {
+      composerInput.addEventListener("input", () => this.scheduleDraft());
+    }
     const convLog = $("#conv-log");
     if (convLog) {
       convLog.addEventListener("scroll", () => {
@@ -2349,7 +2496,9 @@ class Editor {
   /// are faint ghosts that fade in as their time approaches. Images always render at full.
   annotationOpacity(annotation, index) {
     if (!this.isVideo || !this.video) return 1;
-    if (this.selected.has(index)) return 1;
+    // Selection is an outline, not a claim about the current frame. A freshly drawn shape stays
+    // selected; it used to stay fully visible at every later time until another shape stole the
+    // selection, which is exactly "the old annotation disappears only after I draw a new one".
     if (typeof annotation.at !== "number") return 1;
     const current = this.video.currentTime || 0;
     const at = annotation.at;
@@ -2609,6 +2758,7 @@ class Editor {
     fn();
     this.renderInspector();
     this.render();
+    this.scheduleDraft();
   }
 
   undo() {
@@ -2618,6 +2768,7 @@ class Editor {
     this.selected.clear();
     this.renderInspector();
     this.render();
+    this.scheduleDraft();
   }
 
   redo() {
@@ -2627,6 +2778,7 @@ class Editor {
     this.selected.clear();
     this.renderInspector();
     this.render();
+    this.scheduleDraft();
   }
 
   translateAnnotation(annotation, dx, dy) {
@@ -2946,6 +3098,7 @@ class Editor {
         this.future.length = 0;
         this.drag = null;
         this.renderInspector();
+        this.scheduleDraft();
       }
       if (this.draw) {
         const drawing = this.draw;
@@ -3133,6 +3286,141 @@ class Editor {
 
   // ---------------------------------------------------------- inspector
 
+  /// Video annotations belong to a moment. Group the list by that moment so a long review reads
+  /// as a timeline instead of an undifferentiated stack. `null` means "keep the flat list" — an
+  /// image session (or a video that failed to load) has no time axis to group on.
+  annotationGroups() {
+    if (!this.isVideo) return null;
+    const groups = new Map();
+    this.annotations.forEach((annotation, index) => {
+      const timed = typeof annotation.at === "number";
+      const key = timed ? annotation.at.toFixed(3) : "none";
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          at: timed ? annotation.at : null,
+          until: timed ? annotation.at : null,
+          items: [],
+        });
+      }
+      const group = groups.get(key);
+      group.items.push({ annotation, index });
+      if (timed && typeof annotation.until === "number") {
+        group.until = Math.max(group.until, annotation.until);
+      }
+    });
+    // Chronological, with legacy/no-timecode annotations last. The rows keep their global
+    // number, so the number in the panel always matches the badge on the canvas.
+    return [...groups.values()].sort((a, b) => {
+      if (a.at === null) return 1;
+      if (b.at === null) return -1;
+      return a.at - b.at;
+    });
+  }
+
+  annotationGroupHtml(group) {
+    const count = plural(group.items.length, "annotation");
+    if (group.at === null) {
+      return `<div class="ann-group-head static"><span class="group-dot"></span>
+        <span class="group-time">No timecode</span><span class="group-count">${count}</span></div>`;
+    }
+    const at = escapeHtml(timecode(group.at));
+    return `<button type="button" class="ann-group-head" data-group-at="${group.at}"
+      title="Seek to ${at}">
+      <span class="group-dot"></span><span class="group-time">${at}</span>
+      <span class="group-count">${count}</span>
+    </button>`;
+  }
+
+  /// One row, shared by the live editor and the read-only history viewer. A pen has `points`,
+  /// not `start`/`end`; reading `start.x` here used to abort the whole inspector render.
+  annotationRowHtml(annotation, index, readonly) {
+    const label = annotation.type === "text"
+      ? escapeHtml(annotation.text || "")
+      : annotation.type === "rect" || annotation.type === "ellipse" || annotation.type === "arrow"
+        ? `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)} → ${Math.round(annotation.end.x)}, ${Math.round(annotation.end.y)}`
+        : annotation.type === "pen"
+          ? `freehand · ${annotation.points?.length || 0} points`
+          : `${Math.round(annotation.start?.x ?? 0)}, ${Math.round(annotation.start?.y ?? 0)}`;
+    const note = String(annotation.note || "").trim();
+    const primary = readonly
+      ? escapeHtml(String(annotation.note || annotation.text || annotation.type))
+      : note ? escapeHtml(note) : label;
+    const at = typeof annotation.at === "number" ? timecode(annotation.at) : "";
+    const until = typeof annotation.until === "number" ? `–${timecode(annotation.until)}` : "";
+    const range = at ? `${at}${until}` : "";
+    const meta = `${annotation.type}${annotation.group ? " · group" : ""}${
+      range ? ` · ${range}` : ""
+    }`;
+    const color = escapeHtml(annotation.color || "#e11d48");
+    if (readonly) {
+      return `<div class="ann-row readonly" data-index="${index}">
+        <span class="ann-num" style="background:${color}">${index + 1}</span>
+        <span class="label"><b>${primary}</b><span>${escapeHtml(meta)}</span></span>
+      </div>`;
+    }
+    const rangeButton = this.isVideo && at
+      ? `<button class="end" data-end="${index}" aria-label="${
+        typeof annotation.until === "number" ? "Clear range end" : "Set range end at the current time"
+      }" title="${
+        typeof annotation.until === "number" ? "Clear the range end" : "Set the range end to the current time"
+      }">${typeof annotation.until === "number" ? "×" : "⏱"}</button>`
+      : "";
+    return `
+      <div class="ann-row" data-index="${index}" aria-current="${this.selected.has(index)}">
+        <span class="ann-num" style="background:${color}">${index + 1}</span>
+        <span class="label"><b title="${primary}">${primary}</b><span>${escapeHtml(meta)}</span></span>
+        ${rangeButton}
+        <button class="del" data-delete="${index}" title="Delete">✕</button>
+      </div>`;
+  }
+
+  annotationListHtml(readonly) {
+    const groups = this.annotationGroups();
+    if (!groups) {
+      return this.annotations
+        .map((annotation, index) => this.annotationRowHtml(annotation, index, readonly))
+        .join("");
+    }
+    return groups.map((group) => `
+      <section class="ann-group" data-group="${escapeHtml(group.key)}"${
+        group.at !== null ? ` data-at="${group.at}" data-until="${group.until ?? group.at}"` : ""
+      }>
+        ${this.annotationGroupHtml(group)}
+        <div class="ann-group-rows">${group.items
+          .map(({ annotation, index }) => this.annotationRowHtml(annotation, index, readonly))
+          .join("")}</div>
+      </section>`).join("");
+  }
+
+  /// Mark the group the playhead is on; a range stays active for its whole span. Called from
+  /// `syncVideoBar` (seek/playback) and at the end of every inspector render.
+  updateGroupActive() {
+    const groups = $$("#ann-list .ann-group[data-at]");
+    if (!groups.length || !this.video) return;
+    const current = this.video.currentTime || 0;
+    for (const group of groups) {
+      const at = Number(group.dataset.at);
+      const until = Math.max(at, Number(group.dataset.until) || at);
+      group.classList.toggle("active", current >= at - 0.05 && current <= until + 0.05);
+    }
+  }
+
+  /// A group header is a navigation control, both on the live canvas and in the read-only
+  /// history viewer: clicking a timestamp seeks there without selecting an arbitrary member.
+  bindGroupSeek(body) {
+    $$(".ann-group-head[data-group-at]", body).forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const at = Number(button.dataset.groupAt);
+        this.seekTo(at);
+        this.selected.clear();
+        this.renderInspector();
+        this.render();
+      });
+    });
+  }
+
   renderInspector() {
     const body = $("#ann-list");
     if (this.viewing || this.locked) {
@@ -3143,19 +3431,10 @@ class Editor {
       const tools = $("#selection-tools");
       if (tools) tools.classList.add("hidden");
       $("#ann-count").textContent = String(this.annotations.length);
-      body.innerHTML = this.annotations.map((annotation, index) => {
-        const label = String(
-          annotation.note || annotation.text || `${annotation.type}`,
-        );
-        const at = typeof annotation.at === "number" ? timecode(annotation.at) : "";
-        const until = typeof annotation.until === "number" ? `–${timecode(annotation.until)}` : "";
-        return `<div class="ann-row readonly">
-          <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
-          <span class="label"><b>${escapeHtml(label)}</b><span>${escapeHtml(annotation.type)}${
-            at ? ` · ${escapeHtml(at + until)}` : ""
-          }</span></span>
-        </div>`;
-      }).join("") || `<div class="inspector-empty">No annotations in this round.</div>`;
+      body.innerHTML = this.annotationListHtml(true)
+        || `<div class="inspector-empty">No annotations in this round.</div>`;
+      this.bindGroupSeek(body);
+      if (this.video) this.updateGroupActive();
       return;
     }
     const count = this.annotations.length;
@@ -3191,41 +3470,9 @@ class Editor {
       body.innerHTML = `<div class="inspector-empty">Nothing drawn yet.<br>Pick a tool above the canvas.</div>`;
       return;
     }
-    body.innerHTML = this.annotations.map((annotation, index) => {
-      // A pen has `points`, not `start`/`end`. Reaching for `start.x` here threw before the
-      // inspector list (and, because `mutate` renders the inspector first, the canvas badge)
-      // could be built; the live stroke hid the failure. Every shape type gets an explicit label.
-      const label = annotation.type === "text"
-        ? escapeHtml(annotation.text || "")
-        : annotation.type === "rect" || annotation.type === "ellipse" || annotation.type === "arrow"
-          ? `${Math.round(annotation.start.x)}, ${Math.round(annotation.start.y)} → ${Math.round(annotation.end.x)}, ${Math.round(annotation.end.y)}`
-          : annotation.type === "pen"
-            ? `freehand · ${annotation.points?.length || 0} points`
-            : `${Math.round(annotation.start?.x ?? 0)}, ${Math.round(annotation.start?.y ?? 0)}`;
-      const note = String(annotation.note || "").trim();
-      const primary = note ? escapeHtml(note) : label;
-      const at = typeof annotation.at === "number" ? timecode(annotation.at) : "";
-      const until = typeof annotation.until === "number" ? `–${timecode(annotation.until)}` : "";
-      const range = at ? `${at}${until}` : "";
-      const meta = `${annotation.type}${annotation.group ? " · group" : ""}${
-        range ? ` · ${range}` : ""
-      }`;
-      const rangeButton = this.isVideo && at
-        ? `<button class="end" data-end="${index}" aria-label="${
-          typeof annotation.until === "number" ? "Clear range end" : "Set range end at the current time"
-        }" title="${
-          typeof annotation.until === "number" ? "Clear the range end" : "Set the range end to the current time"
-        }">${typeof annotation.until === "number" ? "×" : "⏱"}</button>`
-        : "";
-      return `
-        <div class="ann-row" data-index="${index}" aria-current="${this.selected.has(index)}">
-          <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
-          <span class="label"><b title="${primary}">${primary}</b><span>${escapeHtml(meta)}</span></span>
-          ${rangeButton}
-          <button class="del" data-delete="${index}" title="Delete">✕</button>
-        </div>`;
-    }).join("");
+    body.innerHTML = this.annotationListHtml(false);
 
+    this.bindGroupSeek(body);
     $$(".ann-row", body).forEach((row) => {
       row.addEventListener("click", (event) => {
         if (event.target.dataset.delete !== undefined || event.target.dataset.end !== undefined) return;
@@ -3272,7 +3519,10 @@ class Editor {
         });
       });
     });
-    if (this.video) this.renderTimelineMarks();
+    if (this.video) {
+      this.renderTimelineMarks();
+      this.updateGroupActive();
+    }
   }
 
   revealSelection() {
@@ -3525,23 +3775,29 @@ class Editor {
         api(`/api/sessions/${id}/events`),
       ]);
       const previousImage = this.meta?.image;
+      const previousMedia = mediaIdentity(this.meta);
       this.meta = session.meta;
       this.thread = Array.isArray(thread.messages) ? thread.messages : [];
       this.events = Array.isArray(events.events) ? events.events : [];
       this.renderHeader();
       this.renderConversation();
-      // The agent posted a new round: the canvas switches to the new screenshot.
-      if (previousImage && this.meta.image && this.meta.image !== previousImage) {
+      // The agent posted a new round: the canvas switches to the new picture. A submit changes
+      // the round stamp too, but that round is already on screen and must not be reloaded.
+      if (previousImage && previousMedia !== mediaIdentity(this.meta)
+        && this.meta.status !== "submitted") {
+        this.draftNotice = Boolean(this.drafts.get(this.sessionId)) || null;
+        this.drafts.delete(this.sessionId);
         this.annotations = (session.annotations && session.annotations.annotations) || [];
         this.selected.clear();
         this.history = [];
         this.future = [];
-        this.ghosts = null;
+        this.ghosts = prefs.get("videoGhosts", false);
         await this.loadMedia(this.meta);
         this.fit();
         this.render();
         this.renderInspector();
         this.loadHistory();
+        this.syncDirty();
       }
     } catch (error) {
       if (!quiet) {
@@ -3625,7 +3881,7 @@ class Editor {
 
     const status = [];
     if (this.draftNotice) {
-      status.push(`<div class="conv-wait"><b>Draft discarded.</b> The agent posted a new round, `
+      status.push(`<div class="conv-wait"><b>Draft discarded.</b> This review's round changed, `
         + `so the canvas starts fresh.</div>`);
     }
     if (this.meta?.status === "submitted") {
@@ -3729,7 +3985,8 @@ class Editor {
     }
   }
 
-  /// Unsaved canvas work must survive switching sessions; a submitted round must not.
+  /// Unsaved canvas work must survive switching sessions, navigation and a reload; a submitted
+  /// round must not. localStorage is the backing store (see `Drafts`), so the document can die.
   saveDraft() {
     const id = this.sessionId;
     if (!id || this.viewing) return;
@@ -3742,9 +3999,18 @@ class Editor {
       this.drafts.set(id, {
         annotations: JSON.parse(JSON.stringify(this.annotations)),
         prompt,
+        savedAt: Date.now(),
+        media: mediaFingerprint(this.meta),
       });
     }
     this.syncDirty();
+  }
+
+  /// Edits are saved continuously, not only when the human switches reviews: a reload, a crash
+  /// or the desktop app navigating must not throw away the last minutes of drawing.
+  scheduleDraft() {
+    clearTimeout(this.draftTimer);
+    this.draftTimer = setTimeout(() => this.saveDraft(), 400);
   }
 
   /// No Tauri globals in the webview (a remote server must not get them): the desktop shell reads
@@ -4354,7 +4620,10 @@ function renderGallery(rail) {
     .filter((session) => featureState(session) === "pending")
     .slice(0, 12);
   if (!sessions.length) {
+    // Hiding the gallery is not emptying it: the last card stayed in the DOM (hidden), so a
+    // "cancelled review is gone" check kept finding it. Clear the shell too.
     box.hidden = true;
+    box.innerHTML = "";
     return;
   }
   const names = new Map((rail.projects || []).map((project) => [project.slug, project.name]));
@@ -4393,8 +4662,8 @@ function renderGallery(rail) {
 async function bootList() {
   bindRailResize();
   const refresh = async () => {
+    // `rail.load()` hands the fresh list to its `onSessions` subscriber (the gallery).
     await rail.load();
-    renderGallery(rail);
   };
   const rail = new Rail({
     body: $("#rail-body"),
@@ -4453,11 +4722,14 @@ async function bootList() {
       rail.exitBulk();
       await refresh();
     },
+    // The gallery is a view of the same session list; keep it in step with the rail's poll.
+    onSessions: (data) => renderGallery(data),
   });
+  window.redlineRail = rail;
   await rail.load();
-  renderGallery(rail);
   // A dashboard restored from the back-forward cache keeps the DOM it had when the human left it,
-  // including gallery cards for reviews that have since been confirmed or cancelled. Refresh it.
+  // including gallery cards for reviews that have since been confirmed or cancelled. Refresh it
+  // immediately on restore; the rail's 8 s poll keeps it current afterwards.
   addEventListener("pageshow", (event) => {
     if (event.persisted) refresh();
   });

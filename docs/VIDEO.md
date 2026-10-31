@@ -20,7 +20,8 @@ persistent drafts, timestamp groups, hidden-by-default other moments — shipped
    default**. The `Ghosts` toggle shows them at low opacity and fades them in as their time is
    approached (timeline markers always visible). Selection is an outline, never a visibility
    override.
-7. **Timeline:** basic controls plus a zoomable timeline (wheel/zoom + overview strip).
+7. **Timeline:** basic controls plus a zoomable timeline (wheel/zoom + overview strip). While a
+   round is submitted the timeline's zoom is locked with the canvas; playback and seeking stay.
 8. **Agent output:** contact sheet **and** full-resolution frames for the unique annotated
    timestamps; the cap is confirmed at **20 unique timestamps / ~60 MB per submission** (see §7).
 9. **Audio:** no audio controls in v1; playback is muted.
@@ -102,6 +103,10 @@ detail timeline (zoomable window; scrubber, markers, time ruler)
   zoomable detail ruler. Wheel over the timeline zooms around the pointer; `Fit` returns to the
   full duration. Marker positions, the scrubber and the time labels all respect the current
   window. Basic controls stay usable without zooming.
+- A submitted round freezes the timeline's zoom, exactly like the canvas zoom: `−`, `+`, `Fit`
+  and wheel-over-timeline are disabled (with a reason on hover) until STOP reopens the round, and
+  a history round replayed read-only stays navigable. Playback and seeking are reading, not
+  editing, and stay available.
 - Annotation markers (colour = annotation colour, clustered when close) live on both strips.
   Hover shows time and count; click seeks.
 - Annotation visibility: the annotation(s) at the current time are full opacity. Other

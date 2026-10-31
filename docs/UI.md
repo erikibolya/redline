@@ -129,6 +129,12 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   Wheel over the timeline zooms around the pointer, `Fit` restores the whole clip. Annotation
   markers use the annotation colour; a range draws a band between `at` and `until`. Clicking a
   marker seeks to it and selects the row.
+- **A submitted round locks the timeline's zoom.** While the agent owns the round (the same
+  moment the canvas zoom and the drawing tools are disabled), `−`, `+`, `Fit` and the wheel over
+  the timeline are disabled and say why on hover; the timeline keeps the window it was submitted
+  with. Playback, frame stepping, speed, seeking and marker clicks stay, because reading the
+  clip is not an edit. STOP (a round that is open again) restores the zoom; a history round is
+  replayed read-only and stays navigable.
 - **Timecoded annotations**: each annotation gets `at` (seconds) when it is drawn or typed, and
   an optional `until` set from the ⏱ button in the inspector (clicking it while parked on the
   annotation gives a one-second default instead of a zero-length range). The inspector shows

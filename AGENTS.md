@@ -463,6 +463,15 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   one-line regression cannot pass. A styling assertion written against the same number the CSS was
   written from proves nothing; measure the neighbours.
 
+- **A locked canvas is not a locked timeline.** The submitted lock disabled drawing, Delete, the
+  inspector writes and even the canvas zoom, but a video's timeline kept `−`/`+`/`Fit` and its
+  wheel zoom — the one surface that places annotations in time was still editable on a round the
+  agent owned (2026-10-31). A lock has to reach every control that edits the round: when the
+  canvas zoom goes disabled, so does the timeline's. Reading is not editing — playback, frame
+  stepping, seeking and marker clicks stay, and a history round stays navigable — but disable
+  visibly and explain on hover, and test the refusal (click the buttons, wheel the ruler) as well
+  as the unlock after STOP.
+
 ## 8. Working rules
 
 - Ask before destructive actions (see global AGENTS.md). Creating/updating the `redline` container

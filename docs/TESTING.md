@@ -180,7 +180,9 @@ same path a human does: upload, play, draw, range, zoom, submit.
   active to its end; other moments are hidden by default, a selected annotation still obeys the
   playhead, Ghosts shows a 0.12 ghost, and the current annotation is full; the ⏱ button sets
   `until`; zoom narrows the window and Fit restores it; the timeline shows a marker and a range
-  band; `K` pauses and `.` steps a frame; a second shape at the same moment stays in one group; a
+  band; a submitted round locks the timeline's zoom (the buttons are disabled, wheel over the
+  ruler leaves the window alone) while play and seek still work, and STOP unlocks the zoom; `K`
+  pauses and `.` steps a frame; a second shape at the same moment stays in one group; a
   third at another moment gets its own frame and group; the draft is autosaved to localStorage,
   survives a dashboard round-trip with its `at` values and groups, and is cleared by submit; a
   draft left over an agent `post_round` is discarded and says so; the submit persists

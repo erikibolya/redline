@@ -431,6 +431,20 @@ The rail lists projects (conversation areas), not a flat stream of requests.
   treats a review as running while it is still `submitted`. A submitted round the agent has
   answered but not resolved reads **replied** (amber) instead of **waiting for agent**, because
   the agent already picked it up and may still be working.
+- **A live claim outranks the last thing the agent said.** `agent_state` is written by whoever
+  spoke last, so a `reply` that lands mid-run used to replace the spinner with *replied* while the
+  bridge was still working (2026-10-31: *"the working label is not present, is it a bug?"*).
+  `GET /api/sessions` now also returns `agent_running`, derived from the bridge's claim while its
+  lease is alive, and the rail treats a running claim as **working** whatever the last message
+  said. Releasing the claim (or letting it expire) clears the spinner again: no animation without
+  a heartbeat.
+- **A run that cannot start is a state, not a silence.** When the agent reports
+  `reply {state:"failed"}` (a dead OpenCode server, an unresolvable repo, …) the round is handed
+  back to the human — `status=open`, annotations intact — and the rail shows a red **agent failed**
+  badge. The conversation explains it ("The agent could not run this round… It is yours again"),
+  the run card turns red instead of pulsing, and the canvas, tools and composer are usable again.
+  Before this, a failed run left the review `submitted` behind a *replied* label: locked, with no
+  sign that nobody was coming back.
 - Filters and search still apply inside every project; day separators appear only in long lists.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
@@ -473,6 +487,13 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.
+- **Agent output** (2026-10-31): the conversation header carries an **output** toggle. It reveals
+  the agent's own lines — `progress` events with `state: "log"`, which the bridge streams from the
+  OpenCode process (throttled to one line every two seconds, ANSI stripped, ≤ 400 chars, and the
+  last line of a short run is always kept) — in a monospace, scrollable tail with the time of the
+  last line. It is off by default so a wall of tool output never buries the conversation, the
+  choice is remembered per browser (`redline:convVerbose`), and `log` events are never rendered as
+  conversation lines.
 
 ## Status bar
 

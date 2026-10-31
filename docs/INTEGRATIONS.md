@@ -84,6 +84,36 @@ The response is one of:
 - Heartbeat the claim and release it when done; the server's limits, leases and one-owner-per-branch
   rules are the same for both jobs. A waiting claim (the human has the ball) does not consume a
   run slot.
+- While a running claim is alive the rail shows **working**, whatever the last `progress`/`reply`
+  said: the claim is the evidence, the label is only a message. If the bridge dies, the lease
+  expires and the spinner stops instead of promising work that is not happening.
+
+## A run that cannot start
+
+`reply` is not only a message — its `state` says whether the agent answered or could not work:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "reply",
+    "arguments": {
+      "session_id": "20261031-120000-feature-1a2b",
+      "message": "The agent run failed: Server at http://opencode:4096 rejected the password",
+      "state": "failed"
+    }
+  }
+}
+```
+
+`state` is `replied` (default: the agent answered and may still be working) or `failed` (the run
+could not happen). A failure sets `agent_state=failed` and **hands the round back**
+(`status=open`, annotations and history intact), so the human can fix the problem and resubmit
+instead of staring at a locked review. Release the claim afterwards, as usual. Do not use
+`failed` for a normal answer: the round must stay submitted while the agent still intends to
+finish it.
 
 ## Reporting the result
 

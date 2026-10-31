@@ -1901,6 +1901,23 @@ class Editor {
     if (speed) speed.value = String(video.playbackRate || 1);
     const next = $("#video-new");
     if (next) next.hidden = !video || this.locked || Boolean(this.viewing);
+    // The timeline belongs to the round: while the agent owns a submitted round, zooming it is
+    // an edit of the timeline, and the canvas zoom is already disabled at the same moment.
+    // Playback and seeking stay — reading the clip is not an edit — but the zoom controls must
+    // not look armed.
+    const timelineLocked = this.locked;
+    [
+      ["#timeline-zoom-out", "Zoom out timeline"],
+      ["#timeline-zoom-in", "Zoom in timeline"],
+      ["#timeline-fit", "Fit the whole video"],
+    ].forEach(([id, label]) => {
+      const button = $(id);
+      if (!button) return;
+      button.disabled = timelineLocked;
+      button.title = timelineLocked
+        ? "Timeline is locked while the agent has this round — press STOP to edit"
+        : label;
+    });
     const ghosts = $("#video-ghosts");
     if (ghosts) ghosts.setAttribute("aria-pressed", String(this.ghosts));
     const overview = $("#timeline-window");
@@ -2048,7 +2065,9 @@ class Editor {
   }
 
   zoomTimeline(factor, center) {
-    if (!this.video) return;
+    // A submitted round keeps its timeline as submitted: the lock refuses the zoom itself, not
+    // only the buttons. A history round stays navigable — read-only is not a dead bar.
+    if (!this.video || this.locked) return;
     const duration = this.video.duration || 0;
     const window = this.videoWindow;
     const span = Math.max(0.1, window.end - window.start);
@@ -2094,7 +2113,7 @@ class Editor {
     $("#timeline-zoom-in")?.addEventListener("click", () => this.zoomTimeline(1 / 1.6));
     $("#timeline-zoom-out")?.addEventListener("click", () => this.zoomTimeline(1.6));
     $("#timeline-fit")?.addEventListener("click", () => {
-      if (!this.video) return;
+      if (!this.video || this.locked) return;
       this.videoWindow = { start: 0, end: this.video.duration || 0 };
       this.syncVideoBar();
       this.render();
@@ -2103,7 +2122,7 @@ class Editor {
       if (this.video) this.seekTo(Number(event.target.value));
     });
     $("#video-timeline")?.addEventListener("wheel", (event) => {
-      if (!this.video) return;
+      if (!this.video || this.locked) return;
       event.preventDefault();
       event.stopPropagation();
       const rect = event.currentTarget.getBoundingClientRect();

@@ -3023,6 +3023,42 @@ const main = async () => {
   await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 30000 });
   const storedAfterSubmit = await page.evaluate((key) => localStorage.getItem(key), draftKey);
   check("submitting clears the stored draft", storedAfterSubmit === null, String(storedAfterSubmit));
+  // Reported on a video review (2026-10-31): while the agent was working the round was locked,
+  // yet the timeline still zoomed — an editable-looking control on a submitted round. The lock
+  // now reaches the timeline's edit controls; playback and seeking stay, because reading the
+  // clip is not an edit.
+  const lockedTimeline = await page.evaluate(() => ({
+    locked: Boolean(window.redline.locked),
+    disabled: ["#timeline-zoom-out", "#timeline-zoom-in", "#timeline-fit"]
+      .map((id) => document.querySelector(id).disabled),
+    title: document.querySelector("#timeline-fit").title,
+    span: window.redline.videoWindow.end - window.redline.videoWindow.start,
+  }));
+  await page.click("#timeline-zoom-in");
+  const timelineBox = await (await page.$("#video-timeline")).boundingBox();
+  await page.mouse.move(timelineBox.x + timelineBox.width / 2, timelineBox.y + 4);
+  await page.mouse.wheel({ deltaY: -240 });
+  const lockedSpan = await page.evaluate(
+    () => window.redline.videoWindow.end - window.redline.videoWindow.start,
+  );
+  check("a submitted round locks the timeline's zoom, not only the canvas",
+    lockedTimeline.locked && lockedTimeline.disabled.every(Boolean)
+      && /locked/i.test(lockedTimeline.title)
+      && Math.abs(lockedSpan - lockedTimeline.span) < 0.01,
+    JSON.stringify({ lockedTimeline, lockedSpan }));
+  const lockedPlay = await page.evaluate(async () => {
+    const video = window.redline.video;
+    video.currentTime = 0;
+    await video.play();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    video.pause();
+    return { time: video.currentTime, paused: video.paused };
+  });
+  await page.evaluate(() => window.redline.seekTo(0.5));
+  const lockedSeek = await page.evaluate(() => window.redline.video.currentTime);
+  check("the locked timeline still plays and seeks",
+    lockedPlay.time > 0.1 && lockedPlay.paused && Math.abs(lockedSeek - 0.5) < 0.05,
+    JSON.stringify({ lockedPlay, lockedSeek }));
   const submitted = await api(`/api/sessions/${videoId}`);
   const annotations = submitted.annotations?.annotations || [];
   const frames = submitted.annotations?.frames || [];
@@ -3086,6 +3122,19 @@ const main = async () => {
   const newButton = await page.$eval("#video-new", (el) => ({ hidden: el.hidden }));
   check("New video appears once the round is open", newButton.hidden === false,
     JSON.stringify(newButton));
+  const openTimeline = await page.evaluate(() => ({
+    disabled: ["#timeline-zoom-out", "#timeline-zoom-in", "#timeline-fit"]
+      .map((id) => document.querySelector(id).disabled),
+    span: window.redline.videoWindow.end - window.redline.videoWindow.start,
+  }));
+  await page.click("#timeline-zoom-in");
+  const openSpan = await page.evaluate(
+    () => window.redline.videoWindow.end - window.redline.videoWindow.start,
+  );
+  check("STOP unlocks the timeline's zoom again",
+    openTimeline.disabled.every((disabled) => !disabled) && openSpan < openTimeline.span * 0.8,
+    JSON.stringify({ openTimeline, openSpan }));
+  await page.click("#timeline-fit");
 
   page.once("dialog", (dialog) => dialog.accept());
   const chooserPromise = page.waitForFileChooser();

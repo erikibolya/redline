@@ -421,6 +421,15 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   words of brand next to one word of content is a heading, not a mark; when a label is removed for
   looks, keep it for assistive tech and measure the result in the e2e.
 
+- **A font size is not a text block.** The first fix sized the header mark to the title's 13 px
+  font, which measured "correct" against the e2e's `font-size` assertion and still looked like a
+  chip floating beside the title; the human had to draw the rectangle they wanted, twice
+  (2026-10-31). What the eye compares is the *block* — title plus its 11 px subtitle, ≈ 29 px — so
+  size an icon to the union of the visible lines it faces, measure that union in the e2e (never the
+  `.subline` wrapper, which also carries a taller chip), and check it is bigger than one line so a
+  one-line regression cannot pass. A styling assertion written against the same number the CSS was
+  written from proves nothing; measure the neighbours.
+
 ## 8. Working rules
 
 - Ask before destructive actions (see global AGENTS.md). Creating/updating the `redline` container

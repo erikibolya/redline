@@ -56,10 +56,12 @@ column.
 - **The brand is the icon, not a wordmark.** The header showed a 22 × 22 px tile *plus* the word
   `RedLine`, so the app name sat next to the session title as if it were a second heading, and the
   tile stood half a head taller than the 13 px text beside it. The wordmark is gone on every page
-  (editor, dashboard, setup, servers); the mark is now 18 × 18 px — the height of the title line
-  it stands beside — vertically centred with the row, and it keeps the name for screen readers
-  (`role="img" aria-label="RedLine"`). The e2e measures it: no text node, and the mark fits the
-  title's font size on the editor *and* the dashboard.
+  (editor, dashboard, setup, servers); the mark is now 28 × 28 px — the height of the two-line
+  text block it stands beside (title 13 px + subtitle 11 px at line-height 1.2 ≈ 29 px) — vertically
+  centred with the row, and it keeps the name for screen readers (`role="img" aria-label="RedLine"`).
+  The first fix sized it to the title's *font size* (18 px), which still read as a chip floating
+  next to the title; the mark matches the block, not one line. The e2e measures it: no text node,
+  and the mark's height within 2 px of the title-block height on the editor *and* the dashboard.
 
 The three vertical/horizontal borders are **draggable**: the rail's right edge, the
 inspector's left edge, and the line above the conversation. Each is a 9 px transparent strip over

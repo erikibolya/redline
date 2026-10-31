@@ -123,16 +123,17 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   min-width: 0;
 }
 /* The brand is the icon alone. A wordmark printed "RedLine" beside the title it sits next to,
-   which read as a second heading, and the 22 px tile overtopped the text by half its height.
-   The mark is now the height of the title line it stands beside, so both read as one row. */
+   which read as a second heading. The mark is as tall as the text block beside it — the title's
+   two lines (13 px + 11 px at line-height 1.2 ≈ 29 px), not one 13 px font size: sized to a
+   single line it read as a small chip floating next to the title. */
 .brand { display: flex; align-items: center; }
 .brand-mark {
-  --bar-gap: 4px;
-  width: 18px; height: 18px; border-radius: 5px; background: var(--bg);
+  --bar-gap: 6px;
+  width: 28px; height: 28px; border-radius: 8px; background: var(--bg);
   border: 1px solid var(--border); display: grid; place-items: center;
 }
 .brand-mark i {
-  display: block; width: 10px; height: 2px; border-radius: 2px;
+  display: block; width: 16px; height: 3px; border-radius: 3px;
   background: var(--danger); box-shadow: 0 var(--bar-gap) 0 var(--text);
 }
 .header .title {

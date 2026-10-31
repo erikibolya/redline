@@ -113,11 +113,16 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 ## The header brand
 
 The shell header carries the icon alone — no `RedLine` wordmark, because the app name printed next
-to the session title read as a second heading and its tile overtopped the text. The e2e measures the
-brand on the editor **and** on the dashboard: no text node, exactly one `.brand-mark` with
-`aria-label="RedLine"`, a mark no taller than the title's font size + 6 px, and centred in the
-header row. Text is not a substitute for geometry here: "the wordmark is gone" is a measurement, not
-a class name.
+to the session title read as a second heading. The mark is as tall as the **two-line text block**
+it stands beside (title + subtitle), not the title's font size: sized to one 13 px line it read as a
+chip floating next to the title, and the human had to draw the rectangle they wanted.
+
+The e2e measures the brand on the editor **and** on the dashboard: no text node, exactly one
+`.brand-mark` with `aria-label="RedLine"`, a mark at least twice the title's font size (so it cannot
+regress to a one-line chip) and within 2 px of the title-block height, centred in the header row.
+The block is the union of the title and subtitle lines, never the `.subline` that also carries the
+branch chip. Text is not a substitute for geometry here: "the wordmark is gone" and "it is on par
+with the text" are measurements, not class names.
 
 ## Bug-fix protocol
 

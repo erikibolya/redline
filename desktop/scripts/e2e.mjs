@@ -3308,7 +3308,9 @@ const main = async () => {
     JSON.stringify(historyPlaying));
   await page.click("#viewing-bar");
   await page.waitForFunction(
-    () => !window.redline.viewing && (window.redline.video?.src || "").includes("/media"),
+    () => !window.redline.viewing
+      && (window.redline.video?.src || "").includes("/media")
+      && !document.querySelector("#video-new")?.hidden,
     { timeout: 15000 },
   );
   const backLive = await page.evaluate(() => ({

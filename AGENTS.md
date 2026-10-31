@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.25.0.** Live in production on holly:
+**Current release: v0.26.0.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -220,7 +220,7 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - **A prerelease of the current stable is older, not newer.** Dev builds were versioned
   `0.23.0-dev.N` while stable was already `0.23.0`, so the updater correctly refused to install
   one; "Install latest dev build…" looked broken. `DEV_BASE_VERSION` must be the *next* minor
-  (now 0.26.0); the dev workflow now fails if the base does not sort above the latest stable.
+  (now 0.27.0); the dev workflow now fails if the base does not sort above the latest stable.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.26.0 — 2026-10-31
 
 - **A handoff result can always be reported.** The human can confirm a feature while the agent is
   still finishing, and the round it posts afterwards (`post_round`, or a new clip through

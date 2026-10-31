@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **The working scrim is dark enough to read, and the chrome over the stage follows the theme.**
+  While a round is submitted the canvas carries a scrim, but at `.18` (dark) and `.10` (light) it
+  was invisible on a light stage, so nothing said the canvas was locked. It is now `.28`/`.18`.
+  The centred *"Agent is working — …"* pill and the read-only round bar hard-coded a near-black
+  capsule; on a white screenshot that read as a hole in the picture. Both get a light-theme card
+  (white fill, slate text). The same sweep covers the other surfaces that only had dark colours:
+  the *Delete cancelled* chip, the row-menu hover, the new-review drop zone's drag state, form
+  errors, and the amber banners on the Servers and Setup pages. The e2e reads the computed
+  colours of the pill, the round bar and the scrim in both themes instead of trusting the class.
+
 ## 0.23.0 — 2026-10-31
 
 - **A history glyph belongs to the round's title, not to the middle of the card.** A history row

@@ -180,6 +180,8 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: #1c142f; border: 1px solid #4c1d95; color: #c4b5fd; font-size: 11px;
 }
 .viewing-bar:hover { background: #241a3d; }
+[data-theme="light"] .viewing-bar { background: #f5f3ff; border-color: #c4b5fd; color: #5b21b6; }
+[data-theme="light"] .viewing-bar:hover { background: #ede9fe; }
 
 /* A feature decision is consequential, so it gets a real dialog instead of a native confirm. */
 .feature-dialog {
@@ -277,6 +279,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .settings-claim span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-empty { padding: 6px 0; color: var(--muted); font-size: 11px; }
 .settings-error { margin: 0; color: #fda4af; font-size: 12px; }
+[data-theme="light"] .settings-error { color: #be123c; }
 .settings-actions { display: flex; justify-content: flex-end; gap: 8px; }
 
 /* ---------------------------------------------------------------- buttons */
@@ -435,8 +438,11 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 }
 .session .act:hover { color: var(--text); background: var(--panel-3); border-color: var(--border); }
 .session .act[data-act="menu"]:hover { color: #fda4af; border-color: #7f1d1d; background: #2a1115; }
+[data-theme="light"] .session .act[data-act="menu"]:hover { color: #be123c; border-color: #fda4af; background: #ffe4e6; }
 .chip.danger { border-color: #7f1d1d; color: #fda4af; }
 .chip.danger:hover { background: #2a1115; color: #fecdd3; }
+[data-theme="light"] .chip.danger { border-color: #fda4af; color: #be123c; }
+[data-theme="light"] .chip.danger:hover { background: #ffe4e6; color: #9f1239; }
 .session .badge {
   flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
   display: grid; place-items: center; font-size: 11px; font-weight: 600;
@@ -534,13 +540,15 @@ body.touch .btn { min-height: 38px; }
 body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 
 /* ---------------------------------------------------------------- stage */
-/* A light scrim over the screenshot while the agent has the round. It stays below the toolbar
-   and the status pill, and pointer-events are off so only the explicit guards block input. */
+/* A scrim over the screenshot while the agent has the round. It stays below the toolbar and
+   the status pill, and pointer-events are off so only the explicit guards block input. It has
+   to be dark enough to read as "locked" at a glance: the first pass (`.18` dark, `.10` light)
+   was invisible on the light stage. */
 .stage-dim {
   position: absolute; inset: 0; z-index: 4; pointer-events: none;
-  background: rgba(5, 9, 14, .18); transition: opacity .15s ease;
+  background: rgba(5, 9, 14, .28); transition: opacity .15s ease;
 }
-[data-theme="light"] .stage-dim { background: rgba(15, 23, 42, .10); }
+[data-theme="light"] .stage-dim { background: rgba(15, 23, 42, .18); }
 .stage-status {
   position: absolute; z-index: 6;
   /* Centred in the stage: the submitted lock used to be a dimming modal here, which hid the
@@ -551,6 +559,12 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   background: rgba(15, 23, 42, .9); border: 1px solid #334155;
   color: #e2e8f0; font-size: 12px; line-height: 1.4;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+/* The pill floats over the screenshot, so it is chrome, not a dark-mode surface: on the light
+   stage a black capsule read as a hole in the picture. */
+[data-theme="light"] .stage-status {
+  background: rgba(255, 255, 255, .95); border-color: #cbd5e1;
+  color: #1e293b; box-shadow: 0 8px 24px rgba(30, 41, 59, .18);
 }
 .stage {
   grid-area: stage;
@@ -920,8 +934,10 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .modal .drop-preview[hidden] { display: none; }
 .modal .drop-label { font-size: 12px; }
 .modal .drop.over { border-color: var(--accent); color: var(--text); background: #12233a; }
+[data-theme="light"] .modal .drop.over { background: #e0f2fe; }
 .modal .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .modal .error { color: #fda4af; font-size: 12px; min-height: 18px; margin-top: 8px; }
+[data-theme="light"] .modal .error { color: #be123c; }
 
 /* ---------------------------------------------------------------- help */
 .help-grid { display: grid; grid-template-columns: auto 1fr; gap: 6px 16px; margin-top: 10px; font-size: 12.5px; }

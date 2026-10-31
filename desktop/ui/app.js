@@ -1037,7 +1037,10 @@ const FILTERS = [
 ];
 
 class Rail {
-  constructor({ body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk, onViewChange }) {
+  constructor({
+    body, chips, search, purge, selectedId, onSelect, onAction, onPurge, onBulk, onViewChange,
+    onSessions,
+  }) {
     this.body = body;
     this.chips = chips;
     this.search = search;
@@ -1048,6 +1051,7 @@ class Rail {
     this.onPurge = onPurge;
     this.onBulk = onBulk;
     this.onViewChange = onViewChange;
+    this.onSessions = onSessions;
     this.bulkMode = false;
     this.selection = new Set();
     this.sessions = [];
@@ -1128,6 +1132,9 @@ class Rail {
     this.projects = projects.projects || [];
     this.render();
     this.watchAgentState();
+    // Every view derived from the session list (today the dashboard gallery) is refreshed from
+    // the same load; the editor passes no callback.
+    this.onSessions?.(this);
   }
 
   /// The rail is the one screen that must say "an agent is busy here" without opening the review,
@@ -1145,8 +1152,13 @@ class Rail {
       return;
     }
     const before = workingIds(this.sessions);
+    const beforeData = JSON.stringify(this.sessions);
     this.sessions = sessions;
     if (workingIds(sessions) !== before) this.render();
+    // The dashboard gallery is derived from the same list. It used to be painted only at boot
+    // and on a back-forward restore, so a review cancelled elsewhere could keep its card for as
+    // long as the page stayed open; let the dashboard re-render it with the poll.
+    if (JSON.stringify(sessions) !== beforeData) this.onSessions?.(this);
   }
 
   setSelected(id) {
@@ -4608,7 +4620,10 @@ function renderGallery(rail) {
     .filter((session) => featureState(session) === "pending")
     .slice(0, 12);
   if (!sessions.length) {
+    // Hiding the gallery is not emptying it: the last card stayed in the DOM (hidden), so a
+    // "cancelled review is gone" check kept finding it. Clear the shell too.
     box.hidden = true;
+    box.innerHTML = "";
     return;
   }
   const names = new Map((rail.projects || []).map((project) => [project.slug, project.name]));
@@ -4647,8 +4662,8 @@ function renderGallery(rail) {
 async function bootList() {
   bindRailResize();
   const refresh = async () => {
+    // `rail.load()` hands the fresh list to its `onSessions` subscriber (the gallery).
     await rail.load();
-    renderGallery(rail);
   };
   const rail = new Rail({
     body: $("#rail-body"),
@@ -4707,11 +4722,14 @@ async function bootList() {
       rail.exitBulk();
       await refresh();
     },
+    // The gallery is a view of the same session list; keep it in step with the rail's poll.
+    onSessions: (data) => renderGallery(data),
   });
+  window.redlineRail = rail;
   await rail.load();
-  renderGallery(rail);
   // A dashboard restored from the back-forward cache keeps the DOM it had when the human left it,
-  // including gallery cards for reviews that have since been confirmed or cancelled. Refresh it.
+  // including gallery cards for reviews that have since been confirmed or cancelled. Refresh it
+  // immediately on restore; the rail's 8 s poll keeps it current afterwards.
   addEventListener("pageshow", (event) => {
     if (event.persisted) refresh();
   });

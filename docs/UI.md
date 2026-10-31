@@ -389,7 +389,9 @@ new one.
   Works on the editor and on the start page; drops still work the same way.
 - **Gallery on `/`**: the last twelve *active* reviews as cards with their screenshot, project,
   relative time and status. Confirmed and cancelled features are finished work and stay in the
-  rail's All/Done filters, not on the dashboard. The start screen below it is unchanged.
+  rail's All/Done filters, not on the dashboard. The gallery is re-derived from the rail's 8 s
+  session poll, so a review decided in another tab or before a back-forward restore loses its
+  card without a reload. The start screen below it is unchanged.
 - **Diff overlay**: in the History disclosure, the `◫` button ghosts that round's annotations
   behind the current ones at 35 % opacity; a `Ghost · <stamp>` chip in the header clears it.
   The `Δ` button still prints the textual diff.

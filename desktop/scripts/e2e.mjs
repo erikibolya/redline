@@ -1441,6 +1441,24 @@ const main = async () => {
     Boolean(cancelled.feature_cancelled_at) && !cancelDashboard.selected && !cancelDashboard.card,
     JSON.stringify({ cancelled: cancelled.feature_cancelled_at, ...cancelDashboard }));
 
+  // The dashboard gallery is derived from the rail's session list. A review decided while the
+  // dashboard stayed open must leave the gallery on the next poll, not only after a reload.
+  const pollCancel = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "poll cancel", image_base64: makePng(), project: "e2e" }),
+  });
+  await page.evaluate(() => window.redlineRail.load());
+  await page.waitForSelector(`#gallery .card[data-session="${pollCancel.meta.id}"]`, { timeout: 5000 });
+  await api(`/api/sessions/${pollCancel.meta.id}/cancel-feature`, { method: "POST" });
+  await page.evaluate(() => window.redlineRail.refreshAgentState());
+  const pollState = await page.evaluate((sessionId) => ({
+    card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),
+    cards: document.querySelectorAll("#gallery .card").length,
+    hidden: Boolean(document.querySelector("#gallery")?.hidden),
+  }), pollCancel.meta.id);
+  check("the dashboard gallery follows the rail poll after a review is cancelled",
+    !pollState.card && pollState.cards === 0, JSON.stringify(pollState));
+
   await clickChip("Done");
   await page.waitForSelector(row, { timeout: 5000 });
   await page.$eval(row, (el) => el.click());

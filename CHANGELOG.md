@@ -20,6 +20,13 @@
   under the playhead is marked, a range group stays active to its end, and read-only history
   rounds use the same shape. A second shape on the same moment stays in one group rather than
   making a duplicate header. Image sessions keep the flat list.
+- **The dashboard gallery follows the rail's poll and empties when it hides.** The `/` gallery was
+  painted only at boot and on a back-forward restore, so a review cancelled elsewhere (or restored
+  from the back-forward cache before the refresh landed) could keep its card while the rail itself
+  was already current. Worse, when the last pending review was cancelled, `renderGallery` set
+  `hidden` but left the old card in the DOM. The rail's 8 s session poll now hands the same list to
+  the gallery, and the empty state clears the shell. The e2e cancels a review through the API,
+  calls that poll, and asserts no card remains and the gallery is empty.
 - **The working scrim is dark enough to read, and the chrome over the stage follows the theme.**
   While a round is submitted the canvas carries a scrim, but at `.18` (dark) and `.10` (light) it
   was invisible on a light stage, so nothing said the canvas was locked. It is now `.28`/`.18`.

@@ -366,6 +366,18 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   finished. Move configuration into a dialog opened from the status chip, and leave only an
   invitation while the condition that needs it (no bridge online) is true. Test the dialog from
   both pages, the masked token, and the invitation appearing/disappearing with presence.
+- **A poll that updates the rail does not update the gallery.** The rail already re-read the
+  session list every 8 s, but the `/` gallery was painted only at boot and on a back-forward
+  restore. A review cancelled elsewhere (or a restore whose refresh did not land) kept its card
+  for as long as the dashboard stayed open; the e2e saw it as an intermittent failure of the
+  cancel flow. Treat every derived view as a subscriber of the one poll — hand the fresh list to
+  the gallery — and test the poll, not only a reload. A list that is right in the rail and stale
+  beside it is still wrong.
+- **Hiding a list is not emptying it.** When the last pending review was cancelled, the dashboard
+  set `#gallery.hidden = true` and left the old card in the DOM. The screen looked right, but
+  `querySelector` still found the card, so the e2e's "cancelled review is gone" check failed
+  intermittently depending on whether another pending review kept the gallery visible. Clear the
+  container when you hide it; a visual empty state and an empty DOM are two different claims.
 - **A local page's back link is not a session link.** The Servers and Setup pages are served by
   the desktop app's local server, but the window may be pointed at a remote profile. Their
   `href="/"` returned to the local dashboard, which has no reviews and no agent presence — the

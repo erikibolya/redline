@@ -1,6 +1,6 @@
 # Video annotation feedback — plan (2026-10-31)
 
-Status: **implemented** on `feat/video-annotation-fixes`; browser e2e 228/228 and the Rust
+Status: **implemented** on `feat/video-annotation-fixes`; browser e2e 229/229 and the Rust
 workspace suite are green. Docs updated in `docs/UI.md`, `docs/VIDEO.md`, `docs/TESTING.md` and
 `CHANGELOG.md`.
 

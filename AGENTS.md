@@ -365,6 +365,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   Derive staleness from the live claim (`handoff_stale`), show **handoff stale** with the retry
   action, and make the bridge report failed when a handoff stops while the feature is still
   confirmed. A status label is only evidence when something owns the work.
+- **A killed agent is not a killed process tree.** Killing `opencode` left its shell command and
+  `docker build` grandchildren running; one orphaned `redline:logo-merge` build blocked the Docker
+  legacy builder for four hours and made every later build hang at `COPY` (2026-11-01). Spawn the
+  run in its own process group and `SIGKILL` the group on timeout/STOP, and test a background
+  grandchild as well as the direct child. A build process survives its parent kill unless the
+  parent owns the group.
 - **A local preflight should not rebuild the release image.** The handoff agent spent its budget
   on a full browser image build before pushing. Push a **draft PR** first and let GitHub CI run
   the full suite; locally mount a fresh server binary into the published browser image

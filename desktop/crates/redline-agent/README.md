@@ -35,7 +35,9 @@ redline-agent
 
 The idle timeout is the primary guard: a long build that keeps printing progress survives, while a
 process that has gone silent is killed and reported as `timeout_idle`. The hard cap is only the
-backstop for a run that never stops producing output.
+backstop for a run that never stops producing output. On Unix a killed run takes its whole process
+group with it, including shell commands and `docker build` children, so nothing orphaned can hold
+the Docker builder.
 | `OPENCODE_BIN` | `opencode` | OpenCode binary |
 
 Needs `opencode` with provider auth configured (`opencode auth list`).

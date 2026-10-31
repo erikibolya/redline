@@ -730,6 +730,7 @@ name = "redline-agent"
 version = "0.26.0"
 dependencies = [
  "axum",
+ "libc",
  "redline-core",
  "serde",
  "serde_json",

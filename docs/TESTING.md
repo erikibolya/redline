@@ -72,10 +72,11 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - `redline-agent` tests: `log_line` strips terminal colours, drops blank lines and bounds the
   length; `a_run_is_killed_when_it_goes_silent_or_exceeds_the_hard_cap` runs a fake OpenCode that
   goes silent (must fail with `timeout_idle`), one that keeps printing (must survive the idle
-  window), and one that hits the hard cap (`timeout_hard`); the handoff prompt test asserts the
-  draft-PR-first flow, the `REDLINE_BIN` preflight and the failed-result report; the two-worktree
-  bridge integration test asserts the fake agent's own stdout line arrives in the review as a
-  `state="log"` event.
+  window), and one that hits the hard cap (`timeout_hard`); the idle case also spawns a background
+  grandchild and asserts the process-group kill reaps it (no orphaned builds); the handoff prompt
+  test asserts the draft-PR-first flow, the `REDLINE_BIN` preflight and the failed-result report;
+  the two-worktree bridge integration test asserts the fake agent's own stdout line arrives in the
+  review as a `state="log"` event.
 - Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
   project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
   tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours

@@ -628,7 +628,9 @@ async function featureAction(action, id, title, session = {}) {
     || (session.feature_confirmed_at ? "confirmed"
       : session.feature_cancelled_at ? "cancelled" : "pending");
   const handoff = session.handoff || null;
-  const canRetryHandoff = state === "confirmed" && handoff?.status === "failed";
+  const staleHandoff = Boolean(session.handoff_stale);
+  const canRetryHandoff = state === "confirmed"
+    && (handoff?.status === "failed" || staleHandoff);
   const canHandoff = state === "confirmed" && !handoff;
   if (action === "confirm") {
     const choice = await askFeature({
@@ -700,9 +702,18 @@ function handoffBadge(session) {
   if (!handoff) return "";
   const status = handoff.status;
   const url = handoff.url || "";
+  const stale = Boolean(session.handoff_stale);
   const label = handoff.label
     || (status === "done" ? "done" : status === "failed" ? "handoff failed" : "");
   const title = handoff.message || `Handoff ${status}`;
+  if (stale) {
+    // The integration reported `running` but its claim is gone: the row must not spin forever.
+    const staleLabel = status === "done" ? label : "handoff stale";
+    return url
+      ? `<a class="badge handoff failed handoff-link" href="${escapeHtml(url)}" target="_blank"
+            rel="noopener" title="The handoff agent stopped without reporting a result — retry">${escapeHtml(staleLabel)}</a>`
+      : `<span class="badge handoff failed" title="The handoff agent stopped without reporting a result — retry">${escapeHtml(staleLabel)}</span>`;
+  }
   if (status === "requested") {
     return `<span class="badge handoff requested" title="Waiting for an agent that supports handoff">
       handoff queued</span>`;
@@ -1098,6 +1109,7 @@ const railFingerprint = (sessions) => (sessions || []).map((session) => [
   session.handoff?.label || "",
   session.handoff?.url || "",
   session.handoff?.message || "",
+  session.handoff_stale ? 1 : 0,
 ].join("\u0001")).join("\n");
 
 // Three views are enough: work that is not finished, work that is, and everything. "Active" is
@@ -1420,7 +1432,7 @@ class Rail {
                           : "";
         // The handoff badge sits beside the confirmation: "confirmed" is the decision, while
         // "handoff queued" / "merged" / "handoff failed" is what the integration did with it.
-        const badge = feature === "confirmed" && session.handoff
+        const badge = session.handoff
           ? `${baseBadge}${handoffBadge(session)}`
           : baseBadge;
         parts.push(`
@@ -1456,7 +1468,8 @@ class Rail {
               ${decided
                 ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
                 : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>`}
-              ${session.handoff?.status === "failed"
+              ${(session.handoff?.status === "failed" || session.handoff_stale)
+                && feature === "confirmed"
                 ? `<button class="act" data-act="handoff" title="Retry handoff">↻</button>`
                 : ""}
               <button class="act" data-act="menu"

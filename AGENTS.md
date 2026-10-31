@@ -360,6 +360,17 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   and deploy"; it spent its whole run on a full image build. Say explicitly that a review runs
   focused checks only and must not build/publish the release image or run the release pipeline;
   put the same guidance in the MCP feedback (`review_guidance`) so non-bridge agents see it too.
+- **A handoff status is not a claim.** A stopped/crashed handoff released its branch claim but left
+  `handoff.status=running`, so the rail showed **handing off** forever with no process behind it.
+  Derive staleness from the live claim (`handoff_stale`), show **handoff stale** with the retry
+  action, and make the bridge report failed when a handoff stops while the feature is still
+  confirmed. A status label is only evidence when something owns the work.
+- **A local preflight should not rebuild the release image.** The handoff agent spent its budget
+  on a full browser image build before pushing. Push a **draft PR** first and let GitHub CI run
+  the full suite; locally mount a fresh server binary into the published browser image
+  (`REDLINE_BIN` in `e2e.sh`) and run focused checks. A full `Dockerfile.browser` build is only for
+  changes to the image/system dependencies. Avoid sending a failing ready PR — a draft PR is the
+  safe place to discover a red build.
 - **A live tail is not a conversation.** The agent's own lines are what the human asked for
   ("realtime output… like a regular opencode window"), but every line in the timeline buries the
   messages that need reading. Stream them into the same event log under `state: "log"` (throttled,

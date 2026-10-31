@@ -12,7 +12,7 @@ optional: a green suite that never drew a freehand stroke is not a green suite.
 | Layer | Command | What it proves |
 |---|---|---|
 | Rust unit/integration | `docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm cargo test --workspace` | store layout, HTTP/API, MCP, auth, history, feature decisions, path/config helpers, CLI |
-| Browser e2e | `docker build -q -f desktop/Dockerfile.browser -t redline:local .` then `REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh` | real Chromium: pointer drags, clicks, dialogs, DOM/geometry/canvas pixels, server round-trip |
+| Browser e2e | `docker build -q -f desktop/Dockerfile.browser -t redline:local .` then `REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh` (or `REDLINE_BIN=/path/to/redline REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser` to mount a fresh binary without rebuilding the image) | real Chromium: pointer drags, clicks, dialogs, DOM/geometry/canvas pixels, server round-trip |
 | GitHub CI | required checks on `dev` and `main` | Linux + Windows, Tauri compile, browser e2e, container/image build |
 | Release smoke | the checklist below against the exact tag/image | the thing users install, not just the source tree |
 
@@ -61,7 +61,9 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 
 - Rust `tests/api.rs`: `the_sessions_list_exposes_only_a_live_run_as_working` — no claim reads
   `agent_running=false`, a running claim `true`, a `waiting` claim `false` again, a released claim
-  `false`.
+  `false`; `a_running_handoff_without_a_live_claim_is_exposed_as_stale` — a claimed handoff reads
+  `handoff_stale=false`, releasing the claim while the meta still says `running` exposes
+  `handoff_stale=true`, and re-queueing it returns to `requested` with no stale flag.
 - Rust `tests/mcp.rs`: `a_failed_run_hands_the_round_back_and_says_so` — `reply` with
   `state="failed"` reopens the submitted round, keeps `agent_state=failed`, stores
   `agent_failure {code,message,at}` (`timeout_idle` here), and returns it plus `review_guidance` in
@@ -70,17 +72,20 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - `redline-agent` tests: `log_line` strips terminal colours, drops blank lines and bounds the
   length; `a_run_is_killed_when_it_goes_silent_or_exceeds_the_hard_cap` runs a fake OpenCode that
   goes silent (must fail with `timeout_idle`), one that keeps printing (must survive the idle
-  window), and one that hits the hard cap (`timeout_hard`); the two-worktree bridge integration
-  test asserts the fake agent's own stdout line arrives in the review as a `state="log"` event.
+  window), and one that hits the hard cap (`timeout_hard`); the handoff prompt test asserts the
+  draft-PR-first flow, the `REDLINE_BIN` preflight and the failed-result report; the two-worktree
+  bridge integration test asserts the fake agent's own stdout line arrives in the review as a
+  `state="log"` event.
 - Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
   project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
   tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours
   again" notice with the bridge's message; a `code=timeout_idle` failure shows **agent timed out**
-  on the rail and in the card, not the generic label; the **output** button opens the streamed
-  `log` lines in a popup centred in the viewport (asserted by geometry, and by the fact that
-  nothing is injected into `#conv-log`), a poll keeps feeding it while it is open, the stage toast
-  prints the last *step* and never a log line, and the popup closes from its button, `Esc` and not
-  at all by itself on a reload.
+  on the rail and in the card, not the generic label; a handoff whose claim was released while
+  the meta still says `running` shows **handoff stale** and a retry action, and retrying queues it
+  again; the **output** button opens the streamed `log` lines in a popup centred in the viewport
+  (asserted by geometry, and by the fact that nothing is injected into `#conv-log`), a poll keeps
+  feeding it while it is open, the stage toast prints the last *step* and never a log line, and
+  the popup closes from its button, `Esc` and not at all by itself on a reload.
 
 ## Agent concurrency (v0.22)
 

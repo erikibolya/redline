@@ -148,7 +148,9 @@ Call the MCP tool `handoff_status` after the integration's action:
 
 `state` is `done` or `failed`. `url` must be `http(s)`; `label`/`message` are optional. The server
 stores the result and the rail updates. A report for a feature the human reopened or cancelled in
-the meantime is refused; do not retry it blindly.
+the meantime is refused; do not retry it blindly. A round that lands while the handoff is queued or
+running (the agent posting its own clip or screenshot) does **not** cancel the claim — the human's
+decision stands and the report is accepted.
 
 The tool is in the MCP tool list, and `handoff` also appears in `get_feedback`,
 `wait_for_feedback`, `list_reviews` and `GET /api/sessions`.

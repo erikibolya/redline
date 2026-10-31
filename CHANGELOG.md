@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A handoff result can always be reported.** The human can confirm a feature while the agent is
+  still finishing, and the round it posts afterwards (`post_round`, or a new clip through
+  `new_video_round`) reopens the review — which also cleared `feature_confirmed_at`. On a video
+  session the handoff itself survived that write, so the integration held a running claim the
+  server then refused to accept a result for (*"the feature is not confirmed; ignoring the handoff
+  result"*), and the rail could never leave **handoff running** (2026-10-31). A round that lands
+  while a handoff is queued or running is the agent's own work, not the human coming back, so it
+  keeps the decision and the claim; `handoff_status` now refuses only the decisions that are
+  really dead (cancelled, or reopened with no handoff left), and rows already stranded by 0.25.0
+  can report their result too.
+
 - **The dashboard opens with its content, not empty.** Clicking a filter that no longer contains
   the open review sends the human back to `/`; that full load painted the chip row, the rail and
   the gallery only after `/api/sessions` answered, so the page sat blank and then everything

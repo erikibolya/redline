@@ -116,8 +116,11 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   integration's `label`/`url`/`message`; `/api/agent/next` returns `job=handoff` only to a bridge
   that advertises `jobs:["review","handoff"]` and never to an old bridge; a handoff job's claim
   uses the branch the review actually worked on (including a legacy `session/<id>`).
-- Rust `tests/mcp.rs`: `handoff_status` is listed, refuses an unconfirmed feature, records a
-  generic done/failed result with label/url/message, and refuses a non-http URL.
+  A round posted while a handoff is queued or running (`post_round`, `new_video_round`) keeps the
+  human's confirmation and the integration's claim, and its result is reportable — including a row
+  a 0.25.0 build stranded without the stamp; a cancelled feature still refuses the result.
+- Rust `tests/mcp.rs`: `handoff_status` is listed, refuses a feature with no confirmation and no
+  handoff, records a generic done/failed result with label/url/message, and refuses a non-http URL.
 - Rust `tests/agent.rs`: a bridge advertises `jobs`, a later sync does not downgrade it, and an
   old presence file defaults to review-only.
 - `redline-agent` tests: the review prompt explicitly forbids opening a PR/feature-ready/merging;

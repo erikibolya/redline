@@ -50,7 +50,7 @@
 }
 [data-theme="light"] .options { background: rgba(255, 255, 255, .95); box-shadow: 0 8px 24px rgba(30, 41, 59, .12); }
 [data-theme="light"] .brand-mark { background: #fff; }
-[data-theme="light"] .brand-mark i { box-shadow: 0 5px 0 var(--text); }
+[data-theme="light"] .brand-mark i { box-shadow: 0 var(--bar-gap) 0 var(--text); }
 [data-theme="light"] .session[aria-current="true"] { background: var(--panel-3); }
 [data-theme="light"] .pre { color: #334155; }
 [data-theme="light"] .text-editor { background: #fff; color: var(--text); }
@@ -122,12 +122,20 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   border-bottom: 1px solid var(--border);
   min-width: 0;
 }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: .01em; }
+/* The brand is the icon alone. A wordmark printed "RedLine" beside the title it sits next to,
+   which read as a second heading. The mark is as tall as the text block beside it — the title's
+   two lines (13 px + 11 px at line-height 1.2 ≈ 29 px), not one 13 px font size: sized to a
+   single line it read as a small chip floating next to the title. */
+.brand { display: flex; align-items: center; }
 .brand-mark {
-  width: 22px; height: 22px; border-radius: 6px; background: var(--bg);
+  --bar-gap: 6px;
+  width: 28px; height: 28px; border-radius: 8px; background: var(--bg);
   border: 1px solid var(--border); display: grid; place-items: center;
 }
-.brand-mark i { display: block; width: 13px; height: 2.5px; border-radius: 2px; background: var(--danger); box-shadow: 0 5px 0 var(--text); }
+.brand-mark i {
+  display: block; width: 16px; height: 3px; border-radius: 3px;
+  background: var(--danger); box-shadow: 0 var(--bar-gap) 0 var(--text);
+}
 .header .title {
   min-width: 0; flex: 1;
   display: flex; flex-direction: column; line-height: 1.2;
@@ -493,6 +501,15 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 [data-theme="light"] .session .badge.replied {
   background: #fef3c7; border-color: #fde68a; color: #92400e;
 }
+/* The agent could not run the round at all: red, not amber (nothing is running) and not a count. */
+.session .badge.failed {
+  padding: 0 8px; font-size: 10px; font-weight: 600; white-space: nowrap;
+  background: rgba(244, 63, 94, .16); border-color: rgba(251, 113, 133, .55); color: #fda4af;
+}
+[data-theme="light"] .session .badge.failed {
+  background: #ffe4e6; border-color: #fda4af; color: #9f1239;
+}
+.session.failed .dot { background: #f43f5e; }
 /* The confirmation's outcome. "confirmed" alone is a decision; these say what the integration
    did with it: queued, running, a done label + link (merged/deployed/published), or failed. */
 .session .badge.handoff { text-decoration: none; white-space: nowrap; }
@@ -861,6 +878,17 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   font-size: 10px; letter-spacing: 0; text-transform: none;
 }
 .conv-new:hover { background: var(--panel-2); }
+/* The Output toggle: always visible so the human can find the agent's realtime output, and
+   pressed while the tail is open. */
+.conv-verbose {
+  padding: 1px 8px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--muted);
+  font-size: 10px; letter-spacing: 0; text-transform: none;
+}
+.conv-verbose:hover { color: var(--text); border-color: var(--accent); }
+.conv-verbose[aria-pressed="true"] {
+  border-color: var(--accent); background: var(--panel-3); color: var(--accent);
+}
 .conv-activity {
   margin-left: auto; max-width: 62%; overflow: hidden; text-overflow: ellipsis;
   white-space: nowrap; text-transform: none; letter-spacing: 0; color: var(--accent); font-size: 11px;
@@ -898,6 +926,31 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .conv-run.pending { border-color: rgba(251, 191, 36, .35); background: rgba(251, 191, 36, .06); }
 .conv-run.pending .conv-run-title { color: #fbbf24; }
 .conv-run.pending .conv-run-mark { background: #fbbf24; }
+/* The run never happened: red, no pulse. The round is back in the human's hands. */
+.conv-run.failed { border-color: rgba(244, 63, 94, .45); background: rgba(244, 63, 94, .08); }
+.conv-run.failed .conv-run-title { color: #fda4af; }
+.conv-run.failed .conv-run-mark { background: #f43f5e; }
+[data-theme="light"] .conv-run.failed { background: #fff1f2; border-color: #fecdd3; }
+[data-theme="light"] .conv-run.failed .conv-run-title { color: #9f1239; }
+.conv-wait.failed { border-style: solid; border-color: rgba(251, 113, 133, .5); color: #fda4af; }
+.conv-wait.failed b { color: #fecdd3; }
+[data-theme="light"] .conv-wait.failed { background: #fff1f2; color: #9f1239; }
+[data-theme="light"] .conv-wait.failed b { color: #881337; }
+/* The agent's own output: monospace, scrollable, and clearly a log rather than a message. */
+.conv-output {
+  border: 1px solid var(--border-soft); border-radius: 10px; background: #0b0f14;
+  padding: 6px 8px; max-height: 220px; overflow: auto;
+}
+[data-theme="light"] .conv-output { background: #f6f8fa; }
+.conv-output.live { border-color: rgba(47, 129, 247, .35); }
+.conv-output-head {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  margin-bottom: 4px;
+}
+.conv-output-body {
+  margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px;
+  line-height: 1.45; color: var(--text); white-space: pre-wrap; word-break: break-word;
+}
 @keyframes conv-pulse {
   0%, 100% { opacity: .25; transform: scale(.8); }
   50% { opacity: 1; transform: scale(1.15); }

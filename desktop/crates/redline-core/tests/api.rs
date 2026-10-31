@@ -1193,6 +1193,52 @@ async fn agent_settings_and_branch_are_exposed_and_editable() {
 }
 
 #[tokio::test]
+async fn the_sessions_list_exposes_only_a_live_run_as_working() {
+    let h = harness();
+    let id = submitted_session(&h, "p1", "feat/live").await;
+
+    async fn running(h: &Harness, id: &str) -> Value {
+        let (status, _, body) = send(&h.app, authed("GET", "/api/sessions", json!({}))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        body["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == id)
+            .map(|session| session["agent_running"].clone())
+            .unwrap_or(Value::Null)
+    }
+
+    // Submitted and read, but nobody is running it: "working" would be a promise without evidence.
+    assert_eq!(running(&h, &id).await, json!(false), "no claim, no run");
+
+    let (status, _, body) = claim(&h, &id, "agent").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        running(&h, &id).await,
+        json!(true),
+        "a running claim is a run"
+    );
+
+    // Waiting for the human keeps the branch but frees the slot: the agent is not working.
+    let (status, _, body) = claim_state(&h, &id, "agent", "waiting").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        running(&h, &id).await,
+        json!(false),
+        "a waiting claim is not a run"
+    );
+
+    let (status, _, _) = release_claim(&h, &id, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        running(&h, &id).await,
+        json!(false),
+        "released is not running"
+    );
+}
+
+#[tokio::test]
 async fn agent_claims_enforce_limits_and_waiting_releases_the_slot() {
     let h = harness();
     let a = submitted_session(&h, "p1", "feat/a").await;

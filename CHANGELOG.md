@@ -10,6 +10,34 @@
   `finished_at` and `duration_secs` per round — submit → the agent's next picture, the next human
   submission, or `resolve` — and the History rows plus the conversation's run summary print the
   cost. The fields are additive and omitted while a round is still running.
+- **The header carries the icon, not the wordmark — and the icon is as big as the text.** The shell
+  printed a 22 px tile *and* the word `RedLine` beside the session title, so the app name read as a
+  second heading and the tile overtopped the 13 px text next to it. The wordmark is gone on all four
+  pages (editor, dashboard, setup, servers), and the mark is now 28 px — the height of the two-line
+  title block it stands beside (13 px title + 11 px subtitle) — centred in the header row; screen
+  readers still hear the name through `role="img" aria-label="RedLine"`. The first fix sized it to
+  the title's *font size* (18 px), which still read as a chip floating next to the title. Covered by
+  an e2e measurement of both the editor and the dashboard header (no text node, mark within 2 px of
+  the title block, at least twice the font size).
+- **A failed run no longer looks like a working one, and no longer keeps the round locked.** The
+  bridge reports "I could not run this" through `reply {state:"failed"}` instead of a normal
+  answer; the server sets `agent_state=failed` and hands the review back (`status=open`,
+  annotations and history intact), the rail shows a red **agent failed** badge and the run card
+  turns red. Before, a bridge that could not start OpenCode left the round `submitted` behind a
+  *replied* label: the canvas was locked, the working indicator was gone and nothing said the
+  agent was never coming back (reported as *"the UI is blocked… the working label is not present,
+  is it a bug?"*).
+- **A live claim outranks the last message, so the working label survives a mid-run reply.**
+  `GET /api/sessions` now returns `agent_running`, derived from the bridge's claim while its lease
+  is alive; the rail shows **working** for it even when `agent_state` already says `replied`, and
+  drops the spinner when the claim is released or expires. `agent_state` alone only records who
+  spoke last, so an answer during a long run used to erase the only sign of activity.
+- **The agent's own output is one click away.** The conversation header has an **output** toggle
+  that shows the lines the bridge streams from the OpenCode process (`progress {state:"log"}`,
+  throttled to one line every 2 s, ANSI stripped, ≤ 400 chars, last line of a short run kept) in a
+  monospace tail with the time of the last line. Off by default and remembered per browser, so a
+  wall of tool output never buries the conversation. Requested as *"a button that would show
+  realtime output from the agent, like in a regular opencode window"*.
 
 ## 0.24.0 — 2026-10-31
 

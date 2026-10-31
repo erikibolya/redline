@@ -1583,6 +1583,22 @@ const main = async () => {
   check("the round number is centred inside its square",
     numbered.length > 0 && numbered.every((row) => Math.abs(row.ink) <= 1),
     JSON.stringify(glyphLook));
+  // The live round is marked by its green glyph, not by a permanent fill or border: while a
+  // historical round is being viewed, the live row is not selected and must look like any card.
+  const idleLive = await page.evaluate(() => {
+    const live = document.querySelector("#history-list .history-row.live");
+    const style = getComputedStyle(live);
+    return {
+      selected: live.classList.contains("selected"),
+      look: [style.backgroundColor, style.borderTopColor],
+      glyph: getComputedStyle(live.querySelector(".glyph")).color,
+    };
+  });
+  check("the live row is not selected while an archived round is previewed",
+    !idleLive.selected, JSON.stringify(idleLive));
+  check("the live history row is marked by a green glyph",
+    ["rgb(22, 163, 74)", "rgb(21, 128, 61)"].includes(idleLive.glyph), idleLive.glyph);
+
   await page.click("#viewing-bar");
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
   // `showCurrent` reloads the list; the stale rows still contain `current`, so wait for the
@@ -1591,7 +1607,6 @@ const main = async () => {
     () => Boolean(document.querySelector("#history-list .history-row.live.selected")),
     { timeout: 5000 },
   );
-  // The live round is identified by its green glyph, not by a different fill or border.
   const liveLook = await page.evaluate(() => {
     const live = document.querySelector("#history-list .history-row.live");
     const other = [...document.querySelectorAll("#history-list .history-row")]
@@ -1599,17 +1614,26 @@ const main = async () => {
     const liveStyle = getComputedStyle(live);
     const glyph = getComputedStyle(live.querySelector(".glyph"));
     return {
+      selected: live.classList.contains("selected"),
       live: [liveStyle.backgroundColor, liveStyle.borderTopColor],
       other: other ? [getComputedStyle(other).backgroundColor,
         getComputedStyle(other).borderTopColor] : [],
       glyph: glyph.color,
     };
   });
-  check("the live history row looks like the other rounds",
-    liveLook.other.length === 2 && liveLook.live.join() === liveLook.other.join(),
-    JSON.stringify(liveLook));
-  check("the live history row is marked by a green glyph",
-    ["rgb(22, 163, 74)", "rgb(21, 128, 61)"].includes(liveLook.glyph), liveLook.glyph);
+  // `Current` is the round the canvas shows whenever it is on screen, so it is the selected row
+  // and has to wear the same accent outline as a selected archived round — the human reported it
+  // as an idle card with no idea which round was live.
+  check("the current round is the selected row",
+    liveLook.selected, JSON.stringify(liveLook));
+  check("the selected current row is outlined like any selected round",
+    liveLook.live[1] === borders[0], `${liveLook.live[1]} vs ${borders[0]}`);
+  check("an unselected live row looks like the other rounds",
+    liveLook.other.length === 2 && idleLive.look.join() === liveLook.other.join(),
+    JSON.stringify({ idle: idleLive.look, other: liveLook.other }));
+  check("the live history row keeps its green glyph when selected",
+    liveLook.glyph === idleLive.glyph &&
+      ["rgb(22, 163, 74)", "rgb(21, 128, 61)"].includes(liveLook.glyph), liveLook.glyph);
 
   // ---- unsent annotations survive a session switch
   await page.keyboard.press("r");

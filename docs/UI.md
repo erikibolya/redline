@@ -329,7 +329,9 @@ do not move; it also clicks every close X.
   working" toast is hidden while an archived round is on screen.
 - Every history row is its own card (4 px apart, all four corners rounded). The live round keeps
   the same fill and border as the archived ones; only its glyph is green, and the accent outline
-  marks the round currently being viewed.
+  marks the round currently being viewed — including `Current`, which is the selected row whenever
+  the live canvas is on screen. An unselected live row (while a round is previewed) is an ordinary
+  card.
 - The ghost (`◫`), diff (`Δ`) and open-PNG (`↗`) buttons and the `Ghost · …` chip were removed;
   the diff endpoint remains for agents.
 - The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History

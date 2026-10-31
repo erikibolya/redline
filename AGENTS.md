@@ -273,7 +273,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - **A highlight is not the only way to mark a live row.** The live history row tinted its fill and
   border blue, so it read as a different kind of card; the human asked for the same card as every
   other round with only the glyph green. Colour the smallest marker that has to stand out, and keep
-  selection (which round you are viewing) a separate signal.
+  selection (which round you are viewing) a separate signal. Then keep *both* signals working:
+  dropping the outline from the live row too left `Current` looking like an idle card, and the
+  human could not tell which round the canvas was showing (2026-10-31). The live *default* is a
+  plain card; selection is the accent outline on whichever row is shown, live or archived. Test
+  the unselected live row against a sibling's look and the selected one against the accent.
 
 - **A centred icon is not an aligned icon.** A history row is two lines (title + timestamp) and
   `.ann-row` centres its glyph on the whole row, so the round number and the live bullet floated

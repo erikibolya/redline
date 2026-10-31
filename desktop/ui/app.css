@@ -743,13 +743,15 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 }
 .ann-row .end:hover { background: var(--accent); color: #fff; }
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
-/* History rounds are a list of small, bounded rows — no dead space around them. */
-#history-list .history-row.selected { border-color: var(--accent); background: var(--panel-3); }
 /* The live round is not a different kind of card: it keeps the same fill and border as the
-   archived rounds, and only its glyph turns green so it stands out. When it is the row being
-   viewed (the normal live state) it must not also wear the selection outline. */
-#history-list .history-row.live,
-#history-list .history-row.live.selected { background: var(--panel-2); border-color: var(--border); }
+   archived rounds, and only its glyph turns green so it stands out. Selection — which round the
+   canvas is showing — is a separate signal and belongs to the live row too; the current round is
+   the one normally selected, so without the outline it was indistinguishable from an idle card. */
+#history-list .history-row.live { background: var(--panel-2); border-color: var(--border); }
+/* History rounds are a list of small, bounded rows — no dead space around them. Declared after
+   the live-row default so the outline wins on the row being viewed, live or not. */
+#history-list .history-row.selected,
+#history-list .history-row.live.selected { border-color: var(--accent); background: var(--panel-3); }
 #history-list .history-row.live .glyph {
   background: rgba(22, 163, 74, .16); border-color: rgba(22, 163, 74, .45); color: var(--ok);
 }

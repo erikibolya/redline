@@ -248,6 +248,160 @@ fn a_new_round_clears_the_feature_decision() {
     );
 }
 
+/// A round that lands while the integration holds the handoff is not new human work. The human
+/// already decided; clearing the confirmation here orphaned the handoff, so its result could
+/// never be reported ("the feature is not confirmed") and the rail sat on *handoff running*
+/// forever (2026-10-31).
+#[test]
+fn a_clip_posted_during_a_handoff_keeps_the_human_decision() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Dashboard",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    store.confirm_feature(&meta.id, true).unwrap();
+    store.mark_handoff_running(&meta.id).unwrap();
+
+    let next = store
+        .new_video_round(&meta.id, WEBM, None, Some(2000), None, None, None)
+        .expect("the agent's own clip must land");
+    assert_eq!(
+        next.feature_state(),
+        "confirmed",
+        "a round posted mid-handoff must not undo the human's ✓"
+    );
+    assert_eq!(
+        next.handoff.as_ref().map(|handoff| handoff.status),
+        Some(HandoffStatus::Running),
+        "the integration keeps the claim it was given"
+    );
+
+    let done = store
+        .report_handoff(
+            &meta.id,
+            HandoffReport {
+                status: HandoffStatus::Done,
+                label: Some("merged".to_string()),
+                url: Some("https://github.com/o/r/pull/1".to_string()),
+                message: Some("merge commit abc".to_string()),
+            },
+        )
+        .expect("the integration must be able to report its result");
+    assert_eq!(
+        done.handoff.as_ref().map(|handoff| handoff.status),
+        Some(HandoffStatus::Done)
+    );
+}
+
+/// The same rule for a screenshot round: `post_round` used to drop the handoff and the
+/// confirmation together, which left the integration holding a claim nobody could report.
+#[test]
+fn a_screenshot_round_posted_during_a_handoff_keeps_the_handoff() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "shot.png", "Feature", "", "", None, None, None)
+        .unwrap();
+    store.confirm_feature(&meta.id, true).unwrap();
+    store.mark_handoff_running(&meta.id).unwrap();
+
+    let next = store
+        .post_round(&meta.id, None, "", "done", None, None)
+        .unwrap();
+    assert_eq!(next.feature_state(), "confirmed");
+    assert_eq!(
+        next.handoff.as_ref().map(|handoff| handoff.status),
+        Some(HandoffStatus::Running)
+    );
+    assert!(
+        store
+            .report_handoff(
+                &meta.id,
+                HandoffReport {
+                    status: HandoffStatus::Done,
+                    label: Some("merged".to_string()),
+                    url: None,
+                    message: None,
+                },
+            )
+            .is_ok(),
+        "a posted round must not strand the running handoff"
+    );
+}
+
+/// Rows written by a build that already lost the stamp (0.25.0 kept the handoff but cleared the
+/// confirmation) must still be reportable rather than stuck at *handoff running* for good.
+#[test]
+fn a_handoff_result_is_accepted_after_an_older_build_lost_the_confirmation() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "shot.png", "Feature", "", "", None, None, None)
+        .unwrap();
+    store.confirm_feature(&meta.id, true).unwrap();
+    store.mark_handoff_running(&meta.id).unwrap();
+
+    let path = store.dir(&meta.id).unwrap().join("meta.json");
+    let mut saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    saved
+        .as_object_mut()
+        .expect("meta is an object")
+        .remove("feature_confirmed_at");
+    std::fs::write(&path, serde_json::to_string(&saved).unwrap()).unwrap();
+
+    let done = store
+        .report_handoff(
+            &meta.id,
+            HandoffReport {
+                status: HandoffStatus::Done,
+                label: Some("merged".to_string()),
+                url: Some("https://github.com/o/r/pull/1".to_string()),
+                message: Some("merge commit abc".to_string()),
+            },
+        )
+        .expect("an in-flight handoff must be reportable");
+    assert_eq!(
+        done.handoff.as_ref().map(|handoff| handoff.status),
+        Some(HandoffStatus::Done)
+    );
+}
+
+/// A cancelled feature is still a dead decision: the integration must not resurrect it.
+#[test]
+fn a_cancelled_feature_refuses_a_handoff_result() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "shot.png", "Feature", "", "", None, None, None)
+        .unwrap();
+    store.confirm_feature(&meta.id, true).unwrap();
+    store.mark_handoff_running(&meta.id).unwrap();
+    store.cancel_feature(&meta.id).unwrap();
+
+    let error = store
+        .report_handoff(
+            &meta.id,
+            HandoffReport {
+                status: HandoffStatus::Done,
+                label: Some("merged".to_string()),
+                url: None,
+                message: None,
+            },
+        )
+        .expect_err("a cancelled feature keeps its decision");
+    assert!(error.to_string().contains("cancelled"), "{error}");
+}
+
 #[test]
 fn list_is_newest_first_and_remove_is_permanent() {
     let (_dir, store) = store();

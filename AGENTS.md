@@ -447,6 +447,16 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   bridge that sends no `jobs` is never handed a handoff job. Test the review prompt *forbids*
   handing off, the confirm → `next(job=handoff)` path, the MCP report, and the rail badge; a
   status label that merely says "confirmed" is not a handoff.
+- **A claim nobody can report is a dead rail.** The human can press ✓ while the agent is still
+  finishing, and the round the agent posts afterwards reopens the review — which also cleared
+  `feature_confirmed_at`. On a video session the handoff survived that write on its own, so the
+  integration held a running claim and the server refused its result forever (*"the feature is not
+  confirmed; ignoring the handoff result"*), leaving the rail on **handoff running** with no way
+  out (2026-10-31). A round that lands **while a handoff is queued or running** is the agent's own
+  work, not the human coming back: keep the decision and the claim (`post_round`,
+  `new_video_round`), and let `handoff_status` refuse only decisions that are really dead —
+  cancelled, or reopened with no handoff left. Test the mid-handoff round, the stranded row from
+  the old build, and the refusal that must stay.
 - **A row with no badge is not a neutral row.** The rail badge chain covered working, feature
   decisions, waiting/replied, unread and the annotation count — everything except a plain finished
   review and an open round nobody had drawn on, so those rows were unlabelled cards and the human

@@ -1303,8 +1303,13 @@ impl Store {
         meta.seen_by_agent_at = None;
         meta.agent_state = None;
         meta.agent_failure = None;
-        meta.feature_confirmed_at = None;
-        meta.feature_cancelled_at = None;
+        // A round that lands while a handoff is queued or running is not new human work: the
+        // human already decided, and dropping the confirmation here orphaned the handoff so its
+        // result could never be reported (2026-10-31).
+        if meta.handoff.is_none() {
+            meta.feature_confirmed_at = None;
+            meta.feature_cancelled_at = None;
+        }
         meta.prompt = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
@@ -1439,10 +1444,13 @@ impl Store {
         meta.status = Status::Open;
         meta.submitted_at = None;
         meta.resolved_at = None;
-        // New work after a decision makes the feature pending again.
-        meta.feature_confirmed_at = None;
-        meta.feature_cancelled_at = None;
-        meta.handoff = None;
+        // New work after a decision makes the feature pending again — unless the integration is
+        // holding a handoff for it. That round is the agent's own result, not the human coming
+        // back, and dropping the decision stranded the claim with no way to report it.
+        if meta.handoff.is_none() {
+            meta.feature_confirmed_at = None;
+            meta.feature_cancelled_at = None;
+        }
         meta.agent_state = Some("replied".to_string());
         meta.agent_failure = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -1661,7 +1669,16 @@ impl Store {
     pub fn report_handoff(&self, id: &str, report: HandoffReport) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
-        if meta.feature_confirmed_at.is_none() {
+        // Refuse only a dead decision: the human cancelled the feature, or reopened it and its
+        // handoff went with the round. A missing confirmation while a handoff is still queued or
+        // running is a round that landed mid-handoff (0.25.0 cleared the stamp and orphaned the
+        // claim), and refusing that stranded the integration's result forever (2026-10-31).
+        if meta.feature_cancelled_at.is_some() {
+            return Err(Error::BadRequest(
+                "the feature was cancelled; ignoring the handoff result".to_string(),
+            ));
+        }
+        if meta.feature_confirmed_at.is_none() && meta.handoff.is_none() {
             return Err(Error::BadRequest(
                 "the feature is not confirmed; ignoring the handoff result".to_string(),
             ));

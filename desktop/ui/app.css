@@ -50,7 +50,7 @@
 }
 [data-theme="light"] .options { background: rgba(255, 255, 255, .95); box-shadow: 0 8px 24px rgba(30, 41, 59, .12); }
 [data-theme="light"] .brand-mark { background: #fff; }
-[data-theme="light"] .brand-mark i { box-shadow: 0 5px 0 var(--text); }
+[data-theme="light"] .brand-mark i { box-shadow: 0 var(--bar-gap) 0 var(--text); }
 [data-theme="light"] .session[aria-current="true"] { background: var(--panel-3); }
 [data-theme="light"] .pre { color: #334155; }
 [data-theme="light"] .text-editor { background: #fff; color: var(--text); }
@@ -122,12 +122,19 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   border-bottom: 1px solid var(--border);
   min-width: 0;
 }
-.brand { display: flex; align-items: center; gap: 8px; font-weight: 600; letter-spacing: .01em; }
+/* The brand is the icon alone. A wordmark printed "RedLine" beside the title it sits next to,
+   which read as a second heading, and the 22 px tile overtopped the text by half its height.
+   The mark is now the height of the title line it stands beside, so both read as one row. */
+.brand { display: flex; align-items: center; }
 .brand-mark {
-  width: 22px; height: 22px; border-radius: 6px; background: var(--bg);
+  --bar-gap: 4px;
+  width: 18px; height: 18px; border-radius: 5px; background: var(--bg);
   border: 1px solid var(--border); display: grid; place-items: center;
 }
-.brand-mark i { display: block; width: 13px; height: 2.5px; border-radius: 2px; background: var(--danger); box-shadow: 0 5px 0 var(--text); }
+.brand-mark i {
+  display: block; width: 10px; height: 2px; border-radius: 2px;
+  background: var(--danger); box-shadow: 0 var(--bar-gap) 0 var(--text);
+}
 .header .title {
   min-width: 0; flex: 1;
   display: flex; flex-direction: column; line-height: 1.2;

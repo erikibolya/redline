@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The header carries the icon, not the wordmark.** The shell printed a 22 px tile *and* the word
+  `RedLine` beside the session title, so the app name read as a second heading and the tile
+  overtopped the 13 px text next to it. The wordmark is gone on all four pages (editor, dashboard,
+  setup, servers), and the mark is sized to the title line (18 px) and centred in the header row;
+  screen readers still hear the name through `role="img" aria-label="RedLine"`. Covered by an e2e
+  measurement of both the editor and the dashboard header (no text node, mark within the title's
+  font size).
+
 ## 0.24.0 — 2026-10-31
 
 - **"Install latest dev build…" offers the newest dev build again.** Dev builds were versioned

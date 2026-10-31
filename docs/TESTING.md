@@ -110,6 +110,15 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Destructive actions: assert the confirmation and the state after it.
 - If the control is visual, measure it. A border is not a separator just because the class exists.
 
+## The header brand
+
+The shell header carries the icon alone — no `RedLine` wordmark, because the app name printed next
+to the session title read as a second heading and its tile overtopped the text. The e2e measures the
+brand on the editor **and** on the dashboard: no text node, exactly one `.brand-mark` with
+`aria-label="RedLine"`, a mark no taller than the title's font size + 6 px, and centred in the
+header row. Text is not a substitute for geometry here: "the wordmark is gone" is a measurement, not
+a class name.
+
 ## Bug-fix protocol
 
 1. Reproduce the bug in the real UI (or the real API) and capture the failing state.

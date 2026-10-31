@@ -14,7 +14,7 @@ options, right inspector, status bar. We borrow the layout, not the feature set.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│ header:   redline · <session title>          ⚙ ⌨ ☀ │ ▤ ▥   [review actions]   │
+│ header:   [icon] <session title>             ⚙ ⌨ ☀ │ ▤ ▥   [review actions]   │
 ├──────────────┬───────────────────────────────────────────────┬───────────────┤
 │ left rail    │  options bar (floating, top-centre)           │ right panel   │
 │ 264px        │  [V][R][A][P][T]   colour   width   zoom      │ 300px         │
@@ -52,6 +52,14 @@ column.
   *waiting for agent* / *confirmed* / *cancelled*, the stage toast says what the agent is doing,
   and the composer/STOP button says whose turn it is. The e2e asserts the header has no `.pill`
   and that those states still render in the toast and the rail card.
+
+- **The brand is the icon, not a wordmark.** The header showed a 22 × 22 px tile *plus* the word
+  `RedLine`, so the app name sat next to the session title as if it were a second heading, and the
+  tile stood half a head taller than the 13 px text beside it. The wordmark is gone on every page
+  (editor, dashboard, setup, servers); the mark is now 18 × 18 px — the height of the title line
+  it stands beside — vertically centred with the row, and it keeps the name for screen readers
+  (`role="img" aria-label="RedLine"`). The e2e measures it: no text node, and the mark fits the
+  title's font size on the editor *and* the dashboard.
 
 The three vertical/horizontal borders are **draggable**: the rail's right edge, the
 inspector's left edge, and the line above the conversation. Each is a 9 px transparent strip over

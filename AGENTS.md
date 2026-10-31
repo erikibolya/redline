@@ -414,6 +414,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   bridge that sends no `jobs` is never handed a handoff job. Test the review prompt *forbids*
   handing off, the confirm → `next(job=handoff)` path, the MCP report, and the rail badge; a
   status label that merely says "confirmed" is not a handoff.
+- **A wordmark beside a title is a second title.** The shell header printed the icon *and*
+  `RedLine`, so the app name competed with the session title it sat next to, and the 22 px tile
+  stood half a head above the 13 px text (2026-10-31). The header now carries the icon alone, sized
+  to the title line it stands beside, with the name kept for screen readers (`aria-label`). Two
+  words of brand next to one word of content is a heading, not a mark; when a label is removed for
+  looks, keep it for assistive tech and measure the result in the e2e.
 
 ## 8. Working rules
 

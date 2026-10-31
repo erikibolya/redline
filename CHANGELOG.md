@@ -2,6 +2,11 @@
 
 ## 0.25.0 — 2026-10-31
 
+- **A history round stays the round you opened.** A live conversation poll that was already in
+  flight could finish after a history round started loading and replace its archived clip with the
+  live one (the annotations stayed historical, so the picture and the marks disagreed). The poll
+  now re-checks the session and `viewing`/round-load state after its awaits, and a round load is
+  atomic: a later poll or another round click can no longer paint over it.
 - **Errors no longer hide in Done.** The rail had five views (`All`, `Active`, `Open`,
   `Submitted`, `Done`), and `Active` meant "not resolved" — so a confirmed feature whose handoff
   was queued, running or failed sat in `Done`, together with the `handoff failed` /

@@ -1511,6 +1511,9 @@ class Editor {
     this.locked = false;
     this.serverAnnotations = "[]";
     this.viewing = null;
+    // Bumped when a history round starts loading. A conversation poll that was already in flight
+    // must not finish and paint the live clip over the archived one (or the new session's meta).
+    this.roundLoad = 0;
     this.live = null;
     this.historyEntries = [];
     this.draftNotice = null;
@@ -1689,6 +1692,7 @@ class Editor {
     clearTimeout(this.draftTimer);
     $("#stage").classList.remove("hidden");
     this.viewing = null;
+    this.roundLoad = 0;
     this.live = null;
     this.updateViewingBar();
     try {
@@ -3722,12 +3726,15 @@ class Editor {
   async viewRound(stamp) {
     if (this.viewing?.stamp === stamp) return;
     this.saveDraft();
+    const sessionId = this.sessionId;
+    const load = ++this.roundLoad;
     try {
       const response = await fetch(
-        `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(`${stamp}.json`)}`,
+        `/sessions/${encodeURIComponent(sessionId)}/history/${encodeURIComponent(`${stamp}.json`)}`,
       );
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const set = await response.json();
+      if (this.roundLoad !== load || sessionId !== this.sessionId) return;
       const round = (this.historyEntries || []).find((entry) => entry.stamp === stamp);
       if (!this.viewing) {
         this.live = {
@@ -3744,14 +3751,17 @@ class Editor {
       let image;
       if (historyVideo) {
         image = await this.loadVideoFrom(
-          `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(stamp)}/video`,
+          `/sessions/${encodeURIComponent(sessionId)}/history/${encodeURIComponent(stamp)}/video`,
         );
       } else {
         const file = round?.source ? `${stamp}-source.png` : `${stamp}.png`;
         image = await this.loadImageFrom(
-          `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(file)}`,
+          `/sessions/${encodeURIComponent(sessionId)}/history/${encodeURIComponent(file)}`,
         );
       }
+      // A poll or another round may have taken over while the media loaded; never paint this
+      // round over the newer state.
+      if (this.roundLoad !== load || sessionId !== this.sessionId) return;
       if (!image) return;
       this.viewing = {
         stamp,
@@ -3771,11 +3781,14 @@ class Editor {
       this.loadHistory();
     } catch (error) {
       console.warn("round view failed", error);
+    } finally {
+      if (this.roundLoad === load) this.roundLoad = 0;
     }
   }
 
   async showCurrent() {
     this.viewing = null;
+    this.roundLoad = 0;
     this.live = null;
     this.updateViewingBar();
     try {
@@ -3874,18 +3887,22 @@ class Editor {
   async loadConversation({ quiet = false } = {}) {
     const log = $("#conv-log");
     if (!log) return;
+    const sessionId = this.sessionId;
     // A historical round is a viewer; the live poll must not overwrite it.
-    if (this.viewing) return;
+    if (this.viewing || this.roundLoad) return;
     if (!quiet && !log.childElementCount) {
       log.innerHTML = `<div class="inspector-empty">Loading…</div>`;
     }
     try {
-      const id = encodeURIComponent(this.sessionId);
+      const id = encodeURIComponent(sessionId);
       const [session, thread, events] = await Promise.all([
         api(`/api/sessions/${id}`),
         api(`/api/sessions/${id}/thread`),
         api(`/api/sessions/${id}/events`),
       ]);
+      // The poll may have started before the human opened a history round or switched sessions;
+      // its response must not paint the live clip or the old session over the newer state.
+      if (sessionId !== this.sessionId || this.viewing || this.roundLoad) return;
       const previousImage = this.meta?.image;
       const previousMedia = mediaIdentity(this.meta);
       this.meta = session.meta;

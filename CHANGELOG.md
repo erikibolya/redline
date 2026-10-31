@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **"Install latest dev build…" offers the newest dev build again.** Dev builds were versioned
+  `0.23.0-dev.N` after stable `0.23.0` had shipped; semver correctly treats that as an *older*
+  prerelease, so the updater refused it and the menu looked broken. The dev base is now `0.24.0`,
+  and the dev workflow fails unless `DEV_BASE_VERSION` sorts above the latest stable release. The
+  next dev build (`0.24.0-dev.<run>`) is offered to an installed `0.23.0` (and to
+  `0.23.0-dev.68`).
 - **Unsent video work survives leaving the review.** Drafts were an in-memory `Map`, so a rail
   switch kept them but a dashboard round-trip, a reload or the desktop webview navigating started
   a new document and threw away every timecoded shape. Drafts now live in `localStorage` per

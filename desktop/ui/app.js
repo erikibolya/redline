@@ -293,6 +293,30 @@ const prefs = {
 };
 
 /**
+ * The last session list this tab painted, so a page reached by a full load can show it while the
+ * network answers. Clicking a filter that excludes the open review navigates the editor to the
+ * dashboard; the dashboard started with an empty rail and no gallery, then popped both in and
+ * pushed "Start a review" down the page (2026-10-31). sessionStorage is per tab — exactly the
+ * window a navigation happens in — and the first API response replaces the cache.
+ */
+const listCache = {
+  key: "redline:list",
+  read() {
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(this.key) || "null");
+      return cached && Array.isArray(cached.sessions) ? cached : null;
+    } catch {
+      return null;
+    }
+  },
+  write(sessions, projects) {
+    try {
+      sessionStorage.setItem(this.key, JSON.stringify({ sessions, projects }));
+    } catch { /* private mode or quota */ }
+  },
+};
+
+/**
  * Unsent canvas work per session. v0.16 kept this in a Map, so it survived a rail switch but not
  * a real navigation/reload — a video round with dozens of timecoded shapes vanished when the
  * human went back to the dashboard. localStorage keeps the same small interface and makes a
@@ -1161,7 +1185,24 @@ class Rail {
     if (this.filter !== stored) prefs.set("filter", this.filter);
     this.query = "";
     this.agentTimer = null;
+    this.loaded = false;
     this.wire();
+    // The chip row is static chrome: it belongs on the first paint, not after the session list
+    // arrives. Counts wait for the data (see `renderChips`), the buttons do not.
+    this.renderChips();
+  }
+
+  /// Paint the list this tab last saw, before the first response lands. `bootList` calls it so a
+  /// dashboard reached by a full load does not open empty and then shift as the gallery pops in.
+  hydrate() {
+    const cached = listCache.read();
+    if (!cached) return false;
+    this.sessions = cached.sessions;
+    this.projects = cached.projects || [];
+    this.loaded = true;
+    this.render();
+    this.onSessions?.(this);
+    return true;
   }
 
   wire() {
@@ -1220,11 +1261,18 @@ class Rail {
 
   async load() {
     const [sessions, projects] = await Promise.all([
-      api("/api/sessions").catch(() => ({ sessions: [] })),
-      api("/api/projects").catch(() => ({ projects: [] })),
+      api("/api/sessions").catch(() => null),
+      api("/api/projects").catch(() => null),
     ]);
-    this.sessions = sessions.sessions || [];
-    this.projects = projects.projects || [];
+    this.loaded = true;
+    // A failed request is not evidence that the list is empty: keep what this tab already
+    // painted (the cache, or a previous answer) and leave the cache alone, instead of blanking
+    // the page and waiting for a network it just proved it cannot reach.
+    if (sessions) {
+      this.sessions = sessions.sessions || [];
+      this.projects = projects?.projects || [];
+      listCache.write(this.sessions, this.projects);
+    }
     this.render();
     this.watchAgentState();
     // Every view derived from the session list (today the dashboard gallery) is refreshed from
@@ -1257,7 +1305,10 @@ class Rail {
     // The dashboard gallery is derived from the same list. It used to be painted only at boot
     // and on a back-forward restore, so a review cancelled elsewhere could keep its card for as
     // long as the page stayed open; let the dashboard re-render it with the poll.
-    if (JSON.stringify(sessions) !== beforeData) this.onSessions?.(this);
+    if (JSON.stringify(sessions) !== beforeData) {
+      listCache.write(sessions, this.projects);
+      this.onSessions?.(this);
+    }
   }
 
   setSelected(id) {
@@ -1298,11 +1349,14 @@ class Rail {
     const failed = this.sessions.filter((session) => session.handoff?.status === "failed").length;
     this.chips.innerHTML = FILTERS.map((filter) => {
       const attention = filter.id === "active" && failed > 0;
+      // Before the first response there is no count to print; the buttons are already here. A
+      // lone `0` would read as "you have no reviews".
+      const count = this.loaded ? `<b>${counts[filter.id]}</b>` : "";
       return `
         <button class="chip${attention ? " attention" : ""}" type="button"
                 data-filter="${filter.id}" aria-pressed="${this.filter === filter.id}"
                 ${attention ? `title="${plural(failed, "review")} with a failed handoff"` : ""}>
-          ${filter.label}<b>${counts[filter.id]}</b>
+          ${filter.label}${count}
         </button>`;
     }).join("");
     $$(".chip", this.chips).forEach((chip) =>
@@ -4920,9 +4974,22 @@ const NewReview = {
 /// The start page is a gallery: the last few reviews with their screenshots. A decided review
 /// (confirmed or cancelled) is finished work, not something to resume, so it does not belong
 /// here — the rail's All/Done filters are where history lives.
+/// A cold visit has nothing cached to paint: one placeholder card of the same shape (an image
+/// at the same aspect ratio, a title line and the two-line meta a card usually carries) keeps
+/// the row's height, so the first response replaces it without moving "Start a review" down the
+/// page (2026-10-31). A card's meta wraps by its text, so this reserves the common case, not
+/// every one.
+function gallerySkeleton() {
+  return `<span class="card skeleton" aria-hidden="true">
+    <span class="thumb"></span>
+    <span class="card-body"><b>&nbsp;</b><span>&nbsp;<br>&nbsp;</span></span>
+  </span>`;
+}
+
 function renderGallery(rail) {
   const box = $("#gallery");
   if (!box) return;
+  box.classList.remove("loading");
   const sessions = (rail.sessions || [])
     .filter((session) => featureState(session) === "pending")
     .slice(0, 12);
@@ -5033,6 +5100,23 @@ async function bootList() {
     onSessions: (data) => renderGallery(data),
   });
   window.redlineRail = rail;
+  const count = $("#sessions-count");
+  const paintCount = () => {
+    if (count) count.textContent = plural(rail.sessions.length, "session");
+  };
+  // Paint what this tab already had before the first response: a dashboard opened by a full load
+  // must not show an empty rail and a blank main column that fill in a moment later.
+  if (!rail.hydrate()) {
+    // Nothing cached (a cold visit): reserve the row the gallery will occupy with a placeholder
+    // card of the same shape instead of letting the real cards push "Start a review" down.
+    const gallery = $("#gallery");
+    if (gallery) {
+      gallery.hidden = false;
+      gallery.classList.add("loading");
+      gallery.innerHTML = gallerySkeleton();
+    }
+  }
+  paintCount();
   await rail.load();
   // A dashboard restored from the back-forward cache keeps the DOM it had when the human left it,
   // including gallery cards for reviews that have since been confirmed or cancelled. Refresh it
@@ -5042,8 +5126,7 @@ async function bootList() {
   });
   NewReview.wire();
   $("#new-review").addEventListener("click", () => NewReview.open());
-  const count = $("#sessions-count");
-  if (count) count.textContent = plural(rail.sessions.length, "session");
+  paintCount();
 }
 
 /* ------------------------------------------------------------------ boot */

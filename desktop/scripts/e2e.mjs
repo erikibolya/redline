@@ -1710,6 +1710,76 @@ const main = async () => {
     !filteredOut.selected && filteredOut.filter === "done", JSON.stringify(filteredOut));
   await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
+
+  // ---- a full page load paints the rail and the gallery this tab already had
+  // Review 2026-10-31: the redirect above opened the dashboard with no chips and no gallery,
+  // and when `/api/sessions` answered both popped in and pushed "Start a review" down the page.
+  // The list is cached per tab and painted at boot; hold the request to prove the paint does not
+  // depend on it, then release it and prove the page does not move.
+  const measureDashboard = () => page.evaluate(() => {
+    const heading = [...document.querySelectorAll(".list-main h2")]
+      .find((node) => node.textContent.trim() === "Start a review");
+    return {
+      chips: document.querySelectorAll("#chips .chip").length,
+      rail: document.querySelectorAll("#rail-body .session").length,
+      cards: document.querySelectorAll("#gallery .card").length,
+      heading: heading ? Math.round(heading.getBoundingClientRect().top) : -1,
+    };
+  });
+  await page.setRequestInterception(true);
+  const held = [];
+  const holdSessions = (request) => {
+    if (new URL(request.url()).pathname === "/api/sessions") held.push(request);
+    else request.continue();
+  };
+  page.on("request", holdSessions);
+  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelectorAll("#chips .chip").length > 0,
+    { timeout: 3000 }).catch(() => {});
+  const firstPaint = await measureDashboard();
+  check("the dashboard paints chips, rail and gallery before the session list answers",
+    firstPaint.chips === 3 && firstPaint.rail > 0 && firstPaint.cards > 0,
+    JSON.stringify(firstPaint));
+  held.splice(0).forEach((request) => request.continue());
+  page.off("request", holdSessions);
+  await page.setRequestInterception(false);
+  // The paint does not wait for the answer; the page must not move when it lands either.
+  await page.waitForNetworkIdle({ idleTime: 500, timeout: 8000 }).catch(() => {});
+  const settled = await measureDashboard();
+  check("the dashboard does not shift when the session list lands",
+    Math.abs(settled.heading - firstPaint.heading) <= 2,
+    `${firstPaint.heading} → ${settled.heading}`);
+
+  // A cold visit has no cache to paint from, so the gallery reserves its row with a placeholder
+  // card of the real card's shape. Clear the cache, hold the answer again, and measure the same
+  // thing: a placeholder is there, and the page does not move when it is replaced.
+  await page.evaluate(() => sessionStorage.clear());
+  await page.setRequestInterception(true);
+  const coldHeld = [];
+  const holdColdSessions = (request) => {
+    if (new URL(request.url()).pathname === "/api/sessions") coldHeld.push(request);
+    else request.continue();
+  };
+  page.on("request", holdColdSessions);
+  await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => document.querySelectorAll("#gallery .card").length > 0,
+    { timeout: 3000 }).catch(() => {});
+  const coldPaint = await measureDashboard();
+  coldHeld.splice(0).forEach((request) => request.continue());
+  page.off("request", holdColdSessions);
+  await page.setRequestInterception(false);
+  await page.waitForFunction(
+    () => document.querySelectorAll("#gallery .card:not(.skeleton)").length > 0,
+    { timeout: 8000 }).catch(() => {});
+  const coldSettled = await measureDashboard();
+  // A card's meta line wraps with its text, so the placeholder reserves the common two-line card
+  // rather than any one card's exact height: allow one wrapped line, but nothing like the row a
+  // page without a placeholder gives up (a card is ~190 px there).
+  check("a cold dashboard reserves the gallery row and does not shift when the list lands",
+    coldPaint.chips === 3
+      && Boolean(coldPaint.cards) && Math.abs(coldSettled.heading - coldPaint.heading) <= 20,
+    `${coldPaint.heading} → ${coldSettled.heading}, cards ${coldPaint.cards} → ${coldSettled.cards}`);
+
   await page.$eval(row, (el) => el.click());
   await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
     { timeout: 10000 }, id);

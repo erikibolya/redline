@@ -2,7 +2,8 @@
 
 Status: **shipped in v0.23.0** (server media core, browser upload, canvas
 playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full frames,
-new video rounds/history playback and agent `post_round` video). Phase 4 is the release pass.
+new video rounds/history playback and agent `post_round` video). The annotation feedback fixes —
+persistent drafts, timestamp groups, hidden-by-default other moments — shipped in **v0.24.0**.
 
 ## 0. Decisions from the product owner (2026-10-31)
 

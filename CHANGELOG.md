@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.24.0 — 2026-10-31
 
 - **"Install latest dev build…" offers the newest dev build again.** Dev builds were versioned
   `0.23.0-dev.N` after stable `0.23.0` had shipped; semver correctly treats that as an *older*

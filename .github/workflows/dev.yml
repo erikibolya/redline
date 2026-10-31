@@ -24,7 +24,7 @@ env:
   # Dev builds must sort *above* the current stable line, otherwise the updater refuses them:
   # `0.23.0-dev.68` is a prerelease of 0.23.0, so an installed 0.23.0 will never offer it.
   # Bump this when a new stable minor is released; the workflow checks it below.
-  DEV_BASE_VERSION: "0.24.0"
+  DEV_BASE_VERSION: "0.25.0"
 
 jobs:
   windows:

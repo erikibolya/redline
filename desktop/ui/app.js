@@ -81,6 +81,32 @@ const agentWorking = (meta) => meta?.status === "submitted" &&
  *  it must not spin: it is a visible dead end the human can fix and resubmit. */
 const agentFailed = (meta) => meta?.agent_state === "failed";
 
+/** The structured reason a run failed (v0.25.1). Older meta has none; the UI then says the
+ *  generic "agent failed" as before. */
+const agentFailure = (meta) => meta?.agent_failure || null;
+const agentFailureIsTimeout = (meta) =>
+  String(agentFailure(meta)?.code || "").startsWith("timeout");
+
+/** The last line the agent actually narrated. Its own terminal output also lands in the event
+ *  log (`state: "log"`) and is a shell transcript, not a step — the stage toast and the activity
+ *  label must never print a command where a status belongs (2026-10-31). */
+const latestStep = (events) => {
+  const list = events || [];
+  for (let index = list.length - 1; index >= 0; index -= 1) {
+    const event = list[index];
+    if (event.state !== "log" && String(event.message || "").trim()) return event;
+  }
+  return null;
+};
+
+/** One short line: a `progress` message can be a paragraph and the toast is a pill. The full text
+ *  stays reachable through its `title`. */
+const stepLabel = (message, limit = 80) => {
+  const line = String(message || "").split(/\r?\n/).find((part) => part.trim()) || "";
+  const clean = line.trim();
+  return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
+};
+
 
 /** "edit, shell and run" → "Edit, Shell and Run", the way a person lists tools. */
 function listNames(names) {
@@ -263,6 +289,30 @@ const prefs = {
     try {
       localStorage.setItem(`redline:${key}`, JSON.stringify(value));
     } catch { /* private mode */ }
+  },
+};
+
+/**
+ * The last session list this tab painted, so a page reached by a full load can show it while the
+ * network answers. Clicking a filter that excludes the open review navigates the editor to the
+ * dashboard; the dashboard started with an empty rail and no gallery, then popped both in and
+ * pushed "Start a review" down the page (2026-10-31). sessionStorage is per tab — exactly the
+ * window a navigation happens in — and the first API response replaces the cache.
+ */
+const listCache = {
+  key: "redline:list",
+  read() {
+    try {
+      const cached = JSON.parse(sessionStorage.getItem(this.key) || "null");
+      return cached && Array.isArray(cached.sessions) ? cached : null;
+    } catch {
+      return null;
+    }
+  },
+  write(sessions, projects) {
+    try {
+      sessionStorage.setItem(this.key, JSON.stringify({ sessions, projects }));
+    } catch { /* private mode or quota */ }
   },
 };
 
@@ -602,7 +652,9 @@ async function featureAction(action, id, title, session = {}) {
     || (session.feature_confirmed_at ? "confirmed"
       : session.feature_cancelled_at ? "cancelled" : "pending");
   const handoff = session.handoff || null;
-  const canRetryHandoff = state === "confirmed" && handoff?.status === "failed";
+  const staleHandoff = Boolean(session.handoff_stale);
+  const canRetryHandoff = state === "confirmed"
+    && (handoff?.status === "failed" || staleHandoff);
   const canHandoff = state === "confirmed" && !handoff;
   if (action === "confirm") {
     const choice = await askFeature({
@@ -674,9 +726,18 @@ function handoffBadge(session) {
   if (!handoff) return "";
   const status = handoff.status;
   const url = handoff.url || "";
+  const stale = Boolean(session.handoff_stale);
   const label = handoff.label
     || (status === "done" ? "done" : status === "failed" ? "handoff failed" : "");
   const title = handoff.message || `Handoff ${status}`;
+  if (stale) {
+    // The integration reported `running` but its claim is gone: the row must not spin forever.
+    const staleLabel = status === "done" ? label : "handoff stale";
+    return url
+      ? `<a class="badge handoff failed handoff-link" href="${escapeHtml(url)}" target="_blank"
+            rel="noopener" title="The handoff agent stopped without reporting a result — retry">${escapeHtml(staleLabel)}</a>`
+      : `<span class="badge handoff failed" title="The handoff agent stopped without reporting a result — retry">${escapeHtml(staleLabel)}</span>`;
+  }
   if (status === "requested") {
     return `<span class="badge handoff requested" title="Waiting for an agent that supports handoff">
       handoff queued</span>`;
@@ -1063,6 +1124,8 @@ const railFingerprint = (sessions) => (sessions || []).map((session) => [
   session.annotation_count || 0,
   session.agent_state || "",
   session.agent_running ? 1 : 0,
+  session.agent_failure?.code || "",
+  session.agent_failure?.message || "",
   session.seen_by_agent_at ? 1 : 0,
   session.branch || "",
   featureState(session),
@@ -1070,6 +1133,7 @@ const railFingerprint = (sessions) => (sessions || []).map((session) => [
   session.handoff?.label || "",
   session.handoff?.url || "",
   session.handoff?.message || "",
+  session.handoff_stale ? 1 : 0,
 ].join("\u0001")).join("\n");
 
 // Three views are enough: work that is not finished, work that is, and everything. "Active" is
@@ -1121,7 +1185,24 @@ class Rail {
     if (this.filter !== stored) prefs.set("filter", this.filter);
     this.query = "";
     this.agentTimer = null;
+    this.loaded = false;
     this.wire();
+    // The chip row is static chrome: it belongs on the first paint, not after the session list
+    // arrives. Counts wait for the data (see `renderChips`), the buttons do not.
+    this.renderChips();
+  }
+
+  /// Paint the list this tab last saw, before the first response lands. `bootList` calls it so a
+  /// dashboard reached by a full load does not open empty and then shift as the gallery pops in.
+  hydrate() {
+    const cached = listCache.read();
+    if (!cached) return false;
+    this.sessions = cached.sessions;
+    this.projects = cached.projects || [];
+    this.loaded = true;
+    this.render();
+    this.onSessions?.(this);
+    return true;
   }
 
   wire() {
@@ -1180,11 +1261,18 @@ class Rail {
 
   async load() {
     const [sessions, projects] = await Promise.all([
-      api("/api/sessions").catch(() => ({ sessions: [] })),
-      api("/api/projects").catch(() => ({ projects: [] })),
+      api("/api/sessions").catch(() => null),
+      api("/api/projects").catch(() => null),
     ]);
-    this.sessions = sessions.sessions || [];
-    this.projects = projects.projects || [];
+    this.loaded = true;
+    // A failed request is not evidence that the list is empty: keep what this tab already
+    // painted (the cache, or a previous answer) and leave the cache alone, instead of blanking
+    // the page and waiting for a network it just proved it cannot reach.
+    if (sessions) {
+      this.sessions = sessions.sessions || [];
+      this.projects = projects?.projects || [];
+      listCache.write(this.sessions, this.projects);
+    }
     this.render();
     this.watchAgentState();
     // Every view derived from the session list (today the dashboard gallery) is refreshed from
@@ -1217,7 +1305,10 @@ class Rail {
     // The dashboard gallery is derived from the same list. It used to be painted only at boot
     // and on a back-forward restore, so a review cancelled elsewhere could keep its card for as
     // long as the page stayed open; let the dashboard re-render it with the poll.
-    if (JSON.stringify(sessions) !== beforeData) this.onSessions?.(this);
+    if (JSON.stringify(sessions) !== beforeData) {
+      listCache.write(sessions, this.projects);
+      this.onSessions?.(this);
+    }
   }
 
   setSelected(id) {
@@ -1258,11 +1349,14 @@ class Rail {
     const failed = this.sessions.filter((session) => session.handoff?.status === "failed").length;
     this.chips.innerHTML = FILTERS.map((filter) => {
       const attention = filter.id === "active" && failed > 0;
+      // Before the first response there is no count to print; the buttons are already here. A
+      // lone `0` would read as "you have no reviews".
+      const count = this.loaded ? `<b>${counts[filter.id]}</b>` : "";
       return `
         <button class="chip${attention ? " attention" : ""}" type="button"
                 data-filter="${filter.id}" aria-pressed="${this.filter === filter.id}"
                 ${attention ? `title="${plural(failed, "review")} with a failed handoff"` : ""}>
-          ${filter.label}<b>${counts[filter.id]}</b>
+          ${filter.label}${count}
         </button>`;
     }).join("");
     $$(".chip", this.chips).forEach((chip) =>
@@ -1339,6 +1433,11 @@ class Rail {
         const fresh = seen.isNew(session);
         const working = agentWorking(session);
         const failed = agentFailed(session);
+        const failure = agentFailure(session);
+        const failedTimeout = agentFailureIsTimeout(session);
+        const failureLabel = failedTimeout ? "agent timed out" : "agent failed";
+        const failureTitle = failure?.message
+          || "The agent could not run this round — it is yours again";
         const feature = featureState(session);
         const decided = feature !== "pending";
         // "How long did the last task run?" — a resolved row can answer it from the two stamps
@@ -1363,7 +1462,7 @@ class Rail {
               : failed
                 // The run could not happen and the round came back: the human must not read this
                 // as an agent still working on it, and must know why nothing is happening.
-                ? `<span class="badge failed" title="The agent could not run this round — it is yours again">agent failed</span>`
+                ? `<span class="badge failed" title="${escapeHtml(failureTitle)}">${failureLabel}</span>`
                 : queued && session.agent_state === "replied"
                   ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
                   : queued
@@ -1387,7 +1486,7 @@ class Rail {
                           : "";
         // The handoff badge sits beside the confirmation: "confirmed" is the decision, while
         // "handoff queued" / "merged" / "handoff failed" is what the integration did with it.
-        const badge = feature === "confirmed" && session.handoff
+        const badge = session.handoff
           ? `${baseBadge}${handoffBadge(session)}`
           : baseBadge;
         parts.push(`
@@ -1401,7 +1500,7 @@ class Rail {
                  decided ? `, feature ${feature}` : ""
                }${session.branch ? `, branch ${escapeHtml(session.branch)}` : ""}${
                  working ? ", working"
-                   : failed ? ", agent failed"
+                   : failed ? `, ${failureLabel}`
                      : queued ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
                }"
                aria-current="${session.id === this.selectedId}"
@@ -1423,7 +1522,8 @@ class Rail {
               ${decided
                 ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
                 : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>`}
-              ${session.handoff?.status === "failed"
+              ${(session.handoff?.status === "failed" || session.handoff_stale)
+                && feature === "confirmed"
                 ? `<button class="act" data-act="handoff" title="Retry handoff">↻</button>`
                 : ""}
               <button class="act" data-act="menu"
@@ -1521,8 +1621,6 @@ class Editor {
     // an undefined list (a fresh load of a submitted session renders the header first).
     this.events = [];
     this.thread = [];
-    // The agent's raw output starts closed: it is diagnosis, not the conversation.
-    this.verbose = prefs.get("convVerbose", false);
     this.selected = new Set();
     this.marquee = null;
     this.tool = "select";
@@ -1694,6 +1792,8 @@ class Editor {
     this.viewing = null;
     this.roundLoad = 0;
     this.live = null;
+    // The popup shows one session's run; keeping it open over another review would lie.
+    this.closeOutput();
     this.updateViewingBar();
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
@@ -1868,6 +1968,23 @@ class Editor {
     if (speed) speed.value = String(video.playbackRate || 1);
     const next = $("#video-new");
     if (next) next.hidden = !video || this.locked || Boolean(this.viewing);
+    // The timeline belongs to the round: while the agent owns a submitted round, zooming it is
+    // an edit of the timeline, and the canvas zoom is already disabled at the same moment.
+    // Playback and seeking stay — reading the clip is not an edit — but the zoom controls must
+    // not look armed.
+    const timelineLocked = this.locked;
+    [
+      ["#timeline-zoom-out", "Zoom out timeline"],
+      ["#timeline-zoom-in", "Zoom in timeline"],
+      ["#timeline-fit", "Fit the whole video"],
+    ].forEach(([id, label]) => {
+      const button = $(id);
+      if (!button) return;
+      button.disabled = timelineLocked;
+      button.title = timelineLocked
+        ? "Timeline is locked while the agent has this round — press STOP to edit"
+        : label;
+    });
     const ghosts = $("#video-ghosts");
     if (ghosts) ghosts.setAttribute("aria-pressed", String(this.ghosts));
     const overview = $("#timeline-window");
@@ -2015,7 +2132,9 @@ class Editor {
   }
 
   zoomTimeline(factor, center) {
-    if (!this.video) return;
+    // A submitted round keeps its timeline as submitted: the lock refuses the zoom itself, not
+    // only the buttons. A history round stays navigable — read-only is not a dead bar.
+    if (!this.video || this.locked) return;
     const duration = this.video.duration || 0;
     const window = this.videoWindow;
     const span = Math.max(0.1, window.end - window.start);
@@ -2061,7 +2180,7 @@ class Editor {
     $("#timeline-zoom-in")?.addEventListener("click", () => this.zoomTimeline(1 / 1.6));
     $("#timeline-zoom-out")?.addEventListener("click", () => this.zoomTimeline(1.6));
     $("#timeline-fit")?.addEventListener("click", () => {
-      if (!this.video) return;
+      if (!this.video || this.locked) return;
       this.videoWindow = { start: 0, end: this.video.duration || 0 };
       this.syncVideoBar();
       this.render();
@@ -2070,7 +2189,7 @@ class Editor {
       if (this.video) this.seekTo(Number(event.target.value));
     });
     $("#video-timeline")?.addEventListener("wheel", (event) => {
-      if (!this.video) return;
+      if (!this.video || this.locked) return;
       event.preventDefault();
       event.stopPropagation();
       const rect = event.currentTarget.getBoundingClientRect();
@@ -2118,14 +2237,16 @@ class Editor {
       : "Session size on disk";
   }
 
-  /// The Output toggle mirrors the remembered choice, so a reload keeps the tail open.
+  /// The output button mirrors the popup: it is a window onto the run, not a mode that would
+  /// reopen by itself on the next load.
   syncVerbose() {
     const button = $("#conv-verbose");
     if (!button) return;
-    button.setAttribute("aria-pressed", this.verbose ? "true" : "false");
-    button.title = this.verbose
-      ? "Hide the agent's own output"
-      : "Show the agent's own output while it works";
+    const open = this.outputOpen();
+    button.setAttribute("aria-pressed", open ? "true" : "false");
+    button.title = open
+      ? "Close the agent's own output"
+      : "Open the agent's own output in a popup";
   }
 
   renderHeader() {
@@ -2165,14 +2286,18 @@ class Editor {
       // hover over an archived screenshot.
       stageStatus.hidden = !submitted || Boolean(this.viewing);
       if (submitted && !this.viewing) {
-        const last = (this.events || [])[this.events.length - 1];
+        // The step, not the transcript: the toast sits over the canvas and must stay one short
+        // line even while the agent's shell prints a wall of output.
+        const last = latestStep(this.roundEvents());
+        const step = last ? stepLabel(last.message) : "";
         stageStatus.textContent = agentWorking(this.meta) && last
-          ? `Agent is working — ${last.message}`
+          ? `Agent is working — ${step}`
           : this.meta.agent_state === "replied"
             // The answer can land before `resolve`; "waiting for the agent" would contradict
             // the reply sitting in the conversation.
             ? "The agent replied — read it in the conversation"
             : "Waiting for the agent…";
+        stageStatus.title = step;
       }
     }
     this.applyTitle();
@@ -2225,11 +2350,24 @@ class Editor {
       $("#conv-new")?.addEventListener("click", () => this.seenConversation());
     }
     $("#conv-verbose")?.addEventListener("click", () => {
-      this.verbose = !this.verbose;
-      prefs.set("convVerbose", this.verbose);
-      this.syncVerbose();
-      this.renderConversation();
+      if (this.outputOpen()) this.closeOutput();
+      else this.openOutput();
     });
+    const outputDialog = $("#output-dialog");
+    if (outputDialog) {
+      $("#output-close")?.addEventListener("click", () => this.closeOutput());
+      // Esc and the form's own close path both end in `close`, so the button follows the popup.
+      outputDialog.addEventListener("close", () => this.syncVerbose());
+      // A click on the backdrop is the dialog element itself, the same as every other popup.
+      outputDialog.addEventListener("click", (event) => {
+        if (event.target === outputDialog) this.closeOutput();
+      });
+      const outputBody = $("#output-body");
+      outputBody?.addEventListener("scroll", () => {
+        outputBody.dataset.pinned = String(
+          outputBody.scrollHeight - outputBody.scrollTop - outputBody.clientHeight < 40);
+      });
+    }
     $("#viewing-bar")?.addEventListener("click", () => this.showCurrent());
     const syncPanels = () => {
       const app = $("#app");
@@ -3935,24 +4073,33 @@ class Editor {
     }
   }
 
+  /// The events of the round on screen. A round starts at the submission, or — once the agent has
+  /// posted the next screenshot — at that post. An earlier round's lines would inflate the tool
+  /// count and put another run's output in this round's popup.
+  roundEvents() {
+    const events = this.events || [];
+    const start = this.meta?.submitted_at
+      || (this.thread || []).filter((message) => message.image).map((message) => message.at).pop()
+      || "";
+    return start ? events.filter((event) => String(event.at || "") >= String(start)) : events;
+  }
+
   /// The step lines say *what* the agent did; this says *how much* and *whether it is still
   /// going* — the question a human asks while staring at a submitted review. Modelled on the
   /// run summary an interactive agent shows in its own chat ("Used 12 tools: Edit, Shell and Run").
   runSummary() {
-    const events = this.events || [];
-    // Only this round: an earlier round's steps would inflate the count. A round starts at the
-    // submission, or — once the agent has posted the next screenshot — at that post.
-    const start = this.meta?.submitted_at
-      || (this.thread || []).filter((message) => message.image).map((message) => message.at).pop()
-      || "";
-    const round = start ? events.filter((event) => String(event.at || "") >= String(start)) : events;
+    const round = this.roundEvents();
     const failed = agentFailed(this.meta);
+    const failure = agentFailure(this.meta);
+    const failedTimeout = agentFailureIsTimeout(this.meta);
     if (!round.length) {
       // A run that died before logging anything is still a state the human must see.
       return failed
         ? `<div class="conv-run failed"><span class="conv-run-mark" aria-hidden="true"></span><div>`
-          + `<div class="conv-run-title">The agent could not run this round</div>`
-          + `<div class="conv-run-sub">The run never started.</div></div></div>`
+          + `<div class="conv-run-title">${
+            failedTimeout ? "The agent timed out" : "The agent could not run this round"
+          }</div>`
+          + `<div class="conv-run-sub">${escapeHtml(failure?.message || "The run never started.")}</div></div></div>`
         : "";
     }
 
@@ -3978,7 +4125,7 @@ class Editor {
       ? "Working"
       : failed
         // A dead end, not a slow run: the round is back in the human's hands.
-        ? "The agent could not run this round"
+        ? (failedTimeout ? "The agent timed out" : "The agent could not run this round")
         : replied && submitted
           ? "Agent replied — waiting for it to finish"
           : replied
@@ -4007,20 +4154,50 @@ class Editor {
       + `<div class="conv-run-sub">${sub}</div></div></div>`;
   }
 
-  /// The agent's own output, the way its terminal shows it. Off by default — a wall of tool lines
-  /// must never bury the conversation — but "what is it doing right now?" needs an answer that is
-  /// not a spinner (2026-10-31).
-  outputBlock() {
-    if (!this.verbose) return "";
-    const lines = (this.events || []).filter((event) => event.state === "log");
+  /// The agent's own output, the way its terminal shows it. It streams into a centred popup
+  /// instead of the inspector: a wall of tool lines must never bury the conversation, and a tail
+  /// wedged under the messages stole the little height a short window had (2026-10-31).
+  outputOpen() {
+    return Boolean($("#output-dialog")?.open);
+  }
+
+  renderOutput() {
+    const dialog = $("#output-dialog");
+    if (!dialog || !dialog.open) return;
+    const body = $("#output-body");
+    if (!body) return;
+    const lines = this.roundEvents().filter((event) => event.state === "log");
     const last = lines[lines.length - 1];
-    const body = lines.length
-      ? lines.map((event) => escapeHtml(event.message || "")).join("\n")
+    body.textContent = lines.length
+      ? lines.map((event) => event.message || "").join("\n")
       : "No output from this run yet.";
-    return `<div class="conv-output${agentWorking(this.meta) ? " live" : ""}">`
-      + `<div class="conv-output-head">Agent output${
-        last ? ` · ${escapeHtml(relativeTime(last.at))}` : ""
-      }</div><pre class="conv-output-body">${body}</pre></div>`;
+    dialog.classList.toggle("live", agentWorking(this.meta));
+    const meta = $("#output-meta");
+    if (meta) {
+      meta.textContent = agentWorking(this.meta)
+        ? `Still running${last ? ` — last line ${relativeTime(last.at)}` : ""}. This follows the run.`
+        : last
+          ? `From this round's run — last line ${relativeTime(last.at)}.`
+          : "The agent has not printed anything in this round yet.";
+    }
+    // Follow the tail, unless the reader scrolled back to read something.
+    if (body.dataset.pinned !== "false") body.scrollTop = body.scrollHeight;
+  }
+
+  openOutput() {
+    const dialog = $("#output-dialog");
+    if (!dialog) return;
+    const body = $("#output-body");
+    if (body) body.dataset.pinned = "true";
+    if (!dialog.open) dialog.showModal();
+    this.syncVerbose();
+    this.renderOutput();
+  }
+
+  closeOutput() {
+    const dialog = $("#output-dialog");
+    if (dialog?.open) dialog.close();
+    this.syncVerbose();
   }
 
   renderConversation() {
@@ -4044,8 +4221,10 @@ class Editor {
 
     const activity = $("#conv-activity");
     if (activity) {
-      const last = (this.events || [])[this.events.length - 1];
-      activity.textContent = agentWorking(this.meta) && last ? `${last.message}…` : "";
+      const last = latestStep(this.roundEvents());
+      activity.textContent = agentWorking(this.meta) && last
+        ? `${stepLabel(last.message, 48)}…`
+        : "";
     }
 
     const status = [];
@@ -4055,8 +4234,12 @@ class Editor {
     }
     if (agentFailed(this.meta)) {
       // The round came back from a run that never happened: say so, and say it is actionable.
-      status.push(`<div class="conv-wait failed"><b>The agent could not run this round.</b> `
-        + `It is yours again — fix the problem and submit to retry.</div>`);
+      const failure = agentFailure(this.meta);
+      const timedOut = agentFailureIsTimeout(this.meta);
+      status.push(`<div class="conv-wait failed"><b>${
+        timedOut ? "The agent timed out." : "The agent could not run this round."
+      }</b> ${failure?.message ? `${escapeHtml(failure.message)}. ` : ""}It is yours again — `
+        + `fix the problem and submit to retry.</div>`);
     }
     if (this.meta?.status === "submitted") {
       if (!this.meta.seen_by_agent_at) {
@@ -4070,6 +4253,7 @@ class Editor {
     }
     if (!items.length && !status.length) {
       log.innerHTML = `<div class="inspector-empty">No messages yet.<br>Write a prompt below, or just annotate and submit.</div>`;
+      this.renderOutput();
       return;
     }
     const rendered = items.map((item) => {
@@ -4084,9 +4268,12 @@ class Editor {
         <div class="conv-text">${escapeHtml(item.text)}</div>
       </div>`;
     }).join("");
-    const html = rendered + status.join("") + this.runSummary() + this.outputBlock();
+    const html = rendered + status.join("") + this.runSummary();
     const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     this.convCount = items.length + status.length;
+    // The output popup is a view of the same run: a poll that lands while it is open must keep it
+    // following the tail instead of freezing on the lines it opened with.
+    this.renderOutput();
     // Only touch the DOM when something changed, and only follow the tail when the reader is
     // already there — otherwise a 5 s poll yanks them back down mid-sentence.
     if (log.innerHTML !== html) {
@@ -4787,9 +4974,22 @@ const NewReview = {
 /// The start page is a gallery: the last few reviews with their screenshots. A decided review
 /// (confirmed or cancelled) is finished work, not something to resume, so it does not belong
 /// here — the rail's All/Done filters are where history lives.
+/// A cold visit has nothing cached to paint: one placeholder card of the same shape (an image
+/// at the same aspect ratio, a title line and the two-line meta a card usually carries) keeps
+/// the row's height, so the first response replaces it without moving "Start a review" down the
+/// page (2026-10-31). A card's meta wraps by its text, so this reserves the common case, not
+/// every one.
+function gallerySkeleton() {
+  return `<span class="card skeleton" aria-hidden="true">
+    <span class="thumb"></span>
+    <span class="card-body"><b>&nbsp;</b><span>&nbsp;<br>&nbsp;</span></span>
+  </span>`;
+}
+
 function renderGallery(rail) {
   const box = $("#gallery");
   if (!box) return;
+  box.classList.remove("loading");
   const sessions = (rail.sessions || [])
     .filter((session) => featureState(session) === "pending")
     .slice(0, 12);
@@ -4900,6 +5100,23 @@ async function bootList() {
     onSessions: (data) => renderGallery(data),
   });
   window.redlineRail = rail;
+  const count = $("#sessions-count");
+  const paintCount = () => {
+    if (count) count.textContent = plural(rail.sessions.length, "session");
+  };
+  // Paint what this tab already had before the first response: a dashboard opened by a full load
+  // must not show an empty rail and a blank main column that fill in a moment later.
+  if (!rail.hydrate()) {
+    // Nothing cached (a cold visit): reserve the row the gallery will occupy with a placeholder
+    // card of the same shape instead of letting the real cards push "Start a review" down.
+    const gallery = $("#gallery");
+    if (gallery) {
+      gallery.hidden = false;
+      gallery.classList.add("loading");
+      gallery.innerHTML = gallerySkeleton();
+    }
+  }
+  paintCount();
   await rail.load();
   // A dashboard restored from the back-forward cache keeps the DOM it had when the human left it,
   // including gallery cards for reviews that have since been confirmed or cancelled. Refresh it
@@ -4909,8 +5126,7 @@ async function bootList() {
   });
   NewReview.wire();
   $("#new-review").addEventListener("click", () => NewReview.open());
-  const count = $("#sessions-count");
-  if (count) count.textContent = plural(rail.sessions.length, "session");
+  paintCount();
 }
 
 /* ------------------------------------------------------------------ boot */

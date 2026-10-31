@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind, MediaRef,
-    Meta, Status, Submission,
+    AgentFailure, Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind,
+    MediaRef, Meta, Status, Submission,
 };
 use crate::{MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_VIDEO_BYTES};
 
@@ -887,6 +887,10 @@ impl Store {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         meta.agent_state = Some(state.to_string());
+        // A new run (or a reply) clears the previous failure; only `fail_round` keeps one.
+        if state != "failed" {
+            meta.agent_failure = None;
+        }
         if seen && meta.seen_by_agent_at.is_none() {
             meta.seen_by_agent_at = Some(now());
         }
@@ -898,13 +902,18 @@ impl Store {
     /// "replied" (the agent has no answer to give), and it must not leave the review locked:
     /// a human who cannot edit a round nobody is working on is stuck (2026-10-31). The round goes
     /// back to the human, the annotations stay, and `agent_state=failed` keeps the reason visible.
-    pub fn fail_round(&self, id: &str) -> Result<Meta> {
+    pub fn fail_round(&self, id: &str, code: &str, message: &str) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         if meta.status == Status::Submitted {
             meta.status = Status::Open;
         }
         meta.agent_state = Some("failed".to_string());
+        meta.agent_failure = Some(AgentFailure {
+            code: code.to_string(),
+            message: message.to_string(),
+            at: now(),
+        });
         if meta.seen_by_agent_at.is_none() {
             meta.seen_by_agent_at = Some(now());
         }
@@ -1030,6 +1039,7 @@ impl Store {
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
+            agent_failure: None,
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
@@ -1125,6 +1135,7 @@ impl Store {
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
+            agent_failure: None,
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
@@ -1291,8 +1302,14 @@ impl Store {
         meta.round_stamp = None;
         meta.seen_by_agent_at = None;
         meta.agent_state = None;
-        meta.feature_confirmed_at = None;
-        meta.feature_cancelled_at = None;
+        meta.agent_failure = None;
+        // A round that lands while a handoff is queued or running is not new human work: the
+        // human already decided, and dropping the confirmation here orphaned the handoff so its
+        // result could never be reported (2026-10-31).
+        if meta.handoff.is_none() {
+            meta.feature_confirmed_at = None;
+            meta.feature_cancelled_at = None;
+        }
         meta.prompt = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
@@ -1367,6 +1384,7 @@ impl Store {
         }
         meta.status = Status::Open;
         meta.agent_state = None;
+        meta.agent_failure = None;
         meta.cancelled_at = Some(now());
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
@@ -1426,11 +1444,15 @@ impl Store {
         meta.status = Status::Open;
         meta.submitted_at = None;
         meta.resolved_at = None;
-        // New work after a decision makes the feature pending again.
-        meta.feature_confirmed_at = None;
-        meta.feature_cancelled_at = None;
-        meta.handoff = None;
+        // New work after a decision makes the feature pending again — unless the integration is
+        // holding a handoff for it. That round is the agent's own result, not the human coming
+        // back, and dropping the decision stranded the claim with no way to report it.
+        if meta.handoff.is_none() {
+            meta.feature_confirmed_at = None;
+            meta.feature_cancelled_at = None;
+        }
         meta.agent_state = Some("replied".to_string());
+        meta.agent_failure = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
 
         // The conversation keeps the round (and its picture) beside the human's annotations.
@@ -1503,6 +1525,7 @@ impl Store {
         // A fresh round has not been seen by the agent yet, and it reopens a decided feature.
         meta.seen_by_agent_at = None;
         meta.agent_state = None;
+        meta.agent_failure = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
         meta.handoff = None;
@@ -1646,7 +1669,16 @@ impl Store {
     pub fn report_handoff(&self, id: &str, report: HandoffReport) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
-        if meta.feature_confirmed_at.is_none() {
+        // Refuse only a dead decision: the human cancelled the feature, or reopened it and its
+        // handoff went with the round. A missing confirmation while a handoff is still queued or
+        // running is a round that landed mid-handoff (0.25.0 cleared the stamp and orphaned the
+        // claim), and refusing that stranded the integration's result forever (2026-10-31).
+        if meta.feature_cancelled_at.is_some() {
+            return Err(Error::BadRequest(
+                "the feature was cancelled; ignoring the handoff result".to_string(),
+            ));
+        }
+        if meta.feature_confirmed_at.is_none() && meta.handoff.is_none() {
             return Err(Error::BadRequest(
                 "the feature is not confirmed; ignoring the handoff result".to_string(),
             ));

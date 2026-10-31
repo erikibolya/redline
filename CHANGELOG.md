@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.26.0 — 2026-10-31
+
+- **A handoff result can always be reported.** The human can confirm a feature while the agent is
+  still finishing, and the round it posts afterwards (`post_round`, or a new clip through
+  `new_video_round`) reopens the review — which also cleared `feature_confirmed_at`. On a video
+  session the handoff itself survived that write, so the integration held a running claim the
+  server then refused to accept a result for (*"the feature is not confirmed; ignoring the handoff
+  result"*), and the rail could never leave **handoff running** (2026-10-31). A round that lands
+  while a handoff is queued or running is the agent's own work, not the human coming back, so it
+  keeps the decision and the claim; `handoff_status` now refuses only the decisions that are
+  really dead (cancelled, or reopened with no handoff left), and rows already stranded by 0.25.0
+  can report their result too.
+
+- **The dashboard opens with its content, not empty.** Clicking a filter that no longer contains
+  the open review sends the human back to `/`; that full load painted the chip row, the rail and
+  the gallery only after `/api/sessions` answered, so the page sat blank and then everything
+  popped in and pushed "Start a review" ~200 px down (2026-10-31). The rail now paints the filter
+  chips immediately (counts once the data is there), and the last list this tab rendered is kept
+  in `sessionStorage` and painted at boot before the request lands; with no cache the gallery
+  paints one placeholder card of the real card's shape, so the row its cards will take is already
+  reserved. The first response replaces the cached list in place, and a failed request keeps what
+  the tab already painted. The e2e holds `/api/sessions` on a reload of `/`, asserts chips + rail
+  rows + gallery cards are already painted, then releases it and asserts the page does not move;
+  it repeats the measurement with the cache cleared, against the placeholder.
+- **A run is killed for being silent, not for being long.** The bridge used a 30-minute wall-clock
+  cap and killed a run that was actively working/building, then labelled it a generic "agent
+  failed" (2026-10-31). It now tracks output activity: `REDLINE_AGENT_IDLE_TIMEOUT` (default 15 m)
+  kills a run with no output, while `REDLINE_AGENT_TIMEOUT` is only a 6 h hard backstop. A long
+  build that keeps printing survives; a hung process is stopped promptly.
+- **A timeout says it timed out.** `reply {state:"failed", code:"timeout_idle"}` stores
+  `meta.agent_failure { code, message, at }`; the rail badge reads **agent timed out** (or
+  **agent failed** for other codes) and the card/message keep the exact limit. `get_feedback`/
+  `wait_for_feedback` expose the same reason. A new run/reply clears the stored failure.
+- **A handoff can no longer read "handing off" after its agent is gone.** A stopped/crashed handoff
+  released its claim but left `handoff.status=running` forever; `GET /api/sessions` now derives
+  `handoff_stale` when a running handoff has no live claim, and the rail shows **handoff stale**
+  with the retry action. The bridge also reports `failed` when a handoff stops while the feature is
+  still confirmed. The handoff prompt now pushes a **draft PR first**, lets GitHub run the full
+  suite, and only then marks it ready; local preflight uses `REDLINE_BIN` to mount a fresh server
+  binary into the published browser image instead of rebuilding the ~768 MB image.
+- **A review run does not build the release.** The bridge prompt used to permit build/deploy; an
+  agent spent its whole run on a full image build. Review prompts now say to run focused checks
+  only and not to build/publish the release/browser image or run the release pipeline; the same
+  `review_guidance` is returned by MCP `get_feedback`/`wait_for_feedback` and in the tool
+  descriptions, so non-bridge agents receive it too.
+- **The agent's output is a popup, and the stage toast narrates a step instead of a command.** The
+  bridge streams the agent's own terminal lines into the event log as `state: "log"`, and two
+  places printed the newest event whatever it was: the stage toast read **Agent is working — $ cd
+  … && $ sed -n …** and the inspector's output tail sat under the messages, taking the little
+  height a short window had. The **output** button now opens a centred popup (monospace, scrolling,
+  following the tail while the run is live, closed by the button, `Esc` or the backdrop, not
+  reopened by a reload), and the toast plus the conversation's activity label use the last
+  narrated step, one short line, with the full text on hover. The e2e asserts the toast never
+  prints a log line, the popup's centre and that it is not inside the inspector, that a poll keeps
+  feeding it, and every way to close it.
+
 ## 0.25.0 — 2026-10-31
 
 - **A history round stays the round you opened.** A live conversation poll that was already in

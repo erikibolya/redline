@@ -20,7 +20,7 @@ use crate::agent::{AgentControl, AgentSettings, ClaimError, ClaimRequest, ClaimS
 use crate::auth::{self, Auth};
 use crate::error::Error;
 use crate::mcp::{self, McpContext};
-use crate::model::{NewSession, Status, Submission};
+use crate::model::{HandoffStatus, NewSession, Status, Submission};
 use crate::store::{FrameUpload, Store};
 use crate::{MAX_BODY_BYTES, MAX_SUBMIT_BYTES, MAX_VIDEO_BYTES};
 
@@ -458,6 +458,18 @@ async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Err
                 object.insert(
                     "agent_running".to_string(),
                     json!(running.contains(&meta.id)),
+                );
+                // A handoff reports `running` until the integration says done/failed. If the
+                // bridge claim is gone (stopped, crashed or expired), the row would otherwise say
+                // "handing off" forever; expose that as stale so the UI can offer a retry.
+                object.insert(
+                    "handoff_stale".to_string(),
+                    json!(
+                        meta.handoff
+                            .as_ref()
+                            .is_some_and(|handoff| handoff.status == HandoffStatus::Running)
+                            && !running.contains(&meta.id)
+                    ),
                 );
             }
             value

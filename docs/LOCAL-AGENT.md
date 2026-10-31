@@ -74,8 +74,15 @@ REDLINE_AGENT_REPO=/repos/app \
 REDLINE_AGENT_REPO_ROOT=/repos \
 REDLINE_AGENT_ID=holly \
 REDLINE_AGENT_WORKERS=4 \
+REDLINE_AGENT_IDLE_TIMEOUT=900 \
+REDLINE_AGENT_TIMEOUT=21600 \
 redline-agent
 ```
+
+`REDLINE_AGENT_IDLE_TIMEOUT` (default 15 min) kills a run that has produced no output; a long
+build that keeps printing progress survives. `REDLINE_AGENT_TIMEOUT` is only the hard cap
+(default 6 h) for a run that never stops producing output. A timeout is reported as
+`agent_failure.code=timeout_idle` or `timeout_hard` and the UI says **agent timed out**.
 
 ```bash
 docker run -d --name redline-agent \

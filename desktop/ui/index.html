@@ -189,7 +189,8 @@ try {
         <span>Conversation</span>
         <span class="conv-activity" id="conv-activity"></span>
         <button class="conv-verbose" id="conv-verbose" type="button" aria-pressed="false"
-                title="Show the agent's own output while it works">output</button>
+                aria-haspopup="dialog" aria-controls="output-dialog"
+                title="Open the agent's own output in a popup">output</button>
         <button class="conv-new" id="conv-new" hidden></button>
       </div>
       <div class="conv-log" id="conv-log" aria-live="polite" aria-label="Conversation"></div>
@@ -304,6 +305,21 @@ try {
     </div>
   </div>
 </div>
+
+<dialog class="output-dialog" id="output-dialog" aria-labelledby="output-title">
+  <div class="output-card dialog-frame">
+    <div class="dialog-head">
+      <div>
+        <h2 id="output-title">Agent output</h2>
+        <p class="hint" id="output-meta">The agent's own lines, as its terminal shows them.</p>
+      </div>
+      <button type="button" class="btn icon dialog-close" id="output-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <pre class="conv-output-body output-body" id="output-body">No output from this run yet.</pre>
+  </div>
+</dialog>
 
 </body>
 </html>

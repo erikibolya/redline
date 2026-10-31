@@ -129,6 +129,12 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   Wheel over the timeline zooms around the pointer, `Fit` restores the whole clip. Annotation
   markers use the annotation colour; a range draws a band between `at` and `until`. Clicking a
   marker seeks to it and selects the row.
+- **A submitted round locks the timeline's zoom.** While the agent owns the round (the same
+  moment the canvas zoom and the drawing tools are disabled), `−`, `+`, `Fit` and the wheel over
+  the timeline are disabled and say why on hover; the timeline keeps the window it was submitted
+  with. Playback, frame stepping, speed, seeking and marker clicks stay, because reading the
+  clip is not an edit. STOP (a round that is open again) restores the zoom; a history round is
+  replayed read-only and stays navigable.
 - **Timecoded annotations**: each annotation gets `at` (seconds) when it is drawn or typed, and
   an optional `until` set from the ⏱ button in the inspector (clicking it while parked on the
   annotation gives a one-second default instead of a zero-length range). The inspector shows
@@ -243,9 +249,11 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   agent), `handing off` (run active), the integration's `label` with its `url` (`merged` + PR
   link for the reference bridge; `deployed` + environment link for a deploy), or a red
   `handoff failed` label/link whose retry is the row's `↻` action (also **Retry handoff** in the
-  feature menu), calling `POST /api/sessions/<id>/handoff`. The review run itself never opens a
-  PR, so a feature cannot sneak into `dev` overnight; the handoff run is a separate bridge job. A
-  pre-v0.23 confirmed feature has no `handoff` record and keeps the plain `confirmed` badge.
+  feature menu), calling `POST /api/sessions/<id>/handoff`. A `running` handoff whose bridge claim
+  is gone is derived as **handoff stale** (API `handoff_stale`) with the same retry action; it
+  never spins forever. The review run itself never opens a PR, so a feature cannot sneak into
+  `dev` overnight; the handoff run is a separate bridge job. A pre-v0.23 confirmed feature has no
+  `handoff` record and keeps the plain `confirmed` badge.
 - **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
   **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
   with `feature_cancelled_at`, nothing is handed off or merged, and the screenshot/annotations
@@ -416,6 +424,14 @@ new one.
   rail's All/Done filters, not on the dashboard. The gallery is re-derived from the rail's 8 s
   session poll, so a review decided in another tab or before a back-forward restore loses its
   card without a reload. The start screen below it is unchanged.
+- **The dashboard opens with its content, not blank.** Clicking a filter that no longer contains
+  the open review reloads `/` (see "A decision closes the screen that showed the review"); the
+  chips, rail rows and gallery used to wait for `/api/sessions`, so the page sat empty and then
+  popped in and pushed "Start a review" down (2026-10-31). The chip row is painted immediately
+  (its counts wait for the data), the last list this tab rendered is kept in `sessionStorage` and
+  painted at boot, and with no cache the gallery paints one placeholder card of the real card's
+  shape so its row is already reserved. The first response replaces the cached list in place, so
+  nothing moves. A failed request keeps what the tab already painted rather than blanking it.
 - **Diff overlay**: in the History disclosure, the `◫` button ghosts that round's annotations
   behind the current ones at 35 % opacity; a `Ghost · <stamp>` chip in the header clears it.
   The `Δ` button still prints the textual diff.
@@ -459,6 +475,11 @@ The rail lists projects (conversation areas), not a flat stream of requests.
   the run card turns red instead of pulsing, and the canvas, tools and composer are usable again.
   Before this, a failed run left the review `submitted` behind a *replied* label: locked, with no
   sign that nobody was coming back.
+- **A timeout says it timed out.** The bridge reports a machine-readable `agent_failure`
+  (`timeout_idle`, `timeout_hard`, `spawn`, `failed`); the rail badge says **agent timed out** for
+  the timeout codes (and **agent failed** otherwise), and the red card/message name the exact
+  limit. A run is killed for producing no output for 15 minutes, not for merely being long; the
+  6-hour hard cap is only a runaway backstop. The agent's output popup is the evidence of life.
 - Filters and search still apply inside every project; day separators appear only in long lists.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
@@ -501,13 +522,17 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.
-- **Agent output** (2026-10-31): the conversation header carries an **output** toggle. It reveals
-  the agent's own lines — `progress` events with `state: "log"`, which the bridge streams from the
+- **Agent output** (2026-10-31): the conversation header carries an **output** button. It opens the
+  agent's own lines — `progress` events with `state: "log"`, which the bridge streams from the
   OpenCode process (throttled to one line every two seconds, ANSI stripped, ≤ 400 chars, and the
-  last line of a short run is always kept) — in a monospace, scrollable tail with the time of the
-  last line. It is off by default so a wall of tool output never buries the conversation, the
-  choice is remembered per browser (`redline:convVerbose`), and `log` events are never rendered as
-  conversation lines.
+  last line of a short run is always kept) — in a **centred popup**, in monospace with the time of
+  the last line, following the tail while the run is live. It is not in the conversation and not
+  in the inspector: a tail wedged under the messages took the little height a short window had.
+  The button closes the popup again, `Esc` and the backdrop do the same, and a reload does not
+  reopen it. `log` events are never rendered as conversation lines, and the stage toast and the
+  activity label take the last *step*, never a `log` line — a shell command in place of a status
+  read as a stuck agent.
+
 
 ## Status bar
 

@@ -68,11 +68,18 @@ fn tool_text(value: &Value) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": false })
 }
 
+/// Guidance every MCP review client receives with feedback. The reference bridge also puts this
+/// in its run prompt; other agents see it in `get_feedback`/`wait_for_feedback`.
+const REVIEW_GUIDANCE: &str = "Review runs run focused checks only (cargo test for the touched \
+crates, targeted e2e). Do not build or publish the full release/browser image and do not run the \
+release pipeline during a review; those belong to the human's release/handoff step. A dev/preview \
+deploy is allowed only when the review needs a visual result.";
+
 pub fn tool_definitions() -> Value {
     json!([
         {
             "name": "review_screenshot",
-            "description": "Upload a screenshot and open a review session for the human. Returns the session id and a review URL. Set wait_seconds to block until they submit.",
+            "description": "Upload a screenshot and open a review session for the human. Returns the session id and a review URL. Set wait_seconds to block until they submit. Review runs: run focused tests only; do not build or publish the full release image.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -94,7 +101,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "review_video",
-            "description": "Upload a video (MP4 or WebM) and open a review session for the human. Returns the session id and a review URL. Set wait_seconds to block until they submit.",
+            "description": "Upload a video (MP4 or WebM) and open a review session for the human. Returns the session id and a review URL. Set wait_seconds to block until they submit. Review runs: run focused tests only; do not build or publish the full release image.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -136,7 +143,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "get_feedback",
-            "description": "Read the human's annotations, review.md and annotated screenshot for a session. Non-blocking. feature_state is pending until the human confirms or cancels the feature.",
+            "description": "Read the human's annotations, review.md and annotated screenshot for a session. Non-blocking. feature_state is pending until the human confirms or cancels the feature. The response includes review_guidance for the run's build/test scope.",
             "inputSchema": {
                 "type": "object",
                 "properties": { "session_id": { "type": "string" } },
@@ -145,7 +152,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "wait_for_feedback",
-            "description": "Block until the human submits the review, confirms/cancels the feature, or the timeout elapses, then return the feedback (including feature_state).",
+            "description": "Block until the human submits the review, confirms/cancels the feature, or the timeout elapses, then return the feedback (including feature_state and review_guidance).",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -223,7 +230,7 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "reply",
-            "description": "Attach an agent message or question to a session so the human sees it in the editor. `state=failed` means the run could not do the work: the round goes back to the human, unlocked, instead of looking like an answer.",
+            "description": "Attach an agent message or question to a session so the human sees it in the editor. `state=failed` means the run could not do the work: the round goes back to the human, unlocked, instead of looking like an answer. Set `code` to a machine-readable reason such as timeout_idle, timeout_hard or spawn.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -233,7 +240,8 @@ pub fn tool_definitions() -> Value {
                         "type": "string",
                         "enum": ["replied", "failed"],
                         "description": "replied (default): the agent answered and may still be working. failed: the run could not happen; hand the round back to the human."
-                    }
+                    },
+                    "code": { "type": "string", "description": "Failure reason for the UI, e.g. timeout_idle, timeout_hard, spawn." }
                 },
                 "required": ["session_id", "message"]
             }
@@ -644,6 +652,7 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
                 "handoff": meta.handoff,
                 "created_at": meta.created_at,
                 "submitted_at": meta.submitted_at,
+                "agent_failure": meta.agent_failure,
                 "project": meta.project,
             })
         })
@@ -855,6 +864,7 @@ fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
     let message = string_arg(args, "message").ok_or("message is required")?;
     let state = string_arg(args, "state").unwrap_or_else(|| "replied".to_string());
+    let code = string_arg(args, "code").unwrap_or_else(|| "failed".to_string());
     if state != "replied" && state != "failed" {
         return Err(format!("state must be replied or failed, not {state:?}"));
     }
@@ -877,7 +887,9 @@ fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     // A failure is not an answer: the run is over, so the round goes back to the human instead of
     // staying locked behind an agent that will never come back (2026-10-31).
     let meta = if state == "failed" {
-        ctx.store.fail_round(&id).map_err(|err| err.to_string())?
+        ctx.store
+            .fail_round(&id, &code, &message)
+            .map_err(|err| err.to_string())?
     } else {
         ctx.store
             .set_agent_state(&id, "replied", true)
@@ -967,6 +979,7 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         "note": meta.note,
         "prompt": meta.prompt,
         "agent_state": meta.agent_state,
+        "agent_failure": meta.agent_failure,
         "submitted_at": meta.submitted_at,
         "media": meta.media,
         "video_url": meta.media.as_ref()
@@ -993,6 +1006,7 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         "annotations": set.annotations,
         "markdown": markdown,
         "annotated_png": has_png.then(|| format!("redline://session/{}/annotated.png", meta.id)),
+        "review_guidance": REVIEW_GUIDANCE,
         "review_url": review_url(ctx, &meta.id),
     })
 }

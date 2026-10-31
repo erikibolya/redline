@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.25.0.** Live in production on holly:
+**Current release: v0.26.0.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -220,7 +220,7 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - **A prerelease of the current stable is older, not newer.** Dev builds were versioned
   `0.23.0-dev.N` while stable was already `0.23.0`, so the updater correctly refused to install
   one; "Install latest dev build…" looked broken. `DEV_BASE_VERSION` must be the *next* minor
-  (now 0.26.0); the dev workflow now fails if the base does not sort above the latest stable.
+  (now 0.27.0); the dev workflow now fails if the base does not sort above the latest stable.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).
@@ -349,6 +349,28 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   previous lesson: `agent_state` records who spoke last, not whether a process is alive, so the
   rail must take **working** from a live claim (lease + heartbeat, exposed as `agent_running`)
   as well — a mid-run reply must not erase the only sign of activity.
+- **A wall-clock cap is not a liveness check.** The bridge killed an agent that had been working
+  for 30 minutes because `started.elapsed() >= timeout` ignored output; a long build that was
+  printing progress looked identical to a hung process, and the human got a generic "agent failed"
+  (2026-10-31). Time out on **idle** output (`REDLINE_AGENT_IDLE_TIMEOUT`, 15 min) and keep only
+  a high hard backstop (`REDLINE_AGENT_TIMEOUT`, 6 h). Report a structured
+  `agent_failure {code,message,at}` (`timeout_idle`/`timeout_hard`) instead of only a thread line,
+  so the rail can say **agent timed out** without the human parsing a failure message.
+- **A review prompt is not a release pipeline.** The bridge prompt told the agent it "may build
+  and deploy"; it spent its whole run on a full image build. Say explicitly that a review runs
+  focused checks only and must not build/publish the release image or run the release pipeline;
+  put the same guidance in the MCP feedback (`review_guidance`) so non-bridge agents see it too.
+- **A handoff status is not a claim.** A stopped/crashed handoff released its branch claim but left
+  `handoff.status=running`, so the rail showed **handing off** forever with no process behind it.
+  Derive staleness from the live claim (`handoff_stale`), show **handoff stale** with the retry
+  action, and make the bridge report failed when a handoff stops while the feature is still
+  confirmed. A status label is only evidence when something owns the work.
+- **A local preflight should not rebuild the release image.** The handoff agent spent its budget
+  on a full browser image build before pushing. Push a **draft PR** first and let GitHub CI run
+  the full suite; locally mount a fresh server binary into the published browser image
+  (`REDLINE_BIN` in `e2e.sh`) and run focused checks. A full `Dockerfile.browser` build is only for
+  changes to the image/system dependencies. Avoid sending a failing ready PR — a draft PR is the
+  safe place to discover a red build.
 - **A live tail is not a conversation.** The agent's own lines are what the human asked for
   ("realtime output… like a regular opencode window"), but every line in the timeline buries the
   messages that need reading. Stream them into the same event log under `state: "log"` (throttled,
@@ -436,6 +458,16 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   bridge that sends no `jobs` is never handed a handoff job. Test the review prompt *forbids*
   handing off, the confirm → `next(job=handoff)` path, the MCP report, and the rail badge; a
   status label that merely says "confirmed" is not a handoff.
+- **A claim nobody can report is a dead rail.** The human can press ✓ while the agent is still
+  finishing, and the round the agent posts afterwards reopens the review — which also cleared
+  `feature_confirmed_at`. On a video session the handoff survived that write on its own, so the
+  integration held a running claim and the server refused its result forever (*"the feature is not
+  confirmed; ignoring the handoff result"*), leaving the rail on **handoff running** with no way
+  out (2026-10-31). A round that lands **while a handoff is queued or running** is the agent's own
+  work, not the human coming back: keep the decision and the claim (`post_round`,
+  `new_video_round`), and let `handoff_status` refuse only decisions that are really dead —
+  cancelled, or reopened with no handoff left. Test the mid-handoff round, the stranded row from
+  the old build, and the refusal that must stay.
 - **A row with no badge is not a neutral row.** The rail badge chain covered working, feature
   decisions, waiting/replied, unread and the annotation count — everything except a plain finished
   review and an open round nobody had drawn on, so those rows were unlabelled cards and the human
@@ -462,6 +494,24 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `.subline` wrapper, which also carries a taller chip), and check it is bigger than one line so a
   one-line regression cannot pass. A styling assertion written against the same number the CSS was
   written from proves nothing; measure the neighbours.
+
+- **A locked canvas is not a locked timeline.** The submitted lock disabled drawing, Delete, the
+  inspector writes and even the canvas zoom, but a video's timeline kept `−`/`+`/`Fit` and its
+  wheel zoom — the one surface that places annotations in time was still editable on a round the
+  agent owned (2026-10-31). A lock has to reach every control that edits the round: when the
+  canvas zoom goes disabled, so does the timeline's. Reading is not editing — playback, frame
+  stepping, seeking and marker clicks stay, and a history round stays navigable — but disable
+  visibly and explain on hover, and test the refusal (click the buttons, wheel the ruler) as well
+  as the unlock after STOP.
+- **A page that paints after the network shifts everything below it.** Clicking a filter that no
+  longer contains the open review reloads `/`; the dashboard drew its chips, rail rows and gallery
+  only after `/api/sessions` answered, so the human saw a blank page, then cards popping in and
+  pushing "Start a review" down ~200 px (2026-10-31, recorded). Paint the shell from what the tab
+  already had (`sessionStorage`, written by the same `load`/poll that renders the rail) before the
+  request lands, render static chrome (the filter chips) on the first paint with its counts
+  deferred, and reserve the height of any data-driven block above static content. Test it with the
+  request *held* — a `waitForSelector` after the response proves nothing — and measure that a
+  heading below the block does not move when the response is released.
 
 ## 8. Working rules
 

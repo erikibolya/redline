@@ -54,9 +54,14 @@ pub struct Meta {
     /// First time an agent read the current submission (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seen_by_agent_at: Option<String>,
-    /// What the agent is doing: `received`, `working`, `replied` (v0.9).
+    /// What the agent is doing: `received`, `working`, `replied`, `failed` (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
+    /// Why a run failed (v0.25.1). A machine-readable `code` (`timeout_idle`, `timeout_hard`,
+    /// `spawn`, `failed`) and the human-readable message; the UI can say "timed out" instead of
+    /// a generic "agent failed" without parsing the conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_failure: Option<AgentFailure>,
     /// When the human stopped a submission before the agent finished (v0.17).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancelled_at: Option<String>,
@@ -72,6 +77,15 @@ pub struct Meta {
     /// RedLine uses it as the branch-lock key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+}
+
+/// The bridge's report of a run that could not do the work. `code` is stable API; `message` is
+/// for the human and may name the exact timeout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFailure {
+    pub code: String,
+    pub message: String,
+    pub at: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

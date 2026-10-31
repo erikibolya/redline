@@ -174,7 +174,7 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: currentColor; border-radius: 1px; vertical-align: 0;
 }
 .viewing-bar {
-  position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 7;
+  position: absolute; top: 58px; left: 50%; transform: translateX(-50%); z-index: 7;
   max-width: calc(100% - 24px); text-align: center;
   padding: 5px 12px; border-radius: 999px; cursor: pointer;
   background: #1c142f; border: 1px solid #4c1d95; color: #c4b5fd; font-size: 11px;
@@ -595,6 +595,8 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   height: 28px; padding: 0 6px; border-radius: 6px;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
 }
+#video-new { color: var(--text); border-color: var(--accent); }
+#video-new:hover { border-color: var(--accent); color: var(--accent); }
 .timeline { margin-top: 7px; }
 .timeline-overview {
   position: relative; height: 10px; border-radius: 3px; overflow: hidden;

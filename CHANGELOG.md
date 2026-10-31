@@ -54,6 +54,17 @@
   Contact sheets, full-resolution frames, video rounds in history and `post_round` video are the
   next phase. Browser e2e covers the real upload, playback, timecoded draw, ghost opacity, range,
   zoom and persisted submit (182 checks).
+- **Contact sheets, full frames and new video rounds.** A video submit now captures one
+  full-resolution frame per unique annotated timestamp (20 / ~60 MB cap, full-resolution JPEG
+  fallback), paints the moment's annotations over each tile of a labelled contact sheet in
+  `annotated.png`, writes `frames/` and lists both in `review.md` and `get_feedback`. The editor's
+  **New video** button posts the next clip: the previous round (annotations, sheet, frames and
+  clip) is archived under `history/<stamp>/` and the review reopens on the new video. History
+  plays archived video rounds read-only with their annotations, and MCP `post_round` accepts
+  `video_base64`/`video_path`. The live `/media` URL is cache-busted so a replaced clip cannot be
+  served from the previous round. Rust tests cover frame storage/limit/archive, new-round
+  archiving and MCP video rounds; browser e2e covers the composed sheet, two timecoded frames,
+  the new-video flow and history playback (194 checks).
 
 ## 0.22.0 — 2026-10-31
 

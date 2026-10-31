@@ -119,6 +119,16 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   not current.
 - **Keyboard**: `K` play/pause, `J`/`L` jump one second, `,`/`.` step one frame. Space remains
   canvas pan, not play.
+- **Submit** captures one full-resolution frame per unique annotated time (20 / ~60 MB cap, JPEG
+  fallback), composes a labelled contact-sheet grid into `annotated.png`, and uploads both with
+  the annotations JSON as multipart. Each tile shows its timecode, annotation numbers and those
+  annotations painted over the frame.
+- **New video** (next to Ghosts, hidden while submitted or viewing history) asks before discarding
+  unsaved marks, uploads the clip and reopens the review on it. The previous round - annotations,
+  contact sheet, frames and the clip itself - moves to History.
+- **History**: a video round plays in the same canvas and video bar, read-only; its annotations
+  are shown with their timecodes and the previous clip is streamed from
+  `/sessions/<id>/history/<stamp>/video`. *Back to current* restores the live clip.
 - **Gallery**: a video card uses the poster and shows a `▶ mm:ss` chip; a poster-less agent video
   falls back to a `▶ video` placeholder instead of a broken image.
 

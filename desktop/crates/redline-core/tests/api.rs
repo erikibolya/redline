@@ -354,6 +354,248 @@ async fn video_sessions_accept_a_multipart_browser_upload() {
 }
 
 #[tokio::test]
+async fn video_submissions_carry_a_contact_sheet_and_full_frames() {
+    use base64::Engine as _;
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({
+                "title": "Checkout video",
+                "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+                "poster_base64": PNG_B64,
+                "duration_ms": 5000,
+                "width": 320,
+                "height": 180,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG_B64)
+        .unwrap();
+
+    let annotations = json!({
+        "note": "look at the button",
+        "width": 320,
+        "height": 180,
+        "annotations": [
+            {"id": "a", "type": "rect", "color": "#e11d48", "width": 3,
+             "start": {"x": 10, "y": 20}, "end": {"x": 90, "y": 80}, "at": 1.0},
+            {"id": "b", "type": "rect", "color": "#e11d48", "width": 3,
+             "start": {"x": 30, "y": 40}, "end": {"x": 120, "y": 100}, "at": 2.0}
+        ]
+    });
+    let mut body = Vec::new();
+    let boundary = "BOUND";
+    let mut field = |name: &str, filename: &str, content_type: &str, bytes: &[u8]| {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        if filename.is_empty() {
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            );
+        } else {
+            body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    };
+    field("annotations", "", "", annotations.to_string().as_bytes());
+    field("png", "contact-sheet.png", "image/png", &png);
+    field("frames", "2.000.png", "image/png", &png);
+    field("frames", "1.000.png", "image/png", &png);
+    // The same millisecond must be captured once even when two annotations share it.
+    field("frames", "1.000.png", "image/png", &png);
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{id}/annotations"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, saved) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let set = &saved["annotations"];
+    assert_eq!(set["frames"].as_array().unwrap().len(), 2, "{set}");
+    assert_eq!(set["frames"][0]["at"], 1.0);
+    assert_eq!(set["frames"][0]["file"], "frames/1.000.png");
+    assert_eq!(set["frames"][1]["at"], 2.0);
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/frames/1.000.png"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/review.md"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let markdown = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(markdown.contains("### Frames"), "{markdown}");
+    assert!(
+        markdown.contains("00:02.000: frames/2.000.png"),
+        "{markdown}"
+    );
+
+    // The frames are archived with the round; the live folder is replaced by the next submit.
+    let dir = h.store.dir(&id).unwrap();
+    let history = dir.join("history");
+    let archived = std::fs::read_dir(&history)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .find(|entry| entry.file_name().to_string_lossy().ends_with("-frames"))
+        .expect("archived frames");
+    assert!(archived.path().join("1.000.png").is_file());
+    assert!(archived.path().join("2.000.png").is_file());
+}
+
+#[tokio::test]
+async fn a_new_video_can_replace_the_current_round() {
+    use base64::Engine as _;
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    const WEBM: &[u8] = &[0x1A, 0x45, 0xDF, 0xA3, 9, 8, 7, 6];
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({
+                "title": "Replaceable clip",
+                "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+                "poster_base64": PNG_B64,
+                "duration_ms": 5000,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({
+                "annotations": [
+                    {"type": "rect", "start": {"x": 1, "y": 2}, "end": {"x": 3, "y": 4}, "at": 1.0}
+                ],
+                "width": 320,
+                "height": 180
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (history_status, _, history) = send(
+        &h.app,
+        Request::builder()
+            .uri(format!("/api/sessions/{id}/history"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(history_status, StatusCode::OK, "{history}");
+    let stamp = history["submissions"][0]["stamp"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(history["submissions"][0]["media"]["kind"], "video");
+
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG_B64)
+        .unwrap();
+    let boundary = "ROUND";
+    let mut body = Vec::new();
+    let mut field = |name: &str, filename: &str, content_type: &str, bytes: &[u8]| {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        if filename.is_empty() {
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            );
+        } else {
+            body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    };
+    field("video", "second.webm", "video/webm", WEBM);
+    field("poster", "poster.png", "image/png", &png);
+    field("duration_ms", "", "", b"3000");
+    field("width", "", "", b"320");
+    field("height", "", "", b"180");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{id}/video"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, replaced) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{replaced}");
+    assert_eq!(replaced["meta"]["status"], "open");
+    assert_eq!(replaced["meta"]["image"], "video.webm");
+    assert_eq!(replaced["meta"]["media"]["mime"], "video/webm");
+    assert_eq!(replaced["meta"]["media"]["duration_ms"], 3000);
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/history/{stamp}/video"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("range", "bytes=0-3")
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.headers().get("content-range").unwrap(),
+        &format!("bytes 0-3/{}", MP4.len())
+    );
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/media"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..4], &WEBM[..4]);
+}
+
+#[tokio::test]
 async fn create_submit_and_read_back_round_trip() {
     let h = harness();
 

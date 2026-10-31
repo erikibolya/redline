@@ -195,7 +195,14 @@ pub fn tool_definitions() -> Value {
                     "session_id": { "type": "string" },
                     "note": { "type": "string", "description": "Short message for the human." },
                     "image_base64": { "type": "string" },
-                    "image_path": { "type": "string" }
+                    "image_path": { "type": "string" },
+                    "video_base64": { "type": "string", "description": "MP4/WebM base64; posts a new video round." },
+                    "video_path": { "type": "string", "description": "Absolute path on the server; posts a new video round." },
+                    "poster_base64": { "type": "string", "description": "Optional first-frame image for a video round." },
+                    "duration_ms": { "type": "number" },
+                    "width": { "type": "number" },
+                    "height": { "type": "number" },
+                    "fps": { "type": "number" }
                 },
                 "required": ["session_id"]
             }
@@ -668,6 +675,75 @@ fn post_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     use base64::Engine as _;
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
     let note = string_arg(args, "note").unwrap_or_default();
+    let video_base64 = string_arg(args, "video_base64");
+    let video_path = string_arg(args, "video_path");
+    if video_base64.is_some() || video_path.is_some() {
+        let bytes = match (video_base64, video_path) {
+            (Some(encoded), _) => {
+                let raw = encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(&encoded);
+                base64::engine::general_purpose::STANDARD
+                    .decode(raw.trim())
+                    .map_err(|err| format!("video_base64 is not valid base64: {err}"))?
+            }
+            (None, Some(path)) => {
+                let path = std::path::PathBuf::from(&path);
+                let size = std::fs::metadata(&path)
+                    .map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
+                    .len();
+                if size as usize > crate::MAX_VIDEO_BYTES {
+                    return Err(format!(
+                        "video is larger than {} MB",
+                        crate::MAX_VIDEO_BYTES / (1024 * 1024)
+                    ));
+                }
+                std::fs::read(&path)
+                    .map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
+            }
+            (None, None) => unreachable!(),
+        };
+        let poster = match string_arg(args, "poster_base64") {
+            Some(encoded) => {
+                let raw = encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(&encoded);
+                Some(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(raw.trim())
+                        .map_err(|err| format!("poster_base64 is not valid base64: {err}"))?,
+                )
+            }
+            None => None,
+        };
+        let meta = ctx
+            .store
+            .new_video_round(
+                &id,
+                &bytes,
+                poster.as_deref(),
+                args.get("duration_ms").and_then(Value::as_u64),
+                args.get("width").and_then(Value::as_u64).map(|v| v as u32),
+                args.get("height").and_then(Value::as_u64).map(|v| v as u32),
+                args.get("fps").and_then(Value::as_f64),
+            )
+            .map_err(|err| err.to_string())?;
+        return Ok(json!({
+            "session_id": id,
+            "posted": true,
+            "status": meta.status.as_str(),
+            "media": meta.media,
+            "video_url": format!(
+                "{}/sessions/{}/media?t={}",
+                ctx.base_url.trim_end_matches('/'),
+                meta.id,
+                ctx.token
+            ),
+        }));
+    }
+
     let (bytes, name) = match (
         string_arg(args, "image_base64"),
         string_arg(args, "image_path"),
@@ -867,6 +943,7 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         url: None,
         image: None,
         media: None,
+        frames: Vec::new(),
         annotations: Vec::new(),
         submitted_at: None,
     });
@@ -900,6 +977,19 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
                 meta.id,
                 ctx.token
             )),
+        "frames": set.frames.iter().map(|frame| {
+            json!({
+                "at": frame.at,
+                "mime": frame.mime,
+                "url": format!(
+                    "{}/sessions/{}/frames/{}?t={}",
+                    ctx.base_url.trim_end_matches('/'),
+                    meta.id,
+                    frame.file.trim_start_matches("frames/"),
+                    ctx.token
+                ),
+            })
+        }).collect::<Vec<_>>(),
         "annotations": set.annotations,
         "markdown": markdown,
         "annotated_png": has_png.then(|| format!("redline://session/{}/annotated.png", meta.id)),

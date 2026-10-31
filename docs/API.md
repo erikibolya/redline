@@ -171,6 +171,25 @@ Limits: 250 MB per video, 5 minutes when `duration_ms` is sent, 8 MB poster. Mag
 the container (HEIC/AVIF image brands are rejected); the uploaded filename never becomes the path.
 Response is the same `{meta, review_url, dir}` shape as `POST /api/sessions`.
 
+### `POST /api/sessions/<id>/video` (next round)
+
+Same multipart fields as `POST /api/sessions/video` (only `video`, `poster`, `duration_ms`,
+`width`, `height`, `fps` are used). The current round is archived - annotations, contact sheet,
+frames and the clip under `history/<stamp>/video.*` - and the session reopens (`status=open`,
+empty annotations) on the new clip. Used by the editor's **New video** button and MCP
+`post_round`.
+
+### `GET /sessions/<id>/frames/<file>`
+
+A full-resolution still captured at an annotated time (`0.500.png`, `12.340.jpg`). `404` when the
+round has no such frame. Frames are referenced from `annotations.json` (`frames[]`) and
+`get_feedback`.
+
+### `GET /sessions/<id>/history/<stamp>/video`
+
+The archived clip of a submitted video round, with the same `Range`/`206` behaviour as the live
+`/media` route. `/sessions/<id>/history/<stamp>/frames/<file>` serves that round's stills.
+
 ### `GET /sessions/<id>/annotated.png`
 
 The last submitted annotated PNG. `404` before the first submission (or when the client did not
@@ -192,6 +211,18 @@ Request:
 - `annotations`: array; may be empty.
 - `width`/`height`: canvas dimensions; stored in meta + payload.
 - `png`: optional; when present, decoded and written to `annotated.png`.
+
+For a video submit use `multipart/form-data` instead of JSON:
+
+| Field | Meaning |
+|---|---|
+| `annotations` | the JSON above **without** `png` |
+| `png` | the composed contact sheet (PNG) |
+| `frames` | repeated files named `<seconds>.png`/`.jpg`; at most 20 unique times / 60 MB |
+
+The server writes `frames/`, stores their timecodes in `annotations.json`, archives them with the
+round and lists them in `review.md` (`### Frames`). A JSON video submit without a sheet/frames is
+still accepted.
 
 Response `200`:
 

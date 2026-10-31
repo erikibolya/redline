@@ -148,9 +148,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   /api/agent/repos`) and runs each review in its project's repo. Also embedded in the desktop app
   (tray → *Start local agent*); see `docs/LOCAL-AGENT.md`.
 - `redline-core` — session folder store (`meta.json`, `annotations.json`, `review.md`,
-  `annotated.png`, `history/`), project folders (`sessions/projects/<slug>/`, v0.10; optional
-  `repo` key + `agent`), axum HTTP API, bearer/cookie auth, MCP JSON-RPC, headless capture
-  (shells out to Chromium), annotation diffing, loopback HTTP client.
+  `annotated.png`, `frames/`, `history/`), project folders (`sessions/projects/<slug>/`, v0.10;
+  optional `repo` key + `agent`), axum HTTP API, bearer/cookie auth, MCP JSON-RPC, headless
+  capture (shells out to Chromium), annotation diffing, loopback HTTP client.
 - Auth: token from `/data/token`; `Authorization: Bearer`, `redline_token` cookie (set by
   `/s/<id>?t=…` → 307), or `?t=`. `Sec-Fetch-Site: cross-site` is refused.
 - MCP tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`, `wait_for_feedback`,
@@ -170,7 +170,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform
   (`scale/x/y`) applied in `render()`, so zoom is crisp and pointer mapping is `(screen - view)/scale`.
   A video session draws `<video>` into the same canvas via `loadMedia()`; `annotationOpacity()`
-  makes other moments ghosts and `videoWindow` drives the zoomable timeline.
+  makes other moments ghosts and `videoWindow` drives the zoomable timeline. A video submit
+  captures `frames/` and a contact sheet; a new clip is a new round whose predecessor lives under
+  `history/<stamp>/video.*` and replays read-only.
 
 ## 7. Lessons already paid for (do not relearn)
 
@@ -179,6 +181,10 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   The video bar was added inside the stage and its play button did nothing until it joined that
   guard; the timeline wheel also needs `stopPropagation()` or it zooms the canvas while zooming
   the ruler.
+- **A media element ignores `no-store` when the URL stays the same.** Replacing a review's clip
+  rewrote `video.webm`, but `<video src="/sessions/<id>/media?v=video.webm">` kept playing the
+  previous round. Cache-bust the live URL per load (`&r=<timestamp>`), not just with the file
+  name; the history URL already carries the unique round stamp.
 - **A MediaRecorder WebM has no duration until it is seeked.** `video.duration` is `Infinity`
   straight after metadata, which collapses the timeline to a zero-length window. Seek past the
   buffered end once (`currentTime = 1e101`, wait for `durationchange`), then reset to 0; the

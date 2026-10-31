@@ -336,10 +336,24 @@ pub struct AnnotationSet {
     /// Image or video metadata for the round (v0.23).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<MediaRef>,
+    /// Full-resolution frames captured at the unique annotation times (v0.23). The contact sheet
+    /// stays `annotated.png`; these are the individual frames the agent can zoom into.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<FrameRef>,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submitted_at: Option<String>,
+}
+
+/// One captured video frame: `at` is the timecode the human annotated, `file` is relative to the
+/// session folder (`frames/12.340.png`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameRef {
+    pub at: f64,
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -49,7 +49,11 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   the poster so the rail/gallery cards keep working.
 - The browser loads the session; annotations are kept only in the page until **Submit review**.
 - Submit writes `annotations.json`, `annotated.png`, `review.md` and flips `meta.status`.
-  Video annotations may carry `at`/`until` seconds; `review.md` prints timecodes.
+  Video annotations may carry `at`/`until` seconds; `review.md` prints timecodes. A video submit
+  also writes `frames/` (one still per unique annotated time) and `annotated.png` is the contact
+  sheet.
+- A new video round archives the previous one under `history/<stamp>/video.*` (with its sheet and
+  frames) and reopens the session on the new clip.
 - `wait` polls `meta.status`; no push/websocket.
 
 ## Data flow

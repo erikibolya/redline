@@ -1672,7 +1672,7 @@ class Editor {
   pickNewVideo() {
     if (!this.video || this.locked || this.viewing) return;
     if (this.annotations.length && !confirm(
-      "Post a new video as the next round? Unsaved annotations will be discarded; the current round stays in History.",
+      "Post a new video as the next round? Unsaved annotations will be discarded; the submitted round (if any) stays in History.",
     )) return;
     $("#video-file")?.click();
   }

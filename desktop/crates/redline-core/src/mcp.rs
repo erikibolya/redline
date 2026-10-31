@@ -730,6 +730,11 @@ fn post_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
                 args.get("fps").and_then(Value::as_f64),
             )
             .map_err(|err| err.to_string())?;
+        // The clip replaces the canvas, so a note must also land in the conversation or the human
+        // sees a silent new round with no explanation.
+        if !note.is_empty() {
+            let _ = reply(ctx, &json!({ "session_id": &id, "message": &note }));
+        }
         return Ok(json!({
             "session_id": id,
             "posted": true,

@@ -342,6 +342,9 @@ async fn post_round_can_hand_back_a_new_video() {
     // with the agent's video simply frees the old file.
     assert!(store.history(&id).unwrap().is_empty());
     assert!(!store.dir(&id).unwrap().join("screenshot.png").is_file());
+    let thread = std::fs::read_to_string(store.dir(&id).unwrap().join("agent-thread.jsonl"))
+        .expect("agent thread");
+    assert!(thread.contains("here is the fixed flow"), "{thread}");
 }
 
 #[tokio::test]

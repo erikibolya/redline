@@ -79,6 +79,7 @@ async fn initialize_and_tool_list_are_well_formed() {
     assert!(names.contains(&"get_feedback"));
     assert!(names.contains(&"list_reviews"));
     assert!(names.contains(&"resolve"));
+    assert!(names.contains(&"ship_status"));
 
     // Notifications get no response at all.
     let notification = handle(
@@ -119,6 +120,84 @@ async fn review_screenshot_creates_a_session_the_human_can_open() {
         store.image_path(&meta).unwrap().is_file(),
         "screenshot written"
     );
+}
+
+#[tokio::test]
+async fn ship_status_records_the_pr_only_for_a_confirmed_feature() {
+    let (_dir, store) = setup();
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({
+                "title": "ship me",
+                "image_base64": format!("data:image/png;base64,{PNG_B64}")
+            }),
+        )
+        .await,
+    );
+    let id = created["session_id"].as_str().unwrap().to_string();
+
+    let refused = call(
+        &store,
+        "ship_status",
+        json!({
+            "session_id": id,
+            "state": "merged",
+            "pr_url": "https://github.com/o/r/pull/7"
+        }),
+    )
+    .await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(refused["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("not confirmed"));
+
+    store.confirm_feature(&id).unwrap();
+    let opened = call(
+        &store,
+        "ship_status",
+        json!({
+            "session_id": id,
+            "state": "opened",
+            "pr_url": "https://github.com/o/r/pull/7",
+            "pr_number": 7
+        }),
+    )
+    .await;
+    assert_eq!(opened["isError"], false, "{opened}");
+    assert_eq!(payload(&opened)["ship"]["status"], "opened");
+
+    // A merged report keeps the PR and adds the merge commit.
+    let merged = call(
+        &store,
+        "ship_status",
+        json!({
+            "session_id": id,
+            "state": "merged",
+            "merge_commit": "abc123"
+        }),
+    )
+    .await;
+    assert_eq!(merged["isError"], false, "{merged}");
+    let ship = payload(&merged)["ship"].clone();
+    assert_eq!(ship["status"], "merged");
+    assert_eq!(ship["pr_number"], 7);
+    assert_eq!(ship["merge_commit"], "abc123");
+    assert_eq!(
+        store.require(&id).unwrap().ship.unwrap().status,
+        redline_core::model::ShipStatus::Merged
+    );
+
+    // The URL is required when the agent says the PR exists.
+    let no_url = call(
+        &store,
+        "ship_status",
+        json!({"session_id": id, "state": "opened"}),
+    )
+    .await;
+    assert_eq!(no_url["isError"], true, "{no_url}");
 }
 
 #[tokio::test]

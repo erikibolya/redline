@@ -18,6 +18,20 @@
   round currently being viewed. The e2e measures the radius of every row and compares the live
   row's fill and border with a sibling's.
 
+- **A feature ships only after ✓ Confirm, and the rail says what happened.** The review prompt let
+  an agent follow its repository's shipping rules mid-review, so overnight runs opened and merged
+  PRs before the human confirmed anything; by morning every review was already shipped. A review
+  run now pushes its branch and replies but must not open a PR, merge or release. Confirming
+  queues a separate ship job (`ship.status=requested`) that the bridge claims only when it
+  advertises `jobs: ["review","ship"]`; a separate ship prompt grants the PR/merge and reports
+  through MCP `ship_status` (`opened`, `merged`, `failed`, `closed`, plus PR URL/number and merge
+  commit). The rail shows `ship queued`, `shipping`, `PR #46` (link), `merged` (link) or
+  `ship failed ↻` (retry). A failed/closed ship can be retried from the row menu or the badge;
+  reopening/cancelling clears it. Old bridges that send no `jobs` are never handed a ship job, and
+  pre-v0.23 confirmed features keep the plain `confirmed` badge. Rust tests cover the queue, the
+  capability gate, the MCP report and the state reset; the browser e2e confirms a feature, reports
+  the PR through MCP, checks the merged link, fails the ship and retries it. The e2e's cancel
+  dashboard check and two selection/z-order checks now poll instead of assuming an instant.
 - **Video media core.** The server can create a video session (MP4/WebM, magic-byte validation),
   store a poster and duration/dimensions, serve the clip with HTTP `Range` for seeking, and write
   timecoded annotations (`at`/`until`) into `annotations.json` and `review.md`. MCP gains

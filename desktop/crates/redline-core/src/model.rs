@@ -42,6 +42,10 @@ pub struct Meta {
     /// When the human cancelled the feature without shipping it (v0.21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature_cancelled_at: Option<String>,
+    /// The confirmed feature's ship run (v0.23). `confirm_feature` queues it; the bridge claims
+    /// it and the agent reports the PR/merge through MCP `ship_status`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ship: Option<Ship>,
     /// The prompt the human wrote when submitting a round (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -62,7 +66,8 @@ pub struct Meta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Feature branch the agent is working on (v0.22). Set at session creation or on the first
-    /// claim; the fallback is `session/<id>`. RedLine uses it as the branch-lock key.
+    /// claim; v0.21's `session/<id>` fallback is read back as `feat/<title-slug>-<id-tail>`.
+    /// RedLine uses it as the branch-lock key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
 }
@@ -91,6 +96,85 @@ pub struct MediaRef {
     /// omit it; the UI steps by a nominal frame then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f64>,
+}
+
+/// What a confirmed feature's ship run is doing (v0.23). The server queues `requested` when the
+/// human confirms; the bridge claims it (`running`) and the agent reports the PR through MCP
+/// `ship_status` (`opened`, `merged`, `failed`, `closed`). This is additive state: RedLine still
+/// never touches git itself.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Ship {
+    pub status: ShipStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_number: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShipStatus {
+    Requested,
+    Running,
+    Opened,
+    Merged,
+    Failed,
+    Closed,
+}
+
+impl ShipStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ShipStatus::Requested => "requested",
+            ShipStatus::Running => "running",
+            ShipStatus::Opened => "opened",
+            ShipStatus::Merged => "merged",
+            ShipStatus::Failed => "failed",
+            ShipStatus::Closed => "closed",
+        }
+    }
+
+    /// The bridge may claim a ship that is queued or whose previous run went away.
+    pub fn claimable(self) -> bool {
+        matches!(self, ShipStatus::Requested | ShipStatus::Running)
+    }
+
+    /// The agent has answered; the rail can stop saying "shipping".
+    pub fn terminal(self) -> bool {
+        matches!(
+            self,
+            ShipStatus::Opened | ShipStatus::Merged | ShipStatus::Failed | ShipStatus::Closed
+        )
+    }
+}
+
+impl Ship {
+    pub fn requested(at: impl Into<String>) -> Self {
+        Self {
+            status: ShipStatus::Requested,
+            requested_at: Some(at.into()),
+            started_at: None,
+            finished_at: None,
+            pr_url: None,
+            pr_number: None,
+            merge_commit: None,
+            error: None,
+        }
+    }
+
+    pub fn is_merged(&self) -> bool {
+        self.status == ShipStatus::Merged
+    }
 }
 
 /// A conversation area: one agent + one piece of work, holding its sessions and history.
@@ -322,8 +406,8 @@ pub struct NewSession {
     /// Project name or slug (v0.10). Created on first use; omitted means the Inbox.
     #[serde(default)]
     pub project: Option<String>,
-    /// Feature branch the agent is working on (v0.22). Optional; the bridge falls back to
-    /// `session/<id>` when it claims the work.
+    /// Feature branch the agent is working on (v0.22). Optional; the server derives
+    /// `feat/<title-slug>-<id-tail>` when it is empty. v0.21's `session/<id>` is not produced.
     #[serde(default)]
     pub branch: Option<String>,
 }

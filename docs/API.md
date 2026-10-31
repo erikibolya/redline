@@ -29,6 +29,7 @@ Editor page (HTML). The page reads the id from the path and calls the JSON API b
       "feature_state": "pending",
       "feature_confirmed_at": null,
       "feature_cancelled_at": null,
+      "ship": null,
       "branch": "feat/button-hover",
       "created_at": "2026-10-28T11:11:13+00:00",
       "submitted_at": null,
@@ -40,7 +41,9 @@ Editor page (HTML). The page reads the id from the path and calls the JSON API b
 
 Newest first by `created_at`. `feature_state` is derived: `confirmed` when
 `feature_confirmed_at` is set, `cancelled` when `feature_cancelled_at` is set, otherwise
-`pending`.
+`pending`. A confirmed feature also carries `ship` (v0.23): the ship run's state and PR
+(`requested`, `running`, `opened`, `merged`, `failed` or `closed`), see
+[Ship a confirmed feature](#post-apisessionsidship).
 
 ### `GET /api/sessions/<id>`
 
@@ -69,27 +72,51 @@ Name the feature branch the review runs on.
 ```
 
 Returns `{ "meta": { … } }`. `{"branch": null}` (or an empty string) restores the derived
-default. `409` while the session is `submitted`: the agent's worktree was created for the old
-name, so stop the round first. A review created without a name already has a branch —
-`feat/<title-slug>-<id-tail>` — so `session/<id>` is no longer produced; sessions that v0.21
-claimed under that fallback are read back under their `feat/…` name.
+default. `409` while the session is `submitted` (the agent's worktree was created for the old
+name) or has a ship run (the PR points at the shipped branch). A review created without a name
+already has a branch — `feat/<title-slug>-<id-tail>` — so `session/<id>` is no longer produced;
+sessions that v0.21 claimed under that fallback are read back under their `feat/…` name.
 
 ### `POST /api/sessions/<id>/confirm-feature`
 The human says the feature is complete. Sets `status=resolved`, `resolved_at` (if unset) and
-`feature_confirmed_at`, clears `feature_cancelled_at`. RedLine does not touch git; agents read
-`feature_state == "confirmed"` and apply their own workflow (for this repo: open a PR into `dev`).
+`feature_confirmed_at`, clears `feature_cancelled_at`, and queues a **ship run**
+(`ship.status=requested`) unless the feature is already merged. RedLine does not touch git: the
+agent bridge claims the ship job, opens/merges the PR, and reports it through the `ship_status`
+MCP tool. Repeating the request retries a failed or still-open shipment.
+
+### `POST /api/sessions/<id>/ship`
+
+Queue (or retry) a ship run for a feature that is already confirmed. Returns `{ "meta": { … } }`.
+`400` when the feature is not confirmed; a merged feature is returned unchanged. This is the
+retry path behind the rail's `ship failed ↻` badge and the way a pre-v0.23 confirmed feature can
+be shipped.
+
+```json
+{
+  "ship": {
+    "status": "requested",
+    "requested_at": "2026-10-31T10:00:00+00:00",
+    "started_at": null,
+    "finished_at": null,
+    "pr_url": null,
+    "pr_number": null,
+    "merge_commit": null,
+    "error": null
+  }
+}
+```
 
 ### `POST /api/sessions/<id>/cancel-feature`
 
 The human abandons the feature. Sets `status=resolved`, `resolved_at` (if unset) and
-`feature_cancelled_at`, clears `feature_confirmed_at`. Nothing is merged and the review files are
-kept.
+`feature_cancelled_at`, clears `feature_confirmed_at` and `ship`. Nothing is merged and the
+review files are kept.
 
 ### `POST /api/sessions/<id>/reopen`
 
-Undo: `status=open`, clears `resolved_at`, `feature_confirmed_at` and `feature_cancelled_at`.
-A new submission or agent round also clears both feature stamps, so more work makes the feature
-`pending` again.
+Undo: `status=open`, clears `resolved_at`, `feature_confirmed_at`, `feature_cancelled_at` and
+`ship`. A new submission or agent round also clears the feature stamps and the ship, so more
+work makes the feature `pending` again.
 
 ### `GET /sessions/<id>/image`
 
@@ -252,17 +279,23 @@ GET /api/agent/settings
 `lease_seconds`, and a `projects` map of `slug -> number|null` (`null` inherits the default).
 
 ```http
-POST /api/agent/next       {"agent_id": "holly"}
+POST /api/agent/next       {"agent_id": "holly", "jobs": ["review", "ship"]}
 POST /api/agent/claims     {"session_id": "…", "agent_id": "holly", "work_key": "feat/x"}
 POST /api/agent/claims/…/heartbeat   {"agent_id": "holly"}
 POST /api/agent/claims/…/state       {"agent_id": "holly", "state": "waiting"}
 POST /api/agent/claims/…/release     {"agent_id": "holly"}
 ```
 
-`next` returns `{"session": {…}, "claim": {…}, "limits": {…}}` or
+`next` returns `{"session": {…}, "claim": {…}, "job": "review|ship", "limits": {…}}` or
 `{"session": null, "reason": "empty|at_capacity|branch_locked|claimed"}`. A claim response is
-`{"claim": {…}, "session": {…}, "limits": {…}}`. The branch key is `session.branch`, or
-`session/<id>` when the agent did not declare one.
+`{"claim": {…}, "session": {…}, "job": "review", "limits": {…}}`. The branch key is
+`session.branch`, or the derived `feat/…` when the agent did not declare one.
+
+`jobs` is the bridge's capability list. A bridge that omits it only receives `review` work, so
+an old client is never handed a confirmed feature and asked to treat it as an annotation round.
+`ship` jobs are sessions with a claimable `ship` and `feature_confirmed_at`; the response's
+`session.ship.status` is already `running`. The claim's `work_key` wins over `session.branch`:
+it is the branch the review actually worked on, including v0.21's `session/<id>` legacy name.
 
 ### Agent presence
 
@@ -362,6 +395,7 @@ See `docs/ARCHITECTURE.md` § Storage schema. Fields:
 | `feature_confirmed_at` | The human confirmed the feature; agents map this to their own workflow. |
 | `feature_cancelled_at` | The human cancelled the feature; nothing should be merged. |
 | `feature_state` | Derived in `GET /api/sessions`: `pending`, `confirmed` or `cancelled`. |
+| `ship` | Present on a confirmed feature (v0.23): the ship run's `status`, PR URL/number, merge commit and error. `requested`/`running` are claimable; `opened`/`merged`/`failed`/`closed` are reported by the agent. Cleared by a new round, reopen or cancel. |
 | `branch` | The feature branch the review runs on. Every review has one: `feat/<title-slug>-<id-tail>` when nobody named it, and the branch-lock key. v0.21's `session/<id>` fallback is read back as that `feat/…` name. |
 | `image` | Screenshot filename inside the session. |
 | `image_width` / `image_height` | Present after submission; canvas dimensions. |

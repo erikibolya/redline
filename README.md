@@ -56,7 +56,7 @@ MCP over HTTP at `/mcp` (Bearer token):
 ```
 
 Tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`,
-`list_projects`, `progress`, `reply`, `post_round`, `capture_round`, `resolve`.
+`list_projects`, `progress`, `reply`, `post_round`, `capture_round`, `resolve`, `ship_status`.
 
 ## The loop
 
@@ -70,6 +70,9 @@ Tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback
    in the *same* review. One task is one session, not a pile of them.
 5. **Repeat or close** — History is a read-only viewer of every submitted round; drafts survive
    switching between reviews; **STOP** takes a submission back and kills a running agent.
+6. **✓ Confirm ships it** — a review run never opens a PR. Confirming queues a separate ship run;
+   the agent opens/merges the PR and reports it through `ship_status`, and the rail shows
+   `PR #46`, `merged` or `ship failed ↻`.
 
 ## Features
 

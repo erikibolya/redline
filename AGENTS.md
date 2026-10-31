@@ -86,8 +86,10 @@ REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per
 # Release gate: docs/TESTING.md — tool matrix, feature protocol and the checklist.
 
 # Ship a feature (dev is protected; never push it directly)
+# A review run is not a shipment: push the branch and reply, do NOT open a PR or merge.
+# The human's ✓ Confirm feature queues a ship job; the bridge then runs the ship prompt:
 git push origin feat/my-feature
-feature-ready "what changed and why"
+feature-ready "what changed and why"   # only in the ship run, after the confirmation
 # draft PR -> ready -> required CI -> auto-merge -> dev build
 
 # Release (only after an explicit yes; main is protected)
@@ -354,6 +356,17 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   (2026-10-30). Derive "current" from what the canvas actually shows (saved annotations + picture
   equal the newest archived row), let *Current* appear only when the canvas differs from every
   round, and test the resolved case *and* the agent-posted-picture case that still needs it.
+- **A confirmation is permission, not a status label.** The review prompt let agents follow the
+  repo's shipping rules during a review run, so overnight every review was already opened and
+  merged into `dev` before the human woke up; by morning there was nothing left to confirm
+  (2026-10-31). A review run must push the branch and reply, never open a PR or merge. The human's
+  ✓ queues a separate **ship** job (`ship.status=requested`); the bridge advertises
+  `jobs: ["review","ship"]` on `/api/agent/next`, claims it after the review claim is waiting or
+  released, and runs a prompt that explicitly grants the PR/merge. The agent reports through MCP
+  `ship_status`; the rail shows `PR #46` / `merged` / `ship failed ↻`. An old bridge that sends no
+  `jobs` is never handed a ship job. Test the review prompt *forbids* shipping, the confirm →
+  `next(job=ship)` path, the MCP report, and the rail badge; a status label that merely says
+  "confirmed" is not a ship.
 
 ## 8. Working rules
 

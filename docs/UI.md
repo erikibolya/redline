@@ -196,6 +196,13 @@ Each session is one feature. The rail's row actions carry the human's decision; 
   `feature_confirmed_at`; the rail shows a green-tinted `confirmed` badge and dot. Cancelled
   features get a red-tinted `cancelled` badge; both keep their solid text/border colours in the
   light theme, so the decision never reads as a black pill on the dark rail.
+- **The confirmation is also the ship permission (v0.23).** Confirming queues a ship run; the
+  rail shows a second badge beside `confirmed`: `ship queued` (waiting for an agent),
+  `shipping` (agent run active), `PR #46` (a link to the open pull request), `merged` (a link,
+  with the merge commit in the tooltip), `PR closed`, or `ship failed ↻` (a red retry button;
+  clicking it calls `POST /api/sessions/<id>/ship`). The review run itself never opens a PR, so
+  a feature cannot sneak into `dev` overnight; the ship run is a separate bridge job. A
+  pre-v0.23 confirmed feature has no `ship` record and keeps the plain `confirmed` badge.
 - **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
   **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
   with `feature_cancelled_at`, nothing is merged and the screenshot/annotations stay in **Done**.

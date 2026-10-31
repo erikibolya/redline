@@ -90,12 +90,18 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   "resolved_at": null,
   "feature_confirmed_at": null,
   "feature_cancelled_at": null,
+  "ship": null,
   "branch": "feat/button-hover",
   "image": "screenshot.png",
   "image_width": 1440,
   "image_height": 900
 }
 ```
+
+`ship` is present only after the human confirms a feature (v0.23). It records the ship run:
+`status` (`requested`, `running`, `opened`, `merged`, `failed`, `closed`), the PR URL/number,
+the merge commit and the agent's error. The review run never opens a PR; confirmation queues this
+record and the bridge's ship job fills it in.
 
 `annotations.json` (written on submission):
 
@@ -122,9 +128,12 @@ global runs, 1 per project and a 120 s lease. A claim is `running` or `waiting`;
 the branch lock but does not consume an execution slot.
 
 The server is the authority. The bridge asks `POST /api/agent/next`, heartbeats, and marks
-`waiting` when the human has the ball. The branch key is `meta.branch`, falling back to
-`session/<id>`; RedLine never touches git. `redline-agent` runs `REDLINE_AGENT_WORKERS` claim
-workers (default 4), each with its own worktree under
+`waiting` when the human has the ball. The branch key is `Meta::work_key()`: `meta.branch`, or
+the derived `feat/<title-slug>-<id-tail>` for a v0.21 `session/<id>` fallback; RedLine never
+touches git. The bridge advertises `jobs: ["review","ship"]` on `next`; the response's `job`
+selects the review prompt or the ship prompt. A ship claim reuses the waiting review claim's
+`work_key` (the branch the agent actually worked on) and marks `meta.ship.status=running`.
+`redline-agent` runs `REDLINE_AGENT_WORKERS` claim workers (default 4), each with its own worktree under
 `<repo_root>/.redline-worktrees/<repo>-<hash>/<branch>-<hash>`, and running heartbeats every
 `lease/3`. A resolved round releases the claim and removes a clean worktree; a dirty one is left
 for inspection. The OpenCode server must see the worktree path just like the repository itself.

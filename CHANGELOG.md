@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Errors no longer hide in Done.** The rail had five views (`All`, `Active`, `Open`,
+  `Submitted`, `Done`), and `Active` meant "not resolved" — so a confirmed feature whose handoff
+  was queued, running or failed sat in `Done`, together with the `handoff failed` /
+  `worker-offline` badge that said something was wrong. There are now three views: `Active`
+  (default) holds every review that still needs a human — anything not resolved, plus a confirmed
+  feature whose handoff is not `done`; `Done` is only work that finished cleanly; `All` is the
+  archive. When any handoff has failed the `Active` chip carries a red edge and a count in its
+  title, and the poll now redraws the rail when a handoff changes state (it used to redraw only
+  when the working set changed, so a failure stayed in the old list until a reload). Stored
+  preferences for the removed views migrate (`open`/`submitted` → `active`, `resolved` → `done`).
+  The e2e asserts the three chips, that a queued/failed handoff stays in `Active` and out of
+  `Done`, and still walks confirm → handoff → retry → reopen → cancel.
 - **A finished review says `done` in the rail, and every round says how long it ran.** A resolved
   session that was neither `working` nor decided showed no badge at all, so finished tasks looked
   like they were still in progress (2026-10-31). Resolved rows now carry a `done` badge and

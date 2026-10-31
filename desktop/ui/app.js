@@ -1049,7 +1049,11 @@ const Theme = {
  *  *working* set changed, so a run that failed without ever being "working" (the bridge's pickup
  *  is `thinking`, then `failed`) kept its row saying "waiting for agent" until a manual refresh —
  *  the badge that has to explain the dead end was the one that stayed stale (2026-10-31). Compare
- *  the painted fields instead of the whole list, so an unchanged queue still never rebuilds it. */
+ *  the painted fields instead of the whole list, so an unchanged queue still never rebuilds it.
+ *
+ *  A handoff's state is part of that fingerprint for the same reason: queued → running → failed
+ *  changes both the row badge and which view the review belongs to, and a failure that stayed in
+ *  the old list (or under Done) was invisible from the default view (2026-10-31). */
 const railFingerprint = (sessions) => (sessions || []).map((session) => [
   session.id,
   session.title || "",
@@ -1068,15 +1072,23 @@ const railFingerprint = (sessions) => (sessions || []).map((session) => [
   session.handoff?.message || "",
 ].join("\u0001")).join("\n");
 
-// "Active" is the default so finished sessions drop out of the way; "All" is the archive view
-// and "Done" is the resolved-only view.
+// Three views are enough: work that is not finished, work that is, and everything. "Active" is
+// the default, so it must hold *every* review that still needs a human — and a confirmed feature
+// whose handoff is queued, running or failed is not finished. Those reviews are resolved, so a
+// failed handoff or an offline worker used to show up only in "Done", the one place nobody looks
+// for work (2026-10-31).
+const handoffUnfinished = (session) =>
+  Boolean(session.handoff) && session.handoff.status !== "done";
+
 const FILTERS = [
   { id: "all", label: "All", test: () => true },
-  { id: "active", label: "Active", test: (s) => s.status !== "resolved" },
-  { id: "open", label: "Open", test: (s) => s.status === "open" },
-  { id: "submitted", label: "Submitted", test: (s) => s.status === "submitted" },
-  { id: "resolved", label: "Done", test: (s) => s.status === "resolved" },
+  { id: "active", label: "Active", test: (s) => s.status !== "resolved" || handoffUnfinished(s) },
+  { id: "done", label: "Done", test: (s) => s.status === "resolved" && !handoffUnfinished(s) },
 ];
+
+// Views that were folded into Active/Done. A stored preference for them must land on the view
+// that still contains those reviews, not reset to the default.
+const LEGACY_FILTERS = { open: "active", submitted: "active", resolved: "done" };
 
 class Rail {
   constructor({
@@ -1099,13 +1111,14 @@ class Rail {
     this.sessions = [];
     this.projects = [];
     this.collapsed = new Set(prefs.get("collapsedProjects", []));
-    this.filter = prefs.get("filter", "active");
-    // Drop preferences for removed filters (the old "mine") instead of rendering an unpressed
-    // chip row with no matching view.
+    const stored = prefs.get("filter", "active");
+    this.filter = LEGACY_FILTERS[stored] || stored;
+    // Drop preferences for views that no longer exist instead of rendering an unpressed chip
+    // row with no matching list.
     if (!FILTERS.some((filter) => filter.id === this.filter)) {
       this.filter = "active";
-      prefs.set("filter", this.filter);
     }
+    if (this.filter !== stored) prefs.set("filter", this.filter);
     this.query = "";
     this.agentTimer = null;
     this.wire();
@@ -1196,6 +1209,10 @@ class Rail {
     const beforeRows = railFingerprint(this.sessions);
     const beforeData = JSON.stringify(this.sessions);
     this.sessions = sessions;
+    // Anything a row or a chip *says* belongs to the same fingerprint: a handoff that failed (or
+    // went from queued to merged) changes which view the review belongs to, and the row badge
+    // that explains it. Comparing only the working set left a failed handoff hidden in the old
+    // view until a reload (2026-10-31).
     if (railFingerprint(sessions) !== beforeRows) this.render();
     // The dashboard gallery is derived from the same list. It used to be painted only at boot
     // and on a back-forward restore, so a review cancelled elsewhere could keep its card for as
@@ -1236,13 +1253,18 @@ class Rail {
       this.purge.hidden = cancelled === 0;
       this.purge.textContent = `Delete cancelled (${cancelled})`;
     }
-    this.chips.innerHTML = FILTERS.map(
-      (filter) => `
-        <button class="chip" type="button" data-filter="${filter.id}"
-                aria-pressed="${this.filter === filter.id}">
+    // A failed handoff is an error, not a finished feature: say so on the default view, where one
+    // red badge on a single row is easy to scroll past.
+    const failed = this.sessions.filter((session) => session.handoff?.status === "failed").length;
+    this.chips.innerHTML = FILTERS.map((filter) => {
+      const attention = filter.id === "active" && failed > 0;
+      return `
+        <button class="chip${attention ? " attention" : ""}" type="button"
+                data-filter="${filter.id}" aria-pressed="${this.filter === filter.id}"
+                ${attention ? `title="${plural(failed, "review")} with a failed handoff"` : ""}>
           ${filter.label}<b>${counts[filter.id]}</b>
-        </button>`,
-    ).join("");
+        </button>`;
+    }).join("");
     $$(".chip", this.chips).forEach((chip) =>
       chip.addEventListener("click", () => {
         this.filter = chip.dataset.filter;

@@ -455,6 +455,19 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .session .badge.cancelled {
   background: rgba(244, 63, 94, .16); border-color: rgba(251, 113, 133, .5); color: #fda4af;
 }
+/* A resolved review is neither working nor decided: it is finished. Without a word of its own
+   the row carried no badge at all and read as still in progress (2026-10-31). */
+.session .badge.done {
+  padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+  background: var(--panel-2); border-color: var(--border); color: var(--ok);
+}
+[data-theme="light"] .session .badge.done { color: #15803d; }
+/* The other end of "waiting for agent": the round is back in the human's hands and has no
+   annotations yet. A blank row read as nothing to do (2026-10-31). */
+.session .badge.open {
+  padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+  background: var(--panel-2); border-color: var(--border); color: var(--muted);
+}
 [data-theme="light"] .session .badge.confirmed {
   background: #dcfce7; border-color: #86efac; color: #166534;
 }

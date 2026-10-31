@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **A finished review says `done` in the rail, and every round says how long it ran.** A resolved
+  session that was neither `working` nor decided showed no badge at all, so finished tasks looked
+  like they were still in progress (2026-10-31). Resolved rows now carry a `done` badge and
+  resolved rows' subtitles print `· took 4m 12s`; an open round with nothing drawn on it says
+  `open` instead of staying blank. `GET /api/sessions/<id>/history` adds `started_at`,
+  `finished_at` and `duration_secs` per round — submit → the agent's next picture, the next human
+  submission, or `resolve` — and the History rows plus the conversation's run summary print the
+  cost. The fields are additive and omitted while a round is still running.
+
 ## 0.24.0 — 2026-10-31
 
 - **"Install latest dev build…" offers the newest dev build again.** Dev builds were versioned

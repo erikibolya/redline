@@ -51,6 +51,11 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: open History, assert one row per round, that an unchanged resubmission adds no
   row, that a row opens read-only while *Current* returns to the live canvas, and that after STOP
   the round on the canvas is one *Round N (current)* row with no extra *Current*.
+- Round cost (2026-10-31): Rust `tests/api.rs` `every_round_reports_how_long_it_ran` — an older
+  round ends where the next submission begins, the newest submitted round has no end yet, and
+  `resolve` is the end of the round the agent had. The browser e2e asserts a History row prints
+  `· took …`. In the rail, a resolved review keeps a `done` badge plus `· took …`, and an open row
+  with nothing drawn on it says `open` instead of staying blank.
 
 ## Agent concurrency (v0.22)
 

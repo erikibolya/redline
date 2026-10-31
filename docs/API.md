@@ -248,6 +248,33 @@ Response `200`:
 `GET /api/sessions/<id>` also returns `disk_bytes`, the recursive size of the session folder
 (including videos and history) for the 2 GB warning.
 
+### `GET /api/sessions/<id>/history`
+
+```json
+{
+  "submissions": [
+    {
+      "stamp": "2026-10-31T17-56-35-00-00",
+      "round": 3,
+      "current": false,
+      "annotations": 1,
+      "png": true,
+      "source": true,
+      "frames": 0,
+      "started_at": "2026-10-31T17:56:35+00:00",
+      "finished_at": "2026-10-31T18:04:12+00:00",
+      "duration_secs": 457
+    }
+  ]
+}
+```
+
+Newest first; `round` numbers oldest = 1. `started_at` is the submission stamp and `finished_at`
+the moment the round left the agent's hands — the agent's next picture (`post_round`), the next
+human submission, or `resolve` — so `duration_secs` is what the round actually cost. Both are
+omitted while a round is still being worked on, and for v0.1 archives that carry no
+`submitted_at`. The fields are additive: older clients ignore them.
+
 Errors:
 
 - `400` — invalid JSON / body too large (`{"error": "…"}`).

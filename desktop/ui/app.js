@@ -97,6 +97,26 @@ function relativeTime(iso) {
   return new Date(then).toLocaleDateString();
 }
 
+/** How long something took, in words: `46s`, `4m 12s`, `1h 05m`. A round's own cost, not a
+ *  wall clock — a duration is not a timestamp and must never be rendered from a sliced ISO. */
+function durationLabel(seconds) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${String(total % 60).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
+}
+
+/** Seconds between two stamps the server wrote, or null when either is missing. */
+function ranFor(startedAt, finishedAt) {
+  if (!startedAt || !finishedAt) return null;
+  const start = new Date(startedAt).getTime();
+  const end = new Date(finishedAt).getTime();
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
+  return Math.round((end - start) / 1000);
+}
+
 /** Wall-clock time in the viewer's timezone: the API sends UTC, people read their own clock. */
 function clockTime(at) {
   if (!at) return "";
@@ -1276,6 +1296,11 @@ class Rail {
         const working = agentWorking(session);
         const feature = featureState(session);
         const decided = feature !== "pending";
+        // "How long did the last task run?" — a resolved row can answer it from the two stamps
+        // the server wrote; a round the agent still holds has no cost yet (2026-10-31).
+        const ran = session.status === "resolved"
+          ? ranFor(session.submitted_at, session.resolved_at)
+          : null;
         // A submitted round belongs to the agent, so its badge says who has the ball: a round
         // nobody has picked up yet used to read "new" (unread by the human), which is a lie
         // about the state. Only a review that is back in the human's hands can be "new".
@@ -1296,9 +1321,17 @@ class Rail {
                   ? `<span class="badge waiting" title="Waiting for an agent — nobody has picked this round up yet">waiting for agent</span>`
                   : fresh
                   ? `<span class="badge new" title="new since you last looked">new</span>`
-                  : annotations
-                    ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
-                    : "";
+                  // A finished review is not a decision, but it still needs a word: a row with no
+                  // badge at all read as "still in progress" (2026-10-31).
+                  : session.status === "resolved"
+                    ? `<span class="badge done" title="Finished — the agent resolved this review">done</span>`
+                    : annotations
+                      ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
+                      // The other end of "waiting for agent": the round is back in the human's
+                      // hands and nobody has drawn on it yet. A blank row read as nothing to do.
+                      : session.status === "open"
+                        ? `<span class="badge open" title="Back in your hands — no annotations yet">open</span>`
+                        : "";
         // The handoff badge sits beside the confirmation: "confirmed" is the decision, while
         // "handoff queued" / "merged" / "handoff failed" is what the integration did with it.
         const badge = feature === "confirmed" && session.handoff
@@ -1326,7 +1359,9 @@ class Rail {
                 session.branch
                   ? ` · <span class="branch" title="${escapeHtml(session.branch)}">${escapeHtml(session.branch)}</span>`
                   : ""
-              }${session.note ? " · " + escapeHtml(session.note) : ""}</div>
+              }${ran !== null ? ` · took ${durationLabel(ran)}` : ""}${
+                session.note ? " · " + escapeHtml(session.note) : ""
+              }</div>
             </div>
             <span class="row-actions">
               ${decided
@@ -3573,7 +3608,9 @@ class Editor {
             <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
             <span>${escapeHtml(stampTime(round.stamp))} · ${plural(round.annotations, "annotation")}${
               round.media?.kind === "video" ? " · video" : round.source ? " · image" : ""
-            }</span>
+            }${round.duration_secs !== undefined && round.duration_secs !== null
+              ? ` · took ${durationLabel(round.duration_secs)}`
+              : ""}</span>
           </span>
         </div>`);
       }
@@ -3847,7 +3884,13 @@ class Editor {
     // How long ago the last step was is the honest answer to "is it still working?": a spinner
     // must never be the only evidence.
     const age = relativeTime(last.at);
-    const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}`;
+    // "How long did the last task run?" — the round left the agent's hands at `resolve`, so the
+    // gap between the submission and that stamp is the run's cost. A round still submitted has
+    // no cost yet, and History carries every earlier round's own (2026-10-31).
+    const ran = submitted ? null : ranFor(this.meta?.submitted_at, this.meta?.resolved_at);
+    const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}${
+      ran !== null ? ` · took ${durationLabel(ran)}` : ""
+    }`;
     const state = working ? " working" : replied && submitted ? " pending" : "";
     return `<div class="conv-run${state}">`
       + `<span class="conv-run-mark" aria-hidden="true"></span><div>`

@@ -2755,6 +2755,16 @@ const main = async () => {
       && archivedView.annotations === 2 && archivedView.src.includes("/history/")
       && archivedView.nextHidden && archivedView.readonly && archivedView.submitDisabled,
     JSON.stringify(archivedView));
+  await page.click("#video-play");
+  await page.waitForFunction(() => window.redline.video.currentTime > 0.1, { timeout: 5000 });
+  const historyPlaying = await page.evaluate(() => ({
+    paused: window.redline.video.paused,
+    time: window.redline.video.currentTime,
+  }));
+  await page.click("#video-play");
+  check("a history video round plays on demand",
+    !historyPlaying.paused && historyPlaying.time > 0.1,
+    JSON.stringify(historyPlaying));
   await page.click("#viewing-bar");
   await page.waitForFunction(
     () => !window.redline.viewing && (window.redline.video?.src || "").includes("/media"),

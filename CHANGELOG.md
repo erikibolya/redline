@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-_(nothing yet)_
+- **Video media core.** The server can create a video session (MP4/WebM, magic-byte validation),
+  store a poster and duration/dimensions, serve the clip with HTTP `Range` for seeking, and write
+  timecoded annotations (`at`/`until`) into `annotations.json` and `review.md`. MCP gains
+  `review_video` (server path or base64) and `get_feedback` returns `media` plus a tokenised
+  `video_url`. The editor, browser multipart upload, contact sheet/full frames and history video
+  rounds are the next phases. Rust tests cover the media model, range response, poster and
+  timecoded Markdown; the existing image path is unchanged and the browser e2e stays green.
 
 ## 0.22.0 — 2026-10-31
 

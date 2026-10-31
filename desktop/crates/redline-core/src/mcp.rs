@@ -93,6 +93,31 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "review_video",
+            "description": "Upload a video (MP4 or WebM) and open a review session for the human. Returns the session id and a review URL. Set wait_seconds to block until they submit.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "video_base64": { "type": "string", "description": "Base64 MP4/WebM, optionally a data: URL. Prefer video_path for large clips." },
+                    "video_path": { "type": "string", "description": "Absolute path on the machine running redline." },
+                    "poster_base64": { "type": "string", "description": "Optional first-frame PNG/JPEG (base64) used for the rail/gallery thumbnail." },
+                    "duration_ms": { "type": "number", "description": "Video duration in milliseconds, when known." },
+                    "width": { "type": "number" }, "height": { "type": "number" }, "fps": { "type": "number" },
+                    "title": { "type": "string", "description": "What is being reviewed, e.g. 'Checkout flow'." },
+                    "url": { "type": "string", "description": "Page URL the video came from." },
+                    "note": { "type": "string", "description": "What the human should look at." },
+                    "project": { "type": "string", "description": "Project name or slug; created on first use. Default: Inbox." },
+                    "branch": { "type": "string", "description": "Feature branch this review belongs to. RedLine uses it as the branch-lock key." },
+                    "wait_seconds": { "type": "number", "description": "Block up to this long for a submission (default 0)." }
+                },
+                "required": ["title"],
+                "oneOf": [
+                    { "required": ["video_base64"] },
+                    { "required": ["video_path"] }
+                ]
+            }
+        },
+        {
             "name": "capture_review",
             "description": "Screenshot a URL with headless Chromium, then open a review session for it. Requires the :browser image or REDLINE_CHROME on the server.",
             "inputSchema": {
@@ -228,6 +253,7 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
 
     let outcome = match name {
         "review_screenshot" => review_screenshot(ctx, &args).await,
+        "review_video" => review_video(ctx, &args).await,
         "get_feedback" => get_feedback(ctx, &args),
         "wait_for_feedback" => wait_for_feedback(ctx, &args).await,
         "list_reviews" => list_reviews(ctx, &args),
@@ -328,6 +354,93 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
         None
     };
 
+    Ok(json!({
+        "session_id": meta.id,
+        "status": meta.status.as_str(),
+        "title": meta.title,
+        "review_url": review_url(ctx, &meta.id),
+        "dir": ctx.store.dir(&meta.id).map(|p| p.display().to_string()).unwrap_or_default(),
+        "feedback": feedback,
+    }))
+}
+
+async fn review_video(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+    use base64::Engine as _;
+
+    let title = string_arg(args, "title").unwrap_or_else(|| "Video review".to_string());
+    let bytes = match (
+        string_arg(args, "video_base64"),
+        string_arg(args, "video_path"),
+    ) {
+        (Some(encoded), _) => {
+            let raw = encoded
+                .split_once(',')
+                .map(|(_, data)| data)
+                .unwrap_or(&encoded);
+            base64::engine::general_purpose::STANDARD
+                .decode(raw.trim())
+                .map_err(|err| format!("video_base64 is not valid base64: {err}"))?
+        }
+        (None, Some(path)) => {
+            let path = std::path::PathBuf::from(&path);
+            std::fs::read(&path).map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
+        }
+        (None, None) => return Err("provide video_base64 or video_path".to_string()),
+    };
+    let poster = match string_arg(args, "poster_base64") {
+        Some(encoded) => {
+            let raw = encoded
+                .split_once(',')
+                .map(|(_, data)| data)
+                .unwrap_or(&encoded);
+            Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(raw.trim())
+                    .map_err(|err| format!("poster_base64 is not valid base64: {err}"))?,
+            )
+        }
+        None => None,
+    };
+    let meta = ctx
+        .store
+        .create_video_from_bytes(
+            &bytes,
+            &title,
+            args.get("url").and_then(Value::as_str).unwrap_or_default(),
+            args.get("note").and_then(Value::as_str).unwrap_or_default(),
+            None,
+            Some("mcp"),
+            args.get("project").and_then(Value::as_str),
+            poster.as_deref(),
+            args.get("duration_ms").and_then(Value::as_u64),
+            args.get("width").and_then(Value::as_u64).map(|v| v as u32),
+            args.get("height").and_then(Value::as_u64).map(|v| v as u32),
+            args.get("fps").and_then(Value::as_f64),
+        )
+        .map_err(|err| err.to_string())?;
+    let meta = if let Some(branch) = string_arg(args, "branch") {
+        ctx.store
+            .set_branch(&meta.id, Some(&branch))
+            .map_err(|err| err.to_string())?
+    } else {
+        meta
+    };
+    let wait = args
+        .get("wait_seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0) as u64;
+    let meta = if wait > 0 {
+        wait_for_status(ctx.store, &meta.id, wait.min(3600))
+            .await
+            .unwrap_or(meta)
+    } else {
+        meta
+    };
+    let feedback = if meta.status == Status::Submitted {
+        Some(feedback_payload(ctx, &meta))
+    } else {
+        None
+    };
     Ok(json!({
         "session_id": meta.id,
         "status": meta.status.as_str(),
@@ -661,6 +774,7 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         title: None,
         url: None,
         image: None,
+        media: None,
         annotations: Vec::new(),
         submitted_at: None,
     });
@@ -684,6 +798,15 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         "prompt": meta.prompt,
         "agent_state": meta.agent_state,
         "submitted_at": meta.submitted_at,
+        "media": meta.media,
+        "video_url": meta.media.as_ref()
+            .filter(|media| media.kind == crate::model::MediaKind::Video)
+            .map(|_| format!(
+                "{}/sessions/{}/media?t={}",
+                ctx.base_url.trim_end_matches('/'),
+                meta.id,
+                ctx.token
+            )),
         "annotations": set.annotations,
         "markdown": markdown,
         "annotated_png": has_png.then(|| format!("redline://session/{}/annotated.png", meta.id)),

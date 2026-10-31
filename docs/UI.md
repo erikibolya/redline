@@ -72,14 +72,20 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   same accent-blue button in the same place on the dashboard and in a review; the header carries
   icons only, so the primary action never moves or changes colour between pages.
 - Search field (title, note, id).
-- Filter chips with counts: `All` · `Active` (default) · `Open` · `Submitted` · `Done`. `All`
-  keeps finished sessions visible; `Active` hides `resolved`. The old `Mine` chip is gone.
+- Filter chips with counts: `All` · `Active` (default) · `Done`. `All` keeps finished sessions
+  visible; `Active` holds every review that still needs a human — everything not `resolved` *and*
+  a confirmed feature whose handoff is queued, running or failed. `Done` is only work that really
+  finished (`resolved` with no unfinished handoff). The `Open`/`Submitted` splits and the old
+  `Mine` chip are gone; a stored preference for them is migrated. While a handoff is `failed` the
+  `Active` chip carries a red edge and a count in its title, so an error on one row is not easy to
+  scroll past.
 - Each row: agent-provided **title**, note excerpt, relative time (`2h ago`), the feature
   **branch** when known (accent monospace), status dot, and a badge that says who has the ball:
   **working** while the agent runs, **waiting for agent** for a
   submitted round nobody has picked up, **confirmed** / **cancelled** after a feature decision,
   otherwise a **new** marker for anything this browser has not looked at (tracked per session in
-  `localStorage`) or the annotation count.
+  `localStorage`) or the annotation count. The handoff badge shows the integration's label
+  (`merged`, `handoff queued`, `airlock-worker-offline`) next to `confirmed`.
 - Selected row is highlighted; clicking loads that session into the canvas without a page reload.
 - Groups by day (`Today`, `Yesterday`, older) when more than ~15 sessions.
 

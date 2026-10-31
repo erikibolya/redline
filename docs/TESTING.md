@@ -95,11 +95,14 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   label/url/message; a legacy session branch with the commits wins over a `feat/...` name with
   none.
 - Browser e2e: the confirm dialog starts the handoff checkbox off for a review-only agent; tick
-  it → rail shows `confirmed` + `handoff queued`; call MCP `handoff_status` done with label
-  "merged" + URL → reload → rail shows the label and link; report failed with a URL + message →
-  rail shows the link and the row `↻` retry; hover and click it → `/handoff` queues it again and
-  the badge returns to `handoff queued`. The e2e also asserts the retry does not select or close
-  the review.
+  it → rail shows `confirmed` + `handoff queued`; a queued/failed/running handoff keeps the review
+  in **Active**, not **Done** (asserted right after the confirmation and after the retry); call
+  MCP `handoff_status` done with label "merged" + URL → the rail's refresher shows the label and
+  link from Done; report failed with a URL + message → the poll moves it back into Active and
+  marks the chip, the rail shows the link and the row `↻` retry; hover and click
+  it → `/handoff` queues it again and the badge returns to `handoff queued`. The e2e also asserts
+  the retry does not select or close the review, that the rail offers exactly
+  `All`/`Active`/`Done`, and that a stored `submitted` preference migrates to `Active`.
 
 ## Every UI control
 

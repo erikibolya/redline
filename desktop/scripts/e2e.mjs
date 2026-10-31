@@ -523,6 +523,33 @@ const main = async () => {
   });
   const at = (dx, dy) => ({ x: canvas.x + dx, y: canvas.y + dy });
 
+  /** Where a shape is on screen in the *current* view. `at()` assumes the fitted top-left
+   *  origin; a shape clicked after panning or zooming must be mapped, not guessed — the old
+   *  hard-coded points silently missed and the z-order/pen checks flaked under load. */
+  const onScreen = (pick) => page.evaluate((picked) => {
+    const editor = window.redline;
+    const list = editor.annotations;
+    const annotation = picked.type
+      ? [...list].reverse().find((item) => item.type === picked.type)
+      : list[picked.index < 0 ? list.length + picked.index : picked.index];
+    if (!annotation) return null;
+    const points = annotation.type === "pen" ? annotation.points || [] : [];
+    let point = points[picked.point ?? 0];
+    if (!point && picked.centre && annotation.start && annotation.end) {
+      point = {
+        x: (annotation.start.x + annotation.end.x) / 2,
+        y: (annotation.start.y + annotation.end.y) / 2,
+      };
+    }
+    point = point || annotation.start;
+    if (!point) return null;
+    const box = editor.canvas.getBoundingClientRect();
+    return {
+      x: box.x + editor.view.x + point.x * editor.view.scale,
+      y: box.y + editor.view.y + point.y * editor.view.scale,
+    };
+  }, pick);
+
   /** Open a fresh session so a tool test cannot inherit another tool's annotations. */
   const freshSession = async (title) => {
     const made = await api("/api/sessions", {
@@ -1112,19 +1139,25 @@ const main = async () => {
     window.redline.annotations.filter((a) => a.group).length);
   check("shift+g ungroups", ungrouped === 0, `${ungrouped} still grouped`);
 
-  // ---- z-order
-  await page.mouse.click(rectA.x, rectA.y);
+  // ---- z-order: select one rectangle where it actually is, then move it to the front.
+  // Escape first: a leftover multi-selection keeps its members when a click hits one of them.
+  await page.keyboard.press("Escape");
+  const rectSpot = await onScreen({ type: "rect", centre: true });
+  await page.mouse.click(rectSpot.x, rectSpot.y);
+  const zSelected = await page.evaluate(() =>
+    [...window.redline.selected].map((index) => window.redline.annotations[index].id));
   await page.click('[data-layer="front"]');
-  let last = { type: "", x: 0 };
+  let last = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
     last = await page.evaluate(() => {
       const list = window.redline.annotations;
-      return { type: list[list.length - 1].type, x: list[list.length - 1].start?.x };
+      return { id: list[list.length - 1].id, type: list[list.length - 1].type };
     });
-    if (last.type === "rect") break;
+    if (zSelected.includes(last.id)) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  check("bring to front moves the selection last in paint order", last.type === "rect", JSON.stringify(last));
+  check("bring to front moves the selection last in paint order",
+    zSelected.length === 1 && zSelected[0] === last.id, JSON.stringify({ zSelected, last }));
 
   // ---- diff between the archived round and now
   const rounds = await api(`/api/sessions/${id}/history`);
@@ -1201,7 +1234,7 @@ const main = async () => {
   }
   // A decision on the review that is open finishes it: back to the dashboard, no selection.
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
-  await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="done"]', { timeout: 10000 });
   await page.waitForFunction((sessionId) => !document.querySelector(`#gallery .card[data-session="${sessionId}"]`),
     { timeout: 5000 }, id);
   const confirmDashboard = await page.evaluate((sessionId) => ({
@@ -1212,8 +1245,31 @@ const main = async () => {
     status === "resolved" && !confirmDashboard.selected && !confirmDashboard.card,
     JSON.stringify({ status, ...confirmDashboard }));
 
-  // Reopen it from the Done filter to check the decision and the reopen path.
+  // The rail has three views: Active, Done and All. A confirmed feature whose handoff is queued,
+  // running or failed is unfinished work, so it belongs in the default view — the old Done-only
+  // home hid a failed handoff and an offline worker from the human (2026-10-31).
+  const chips = await page.evaluate(() => ({
+    filters: [...document.querySelectorAll("#chips .chip")].map((chip) => chip.dataset.filter),
+  }));
+  check("the rail offers Active, Done and All",
+    chips.filters.join("|") === "all|active|done", JSON.stringify(chips));
+  // A preference stored for a removed view lands on the view that still contains those reviews.
+  await page.evaluate(() => localStorage.setItem("redline:filter", '"submitted"'));
+  await page.reload();
+  await page.waitForSelector('#chips [data-filter="active"][aria-pressed="true"]',
+    { timeout: 10000 });
+  const migrated = await page.evaluate(() => ({
+    filter: window.redlineRail.filter,
+    stored: JSON.parse(localStorage.getItem("redline:filter")),
+  }));
+  check("a stored Open/Submitted preference migrates to Active",
+    migrated.filter === "active" && migrated.stored === "active", JSON.stringify(migrated));
   await clickChip("Done");
+  const queuedInDone = await page.evaluate((sessionId) =>
+    Boolean(document.querySelector(`.session[data-id="${sessionId}"]`)), id);
+  check("a confirmed feature with a queued handoff is not in Done", !queuedInDone);
+
+  await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
   await page.$eval(row, (el) => el.click());
   await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
@@ -1225,8 +1281,8 @@ const main = async () => {
     selected: Boolean(document.querySelector('.session[aria-current="true"]')),
     filter: window.redline.rail.filter,
   }));
-  check("the confirmed feature opens from Done with its decision stamped",
-    confirmed.stamped && confirmed.selected && confirmed.filter === "resolved",
+  check("the confirmed feature opens from Active with its decision stamped",
+    confirmed.stamped && confirmed.selected && confirmed.filter === "active",
     JSON.stringify(confirmed));
   const confirmedBadge = await badgeStyles(".session .badge.confirmed");
   check("confirmed badge is a green tint, not a black pill",
@@ -1269,9 +1325,12 @@ const main = async () => {
   check("handoff_status records the integration's result",
     handoffPayload.handoff.status === "done" && handoffPayload.handoff.label === "merged",
     JSON.stringify(handoffPayload.handoff));
-  await page.reload();
-  await page.waitForFunction(() => window.redline?.meta?.handoff?.status === "done",
-    { timeout: 10000 });
+  // A done handoff is finished work, so the review moves out of Active into Done; the rail shows
+  // the integration's label + link where the human looks for finished features.
+  await page.goto(`${BASE}/`);
+  await page.waitForSelector("#chips .chip", { timeout: 10000 });
+  await clickChip("Done");
+  await page.waitForSelector(`.session[data-id="${id}"] .badge.handoff.done`, { timeout: 5000 });
   const mergedHandoff = await page.evaluate((sessionId) => {
     const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff.done`);
     return {
@@ -1286,7 +1345,10 @@ const main = async () => {
       && mergedHandoff.title.includes("merge commit 456a2c5"),
     JSON.stringify(mergedHandoff));
 
-  // A failed handoff keeps its link and is a retry control, not a dead label.
+  // A failed handoff keeps its link and is a retry control, not a dead label. It is also an
+  // error, so the review leaves Done: the dashboard poll must move it into Active and mark the
+  // default view *without* a reload (the poll used to redraw only when the working set changed,
+  // which left the failure in the old list until F5).
   await api("/mcp", {
     method: "POST",
     body: JSON.stringify({
@@ -1296,14 +1358,30 @@ const main = async () => {
         arguments: {
           session_id: id,
           state: "failed",
-          label: "PR #46 open",
+          label: "airlock-worker-offline",
           url: "https://github.com/erikibolya/redline/pull/46",
           message: "browser e2e is red",
         },
       },
     }),
   });
-  await page.reload();
+  await page.evaluate(() => window.redlineRail.refreshAgentState());
+  await page.waitForFunction((sessionId) => !document.querySelector(`.session[data-id="${sessionId}"]`),
+    { timeout: 5000 }, id);
+  const failedDone = await page.evaluate((sessionId) => ({
+    inDone: Boolean(document.querySelector(`.session[data-id="${sessionId}"]`)),
+    attention: Boolean(document.querySelector('#chips .chip[data-filter="active"].attention')),
+    title: document.querySelector('#chips .chip[data-filter="active"]')?.getAttribute("title") || "",
+  }), id);
+  check("a failed handoff leaves Done on the poll and marks Active",
+    !failedDone.inDone && failedDone.attention && failedDone.title.includes("failed handoff"),
+    JSON.stringify(failedDone));
+  await clickChip("Active");
+  await page.waitForSelector(row, { timeout: 5000 });
+  // Back into the editor: the rest of the flow (reopen, cancel, filters) runs there.
+  await page.$eval(row, (el) => el.click());
+  await page.waitForFunction((sessionId) => location.pathname === `/s/${sessionId}`,
+    { timeout: 10000 }, id);
   await page.waitForFunction(() => window.redline?.meta?.handoff?.status === "failed",
     { timeout: 10000 });
   const failedHandoff = await page.evaluate((sessionId) => {
@@ -1316,7 +1394,7 @@ const main = async () => {
     };
   }, id);
   check("a failed handoff keeps its link and offers a retry",
-    failedHandoff.label === "PR #46 open"
+    failedHandoff.label === "airlock-worker-offline"
       && failedHandoff.href === "https://github.com/erikibolya/redline/pull/46"
       && failedHandoff.retry === "Retry handoff",
     JSON.stringify(failedHandoff));
@@ -1350,9 +1428,9 @@ const main = async () => {
     allFilter.filter === "all" && allFilter.visible && !allFilter.mine,
     JSON.stringify(allFilter));
 
-  // Resolved sessions leave the default 'Active' view, so check the badge and reopen them from
-  // the 'Done' filter.
-  await clickChip("Done");
+  // The retry put the handoff back in the queue, so this confirmed feature is still in Active
+  // (Done only holds work that really finished). Check the badge and reopen it from there.
+  await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
   const confirmedRow = await page.evaluate((sessionId) => ({
     badge: document.querySelector(`.session[data-id="${sessionId}"] .badge`)?.textContent || "",
@@ -1424,7 +1502,7 @@ const main = async () => {
     JSON.stringify({ status: cancelled.status, cancelled: cancelled.feature_cancelled_at }));
 
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
-  await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
+  await page.waitForSelector('#chips [data-filter="done"]', { timeout: 10000 });
   let cancelDashboard = {};
   // The dashboard may be restored from the back-forward cache and refresh asynchronously; a
   // loaded CI runner needed more than the old 5 s budget.
@@ -1493,7 +1571,7 @@ const main = async () => {
   await page.waitForSelector(row, { timeout: 5000 });
 
   // ---- a filter that hides the open review sends the human back to the dashboard
-  await clickChip("Submitted");
+  await clickChip("Done");
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
   await page.waitForSelector('#chips [data-filter="active"]', { timeout: 10000 });
   const filteredOut = await page.evaluate(() => ({
@@ -1501,7 +1579,7 @@ const main = async () => {
     filter: JSON.parse(localStorage.getItem("redline:filter") || '"active"'),
   }));
   check("a filter that hides the open review returns to the dashboard",
-    !filteredOut.selected && filteredOut.filter === "submitted", JSON.stringify(filteredOut));
+    !filteredOut.selected && filteredOut.filter === "done", JSON.stringify(filteredOut));
   await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
   await page.$eval(row, (el) => el.click());
@@ -1901,7 +1979,8 @@ const main = async () => {
   // The pen has its own move path (`translateAnnotation` shifts `points`) and bounds/hit test.
   const penBefore = await page.evaluate(() => window.redline.annotations[0].points[0]);
   await page.keyboard.press("v");
-  await drag(page, at(410, 270), at(440, 290));
+  const penGrip = await onScreen({ type: "pen", point: 1 });
+  await drag(page, penGrip, { x: penGrip.x + 30, y: penGrip.y + 20 });
   const penMoved = await page.evaluate(() => ({
     point: window.redline.annotations[0].points[0],
     scale: window.redline.view.scale,

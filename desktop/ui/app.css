@@ -443,6 +443,11 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .chip.danger:hover { background: #2a1115; color: #fecdd3; }
 [data-theme="light"] .chip.danger { border-color: #fda4af; color: #be123c; }
 [data-theme="light"] .chip.danger:hover { background: #ffe4e6; color: #9f1239; }
+/* The default view carries a red edge while a handoff is failed; the pressed state stays accent. */
+.chip.attention:not([aria-pressed="true"]) { border-color: #7f1d1d; color: #fda4af; }
+[data-theme="light"] .chip.attention:not([aria-pressed="true"]) {
+  border-color: #fda4af; color: #be123c;
+}
 .session .badge {
   flex: none; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
   display: grid; place-items: center; font-size: 11px; font-weight: 600;

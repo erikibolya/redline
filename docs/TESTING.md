@@ -63,17 +63,24 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `agent_running=false`, a running claim `true`, a `waiting` claim `false` again, a released claim
   `false`.
 - Rust `tests/mcp.rs`: `a_failed_run_hands_the_round_back_and_says_so` — `reply` with
-  `state="failed"` reopens the submitted round, keeps `agent_state=failed` and the message in
-  `agent-thread.jsonl`; an unknown state is an error; the default stays an ordinary `replied` with
-  the round still submitted.
+  `state="failed"` reopens the submitted round, keeps `agent_state=failed`, stores
+  `agent_failure {code,message,at}` (`timeout_idle` here), and returns it plus `review_guidance` in
+  `get_feedback`; an unknown state is an error; the default stays an ordinary `replied` with the
+  round still submitted, and a new run/reply clears the old failure.
 - `redline-agent` tests: `log_line` strips terminal colours, drops blank lines and bounds the
-  length; the two-worktree bridge integration test asserts the fake agent's own stdout line
-  arrives in the review as a `state="log"` event.
+  length; `a_run_is_killed_when_it_goes_silent_or_exceeds_the_hard_cap` runs a fake OpenCode that
+  goes silent (must fail with `timeout_idle`), one that keeps printing (must survive the idle
+  window), and one that hits the hard cap (`timeout_hard`); the two-worktree bridge integration
+  test asserts the fake agent's own stdout line arrives in the review as a `state="log"` event.
 - Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
   project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
   tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours
-  again" notice with the bridge's message; the **output** toggle is off by default (no `log` line
-  in the conversation), shows the streamed line when clicked, survives a reload and closes again.
+  again" notice with the bridge's message; a `code=timeout_idle` failure shows **agent timed out**
+  on the rail and in the card, not the generic label; the **output** button opens the streamed
+  `log` lines in a popup centred in the viewport (asserted by geometry, and by the fact that
+  nothing is injected into `#conv-log`), a poll keeps feeding it while it is open, the stage toast
+  prints the last *step* and never a log line, and the popup closes from its button, `Esc` and not
+  at all by itself on a reload.
 
 ## Agent concurrency (v0.22)
 
@@ -197,7 +204,9 @@ same path a human does: upload, play, draw, range, zoom, submit.
   active to its end; other moments are hidden by default, a selected annotation still obeys the
   playhead, Ghosts shows a 0.12 ghost, and the current annotation is full; the ⏱ button sets
   `until`; zoom narrows the window and Fit restores it; the timeline shows a marker and a range
-  band; `K` pauses and `.` steps a frame; a second shape at the same moment stays in one group; a
+  band; a submitted round locks the timeline's zoom (the buttons are disabled, wheel over the
+  ruler leaves the window alone) while play and seek still work, and STOP unlocks the zoom; `K`
+  pauses and `.` steps a frame; a second shape at the same moment stays in one group; a
   third at another moment gets its own frame and group; the draft is autosaved to localStorage,
   survives a dashboard round-trip with its `at` values and groups, and is cleared by submit; a
   draft left over an agent `post_round` is discarded and says so; the submit persists

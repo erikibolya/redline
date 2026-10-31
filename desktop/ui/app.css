@@ -948,17 +948,26 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .conv-wait.failed b { color: #fecdd3; }
 [data-theme="light"] .conv-wait.failed { background: #fff1f2; color: #9f1239; }
 [data-theme="light"] .conv-wait.failed b { color: #881337; }
-/* The agent's own output: monospace, scrollable, and clearly a log rather than a message. */
-.conv-output {
-  border: 1px solid var(--border-soft); border-radius: 10px; background: #0b0f14;
-  padding: 6px 8px; max-height: 220px; overflow: auto;
+/* The agent's own output: monospace and scrollable, clearly a log rather than a message. It lives
+   in a centred popup so the inspector keeps its height for the conversation (2026-10-31). */
+.output-dialog {
+  padding: 0; width: min(760px, calc(100vw - 40px)); max-height: min(84vh, 760px);
+  overflow: hidden; background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
 }
-[data-theme="light"] .conv-output { background: #f6f8fa; }
-.conv-output.live { border-color: rgba(47, 129, 247, .35); }
-.conv-output-head {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
-  margin-bottom: 4px;
+.output-dialog::backdrop {
+  background: rgba(3, 7, 12, .6);
+  backdrop-filter: blur(2px);
 }
+.output-dialog.live { border-color: rgba(47, 129, 247, .45); }
+.output-card.dialog-frame { min-height: 0; }
+.output-body {
+  flex: 0 1 auto; margin: 0; padding: 12px 18px 16px;
+  min-height: 120px; max-height: min(58vh, 520px); overflow: auto;
+  background: #0b0f14;
+}
+[data-theme="light"] .output-body { background: #f6f8fa; }
 .conv-output-body {
   margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10.5px;
   line-height: 1.45; color: var(--text); white-space: pre-wrap; word-break: break-word;
@@ -1061,7 +1070,8 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
    screenshot) overflows a short window. */
 .settings-form.dialog-frame,
 .modal.dialog-frame,
-.feature-card.dialog-frame {
+.feature-card.dialog-frame,
+.output-card.dialog-frame {
   display: flex; flex-direction: column; gap: 0; padding: 0;
   max-height: min(88vh, 820px); min-height: 0; overflow: hidden;
 }

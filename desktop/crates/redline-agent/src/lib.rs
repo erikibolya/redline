@@ -13,9 +13,9 @@ use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use wait_timeout::ChildExt;
@@ -42,7 +42,11 @@ pub struct AgentConfig {
     /// Dispatch into an already running OpenCode instead of a private `--standalone` run.
     pub opencode_server: Option<String>,
     pub poll: Duration,
+    /// Hard cap for one run, even if it keeps producing output. A runaway process must not hold
+    /// a claim forever; the default is deliberately far above a normal review.
     pub timeout: Duration,
+    /// Kill a run only after this long with no output. A long, active build is not a stuck run.
+    pub idle_timeout: Duration,
     /// How many claim workers to run. The server enforces the real global/per-project limits;
     /// extra workers simply idle. `REDLINE_AGENT_WORKERS` overrides this.
     pub workers: usize,
@@ -68,7 +72,8 @@ impl AgentConfig {
             opencode_bin: "opencode".to_string(),
             opencode_server: None,
             poll: Duration::from_secs(10),
-            timeout: Duration::from_secs(1800),
+            timeout: Duration::from_secs(6 * 60 * 60),
+            idle_timeout: Duration::from_secs(15 * 60),
             workers: 4,
         }
     }
@@ -544,6 +549,11 @@ This is a review round, not a handoff. Do NOT open a pull request, run the repos
 feature-ready flow, merge, tag or publish a release. The human's ✓ Confirm feature queues a
 separate handoff run; opening a PR now would hand off a feature they have not accepted. Pushing
 the branch is allowed and expected.
+
+Build and test scope: run focused checks for what you touched (cargo test for the affected
+crates, a targeted e2e). Do NOT build or publish the full release/browser image and do NOT run
+the release pipeline during a review — those are release/handoff steps and can take longer than
+the whole review. Use a dev/preview deploy only when the review needs a visual result.
 Prompt from the human: {prompt}
 
 The human's annotations (JSON):
@@ -555,10 +565,10 @@ The rendered feedback:
 Your job:
 1. Read the repository's AGENTS.md and follow it.
 2. Implement what the annotations ask for. Keep the change minimal and in the style of the
-   codebase. Run the tests you can run. You may build and deploy to a dev/preview environment
-   with the repository's own scripts when the review needs a visual result — the human expects a
-   screenshot of the change. Never merge or deploy to production. Never rewrite published git
-   history; leave the repository in a state a human can review.
+   codebase. Run focused tests, not the full release build. You may deploy to a dev/preview
+   environment with the repository's own scripts when the review needs a visual result — the
+   human expects a screenshot of the change. Never merge or deploy to production. Never rewrite
+   published git history; leave the repository in a state a human can review.
 3. Narrate as you work through the RedLine MCP endpoint with curl — one line per meaningful step,
    at most six:
    curl -s -H "Authorization: Bearer $REDLINE_TOKEN" -H 'content-type: application/json' \
@@ -650,6 +660,48 @@ ship, report failed with the reason."#,
     )
 }
 
+/// Why a run did not finish. The bridge reports `code` to RedLine so the human sees *timeout*
+/// rather than a generic "failed", while the message keeps the exact limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RunError {
+    code: &'static str,
+    message: String,
+}
+
+impl RunError {
+    fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for RunError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+fn now_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// `15m`, `6h` — the timeout message is read by a human, not parsed.
+fn human_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    if seconds >= 3600 && seconds % 3600 == 0 {
+        format!("{}h", seconds / 3600)
+    } else if seconds >= 60 && seconds % 60 == 0 {
+        format!("{}m", seconds / 60)
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 /// Run one `opencode run` to completion. `Ok(true)` means the process exited successfully.
 fn run_opencode(
     config: &AgentConfig,
@@ -657,7 +709,7 @@ fn run_opencode(
     prompt: &str,
     repo: &Path,
     handoff: bool,
-) -> Result<(bool, String), String> {
+) -> Result<(bool, String), RunError> {
     let mut command = Command::new(&config.opencode_bin);
     command.arg("run");
     match &config.opencode_server {
@@ -681,7 +733,7 @@ fn run_opencode(
 
     let mut child = command
         .spawn()
-        .map_err(|err| format!("cannot run opencode: {err}"))?;
+        .map_err(|err| RunError::new("spawn", format!("cannot run opencode: {err}")))?;
     // Poll the session while the agent works: STOP must actually stop it, not just unlock the UI.
     let started = Instant::now();
     let mut last_check = Instant::now();
@@ -691,6 +743,9 @@ fn run_opencode(
     // showing the first line when it fails (2026-10-31).
     let sink = Arc::new(Mutex::new(String::new()));
     let posted = Arc::new(AtomicBool::new(false));
+    // A run is idle only when it has produced no output; `sleep 120; tail build.log` loops still
+    // prove the agent is alive, so the hard cap stays a last resort (2026-10-31).
+    let activity = Arc::new(AtomicU64::new(now_millis()));
     let mut readers = Vec::new();
     if let Some(stream) = child.stdout.take() {
         readers.push(stream_output(
@@ -699,6 +754,7 @@ fn run_opencode(
             stream,
             sink.clone(),
             posted.clone(),
+            activity.clone(),
         ));
     }
     if let Some(stream) = child.stderr.take() {
@@ -708,20 +764,39 @@ fn run_opencode(
             stream,
             sink.clone(),
             posted.clone(),
+            activity.clone(),
         ));
     }
+    let idle_ms = config.idle_timeout.as_millis().max(1) as u64;
     let status = loop {
         match child
             .wait_timeout(Duration::from_millis(500))
-            .map_err(|err| err.to_string())?
+            .map_err(|err| RunError::new("spawn", err.to_string()))?
         {
             Some(status) => break status,
             None => {}
         }
+        if now_millis().saturating_sub(activity.load(Ordering::Relaxed)) >= idle_ms {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(RunError::new(
+                "timeout_idle",
+                format!(
+                    "opencode produced no output for {}",
+                    human_duration(config.idle_timeout)
+                ),
+            ));
+        }
         if started.elapsed() >= config.timeout {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(format!("opencode timed out after {:?}", config.timeout));
+            return Err(RunError::new(
+                "timeout_hard",
+                format!(
+                    "opencode exceeded the {} run limit",
+                    human_duration(config.timeout)
+                ),
+            ));
         }
         if last_check.elapsed() >= Duration::from_secs(2) {
             last_check = Instant::now();
@@ -737,7 +812,7 @@ fn run_opencode(
                 if !alive {
                     let _ = child.kill();
                     let _ = child.wait();
-                    return Err("stopped by the human".to_string());
+                    return Err(RunError::new("stopped", "stopped by the human"));
                 }
             }
         }
@@ -781,6 +856,7 @@ fn stream_output<R: Read + Send + 'static>(
     stream: R,
     sink: Arc<Mutex<String>>,
     posted: Arc<AtomicBool>,
+    activity: Arc<AtomicU64>,
 ) -> std::thread::JoinHandle<()> {
     let config = config.clone();
     let id = session_id.to_string();
@@ -790,6 +866,8 @@ fn stream_output<R: Read + Send + 'static>(
         let mut next = Instant::now();
         let mut line = String::new();
         while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            // Any line — even one the throttle suppresses — is proof of life for the idle check.
+            activity.store(now_millis(), Ordering::Relaxed);
             if let Ok(mut text) = sink.lock() {
                 text.push_str(&line);
                 // Keep the tail only: an agent can print megabytes and the bridge only quotes the
@@ -876,15 +954,17 @@ fn fail_claim(
     config: &AgentConfig,
     id: &str,
     owned: &Arc<Mutex<HashSet<String>>>,
+    code: Option<&str>,
     message: String,
 ) {
     // `state: failed` is not an answer: the server hands the round back to the human, unlocked and
     // labelled, instead of leaving it submitted behind a run that is already gone (2026-10-31).
-    let _ = mcp(
-        config,
-        "reply",
-        json!({ "session_id": id, "message": message, "state": "failed" }),
-    );
+    // The code lets the UI say "timed out" instead of a generic "failed".
+    let mut arguments = json!({ "session_id": id, "message": message, "state": "failed" });
+    if let Some(code) = code {
+        arguments["code"] = json!(code);
+    }
+    let _ = mcp(config, "reply", arguments);
     let _ = claim_release(config, id);
     if let Ok(mut set) = owned.lock() {
         set.remove(id);
@@ -916,6 +996,7 @@ fn handle_claimed(
                 config,
                 &id,
                 owned,
+                None,
                 format!("I cannot start this review: {err}."),
             );
             return;
@@ -928,6 +1009,7 @@ fn handle_claimed(
                 config,
                 &id,
                 owned,
+                None,
                 format!("I cannot read the review: {err}."),
             );
             return;
@@ -951,17 +1033,24 @@ fn handle_claimed(
                 config,
                 &id,
                 owned,
+                None,
                 format!("The agent run failed: {}", first_line(&output)),
             );
             return;
         }
-        Err(err) if err == "stopped by the human" => {
+        Err(err) if err.code == "stopped" => {
             eprintln!("redline-agent: {id} stopped by the human");
             String::new()
         }
         Err(err) => {
             eprintln!("redline-agent: {id}: {err}");
-            fail_claim(config, &id, owned, format!("Agent bridge error: {err}"));
+            fail_claim(
+                config,
+                &id,
+                owned,
+                Some(err.code),
+                format!("Agent bridge error: {}", err.message),
+            );
             return;
         }
     };
@@ -1129,7 +1218,7 @@ fn handle_handoff_claimed(
             );
             return;
         }
-        Err(err) if err == "stopped by the human" => {
+        Err(err) if err.code == "stopped" => {
             eprintln!("redline-agent: {id} handoff stopped by the human");
             let _ = claim_release(config, &id);
             if let Ok(mut set) = owned.lock() {
@@ -1139,7 +1228,12 @@ fn handle_handoff_claimed(
         }
         Err(err) => {
             eprintln!("redline-agent: {id} handoff bridge error: {err}");
-            fail_handoff_claim(config, &id, owned, format!("Agent bridge error: {err}"));
+            fail_handoff_claim(
+                config,
+                &id,
+                owned,
+                format!("Agent bridge error: {}", err.message),
+            );
             return;
         }
     };
@@ -1291,6 +1385,7 @@ fn worker_loop(
                                 &config,
                                 id,
                                 &owned,
+                                None,
                                 format!("I cannot resolve the project repository: {err}."),
                             );
                         }
@@ -1361,6 +1456,58 @@ mod tests {
         let text = "x".repeat(1000);
         assert_eq!(tail(&text, 10).len(), 10);
         assert_eq!(tail("  short  ", 100), "short");
+    }
+
+    #[cfg(unix)]
+    fn fake_opencode(root: &Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let script = root.join(format!("fake-opencode-{name}"));
+        std::fs::write(&script, format!("#!/bin/sh\n{body}\n")).unwrap();
+        let mut permissions = std::fs::metadata(&script).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&script, permissions).unwrap();
+        script
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_run_is_killed_when_it_goes_silent_or_exceeds_the_hard_cap() {
+        let root = temp_root("idle-timeout");
+
+        let mut config = AgentConfig::new("http://127.0.0.1:1", "t", &root);
+        config.idle_timeout = Duration::from_secs(2);
+        config.timeout = Duration::from_secs(30);
+        config.opencode_bin = fake_opencode(&root, "idle", "sleep 30")
+            .to_string_lossy()
+            .to_string();
+        let idle = run_opencode(&config, "idle", "prompt", &root, false).unwrap_err();
+        assert_eq!(idle.code, "timeout_idle");
+        assert!(idle.message.contains("no output"), "{}", idle.message);
+
+        config.opencode_bin = fake_opencode(
+            &root,
+            "active",
+            "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick; sleep 0.4; done",
+        )
+        .to_string_lossy()
+        .to_string();
+        let active = run_opencode(&config, "active", "prompt", &root, false);
+        assert!(active.is_ok(), "active output must keep the run alive");
+
+        config.idle_timeout = Duration::from_secs(30);
+        config.timeout = Duration::from_secs(1);
+        config.opencode_bin = fake_opencode(
+            &root,
+            "hard",
+            "for i in 1 2 3 4 5 6 7 8 9 10; do echo tick; sleep 0.3; done",
+        )
+        .to_string_lossy()
+        .to_string();
+        let hard = run_opencode(&config, "hard", "prompt", &root, false).unwrap_err();
+        assert_eq!(hard.code, "timeout_hard");
+        assert!(hard.message.contains("run limit"), "{}", hard.message);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

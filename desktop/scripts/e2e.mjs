@@ -3093,6 +3093,42 @@ const main = async () => {
   await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 30000 });
   const storedAfterSubmit = await page.evaluate((key) => localStorage.getItem(key), draftKey);
   check("submitting clears the stored draft", storedAfterSubmit === null, String(storedAfterSubmit));
+  // Reported on a video review (2026-10-31): while the agent was working the round was locked,
+  // yet the timeline still zoomed — an editable-looking control on a submitted round. The lock
+  // now reaches the timeline's edit controls; playback and seeking stay, because reading the
+  // clip is not an edit.
+  const lockedTimeline = await page.evaluate(() => ({
+    locked: Boolean(window.redline.locked),
+    disabled: ["#timeline-zoom-out", "#timeline-zoom-in", "#timeline-fit"]
+      .map((id) => document.querySelector(id).disabled),
+    title: document.querySelector("#timeline-fit").title,
+    span: window.redline.videoWindow.end - window.redline.videoWindow.start,
+  }));
+  await page.click("#timeline-zoom-in");
+  const timelineBox = await (await page.$("#video-timeline")).boundingBox();
+  await page.mouse.move(timelineBox.x + timelineBox.width / 2, timelineBox.y + 4);
+  await page.mouse.wheel({ deltaY: -240 });
+  const lockedSpan = await page.evaluate(
+    () => window.redline.videoWindow.end - window.redline.videoWindow.start,
+  );
+  check("a submitted round locks the timeline's zoom, not only the canvas",
+    lockedTimeline.locked && lockedTimeline.disabled.every(Boolean)
+      && /locked/i.test(lockedTimeline.title)
+      && Math.abs(lockedSpan - lockedTimeline.span) < 0.01,
+    JSON.stringify({ lockedTimeline, lockedSpan }));
+  const lockedPlay = await page.evaluate(async () => {
+    const video = window.redline.video;
+    video.currentTime = 0;
+    await video.play();
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    video.pause();
+    return { time: video.currentTime, paused: video.paused };
+  });
+  await page.evaluate(() => window.redline.seekTo(0.5));
+  const lockedSeek = await page.evaluate(() => window.redline.video.currentTime);
+  check("the locked timeline still plays and seeks",
+    lockedPlay.time > 0.1 && lockedPlay.paused && Math.abs(lockedSeek - 0.5) < 0.05,
+    JSON.stringify({ lockedPlay, lockedSeek }));
   const submitted = await api(`/api/sessions/${videoId}`);
   const annotations = submitted.annotations?.annotations || [];
   const frames = submitted.annotations?.frames || [];
@@ -3156,6 +3192,19 @@ const main = async () => {
   const newButton = await page.$eval("#video-new", (el) => ({ hidden: el.hidden }));
   check("New video appears once the round is open", newButton.hidden === false,
     JSON.stringify(newButton));
+  const openTimeline = await page.evaluate(() => ({
+    disabled: ["#timeline-zoom-out", "#timeline-zoom-in", "#timeline-fit"]
+      .map((id) => document.querySelector(id).disabled),
+    span: window.redline.videoWindow.end - window.redline.videoWindow.start,
+  }));
+  await page.click("#timeline-zoom-in");
+  const openSpan = await page.evaluate(
+    () => window.redline.videoWindow.end - window.redline.videoWindow.start,
+  );
+  check("STOP unlocks the timeline's zoom again",
+    openTimeline.disabled.every((disabled) => !disabled) && openSpan < openTimeline.span * 0.8,
+    JSON.stringify({ openTimeline, openSpan }));
+  await page.click("#timeline-fit");
 
   page.once("dialog", (dialog) => dialog.accept());
   const chooserPromise = page.waitForFileChooser();
@@ -3443,54 +3492,175 @@ const main = async () => {
       && brokenUi.notice.includes("rejected the password"),
     JSON.stringify({ badge: brokenUi.badge, card: brokenUi.card }));
 
-  // ---- the agent's own output is one click away, off by default, and remembered
+  // A timeout is not a generic failure: the bridge sends a code, the server stores it, and the
+  // rail/card say so without the human opening the thread.
   await api("/mcp", {
     method: "POST",
     body: JSON.stringify({
-      jsonrpc: "2.0", id: 13, method: "tools/call",
+      jsonrpc: "2.0", id: 12, method: "tools/call",
+      params: { name: "reply", arguments: {
+        session_id: brokenId,
+        message: "opencode produced no output for 15m",
+        state: "failed",
+        code: "timeout_idle",
+      } },
+    }),
+  });
+  const timeoutMeta = (await api(`/api/sessions/${brokenId}`)).meta;
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const timeoutUi = await page.evaluate(() => ({
+    code: window.redline.meta?.agent_failure?.code,
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim(),
+    card: document.querySelector("#conv-log .conv-run")?.textContent || "",
+    notice: document.querySelector("#conv-log")?.textContent || "",
+  }));
+  check("a timeout failure is named as a timeout",
+    timeoutMeta.agent_failure?.code === "timeout_idle"
+      && timeoutUi.code === "timeout_idle"
+      && timeoutUi.badge === "agent timed out"
+      && timeoutUi.card.includes("timed out")
+      && timeoutUi.notice.includes("no output"),
+    JSON.stringify(timeoutUi));
+
+  // ---- the stage toast is a status line, not a console. The bridge streams the agent's own
+  // terminal output into the event log (`state: "log"`), and the toast used to print whatever
+  // event came last — so a shell command replaced the step it was describing (2026-10-31).
+  const loud = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "loud run", image_base64: makePng(), project: "e2e" }),
+  });
+  const loudId = loud.meta.id;
+  await page.goto(`${BASE}/s/${loudId}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  await page.evaluate(() => window.redline.mutate(() => {
+    window.redline.annotations.push({
+      id: "loud-1", type: "rect", color: "#e11d48", width: 3,
+      start: { x: 100, y: 120 }, end: { x: 200, y: 200 }, note: "say it shorter",
+    });
+  }));
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 10000 });
+  // A live claim keeps the round "working" even while the agent narrates and prints at once.
+  await api("/api/agent/claims", {
+    method: "POST",
+    body: JSON.stringify({ session_id: loudId, agent_id: "e2e", state: "running" }),
+  });
+  const command = "$ cd /mnt/c/Users/eriki/source/repos/redline && $ sed -n 1,200p desktop/ui/app.js";
+  for (const [message, state, tool] of [
+    ["Reading the annotations", "tool", "edit"],
+    [command, "log", null],
+  ]) {
+    await api("/mcp", {
+      method: "POST",
+      body: JSON.stringify({
+        jsonrpc: "2.0", id: 13, method: "tools/call",
+        params: { name: "progress", arguments: {
+          session_id: loudId, message, state, ...(tool ? { tool } : {}),
+        } },
+      }),
+    });
+  }
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  const quietToast = await page.evaluate(() => ({
+    text: document.querySelector("#stage-status")?.textContent || "",
+    title: document.querySelector("#stage-status")?.title || "",
+  }));
+  check("the stage toast narrates the step, never the agent's raw output",
+    quietToast.text === "Agent is working — Reading the annotations"
+      && !quietToast.text.includes("sed -n") && quietToast.text.length < 100
+      && !quietToast.title.includes("sed -n"),
+    `${quietToast.text} · title ${quietToast.title}`);
+
+  // ---- the agent's own output is one click away, and it is a popup: a tail wedged under the
+  // conversation took the little height a short window had and pushed the messages up (2026-10-31).
+  const outputOff = await page.evaluate(() => ({
+    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+    block: Boolean(document.querySelector("#conv-log .conv-output")),
+    open: Boolean(document.querySelector("#output-dialog")?.open),
+    leak: (document.querySelector("#conv-log")?.textContent || "").includes("sed -n"),
+  }));
+  check("agent output stays out of the conversation and off screen until asked for",
+    outputOff.pressed === "false" && !outputOff.block && !outputOff.open && !outputOff.leak,
+    JSON.stringify(outputOff));
+
+  await page.click("#conv-verbose");
+  const popup = await page.evaluate(() => {
+    const dialog = document.querySelector("#output-dialog");
+    const card = dialog?.querySelector(".output-card");
+    const body = document.querySelector("#output-body");
+    if (!dialog || !dialog.open || !card || !body) return null;
+    const box = card.getBoundingClientRect();
+    return {
+      pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
+      text: body.textContent || "",
+      live: dialog.classList.contains("live"),
+      centreX: Math.abs((box.left + box.right) / 2 - window.innerWidth / 2),
+      centreY: Math.abs((box.top + box.bottom) / 2 - window.innerHeight / 2),
+      inInspector: Boolean(document.querySelector("#conversation .conv-output, #conv-log .conv-output")),
+    };
+  });
+  check("the Output button opens a popup in the middle of the page, not a taller inspector",
+    popup && popup.pressed === "true" && popup.centreX <= 2 && popup.centreY <= 2
+      && !popup.inInspector,
+    popup ? `off centre ${Math.round(popup.centreX)}×${Math.round(popup.centreY)} · in inspector ${popup.inInspector}` : "no popup");
+  check("the popup shows the agent's own lines while the run is live",
+    popup && popup.text.includes("sed -n") && popup.live,
+    popup ? popup.text.slice(0, 60) : "no popup");
+
+  // The poll must keep feeding an open popup: a window onto a live run that freezes on the lines
+  // it opened with is worse than no window.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 14, method: "tools/call",
       params: { name: "progress", arguments: {
-        session_id: brokenId, message: "edited src/lib.rs", state: "log",
+        session_id: loudId, message: "compiled 3 packages", state: "log",
       } },
     }),
   });
   await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
-  const outputOff = await page.evaluate(() => ({
+  const followed = await page.evaluate(() => document.querySelector("#output-body")?.textContent || "");
+  check("an open popup keeps streaming the run it shows",
+    followed.includes("sed -n") && followed.includes("compiled 3 packages"), followed.slice(-40));
+
+  await page.keyboard.press("Escape");
+  // The dialog's `close` event lands as a task; poll for the button instead of assuming.
+  await page.waitForFunction(
+    () => document.querySelector("#conv-verbose")?.getAttribute("aria-pressed") === "false",
+    { timeout: 3000 },
+  );
+  const escaped = await page.evaluate(() => ({
+    open: Boolean(document.querySelector("#output-dialog")?.open),
     pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
-    block: Boolean(document.querySelector("#conv-log .conv-output")),
-    leak: (document.querySelector("#conv-log")?.textContent || "").includes("edited src/lib.rs"),
   }));
-  check("agent output stays out of the conversation until asked for",
-    outputOff.pressed === "false" && !outputOff.block && !outputOff.leak,
-    JSON.stringify(outputOff));
+  check("Esc closes the output popup and the button follows",
+    !escaped.open && escaped.pressed === "false", JSON.stringify(escaped));
 
   await page.click("#conv-verbose");
-  const outputOn = await page.evaluate(() => ({
+  await page.click("#output-close");
+  const closedByButton = await page.evaluate(() => ({
+    open: Boolean(document.querySelector("#output-dialog")?.open),
     pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
-    body: document.querySelector("#conv-log .conv-output-body")?.textContent || "",
-    stored: localStorage.getItem("redline:convVerbose"),
   }));
-  check("the Output button reveals the agent's realtime output",
-    outputOn.pressed === "true" && outputOn.body.includes("edited src/lib.rs")
-      && outputOn.stored === "true",
-    JSON.stringify(outputOn));
+  check("the popup's close button closes it",
+    !closedByButton.open && closedByButton.pressed === "false", JSON.stringify(closedByButton));
 
+  // A popup is a window, not a mode: reloading must not reopen it over the canvas unprompted.
+  await page.click("#conv-verbose");
   await page.reload({ waitUntil: "networkidle2" });
   await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
-  const outputRemembered = await page.evaluate(() => ({
+  const afterReload = await page.evaluate(() => ({
+    open: Boolean(document.querySelector("#output-dialog")?.open),
     pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
-    block: Boolean(document.querySelector("#conv-log .conv-output-body")),
   }));
-  check("the Output choice survives a reload",
-    outputRemembered.pressed === "true" && outputRemembered.block,
-    JSON.stringify(outputRemembered));
-  await page.click("#conv-verbose");
-  const outputHidden = await page.evaluate(() => ({
-    pressed: document.querySelector("#conv-verbose")?.getAttribute("aria-pressed"),
-    block: Boolean(document.querySelector("#conv-log .conv-output")),
-  }));
-  check("the Output button closes the tail again",
-    outputHidden.pressed === "false" && !outputHidden.block,
-    JSON.stringify(outputHidden));
+  check("the output popup does not reopen by itself on a reload",
+    !afterReload.open && afterReload.pressed === "false", JSON.stringify(afterReload));
+  // The popup showed a live run; leave the server's claim table as we found it.
+  await api(`/api/agent/claims/${loudId}/release`, {
+    method: "POST",
+    body: JSON.stringify({ agent_id: "e2e" }),
+  });
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

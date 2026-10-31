@@ -129,6 +129,12 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   Wheel over the timeline zooms around the pointer, `Fit` restores the whole clip. Annotation
   markers use the annotation colour; a range draws a band between `at` and `until`. Clicking a
   marker seeks to it and selects the row.
+- **A submitted round locks the timeline's zoom.** While the agent owns the round (the same
+  moment the canvas zoom and the drawing tools are disabled), `−`, `+`, `Fit` and the wheel over
+  the timeline are disabled and say why on hover; the timeline keeps the window it was submitted
+  with. Playback, frame stepping, speed, seeking and marker clicks stay, because reading the
+  clip is not an edit. STOP (a round that is open again) restores the zoom; a history round is
+  replayed read-only and stays navigable.
 - **Timecoded annotations**: each annotation gets `at` (seconds) when it is drawn or typed, and
   an optional `until` set from the ⏱ button in the inspector (clicking it while parked on the
   annotation gives a one-second default instead of a zero-length range). The inspector shows
@@ -467,6 +473,11 @@ The rail lists projects (conversation areas), not a flat stream of requests.
   the run card turns red instead of pulsing, and the canvas, tools and composer are usable again.
   Before this, a failed run left the review `submitted` behind a *replied* label: locked, with no
   sign that nobody was coming back.
+- **A timeout says it timed out.** The bridge reports a machine-readable `agent_failure`
+  (`timeout_idle`, `timeout_hard`, `spawn`, `failed`); the rail badge says **agent timed out** for
+  the timeout codes (and **agent failed** otherwise), and the red card/message name the exact
+  limit. A run is killed for producing no output for 15 minutes, not for merely being long; the
+  6-hour hard cap is only a runaway backstop. The agent's output popup is the evidence of life.
 - Filters and search still apply inside every project; day separators appear only in long lists.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals
@@ -509,13 +520,17 @@ The inspector's lower half is the conversation, so the tool stops feeling like a
 - Polling stays at 5 s for the session meta, the thread and the events; no websockets yet.
 - `progress` is the MCP tool the agent uses to narrate: one short line per meaningful step
   (`state` = thinking/tool/step, optional `tool` name). It appends to `agent-events.jsonl`.
-- **Agent output** (2026-10-31): the conversation header carries an **output** toggle. It reveals
-  the agent's own lines — `progress` events with `state: "log"`, which the bridge streams from the
+- **Agent output** (2026-10-31): the conversation header carries an **output** button. It opens the
+  agent's own lines — `progress` events with `state: "log"`, which the bridge streams from the
   OpenCode process (throttled to one line every two seconds, ANSI stripped, ≤ 400 chars, and the
-  last line of a short run is always kept) — in a monospace, scrollable tail with the time of the
-  last line. It is off by default so a wall of tool output never buries the conversation, the
-  choice is remembered per browser (`redline:convVerbose`), and `log` events are never rendered as
-  conversation lines.
+  last line of a short run is always kept) — in a **centred popup**, in monospace with the time of
+  the last line, following the tail while the run is live. It is not in the conversation and not
+  in the inspector: a tail wedged under the messages took the little height a short window had.
+  The button closes the popup again, `Esc` and the backdrop do the same, and a reload does not
+  reopen it. `log` events are never rendered as conversation lines, and the stage toast and the
+  activity label take the last *step*, never a `log` line — a shell command in place of a status
+  read as a stuck agent.
+
 
 ## Status bar
 

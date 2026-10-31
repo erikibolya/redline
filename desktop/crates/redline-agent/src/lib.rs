@@ -412,9 +412,25 @@ fn ensure_worktree(config: &AgentConfig, repo: &Path, work_key: &str) -> Result<
         .ok_or_else(|| format!("worktree path is not UTF-8: {}", path.display()))?;
     let branch_ref = format!("refs/heads/{work_key}");
     let branch_exists = git_ok(repo, &["show-ref", "--verify", "--quiet", &branch_ref]);
+    let remote_ref = format!("refs/remotes/origin/{work_key}");
+    let remote_exists = git_ok(repo, &["show-ref", "--verify", "--quiet", &remote_ref]);
     let base = worktree_base(repo);
     let output = if branch_exists {
         git(repo, &["worktree", "add", path_arg, work_key])?
+    } else if remote_exists {
+        // The review may have been pushed from another clone; shipping must start from those
+        // commits, not from a fresh branch at dev's tip.
+        git(
+            repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                work_key,
+                path_arg,
+                &format!("origin/{work_key}"),
+            ],
+        )?
     } else {
         git(repo, &["worktree", "add", "-b", work_key, path_arg, base])?
     };
@@ -459,16 +475,23 @@ fn release_worktree(config: &AgentConfig, repo: &Path, work_key: &str) {
     }
 }
 
-fn claim_next(config: &AgentConfig) -> Result<Option<(Value, Value)>, String> {
+fn claim_next(config: &AgentConfig) -> Result<Option<(Value, Value, String)>, String> {
     let value = api_post(
         config,
         "/api/agent/next",
-        &json!({ "agent_id": config.agent_id }),
+        // Declare the jobs this bridge can run. An old server ignores it; an old bridge sends no
+        // jobs and is never handed a confirmed feature it would treat as another review round.
+        &json!({ "agent_id": config.agent_id, "jobs": ["review", "ship"] }),
     )?;
     if value["session"].is_null() {
         return Ok(None);
     }
-    Ok(Some((value["session"].clone(), value["claim"].clone())))
+    let job = value["job"].as_str().unwrap_or("review").to_string();
+    Ok(Some((
+        value["session"].clone(),
+        value["claim"].clone(),
+        job,
+    )))
 }
 
 fn claim_heartbeat(config: &AgentConfig, id: &str) -> Result<(), String> {
@@ -516,6 +539,11 @@ Project: {project}
 Feature branch: {branch}
 Work in this worktree only. Commit and push this branch; do not switch branches or rewrite
 published history.
+
+This is a review round, not a shipment. Do NOT open a pull request, run the repository's
+feature-ready flow, merge, tag or publish a release. The human's ✓ Confirm feature queues a
+separate ship run; opening a PR now would ship a feature they have not accepted. Pushing the
+branch is allowed and expected.
 Prompt from the human: {prompt}
 
 The human's annotations (JSON):
@@ -527,9 +555,10 @@ The rendered feedback:
 Your job:
 1. Read the repository's AGENTS.md and follow it.
 2. Implement what the annotations ask for. Keep the change minimal and in the style of the
-   codebase. Run the tests you can run. You may build and deploy with the repository's own
-   scripts when the review needs a visual result — the human expects a screenshot of the change.
-   Never rewrite published git history; leave the repository in a state a human can review.
+   codebase. Run the tests you can run. You may build and deploy to a dev/preview environment
+   with the repository's own scripts when the review needs a visual result — the human expects a
+   screenshot of the change. Never merge or deploy to production. Never rewrite published git
+   history; leave the repository in a state a human can review.
 3. Narrate as you work through the RedLine MCP endpoint with curl — one line per meaningful step,
    at most six:
    curl -s -H "Authorization: Bearer $REDLINE_TOKEN" -H 'content-type: application/json' \
@@ -551,12 +580,66 @@ interpretation and say what you assumed in the reply."#,
     )
 }
 
+/// The second run a feature gets: the human already confirmed it, so the agent may open the PR
+/// and merge. This is deliberately separate from `prompt_for`: the review run is forbidden to
+/// ship, and only this prompt grants that permission.
+fn ship_prompt_for(session: &Value, repo: &Path, branch: &str) -> String {
+    let id = session["id"].as_str().unwrap_or_default();
+    let project = session["project"].as_str().unwrap_or("Inbox");
+    let prompt = session["prompt"]
+        .as_str()
+        .or_else(|| session["note"].as_str())
+        .unwrap_or("(none)");
+    format!(
+        r#"You are shipping a feature the human has already confirmed in RedLine. This is not a
+review round: do not redo the annotations, do not create a new review and do not post a round.
+
+Review id: {id}
+Project: {project}
+Feature branch: {branch}
+Worktree: {repo}
+The original request was: {prompt}
+
+The human confirmed this feature. Nobody is watching; do not ask questions.
+
+Your job:
+1. Read the repository's AGENTS.md and follow its shipping rules. Work only in this worktree
+   and on this branch.
+2. Make sure the branch is pushed. If the review left uncommitted changes, commit them on this
+   branch first. Never rewrite published git history.
+3. Open or reuse a pull request from this branch into the integration branch (dev if it exists,
+   otherwise main). Use the repository's own feature-ready flow if it has one (this repository:
+   `feature-ready "<summary>"`). Never open a second PR when one already exists for this branch.
+4. Wait for the required checks. Do not merge on red. Fix failures caused by this branch, push,
+   and wait again. Do not merge into main when the repository integrates through dev.
+5. Report the result through RedLine's MCP endpoint:
+   curl -s -H "Authorization: Bearer $REDLINE_TOKEN" -H 'content-type: application/json' \
+     -d '{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"ship_status","arguments":{{"session_id":"{id}","state":"merged","pr_url":"https://github.com/OWNER/REPO/pull/N","pr_number":N,"merge_commit":"..."}}}}}}' \
+     "$REDLINE_URL/mcp"
+   - `merged` only when GitHub says the PR is merged.
+   - `opened` if the PR exists but you cannot finish waiting (checks pending, timeout).
+   - `failed` with a short `message` when checks fail or you cannot merge.
+   - `closed` if the PR was closed without merging.
+6. Do not create a RedLine review or post a round for this shipment. Do not send a reply; the
+   human sees the ship state in the rail.
+
+If the branch is already merged, report the existing PR as merged. If there is nothing to ship,
+report failed with the reason."#,
+        id = id,
+        project = project,
+        branch = branch,
+        repo = repo.display(),
+        prompt = prompt,
+    )
+}
+
 /// Run one `opencode run` to completion. `Ok(true)` means the process exited successfully.
 fn run_opencode(
     config: &AgentConfig,
     session_id: &str,
     prompt: &str,
     repo: &Path,
+    ship: bool,
 ) -> Result<(bool, String), String> {
     let mut command = Command::new(&config.opencode_bin);
     command.arg("run");
@@ -601,7 +684,15 @@ fn run_opencode(
         if last_check.elapsed() >= Duration::from_secs(2) {
             last_check = Instant::now();
             if let Ok(value) = api_get(config, &format!("/api/sessions/{session_id}")) {
-                if value["meta"]["status"].as_str() != Some("submitted") {
+                // A review run lives while the round is submitted. A ship run lives while the
+                // feature is still confirmed; reopening or cancelling it kills the shipment.
+                let alive = if ship {
+                    value["meta"]["feature_confirmed_at"].is_string()
+                        && value["meta"]["ship"].is_object()
+                } else {
+                    value["meta"]["status"].as_str() == Some("submitted")
+                };
+                if !alive {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err("stopped by the human".to_string());
@@ -652,7 +743,12 @@ fn handle_claimed(
     repo: &Path,
     work_key: &str,
     owned: &Arc<Mutex<HashSet<String>>>,
+    job: &str,
 ) {
+    if job == "ship" {
+        handle_ship_claimed(config, session, repo, work_key, owned);
+        return;
+    }
     let id = session["id"].as_str().unwrap_or_default().to_string();
     if let Ok(mut set) = owned.lock() {
         set.insert(id.clone());
@@ -690,7 +786,7 @@ fn handle_claimed(
     );
 
     let prompt = prompt_for(session, &feedback, &worktree, work_key);
-    let output = match run_opencode(config, &id, &prompt, &worktree) {
+    let output = match run_opencode(config, &id, &prompt, &worktree, false) {
         Ok((true, output)) => {
             eprintln!("redline-agent: {id} finished ({} bytes)", output.len());
             output
@@ -757,6 +853,179 @@ fn handle_claimed(
             if let Ok(mut set) = owned.lock() {
                 set.remove(&id);
             }
+        }
+    }
+}
+
+/// A ship job failed before or during the agent run. Report it on the rail and release the claim;
+/// keep the worktree so a retry starts from the same commits.
+fn fail_ship_claim(
+    config: &AgentConfig,
+    id: &str,
+    owned: &Arc<Mutex<HashSet<String>>>,
+    message: String,
+) {
+    let _ = mcp(
+        config,
+        "ship_status",
+        json!({ "session_id": id, "state": "failed", "message": message }),
+    );
+    let _ = claim_release(config, id);
+    if let Ok(mut set) = owned.lock() {
+        set.remove(id);
+    }
+}
+
+/// The branch a confirmed feature should ship. A v0.21 review can carry `session/<id>` in git
+/// while its meta was later renamed to `feat/...`; the commits live on the session branch, so
+/// prefer it when the fancy name has no commits.
+fn ship_branch(repo: &Path, work_key: &str, id: &str) -> String {
+    let branch_ref = format!("refs/heads/{work_key}");
+    if git_ok(repo, &["show-ref", "--verify", "--quiet", &branch_ref]) {
+        return work_key.to_string();
+    }
+    let legacy = format!("session/{id}");
+    let legacy_ref = format!("refs/heads/{legacy}");
+    if git_ok(repo, &["show-ref", "--verify", "--quiet", &legacy_ref]) {
+        eprintln!("redline-agent: shipping {id} on the legacy branch {legacy}");
+        return legacy;
+    }
+    work_key.to_string()
+}
+
+fn branch_exists(repo: &Path, branch: &str) -> bool {
+    git_ok(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    ) || git_ok(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/origin/{branch}"),
+        ],
+    )
+}
+
+fn handle_ship_claimed(
+    config: &AgentConfig,
+    session: &Value,
+    repo: &Path,
+    work_key: &str,
+    owned: &Arc<Mutex<HashSet<String>>>,
+) {
+    let id = session["id"].as_str().unwrap_or_default().to_string();
+    if let Ok(mut set) = owned.lock() {
+        set.insert(id.clone());
+    }
+    let branch = ship_branch(repo, work_key, &id);
+    eprintln!("redline-agent: shipping {id} on {branch}");
+    if !branch_exists(repo, &branch) {
+        fail_ship_claim(
+            config,
+            &id,
+            owned,
+            format!("The branch {branch} has no commits to ship; nothing was opened."),
+        );
+        return;
+    }
+    let worktree = match ensure_worktree(config, repo, &branch) {
+        Ok(path) => path,
+        Err(err) => {
+            fail_ship_claim(
+                config,
+                &id,
+                owned,
+                format!("I cannot start the shipment: {err}."),
+            );
+            return;
+        }
+    };
+    let _ = mcp(
+        config,
+        "progress",
+        json!({
+            "session_id": id,
+            "message": "Shipping the confirmed feature: opening the pull request",
+            "state": "step"
+        }),
+    );
+    let prompt = ship_prompt_for(session, &worktree, &branch);
+    let output = match run_opencode(config, &id, &prompt, &worktree, true) {
+        Ok((true, output)) => {
+            eprintln!(
+                "redline-agent: {id} ship run finished ({} bytes)",
+                output.len()
+            );
+            output
+        }
+        Ok((false, output)) => {
+            eprintln!("redline-agent: {id} ship run failed");
+            fail_ship_claim(
+                config,
+                &id,
+                owned,
+                format!("The ship run failed: {}", first_line(&output)),
+            );
+            return;
+        }
+        Err(err) if err == "stopped by the human" => {
+            eprintln!("redline-agent: {id} shipment stopped by the human");
+            let _ = claim_release(config, &id);
+            if let Ok(mut set) = owned.lock() {
+                set.remove(&id);
+            }
+            return;
+        }
+        Err(err) => {
+            eprintln!("redline-agent: {id} ship bridge error: {err}");
+            fail_ship_claim(config, &id, owned, format!("Agent bridge error: {err}"));
+            return;
+        }
+    };
+    if !output.is_empty() {
+        eprintln!(
+            "redline-agent: {id} ship output tail: {}",
+            tail(&output, 400)
+        );
+    }
+    std::thread::sleep(Duration::from_secs(2));
+    let meta = api_get(config, &format!("/api/sessions/{id}")).ok();
+    let status = meta
+        .as_ref()
+        .and_then(|value| value["meta"]["ship"]["status"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    match status.as_str() {
+        "merged" => {
+            eprintln!("redline-agent: {id} shipped and merged");
+            let _ = claim_release(config, &id);
+            if let Ok(mut set) = owned.lock() {
+                set.remove(&id);
+            }
+            release_worktree(config, repo, &branch);
+        }
+        "opened" | "failed" | "closed" => {
+            eprintln!("redline-agent: {id} ship result: {status}");
+            let _ = claim_release(config, &id);
+            if let Ok(mut set) = owned.lock() {
+                set.remove(&id);
+            }
+        }
+        _ => {
+            eprintln!("redline-agent: {id} finished without a ship result");
+            fail_ship_claim(
+                config,
+                &id,
+                owned,
+                "The ship run finished without reporting a pull request or a merge.".to_string(),
+            );
         }
     }
 }
@@ -848,7 +1117,7 @@ fn worker_loop(
         }
 
         match claim_next(&config) {
-            Ok(Some((session, claim))) => {
+            Ok(Some((session, claim, job))) => {
                 let work_key = claim["work_key"].as_str().unwrap_or_default().to_string();
                 let repo = match api_get(&config, "/api/projects")
                     .and_then(|projects| project_repo(&config, &projects, &session))
@@ -856,19 +1125,28 @@ fn worker_loop(
                     Ok(repo) => repo,
                     Err(err) => {
                         let id = session["id"].as_str().unwrap_or_default();
-                        fail_claim(
-                            &config,
-                            id,
-                            &owned,
-                            format!("I cannot resolve the project repository: {err}."),
-                        );
+                        if job == "ship" {
+                            fail_ship_claim(
+                                &config,
+                                id,
+                                &owned,
+                                format!("I cannot resolve the project repository: {err}."),
+                            );
+                        } else {
+                            fail_claim(
+                                &config,
+                                id,
+                                &owned,
+                                format!("I cannot resolve the project repository: {err}."),
+                            );
+                        }
                         if wait(&cancel, config.poll) {
                             return;
                         }
                         continue;
                     }
                 };
-                handle_claimed(&config, &session, &repo, &work_key, &owned);
+                handle_claimed(&config, &session, &repo, &work_key, &owned, &job);
                 if cancel.load(Ordering::Relaxed) {
                     return;
                 }
@@ -956,6 +1234,44 @@ mod tests {
         assert!(prompt.contains("alignment"));
         assert!(prompt.contains("/tmp/repo"));
         assert!(prompt.contains("feat/prompt-test"));
+        // The review run must never ship a feature the human has not confirmed.
+        assert!(prompt.contains("Do NOT open a pull request"));
+        assert!(prompt.contains("separate ship run"));
+    }
+
+    #[test]
+    fn a_ship_prompt_grants_the_pr_and_reports_through_mcp() {
+        let session = json!({
+            "id": "20260101-120000-ship",
+            "project": "RedLine UI",
+            "prompt": "make it green",
+        });
+        let prompt = ship_prompt_for(&session, Path::new("/tmp/repo"), "feat/ship-test");
+        assert!(prompt.contains("already confirmed"));
+        assert!(prompt.contains("feat/ship-test"));
+        assert!(prompt.contains("/tmp/repo"));
+        assert!(prompt.contains("feature-ready"));
+        assert!(prompt.contains("ship_status"));
+        assert!(prompt.contains("\"state\":\"merged\""));
+    }
+
+    #[test]
+    fn a_ship_prefers_the_legacy_branch_that_holds_the_commits() {
+        if !git_available() {
+            eprintln!("git not installed; skipping ship branch test");
+            return;
+        }
+        let root = temp_root("ship-branch");
+        let repo = init_repo(&root);
+        let id = "20260101-120000-demo";
+        git_in(&repo, &["branch", &format!("session/{id}")]);
+        assert_eq!(
+            ship_branch(&repo, "feat/ship-test", id),
+            format!("session/{id}")
+        );
+        git_in(&repo, &["branch", "feat/ship-test"]);
+        assert_eq!(ship_branch(&repo, "feat/ship-test", id), "feat/ship-test");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn temp_root(name: &str) -> PathBuf {

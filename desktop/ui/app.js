@@ -368,8 +368,15 @@ function askBranch(current, submitted = false) {
  * Confirm, cancel, reopen or delete a feature. Returns the server response, `{deleted: true}`,
  * or `null` when the human dismissed the dialog.
  */
-async function featureAction(action, id, title, state = "pending") {
+async function featureAction(action, id, title, session = {}) {
   const path = `/api/sessions/${encodeURIComponent(id)}`;
+  const state = session.feature_state
+    || (session.feature_confirmed_at ? "confirmed"
+      : session.feature_cancelled_at ? "cancelled" : "pending");
+  const ship = session.ship || null;
+  // A failed or opened ship can be retried; a queued/running one is already with an agent.
+  const canRetryShip = state === "confirmed"
+    && ship && ["failed", "opened", "closed"].includes(ship.status);
   if (action === "confirm") {
     const choice = await askFeature({
       title: "Confirm this feature?",
@@ -384,23 +391,27 @@ async function featureAction(action, id, title, state = "pending") {
   }
   if (action === "menu") {
     const decided = state !== "pending";
+    const shipNote = ship
+      ? ` The last ship run is ${ship.status}${ship.error ? `: ${ship.error}` : ""}.`
+      : "";
+    const actions = [{ value: "keep", label: "Keep working" }];
+    if (canRetryShip) {
+      actions.push({ value: "ship", label: "Retry ship", kind: "primary" });
+    }
+    if (decided) {
+      actions.push({ value: "reopen", label: "Reopen" });
+    } else {
+      actions.push({ value: "cancel-feature", label: "Cancel feature" });
+    }
+    actions.push({ value: "delete", label: "Delete files…", kind: "danger" });
     const choice = await askFeature({
       title: "What should happen to this feature?",
       body: decided
-        ? `“${title}” is ${state}. Reopen returns it to the queue; Delete files removes the screenshot and annotations permanently.`
+        ? `“${title}” is ${state}.${shipNote} Reopen returns it to the queue; Delete files removes the screenshot and annotations permanently.`
         : `“${title}” has no decision yet. Cancel feature closes it without merging and keeps the screenshot and annotations; Delete files removes them permanently.`,
-      actions: decided
-        ? [
-            { value: "keep", label: "Keep working" },
-            { value: "reopen", label: "Reopen" },
-            { value: "delete", label: "Delete files…", kind: "danger" },
-          ]
-        : [
-            { value: "keep", label: "Keep working" },
-            { value: "cancel-feature", label: "Cancel feature" },
-            { value: "delete", label: "Delete files…", kind: "danger" },
-          ],
+      actions,
     });
+    if (choice === "ship") return api(`${path}/ship`, { method: "POST" });
     if (choice === "reopen") return api(`${path}/reopen`, { method: "POST" });
     if (choice === "cancel-feature") return api(`${path}/cancel-feature`, { method: "POST" });
     if (choice === "delete") {
@@ -412,12 +423,50 @@ async function featureAction(action, id, title, state = "pending") {
   if (action === "reopen") {
     return api(`${path}/reopen`, { method: "POST" });
   }
+  if (action === "ship") {
+    return api(`${path}/ship`, { method: "POST" });
+  }
   return null;
 }
 
 const featureState = (session) => session.feature_state
   || (session.feature_confirmed_at ? "confirmed"
     : session.feature_cancelled_at ? "cancelled" : "pending");
+
+/** A PR link when there is one; a failed badge is a retry button, never a dead label. */
+function shipBadge(session) {
+  const ship = session.ship;
+  if (!ship) return "";
+  const status = ship.status;
+  const pr = ship.pr_url || "";
+  const number = ship.pr_number ? ` #${ship.pr_number}` : "";
+  const label = status === "opened"
+    ? (ship.pr_number ? `PR${number}` : "PR open")
+    : status === "merged" ? "merged"
+      : status === "closed" ? "PR closed" : "";
+  if (["opened", "merged", "closed"].includes(status)) {
+    const title = status === "merged"
+      ? `Merged${number}${ship.merge_commit ? ` as ${ship.merge_commit}` : ""}`
+      : `Pull request${number} is ${status}`;
+    return pr
+      ? `<a class="badge ship ${status} ship-link" href="${escapeHtml(pr)}" target="_blank"
+            rel="noopener" title="${escapeHtml(title)}">${escapeHtml(label)}</a>`
+      : `<span class="badge ship ${status}" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+  }
+  if (status === "requested") {
+    return `<span class="badge ship requested" title="Waiting for an agent that supports shipping (v0.23+)">
+      ship queued</span>`;
+  }
+  if (status === "running") {
+    return `<span class="badge ship running" title="The agent is opening the pull request">
+      <span class="spin" aria-hidden="true"></span>shipping</span>`;
+  }
+  if (status === "failed") {
+    return `<button type="button" class="badge ship failed ship-retry"
+      title="${escapeHtml(ship.error || "The ship run failed")} — click to retry">ship failed ↻</button>`;
+  }
+  return "";
+}
 
 /* ---------------------------------------------------------------- agent settings */
 
@@ -1011,7 +1060,7 @@ class Rail {
         // An agent currently running outranks "new" and the annotation count: it is the one
         // state that changes a few seconds later without the human touching anything. A feature
         // decision is the human's answer to the session, so it outranks the unread marker.
-        const badge = working
+        const baseBadge = working
           ? `<span class="badge work" title="The agent is working on this review">
             <span class="spin" aria-hidden="true"></span>working</span>`
           : feature === "confirmed"
@@ -1027,6 +1076,11 @@ class Rail {
                   : annotations
                     ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
                     : "";
+        // The ship badge sits beside the confirmation: "confirmed" is the decision, while
+        // "PR #46" / "merged" / "ship failed" is what happened to it.
+        const badge = feature === "confirmed" && session.ship
+          ? `${baseBadge}${shipBadge(session)}`
+          : baseBadge;
         parts.push(`
           <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${
             decided ? ` feature-${feature}` : ""
@@ -1069,6 +1123,16 @@ class Rail {
       button.addEventListener("click", (event) => {
         event.stopPropagation();
         this.onAction?.(button.dataset.act, button.closest(".session").dataset.id);
+      });
+    });
+    // A PR link opens GitHub; a failed ship badge is the retry control. Neither may select the
+    // review row behind it.
+    $$(".session .ship-link, .session .ship-retry", this.body).forEach((control) => {
+      control.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (control.classList.contains("ship-retry")) {
+          this.onAction?.("ship", control.closest(".session").dataset.id);
+        }
       });
     });
     $$(".rail-project", this.body).forEach((header) => {
@@ -1230,11 +1294,12 @@ class Editor {
     try {
       const session = this.rail.sessions.find((s) => s.id === id);
       const title = session?.title || id;
-      const result = await featureAction(action, id, title, featureState(session || {}));
+      const result = await featureAction(action, id, title, session || {});
       if (!result) return;
-      const finished = result.deleted
+      // A ship retry does not close the review; the confirmed stamp is already there.
+      const finished = action !== "ship" && (result.deleted
         || Boolean(result.meta?.feature_confirmed_at)
-        || Boolean(result.meta?.feature_cancelled_at);
+        || Boolean(result.meta?.feature_cancelled_at));
       if (id === this.sessionId && finished) {
         // The decision closed the review on screen; the dashboard is the next useful place.
         location.href = "/";
@@ -3965,7 +4030,7 @@ async function bootList() {
       try {
         const session = rail.sessions.find((s) => s.id === id);
         const title = session?.title || id;
-        const result = await featureAction(action, id, title, featureState(session || {}));
+        const result = await featureAction(action, id, title, session || {});
         if (result) await refresh();
       } catch (error) {
         alert(`Could not ${action}: ${error.message}`);

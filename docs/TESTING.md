@@ -78,6 +78,23 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   creates a review through the dialog with the field left empty, and asserts the rail row and the
   loaded meta carry `feat/<title>-<tail>`.
 
+## Shipping a confirmed feature (v0.23)
+
+- Rust `tests/store.rs` / `tests/api.rs`: confirming queues `ship.status=requested`; a new round
+  or reopen clears it; `mark_ship_running` is idempotent; `report_ship` records the PR URL/number
+  and merge commit; `/api/agent/next` returns `job=ship` only to a bridge that advertises
+  `jobs:["review","ship"]` and never to an old bridge; a ship job's claim uses the branch the
+  review actually worked on (including a legacy `session/<id>`).
+- Rust `tests/mcp.rs`: `ship_status` is listed, refuses an unconfirmed feature, requires a PR URL
+  for `opened`, accepts a merged follow-up that reuses the opened URL, and persists the state.
+- `redline-agent` tests: the review prompt explicitly forbids opening a PR/feature-ready/merging;
+  the ship prompt grants the PR/merge and includes the `ship_status` curl; a legacy session branch
+  with the commits wins over a `feat/...` name with none.
+- Browser e2e: confirm a feature → rail shows `confirmed` + `ship queued`; call MCP
+  `ship_status` merged → reload → rail shows `merged` with the PR link; report failed → rail shows
+  the `ship failed ↻` retry button; click it → `/ship` queues it again and the badge returns to
+  `ship queued`. The e2e also asserts the retry does not select or close the review.
+
 ## Every UI control
 
 - A test must **click** the control, not only call the method or press the shortcut.

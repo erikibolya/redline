@@ -1,5 +1,5 @@
-use redline_core::model::{Annotation, MediaKind, Status, Submission};
-use redline_core::store::{default_branch, valid_id, Store};
+use redline_core::model::{Annotation, MediaKind, ShipStatus, Status, Submission};
+use redline_core::store::{default_branch, valid_id, ShipReport, Store};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -154,7 +154,12 @@ fn a_new_round_clears_the_feature_decision() {
     let meta = store
         .create_from_bytes(PNG, "shot.png", "Feature", "", "", None, None, None)
         .unwrap();
-    store.confirm_feature(&meta.id).unwrap();
+    let confirmed = store.confirm_feature(&meta.id).unwrap();
+    assert_eq!(
+        confirmed.ship.as_ref().map(|ship| ship.status),
+        Some(ShipStatus::Requested),
+        "confirmation must queue a ship run"
+    );
 
     let submission = Submission {
         note: None,
@@ -166,6 +171,61 @@ fn a_new_round_clears_the_feature_decision() {
     let (meta, _) = store.submit(&meta.id, &submission).unwrap();
     assert_eq!(meta.status, Status::Submitted);
     assert_eq!(meta.feature_state(), "pending");
+    assert!(meta.ship.is_none(), "new work drops the old shipment");
+
+    store.confirm_feature(&meta.id).unwrap();
+    let running = store.mark_ship_running(&meta.id).unwrap();
+    assert_eq!(
+        running.ship.as_ref().map(|ship| ship.status),
+        Some(ShipStatus::Running)
+    );
+    let opened = store
+        .report_ship(
+            &meta.id,
+            ShipReport {
+                status: ShipStatus::Opened,
+                pr_url: Some("https://github.com/o/r/pull/7".to_string()),
+                pr_number: Some(7),
+                merge_commit: None,
+                error: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        opened.ship.as_ref().map(|ship| ship.status),
+        Some(ShipStatus::Opened)
+    );
+    // A retry keeps the PR identity; the agent can reuse the same pull request.
+    let retried = store.request_ship(&meta.id).unwrap();
+    let retried_ship = retried.ship.unwrap();
+    assert_eq!(retried_ship.status, ShipStatus::Requested);
+    assert_eq!(retried_ship.pr_number, Some(7));
+    assert_eq!(
+        retried_ship.pr_url.as_deref(),
+        Some("https://github.com/o/r/pull/7")
+    );
+
+    store.mark_ship_running(&meta.id).unwrap();
+    let merged = store
+        .report_ship(
+            &meta.id,
+            ShipReport {
+                status: ShipStatus::Merged,
+                pr_url: None,
+                pr_number: Some(7),
+                merge_commit: Some("abc123".to_string()),
+                error: None,
+            },
+        )
+        .unwrap();
+    let ship = merged.ship.unwrap();
+    assert_eq!(ship.status, ShipStatus::Merged);
+    assert_eq!(ship.pr_number, Some(7));
+    assert_eq!(
+        ship.pr_url.as_deref(),
+        Some("https://github.com/o/r/pull/7")
+    );
+    assert_eq!(ship.merge_commit.as_deref(), Some("abc123"));
 
     store.cancel_feature(&meta.id).unwrap();
     let meta = store
@@ -173,6 +233,7 @@ fn a_new_round_clears_the_feature_decision() {
         .unwrap();
     assert_eq!(meta.status, Status::Open);
     assert_eq!(meta.feature_state(), "pending");
+    assert!(meta.ship.is_none(), "a new round clears the shipped state");
 }
 
 #[test]

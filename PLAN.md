@@ -101,9 +101,11 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
 - No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
 - Repo routing is single-agent: all agents watch the same queue; a claim/filter router is next.
-- **Feature confirmation is a signal, not a git action.** RedLine records `feature_state`; each
-  agent maps `confirmed` to its own workflow (this repo: feature branch → PR → required checks →
-  merge into `dev`). There is no server-side GitHub token.
+- **Feature confirmation is a signal, not a git action.** RedLine records `feature_state` and
+  queues a separate **ship job** (v0.23); the bridge claims it only when it advertises the job,
+  and the agent runs the repository's own PR/merge workflow and reports through `ship_status`.
+  RedLine still has no server-side GitHub token and never runs git itself. A review run is not a
+  shipment: it pushes the branch and replies, it must not open a PR.
 - No server-side pagination; the rail renders everything it gets.
 - Text notes have a fixed font family, one size per note.
 
@@ -113,14 +115,15 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
   helpers, video media/limits/timecodes, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 182 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 192 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the
-  replied-but-still-running state, feature confirm/cancel/delete menus, row delete, cancelled-only
-  purge, the All filter, agent settings/branch display, rail reopen and bulk confirm, and the
-  whole video path (recorded WebM upload, playback, timecoded draw, ghost opacity, range,
-  timeline zoom and submit).
+  replied-but-still-running state, feature confirm/cancel/delete menus, the confirm → ship queue,
+  MCP `ship_status` merged/failed, the rail's PR link and `ship failed ↻` retry, row delete,
+  cancelled-only purge, the All filter, agent settings/branch display, rail reopen and bulk
+  confirm, and the whole video path (recorded WebM upload, playback, timecoded draw, ghost
+  opacity, range, timeline zoom and submit).
 - CI runs both on every push; releases are cut from tags only after green. The tool matrix,
   feature/bug protocol and release checklist live in `docs/TESTING.md`.
 

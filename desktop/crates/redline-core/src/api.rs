@@ -132,6 +132,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/reopen", post(reopen))
         .route("/api/sessions/{id}/confirm-feature", post(confirm_feature))
         .route("/api/sessions/{id}/cancel-feature", post(cancel_feature))
+        .route("/api/sessions/{id}/ship", post(request_ship))
         .route("/api/sessions/{id}/cancel", post(cancel))
         .route("/api/sessions/{id}/history", get(history))
         .route("/api/sessions/{id}/thread", get(agent_thread))
@@ -585,6 +586,11 @@ struct AgentRelease {
 #[derive(Debug, serde::Deserialize)]
 struct NextBody {
     agent_id: String,
+    /// Job kinds this bridge understands. Older bridges omit it and only ever receive review
+    /// work; a new bridge sends `["review", "ship"]`, so a confirmed feature is not handed to a
+    /// client that would treat it as another annotation round.
+    #[serde(default)]
+    jobs: Option<Vec<String>>,
 }
 
 fn claim_error(err: ClaimError) -> Error {
@@ -850,6 +856,7 @@ async fn agent_next(
     let claims = agent.claims();
     let mut blocked = "empty";
 
+    // Review work first: a human waiting for a fix should not queue behind a shipment.
     for mut meta in sessions {
         if let Some(claim) = claims.iter().find(|claim| claim.session_id == meta.id) {
             if claim.agent_id != body.agent_id {
@@ -882,6 +889,7 @@ async fn agent_next(
                 return Ok(Json(json!({
                     "session": meta,
                     "claim": claim,
+                    "job": "review",
                     "limits": { "max_parallel": settings.max_parallel, "project_max": max_parallel },
                 })));
             }
@@ -889,6 +897,76 @@ async fn agent_next(
             Err(ClaimError::BranchLocked { .. }) => blocked = "branch_locked",
             Err(ClaimError::SessionClaimed { .. }) => blocked = "claimed",
             Err(err) => return Err(claim_error(err)),
+        }
+    }
+
+    let can_ship = body
+        .jobs
+        .as_ref()
+        .is_some_and(|jobs| jobs.iter().any(|job| job == "ship"));
+    if can_ship {
+        let mut ships = state.store.list()?;
+        ships.retain(|meta| {
+            meta.feature_confirmed_at.is_some()
+                && meta
+                    .ship
+                    .as_ref()
+                    .is_some_and(|ship| ship.status.claimable())
+        });
+        ships.sort_by_key(|meta| {
+            meta.ship
+                .as_ref()
+                .and_then(|ship| ship.requested_at.clone())
+                .unwrap_or_else(|| meta.created_at.clone())
+        });
+        for meta in ships {
+            let existing = claims.iter().find(|claim| claim.session_id == meta.id);
+            if let Some(claim) = existing {
+                if claim.agent_id != body.agent_id {
+                    blocked = "claimed";
+                    continue;
+                }
+                if claim.state == ClaimState::Running {
+                    blocked = "running";
+                    continue;
+                }
+            }
+            let project = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
+            let max_parallel = project_max(&state, &project, &settings);
+            // A waiting review claim carries the branch the agent actually worked on. It can be
+            // a v0.21 `session/<id>` name even when the meta now reads as `feat/...`; shipping
+            // must use the branch with the commits, not the derived label.
+            let work_key = existing
+                .map(|claim| claim.work_key.clone())
+                .unwrap_or_else(|| meta.work_key());
+            let request = ClaimRequest {
+                session_id: meta.id.clone(),
+                agent_id: body.agent_id.clone(),
+                project,
+                work_key,
+                state: ClaimState::Running,
+                global_max: settings.max_parallel,
+                project_max: max_parallel,
+                lease_seconds: settings.lease_seconds,
+            };
+            match agent.try_claim(request) {
+                Ok(claim) => {
+                    let meta = state.store.mark_ship_running(&meta.id).map_err(|err| {
+                        let _ = agent.release(&meta.id, &body.agent_id);
+                        err
+                    })?;
+                    return Ok(Json(json!({
+                        "session": meta,
+                        "claim": claim,
+                        "job": "ship",
+                        "limits": { "max_parallel": settings.max_parallel, "project_max": max_parallel },
+                    })));
+                }
+                Err(ClaimError::AtCapacity { .. }) => blocked = "at_capacity",
+                Err(ClaimError::BranchLocked { .. }) => blocked = "branch_locked",
+                Err(ClaimError::SessionClaimed { .. }) => blocked = "claimed",
+                Err(err) => return Err(claim_error(err)),
+            }
         }
     }
 
@@ -961,6 +1039,11 @@ async fn set_session_branch(
     if meta.status == Status::Submitted {
         return Err(Error::Conflict(
             "stop the review before renaming its branch".to_string(),
+        ));
+    }
+    if meta.ship.is_some() {
+        return Err(Error::Conflict(
+            "this feature already has a ship run; reopen it before renaming the branch".to_string(),
         ));
     }
     let branch = body
@@ -1246,6 +1329,15 @@ async fn cancel_feature(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     Ok(Json(json!({ "meta": state.store.cancel_feature(&id)? })))
+}
+
+/// Queue (or retry) a ship run for a feature the human already confirmed. Used by the rail's
+/// retry action after a failed ship, and by scripts for features confirmed before v0.23.
+async fn request_ship(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(json!({ "meta": state.store.request_ship(&id)? })))
 }
 
 async fn history(

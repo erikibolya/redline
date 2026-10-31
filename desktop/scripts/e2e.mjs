@@ -1194,6 +1194,91 @@ const main = async () => {
       && confirmedBadge.light.border === "rgb(134, 239, 172)",
     JSON.stringify(confirmedBadge));
 
+  // Confirming queues a ship run; the rail says so before any agent picks it up.
+  const queuedShip = await page.evaluate((sessionId) => {
+    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.ship`);
+    return { text: badge?.textContent.trim() || "", className: badge?.className || "" };
+  }, id);
+  check("a confirmed feature queues a ship run",
+    queuedShip.className.includes("requested") && queuedShip.text.includes("ship queued"),
+    JSON.stringify(queuedShip));
+
+  // The agent reports the PR through MCP; the rail must show the link and the merge.
+  const shipReport = await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 1, method: "tools/call",
+      params: {
+        name: "ship_status",
+        arguments: {
+          session_id: id,
+          state: "merged",
+          pr_url: "https://github.com/erikibolya/redline/pull/46",
+          pr_number: 46,
+          merge_commit: "456a2c5",
+        },
+      },
+    }),
+  });
+  const shipPayload = JSON.parse(shipReport.result.content[0].text);
+  check("ship_status records the PR and the merge",
+    shipPayload.ship.status === "merged" && shipPayload.ship.pr_number === 46,
+    JSON.stringify(shipPayload.ship));
+  await page.reload();
+  await page.waitForFunction(() => window.redline?.meta?.ship?.status === "merged",
+    { timeout: 10000 });
+  const mergedShip = await page.evaluate((sessionId) => {
+    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.ship.merged`);
+    return {
+      text: badge?.textContent.trim() || "",
+      href: badge?.getAttribute("href") || "",
+      title: badge?.getAttribute("title") || "",
+    };
+  }, id);
+  check("the rail shows the PR as merged with a link",
+    mergedShip.text === "merged"
+      && mergedShip.href === "https://github.com/erikibolya/redline/pull/46"
+      && mergedShip.title.includes("#46"),
+    JSON.stringify(mergedShip));
+
+  // A failed shipment is a retry control, not a dead label.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 2, method: "tools/call",
+      params: {
+        name: "ship_status",
+        arguments: { session_id: id, state: "failed", message: "browser e2e is red" },
+      },
+    }),
+  });
+  await page.reload();
+  await page.waitForFunction(() => window.redline?.meta?.ship?.status === "failed",
+    { timeout: 10000 });
+  const failedShip = await page.evaluate((sessionId) => {
+    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.ship.failed`);
+    return { text: badge?.textContent.trim() || "", title: badge?.getAttribute("title") || "" };
+  }, id);
+  check("a failed ship is a retry control",
+    failedShip.text.includes("ship failed") && failedShip.title.includes("browser e2e is red"),
+    JSON.stringify(failedShip));
+  await page.click(`.session[data-id="${id}"] .badge.ship.failed`);
+  let retriedShip = {};
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const meta = await api(`/api/sessions/${id}`);
+    retriedShip = meta.meta;
+    if (retriedShip.ship?.status === "requested") break;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  check("retrying a failed ship queues it again",
+    retriedShip.ship?.status === "requested",
+    JSON.stringify(retriedShip.ship));
+  // The retry action reloads the rail asynchronously. Waiting for the badge (not just the API)
+  // keeps the later row clicks from hitting an element the reload has already detached.
+  await page.waitForFunction((sessionId) => Boolean(
+    document.querySelector(`.session[data-id="${sessionId}"] .badge.ship.requested`)),
+    { timeout: 5000 }, id);
+
   // "All" is the only view that keeps a finished session alongside active work.
   await clickChip("All");
   await page.waitForSelector(row, { timeout: 5000 });

@@ -11,7 +11,8 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Annotation, AnnotationSet, ImageRef, MediaKind, MediaRef, Meta, Status, Submission,
+    Annotation, AnnotationSet, ImageRef, MediaKind, MediaRef, Meta, Ship, ShipStatus, Status,
+    Submission,
 };
 use crate::MAX_VIDEO_BYTES;
 
@@ -19,6 +20,17 @@ use crate::MAX_VIDEO_BYTES;
 /// This is what stops `../` and friends from escaping the sessions directory.
 /// The virtual project that holds sessions created without one (legacy flat folders).
 pub const INBOX: &str = "inbox";
+
+/// What an agent reports about a confirmed feature's ship run. Kept as an input shape so the
+/// store, not the MCP surface, owns the persisted fields.
+#[derive(Debug, Clone)]
+pub struct ShipReport {
+    pub status: ShipStatus,
+    pub pr_url: Option<String>,
+    pub pr_number: Option<u64>,
+    pub merge_commit: Option<String>,
+    pub error: Option<String>,
+}
 
 pub fn valid_id(id: &str) -> bool {
     let mut chars = id.chars();
@@ -125,6 +137,18 @@ fn effective_branch(mut meta: Meta) -> Meta {
 /// `datetime.now(timezone.utc).isoformat(timespec="seconds")`.
 pub fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false)
+}
+
+/// A fresh requested ship, carrying the PR identity from a previous failed/opened attempt. The
+/// retry must not make the rail forget which PR the agent already opened.
+fn requested_ship(meta: &Meta, at: String) -> Ship {
+    let mut ship = Ship::requested(at);
+    if let Some(previous) = &meta.ship {
+        ship.pr_url = previous.pr_url.clone();
+        ship.pr_number = previous.pr_number;
+        ship.merge_commit = previous.merge_commit.clone();
+    }
+    ship
 }
 
 /// Image extensions we are willing to write into a session folder. Anything else is stored as
@@ -848,6 +872,7 @@ impl Store {
             resolved_at: None,
             feature_confirmed_at: None,
             feature_cancelled_at: None,
+            ship: None,
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
@@ -964,6 +989,7 @@ impl Store {
             resolved_at: None,
             feature_confirmed_at: None,
             feature_cancelled_at: None,
+            ship: None,
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
@@ -1166,6 +1192,7 @@ impl Store {
         // New work after a decision makes the feature pending again.
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
+        meta.ship = None;
         meta.agent_state = Some("replied".to_string());
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
 
@@ -1194,6 +1221,7 @@ impl Store {
         meta.agent_state = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
+        meta.ship = None;
         if let Some(prompt) = submission.note.as_deref() {
             let prompt = prompt.trim();
             if !prompt.is_empty() {
@@ -1260,21 +1288,111 @@ impl Store {
         meta.resolved_at = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
+        meta.ship = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
 
-    /// The human says the feature is complete. RedLine only records the decision and closes the
-    /// review; the agent maps `feature_state == "confirmed"` to its own workflow (open a PR,
-    /// merge it, deploy — whatever the project uses).
+    /// The human says the feature is complete. RedLine records the decision and queues a ship
+    /// run: the agent bridge claims it and the agent opens/merges the PR. RedLine still never
+    /// touches git. Repeating the confirmation retries a failed or still-open ship; a merged
+    /// ship is left alone.
     pub fn confirm_feature(&self, id: &str) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         let stamp = now();
         meta.status = Status::Resolved;
         meta.resolved_at.get_or_insert_with(|| stamp.clone());
-        meta.feature_confirmed_at = Some(stamp);
+        meta.feature_confirmed_at = Some(stamp.clone());
         meta.feature_cancelled_at = None;
+        if !meta.ship.as_ref().is_some_and(Ship::is_merged) {
+            let ship = requested_ship(&meta, stamp);
+            meta.ship = Some(ship);
+        }
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// Queue (or retry) a ship run for a confirmed feature. Used by the rail's retry action and
+    /// by callers that need to ship a feature confirmed before v0.23. A retry keeps the PR link
+    /// from the failed/opened attempt so the agent can reuse it and the rail does not forget it.
+    pub fn request_ship(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        if meta.feature_confirmed_at.is_none() {
+            return Err(Error::BadRequest(
+                "confirm the feature before shipping it".to_string(),
+            ));
+        }
+        if meta.ship.as_ref().is_some_and(Ship::is_merged) {
+            return Ok(meta);
+        }
+        let ship = requested_ship(&meta, now());
+        meta.ship = Some(ship);
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The bridge claimed the ship. Idempotent: an already opened/merged/failed ship is left as
+    /// the agent reported it, so a duplicate claim cannot rewind the rail.
+    pub fn mark_ship_running(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let Some(mut ship) = meta.ship.take() else {
+            return Err(Error::BadRequest("no ship is queued".to_string()));
+        };
+        if !ship.status.claimable() {
+            meta.ship = Some(ship);
+            return Ok(meta);
+        }
+        ship.status = ShipStatus::Running;
+        ship.started_at.get_or_insert_with(now);
+        meta.ship = Some(ship);
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// Record what the agent's ship run did. `state` is terminal (`opened`, `merged`, `failed`,
+    /// `closed`); the MCP surface validates it. A report for a feature the human reopened or
+    /// cancelled in the meantime is refused rather than resurrecting a dead decision.
+    pub fn report_ship(&self, id: &str, report: ShipReport) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        if meta.feature_confirmed_at.is_none() {
+            return Err(Error::BadRequest(
+                "the feature is not confirmed; ignoring the ship result".to_string(),
+            ));
+        }
+        let stamp = now();
+        let mut ship = meta
+            .ship
+            .take()
+            .unwrap_or_else(|| Ship::requested(stamp.clone()));
+        ship.status = report.status;
+        if let Some(url) = report.pr_url.filter(|url| !url.trim().is_empty()) {
+            ship.pr_url = Some(url.trim().to_string());
+        }
+        if let Some(number) = report.pr_number {
+            ship.pr_number = Some(number);
+        }
+        if let Some(commit) = report
+            .merge_commit
+            .filter(|commit| !commit.trim().is_empty())
+        {
+            ship.merge_commit = Some(commit.trim().to_string());
+        }
+        if report.status == ShipStatus::Failed {
+            ship.error = report
+                .error
+                .filter(|error| !error.trim().is_empty())
+                .or_else(|| Some("the agent could not ship the feature".to_string()));
+        } else {
+            ship.error = None;
+        }
+        if report.status.terminal() {
+            ship.finished_at = Some(stamp);
+        }
+        meta.ship = Some(ship);
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
@@ -1289,6 +1407,7 @@ impl Store {
         meta.resolved_at.get_or_insert_with(|| stamp.clone());
         meta.feature_cancelled_at = Some(stamp);
         meta.feature_confirmed_at = None;
+        meta.ship = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }

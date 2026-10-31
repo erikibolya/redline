@@ -217,6 +217,10 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `TAURI_SIGNING_PRIVATE_KEY`, in `desktop.yml` too.
 - **Release job ordering**: the Linux-binary job needs `needs: windows` (the release is created by
   the Windows job).
+- **A prerelease of the current stable is older, not newer.** Dev builds were versioned
+  `0.23.0-dev.N` while stable was already `0.23.0`, so the updater correctly refused to install
+  one; "Install latest dev build…" looked broken. `DEV_BASE_VERSION` must be the *next* minor
+  (now 0.24.0); the dev workflow now fails if the base does not sort above the latest stable.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).

@@ -21,9 +21,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Dev builds must sort *above* the current stable line, otherwise the updater refuses them.
-  # Bump this when a new stable minor is released.
-  DEV_BASE_VERSION: "0.23.0"
+  # Dev builds must sort *above* the current stable line, otherwise the updater refuses them:
+  # `0.23.0-dev.68` is a prerelease of 0.23.0, so an installed 0.23.0 will never offer it.
+  # Bump this when a new stable minor is released; the workflow checks it below.
+  DEV_BASE_VERSION: "0.24.0"
 
 jobs:
   windows:
@@ -56,6 +57,21 @@ jobs:
           @{ version = $version } | ConvertTo-Json -Compress |
             Set-Content desktop/app/tauri.dev.conf.json -Encoding utf8
           "DEV_VERSION=$version" | Out-File -Append $env:GITHUB_ENV
+
+      - name: Check the dev version sorts above stable
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          $tag = gh release view --repo $env:REPO --json tagName --jq .tagName
+          if (-not $tag) { throw "could not read the latest stable release" }
+          $stable = [version]($tag.TrimStart("v"))
+          $base = [version]"${{ env.DEV_BASE_VERSION }}"
+          if ($base -le $stable) {
+            throw "DEV_BASE_VERSION $base must be greater than the latest stable $stable; bump it in .github/workflows/dev.yml"
+          }
+          "dev base $base sorts above stable $stable"
 
       - name: Build the CLI and the agent
         run: |

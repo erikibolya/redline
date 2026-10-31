@@ -3373,6 +3373,37 @@ const main = async () => {
       && brokenUi.notice.includes("rejected the password"),
     JSON.stringify({ badge: brokenUi.badge, card: brokenUi.card }));
 
+  // A timeout is not a generic failure: the bridge sends a code, the server stores it, and the
+  // rail/card say so without the human opening the thread.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 12, method: "tools/call",
+      params: { name: "reply", arguments: {
+        session_id: brokenId,
+        message: "opencode produced no output for 15m",
+        state: "failed",
+        code: "timeout_idle",
+      } },
+    }),
+  });
+  const timeoutMeta = (await api(`/api/sessions/${brokenId}`)).meta;
+  await page.evaluate(() => window.redline.loadConversation({ quiet: true }));
+  await page.evaluate(() => window.redline.rail.refreshAgentState());
+  const timeoutUi = await page.evaluate(() => ({
+    code: window.redline.meta?.agent_failure?.code,
+    badge: document.querySelector('.session[aria-current="true"] .badge')?.textContent.trim(),
+    card: document.querySelector("#conv-log .conv-run")?.textContent || "",
+    notice: document.querySelector("#conv-log")?.textContent || "",
+  }));
+  check("a timeout failure is named as a timeout",
+    timeoutMeta.agent_failure?.code === "timeout_idle"
+      && timeoutUi.code === "timeout_idle"
+      && timeoutUi.badge === "agent timed out"
+      && timeoutUi.card.includes("timed out")
+      && timeoutUi.notice.includes("no output"),
+    JSON.stringify(timeoutUi));
+
   // ---- the stage toast is a status line, not a console. The bridge streams the agent's own
   // terminal output into the event log (`state: "log"`), and the toast used to print whatever
   // event came last — so a shell command replaced the step it was describing (2026-10-31).

@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind, MediaRef,
-    Meta, Status, Submission,
+    AgentFailure, Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind,
+    MediaRef, Meta, Status, Submission,
 };
 use crate::{MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_VIDEO_BYTES};
 
@@ -887,6 +887,10 @@ impl Store {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         meta.agent_state = Some(state.to_string());
+        // A new run (or a reply) clears the previous failure; only `fail_round` keeps one.
+        if state != "failed" {
+            meta.agent_failure = None;
+        }
         if seen && meta.seen_by_agent_at.is_none() {
             meta.seen_by_agent_at = Some(now());
         }
@@ -898,13 +902,18 @@ impl Store {
     /// "replied" (the agent has no answer to give), and it must not leave the review locked:
     /// a human who cannot edit a round nobody is working on is stuck (2026-10-31). The round goes
     /// back to the human, the annotations stay, and `agent_state=failed` keeps the reason visible.
-    pub fn fail_round(&self, id: &str) -> Result<Meta> {
+    pub fn fail_round(&self, id: &str, code: &str, message: &str) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         if meta.status == Status::Submitted {
             meta.status = Status::Open;
         }
         meta.agent_state = Some("failed".to_string());
+        meta.agent_failure = Some(AgentFailure {
+            code: code.to_string(),
+            message: message.to_string(),
+            at: now(),
+        });
         if meta.seen_by_agent_at.is_none() {
             meta.seen_by_agent_at = Some(now());
         }
@@ -1030,6 +1039,7 @@ impl Store {
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
+            agent_failure: None,
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
@@ -1125,6 +1135,7 @@ impl Store {
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
+            agent_failure: None,
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
@@ -1291,6 +1302,7 @@ impl Store {
         meta.round_stamp = None;
         meta.seen_by_agent_at = None;
         meta.agent_state = None;
+        meta.agent_failure = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
         meta.prompt = None;
@@ -1367,6 +1379,7 @@ impl Store {
         }
         meta.status = Status::Open;
         meta.agent_state = None;
+        meta.agent_failure = None;
         meta.cancelled_at = Some(now());
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
@@ -1431,6 +1444,7 @@ impl Store {
         meta.feature_cancelled_at = None;
         meta.handoff = None;
         meta.agent_state = Some("replied".to_string());
+        meta.agent_failure = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
 
         // The conversation keeps the round (and its picture) beside the human's annotations.
@@ -1503,6 +1517,7 @@ impl Store {
         // A fresh round has not been seen by the agent yet, and it reopens a decided feature.
         meta.seen_by_agent_at = None;
         meta.agent_state = None;
+        meta.agent_failure = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
         meta.handoff = None;

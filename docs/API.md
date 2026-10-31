@@ -59,6 +59,11 @@ expired because the bridge died. The rail shows **working** for either a running
 `agent_state` is `received`, `working`, `replied` or `failed`. **`failed`** means the run could not
 happen: the server has already handed the round back (`status=open`, annotations intact) so the
 human can fix the problem and resubmit. It is not a reply, and it never leaves the round locked.
+A failed row also carries `agent_failure` (v0.25.1): `{ code, message, at }`. The stable `code`s are
+`timeout_idle` (no output for `REDLINE_AGENT_IDLE_TIMEOUT`), `timeout_hard` (the run hit the
+`REDLINE_AGENT_TIMEOUT` cap), `spawn` (the bridge could not start OpenCode) and `failed` (a
+non-zero run). The UI says "agent timed out" for the two timeout codes and "agent failed" otherwise;
+`message` is the human-readable detail.
 
 ### `GET /api/sessions/<id>`
 

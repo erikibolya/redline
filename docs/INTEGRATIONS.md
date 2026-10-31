@@ -101,19 +101,28 @@ The response is one of:
     "name": "reply",
     "arguments": {
       "session_id": "20261031-120000-feature-1a2b",
-      "message": "The agent run failed: Server at http://opencode:4096 rejected the password",
-      "state": "failed"
+      "message": "opencode produced no output for 15m",
+      "state": "failed",
+      "code": "timeout_idle"
     }
   }
 }
 ```
 
 `state` is `replied` (default: the agent answered and may still be working) or `failed` (the run
-could not happen). A failure sets `agent_state=failed` and **hands the round back**
-(`status=open`, annotations and history intact), so the human can fix the problem and resubmit
-instead of staring at a locked review. Release the claim afterwards, as usual. Do not use
-`failed` for a normal answer: the round must stay submitted while the agent still intends to
-finish it.
+could not happen). A failure sets `agent_state=failed`, stores `agent_failure { code, message, at }`
+and **hands the round back** (`status=open`, annotations and history intact), so the human can fix
+the problem and resubmit instead of staring at a locked review. Release the claim afterwards, as
+usual. Do not use `failed` for a normal answer: the round must stay submitted while the agent still
+intends to finish it.
+
+`code` is optional and machine-readable (`timeout_idle`, `timeout_hard`, `spawn`, `failed`); the UI
+uses it to say **agent timed out** rather than a generic "agent failed". `get_feedback` and
+`wait_for_feedback` return `agent_failure` with the same reason, plus `review_guidance`:
+review runs should run focused checks (cargo test for the touched crates, targeted e2e) and must
+not build or publish the full release/browser image or run the release pipeline — those belong to
+the human's release/handoff step. A dev/preview deploy is allowed only when the review needs a
+visual result.
 
 ## Reporting the result
 

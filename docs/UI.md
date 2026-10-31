@@ -459,6 +459,11 @@ The rail lists projects (conversation areas), not a flat stream of requests.
   the run card turns red instead of pulsing, and the canvas, tools and composer are usable again.
   Before this, a failed run left the review `submitted` behind a *replied* label: locked, with no
   sign that nobody was coming back.
+- **A timeout says it timed out.** The bridge reports a machine-readable `agent_failure`
+  (`timeout_idle`, `timeout_hard`, `spawn`, `failed`); the rail badge says **agent timed out** for
+  the timeout codes (and **agent failed** otherwise), and the red card/message name the exact
+  limit. A run is killed for producing no output for 15 minutes, not for merely being long; the
+  6-hour hard cap is only a runaway backstop. The agent's output popup is the evidence of life.
 - Filters and search still apply inside every project; day separators appear only in long lists.
 - The New review dialog picks the project from a **select** grouped into **Repositories** and
   **Other projects**; it is required. Empty legacy projects are hidden. **+ New project…** reveals

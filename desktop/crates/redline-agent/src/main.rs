@@ -78,6 +78,9 @@ fn main() {
     if let Some(timeout) = env("REDLINE_AGENT_TIMEOUT").and_then(|value| value.parse().ok()) {
         config.timeout = Duration::from_secs(timeout);
     }
+    if let Some(idle) = env("REDLINE_AGENT_IDLE_TIMEOUT").and_then(|value| value.parse().ok()) {
+        config.idle_timeout = Duration::from_secs(idle);
+    }
     if let Some(workers) =
         env("REDLINE_AGENT_WORKERS").and_then(|value| value.parse::<usize>().ok())
     {

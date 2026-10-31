@@ -355,14 +355,25 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
 }
 .chip:hover { color: var(--text); }
-.chip[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: #fff; }
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .chip b { font-weight: 600; opacity: .8; margin-left: 4px; }
 
 .rail-body { overflow-y: auto; padding: 8px; flex: 1; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 26px; }
 .gallery .card {
+  position: relative;
   display: block; overflow: hidden; border: 1px solid var(--border); border-radius: 10px;
   background: var(--panel); color: inherit; text-decoration: none;
+}
+.gallery .media-chip {
+  position: absolute; top: 6px; right: 6px; padding: 2px 6px; border-radius: 999px;
+  background: rgba(13, 17, 23, .78); color: #fff; font-size: 10px; font-weight: 600;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+.gallery .card.no-poster img { visibility: hidden; }
+.gallery .card.no-poster::before {
+  content: "▶ video"; position: absolute; left: 50%; top: 35%; transform: translate(-50%, -50%);
+  color: var(--muted); font-size: 12px; letter-spacing: .04em;
 }
 .gallery .card:hover { border-color: var(--accent); }
 .gallery img { display: block; width: 100%; aspect-ratio: 16 / 10; object-fit: cover; background: var(--panel-2); }
@@ -529,6 +540,63 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .stage.viewing canvas { cursor: grab; }
 .stage.viewing.panning canvas { cursor: grabbing !important; }
 
+/* Video bar: controls stay above the timeline, which has a full-duration overview and a
+   zoomable detail ruler with annotation markers. */
+.video-bar {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 5;
+  padding: 8px 12px 10px; background: rgba(13, 17, 23, .92);
+  border-top: 1px solid var(--border); backdrop-filter: blur(8px);
+}
+.video-controls { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.video-time {
+  min-width: 132px; color: var(--text); font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.video-speed {
+  height: 28px; padding: 0 6px; border-radius: 6px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+}
+.timeline { margin-top: 7px; }
+.timeline-overview {
+  position: relative; height: 10px; border-radius: 3px; overflow: hidden;
+  background: var(--panel-2); border: 1px solid var(--border-soft); cursor: pointer;
+}
+.timeline-window {
+  position: absolute; top: 0; bottom: 0; left: 0; width: 100%;
+  background: rgba(47, 129, 247, .22); border-left: 1px solid var(--accent);
+  border-right: 1px solid var(--accent); pointer-events: none; z-index: 1;
+}
+.timeline-overview-marks { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
+.timeline-overview-mark {
+  position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; opacity: .95;
+}
+.timeline-overview-band {
+  position: absolute; top: 2px; bottom: 2px; border-radius: 2px; opacity: .45;
+}
+.timeline-detail { position: relative; margin-top: 5px; }
+.timeline-marks {
+  position: absolute; left: 0; right: 0; top: -5px; height: 14px;
+  pointer-events: none; z-index: 2;
+}
+.timeline-mark {
+  position: absolute; top: 0; width: 6px; height: 13px; padding: 0;
+  border: 0; border-radius: 2px; transform: translateX(-3px); cursor: pointer;
+  pointer-events: auto; opacity: .8;
+}
+.timeline-mark.active { top: -2px; height: 17px; opacity: 1; box-shadow: 0 0 0 2px rgba(255,255,255,.35); }
+.timeline-range {
+  position: absolute; top: 4px; height: 5px; border-radius: 2px;
+  opacity: .38; pointer-events: none;
+}
+#video-seek { display: block; width: 100%; margin: 0; accent-color: var(--accent); }
+.timeline-ticks { position: relative; height: 13px; margin-top: 1px; }
+.timeline-tick {
+  position: absolute; top: 0; transform: translateX(-50%); white-space: nowrap;
+  color: var(--muted); font: 9px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums; pointer-events: none;
+}
+[data-theme="light"] .video-bar { background: rgba(255, 255, 255, .94); }
+
 .options {
   position: absolute; top: var(--stage-toolbar-top); left: 50%; transform: translateX(-50%);
   display: flex; align-items: center; gap: 4px; padding: 5px;
@@ -541,7 +609,7 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   background: transparent; border: 1px solid transparent; border-radius: 7px; color: var(--muted);
 }
 .tool:hover { background: var(--panel-3); color: var(--text); }
-.tool[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: #fff; }
+.tool[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
 .tool[disabled] { opacity: .35; cursor: not-allowed; }
 .tool[disabled]:hover { background: transparent; color: var(--muted); }
 .tool svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; }
@@ -630,10 +698,15 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 #note-text:focus { outline: 1px solid var(--accent); }
 .ann-row .label { min-width: 0; flex: 1; }
 .ann-row .label b { display: block; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ann-row .label span { color: var(--muted); font-size: 11px; }
+.ann-row .label span { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ann-row .del { background: transparent; border: 0; color: #64748b; padding: 3px; border-radius: 5px; opacity: 0; }
 .ann-row:hover .del { opacity: 1; }
 .ann-row .del:hover { color: var(--danger); background: rgba(225, 29, 72, .12); }
+.ann-row .end {
+  background: transparent; border: 0; color: var(--accent); padding: 3px;
+  border-radius: 5px; font-size: 12px; line-height: 1;
+}
+.ann-row .end:hover { background: var(--accent); color: #fff; }
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
 /* History rounds are a list of small, bounded rows — no dead space around them. */
 #history-list .history-row.live {

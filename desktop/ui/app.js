@@ -105,6 +105,44 @@ function clockTime(at) {
   return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 }
 
+/// MediaRecorder and some streamed WebMs report `Infinity` as duration until the browser seeks
+/// past the buffered end. Asking for a huge time makes Chromium compute the real value.
+function resolvedDuration(video) {
+  if (Number.isFinite(video.duration) && video.duration > 0) {
+    return Promise.resolve(video.duration);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener("durationchange", finish);
+      resolve(Number.isFinite(video.duration) ? video.duration : 0);
+    };
+    video.addEventListener("durationchange", finish);
+    try {
+      video.currentTime = 1e101;
+    } catch {
+      finish();
+    }
+    setTimeout(finish, 1500);
+  });
+}
+
+/// `mm:ss.mmm` (or `hh:mm:ss.mmm`) for video timecodes.
+function timecode(seconds) {
+  const total = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
+  const ms = total % 1000;
+  const totalSeconds = Math.floor(total / 1000);
+  const s = totalSeconds % 60;
+  const m = Math.floor(totalSeconds / 60) % 60;
+  const h = Math.floor(totalSeconds / 3600);
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  const mmm = String(ms).padStart(3, "0");
+  return h > 0 ? `${String(h).padStart(2, "0")}:${mm}:${ss}.${mmm}` : `${mm}:${ss}.${mmm}`;
+}
+
 /** History stamps are the UTC submission time with every ':' and '+' flattened to '-' by the store. */
 function stampTime(stamp) {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(String(stamp ?? ""));
@@ -1084,6 +1122,11 @@ class Editor {
     this.sessionId = root.dataset.sessionId;
     this.meta = null;
     this.image = null;
+    this.video = null;
+    this.videoBar = $("#video-bar");
+    this.videoWindow = { start: 0, end: 0 };
+    this.ghosts = true;
+    this.videoFrame = null;
     this.annotations = [];
     this.history = [];
     this.future = [];
@@ -1170,6 +1213,7 @@ class Editor {
     this.bindChrome();
     this.bindPanels();
     this.bindCanvas();
+    this.bindVideoBar();
     this.bindKeyboard();
     this.syncToolButtons();
     $("#color").value = this.color;
@@ -1273,7 +1317,7 @@ class Editor {
       this.renderHeader();
       this.loadHistory();
       this.startConversationPolling();
-      await this.loadImage(this.meta.image);
+      await this.loadMedia(this.meta);
       this.fit();
       this.render();
     } catch (error) {
@@ -1287,6 +1331,10 @@ class Editor {
   }
 
   loadImage(name) {
+    if (this.video) this.video.pause();
+    this.video = null;
+    if (this.videoBar) this.videoBar.hidden = true;
+    this.stage.classList.remove("video-mode");
     return new Promise((resolve) => {
       const image = new Image();
       image.onload = () => {
@@ -1301,6 +1349,268 @@ class Editor {
       // The URL is stable while the file behind it changes with every round, so the browser
       // would happily show the previous screenshot forever without a cache-buster.
       image.src = `/sessions/${encodeURIComponent(this.sessionId)}/image?v=${encodeURIComponent(name)}`;
+    });
+  }
+
+  get isVideo() {
+    return this.meta?.media?.kind === "video" && Boolean(this.video);
+  }
+
+  mediaWidth() {
+    return this.video?.videoWidth || this.image?.naturalWidth || 0;
+  }
+
+  mediaHeight() {
+    return this.video?.videoHeight || this.image?.naturalHeight || 0;
+  }
+
+  /// Load the session media: an image stays an Image, a video becomes an HTMLVideoElement drawn
+  /// into the same canvas. Video playback is muted in v1.
+  loadMedia(meta) {
+    if (meta?.media?.kind !== "video") return this.loadImage(meta?.image || "");
+    if (this.video) this.video.pause();
+    return new Promise((resolve) => {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = "auto";
+      video.onloadedmetadata = async () => {
+        // A MediaRecorder WebM only learns its duration after a seek; without this the whole
+        // timeline would collapse to a zero-length window.
+        const duration = await resolvedDuration(video);
+        video.currentTime = 0;
+        this.image = video;
+        this.video = video;
+        this.videoWindow = { start: 0, end: duration };
+        this.bindVideo(video);
+        resolve();
+      };
+      video.onerror = () => {
+        this.image = null;
+        this.video = null;
+        this.showStageMessage("Video missing", "Could not play this video (unsupported codec?).");
+        resolve();
+      };
+      video.src = `/sessions/${encodeURIComponent(this.sessionId)}/media?v=${encodeURIComponent(meta.image)}`;
+    });
+  }
+
+  bindVideo(video) {
+    const draw = () => { if (this.video === video) this.render(); };
+    video.addEventListener("seeked", draw);
+    video.addEventListener("timeupdate", () => {
+      this.syncVideoBar();
+      draw();
+    });
+    video.addEventListener("play", () => { this.syncVideoBar(); this.frameLoop(); });
+    video.addEventListener("pause", () => this.syncVideoBar());
+    video.addEventListener("loadedmetadata", () => {
+      this.videoWindow = { start: 0, end: video.duration || 0 };
+      this.syncVideoBar();
+    });
+    this.syncVideoBar();
+  }
+
+  frameLoop() {
+    if (!this.video || this.video.paused) return;
+    this.render();
+    if (this.video.requestVideoFrameCallback) {
+      this.videoFrame = this.video.requestVideoFrameCallback(() => this.frameLoop());
+    } else {
+      this.videoFrame = requestAnimationFrame(() => this.frameLoop());
+    }
+  }
+
+  syncVideoBar() {
+    const bar = this.videoBar;
+    if (!bar) return;
+    const video = this.video;
+    bar.hidden = !video;
+    this.stage.classList.toggle("video-mode", Boolean(video));
+    if (!video) return;
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    const window = this.videoWindow;
+    const span = Math.max(0.001, window.end - window.start);
+    const seek = $("#video-seek");
+    if (seek) {
+      seek.min = String(window.start);
+      seek.max = String(window.end);
+      seek.step = "0.001";
+      seek.value = String(Math.min(window.end, Math.max(window.start, video.currentTime)));
+    }
+    const time = $("#video-time");
+    if (time) time.textContent = `${timecode(video.currentTime)} / ${timecode(duration)}`;
+    const play = $("#video-play");
+    if (play) {
+      play.setAttribute("aria-label", video.paused ? "Play video" : "Pause video");
+      play.textContent = video.paused ? "▶" : "❚❚";
+    }
+    const speed = $("#video-speed");
+    if (speed) speed.value = String(video.playbackRate || 1);
+    const overview = $("#timeline-window");
+    if (overview && duration > 0) {
+      overview.style.left = `${(window.start / duration) * 100}%`;
+      overview.style.width = `${(span / duration) * 100}%`;
+    }
+    this.renderTimelineMarks();
+    this.renderTimelineTicks();
+  }
+
+  /// A ruler under the detail slider. The step follows the zoom window, so a 1 s window shows
+  /// tenths and a 10 min window shows minutes.
+  renderTimelineTicks() {
+    const ticks = $("#timeline-ticks");
+    if (!ticks || !this.video) return;
+    const { start, end } = this.videoWindow;
+    const span = end - start;
+    if (!(span > 0.01)) {
+      ticks.innerHTML = "";
+      return;
+    }
+    const steps = [0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800];
+    const step = steps.find((candidate) => span / candidate <= 5) || 3600;
+    const first = Math.ceil((start - 1e-9) / step) * step;
+    const labels = [];
+    for (let at = first; at <= end + 1e-6; at += step) {
+      const left = ((at - start) / span) * 100;
+      const short = step < 1
+        ? timecode(at).replace(/^0?(\d+):(\d{2})\.\d(\d{2})$/, (_, m, s, tenth) => `${m}:${s}.${tenth}`)
+        : timecode(at).replace(/\.\d+$/, "");
+      // Keep the edge labels inside the bar: half a label hanging over the end reads clipped.
+      const place = left < 2
+        ? "left:0;transform:none"
+        : left > 98
+          ? "left:100%;transform:translateX(-100%)"
+          : `left:${left}%;transform:translateX(-50%)`;
+      labels.push(`<span class="timeline-tick" style="${place}">${escapeHtml(short)}</span>`);
+    }
+    ticks.innerHTML = labels.join("");
+  }
+
+  renderTimelineMarks() {
+    const layer = $("#timeline-marks");
+    if (!layer) return;
+    const window = this.videoWindow;
+    const span = Math.max(0.001, window.end - window.start);
+    layer.innerHTML = this.annotations
+      .map((annotation, index) => {
+        if (typeof annotation.at !== "number") return "";
+        if (annotation.at < window.start || annotation.at > window.end) return "";
+        const at = annotation.at;
+        const left = ((at - window.start) / span) * 100;
+        const active = Math.abs((this.video?.currentTime || 0) - at) < 0.2;
+        const hasRange = typeof annotation.until === "number" && annotation.until > at;
+        const range = hasRange
+          ? `<span class="timeline-range" style="left:${left}%;width:${
+            (Math.min(window.end, annotation.until) - at) / span * 100
+          }%;background:${escapeHtml(annotation.color || "#e11d48")}"></span>`
+          : "";
+        return `${range}<button class="timeline-mark${active ? " active" : ""}" data-mark="${index}"
+          style="left:${left}%;background:${escapeHtml(annotation.color || "#e11d48")}"
+          title="${escapeHtml(timecode(at))}${hasRange ? `–${escapeHtml(timecode(annotation.until))}` : ""} · annotation ${index + 1}"
+          aria-label="Seek to annotation ${index + 1} at ${escapeHtml(timecode(at))}"></button>`;
+      })
+      .join("");
+
+    // The overview always shows every annotation, even when the zoomed window has moved away
+    // from it: the strip is the map of the whole clip.
+    const overview = $("#timeline-overview-marks");
+    if (!overview) return;
+    const duration = Number.isFinite(this.video?.duration) ? this.video.duration : 0;
+    overview.innerHTML = duration > 0
+      ? this.annotations.map((annotation) => {
+        if (typeof annotation.at !== "number") return "";
+        const color = escapeHtml(annotation.color || "#e11d48");
+        const left = (annotation.at / duration) * 100;
+        const hasRange = typeof annotation.until === "number" && annotation.until > annotation.at;
+        const band = hasRange
+          ? `<span class="timeline-overview-band" style="left:${left}%;width:${
+            (Math.min(duration, annotation.until) - annotation.at) / duration * 100
+          }%;background:${color}"></span>`
+          : "";
+        return `${band}<span class="timeline-overview-mark" style="left:${left}%;background:${color}"></span>`;
+      }).join("")
+      : "";
+  }
+
+  seekTo(seconds, selectIndex = -1) {
+    if (!this.video) return;
+    this.video.currentTime = Math.min(this.video.duration || 0, Math.max(0, seconds));
+    if (selectIndex >= 0) this.select(selectIndex);
+    this.syncVideoBar();
+    this.render();
+  }
+
+  zoomTimeline(factor, center) {
+    if (!this.video) return;
+    const duration = this.video.duration || 0;
+    const window = this.videoWindow;
+    const span = Math.max(0.1, window.end - window.start);
+    const next = Math.min(duration, Math.max(0.25, span * factor));
+    const anchor = center ?? this.video.currentTime ?? window.start;
+    let start = anchor - ((anchor - window.start) / span) * next;
+    start = Math.max(0, Math.min(duration - next, start));
+    this.videoWindow = { start, end: start + next };
+    this.syncVideoBar();
+    this.render();
+  }
+
+  bindVideoBar() {
+    const play = $("#video-play");
+    play?.addEventListener("click", () => {
+      if (!this.video) return;
+      if (this.video.paused) this.video.play().catch(() => {});
+      else this.video.pause();
+    });
+    const step = (direction) => {
+      if (!this.video) return;
+      const fps = Number(this.meta?.media?.fps) || 30;
+      this.seekTo(this.video.currentTime + direction / fps);
+    };
+    $("#video-step-back")?.addEventListener("click", () => step(-1));
+    $("#video-step-forward")?.addEventListener("click", () => step(1));
+    $("#video-speed")?.addEventListener("change", (event) => {
+      if (this.video) this.video.playbackRate = Number(event.target.value) || 1;
+    });
+    const ghosts = $("#video-ghosts");
+    ghosts?.addEventListener("click", () => {
+      this.ghosts = !this.ghosts;
+      ghosts.setAttribute("aria-pressed", String(this.ghosts));
+      this.render();
+    });
+    $("#timeline-zoom-in")?.addEventListener("click", () => this.zoomTimeline(1 / 1.6));
+    $("#timeline-zoom-out")?.addEventListener("click", () => this.zoomTimeline(1.6));
+    $("#timeline-fit")?.addEventListener("click", () => {
+      if (!this.video) return;
+      this.videoWindow = { start: 0, end: this.video.duration || 0 };
+      this.syncVideoBar();
+      this.render();
+    });
+    $("#video-seek")?.addEventListener("input", (event) => {
+      if (this.video) this.seekTo(Number(event.target.value));
+    });
+    $("#video-timeline")?.addEventListener("wheel", (event) => {
+      if (!this.video) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const at = this.videoWindow.start
+        + ((event.clientX - rect.left) / Math.max(1, rect.width))
+          * (this.videoWindow.end - this.videoWindow.start);
+      this.zoomTimeline(event.deltaY < 0 ? 1 / 1.2 : 1.2, at);
+    }, { passive: false });
+    $("#timeline-overview")?.addEventListener("click", (event) => {
+      if (!this.video || !this.video.duration) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      this.seekTo(((event.clientX - rect.left) / Math.max(1, rect.width)) * this.video.duration);
+    });
+    $("#timeline-marks")?.addEventListener("click", (event) => {
+      const mark = event.target.closest("[data-mark]");
+      if (!mark) return;
+      event.stopPropagation();
+      const index = Number(mark.dataset.mark);
+      const at = this.annotations[index]?.at;
+      if (typeof at === "number") this.seekTo(at, index);
     });
   }
 
@@ -1617,6 +1927,28 @@ class Editor {
       }
       if (typing(event)) return;
 
+      // Video transport, matching the usual editor keys. Drawing tools keep their letters.
+      if (this.video && !meta) {
+        const key = event.key.toLowerCase();
+        if (key === "k") {
+          event.preventDefault();
+          if (this.video.paused) this.video.play().catch(() => {});
+          else this.video.pause();
+          return;
+        }
+        if (key === "j" || key === "l") {
+          event.preventDefault();
+          this.seekTo(this.video.currentTime + (key === "j" ? -1 : 1));
+          return;
+        }
+        if (key === "," || key === ".") {
+          event.preventDefault();
+          const fps = Number(this.meta?.media?.fps) || 30;
+          this.seekTo(this.video.currentTime + (key === "," ? -1 : 1) / fps);
+          return;
+        }
+      }
+
       const map = { v: "select", r: "rect", e: "ellipse", a: "arrow", p: "pen" };
       if (map[event.key.toLowerCase()] && !meta) {
         this.setTool(map[event.key.toLowerCase()]);
@@ -1707,11 +2039,16 @@ class Editor {
 
   fit() {
     if (!this.image) return;
+    const width = this.mediaWidth();
+    const height = this.mediaHeight();
+    if (!width || !height) return;
     const rect = this.stage.getBoundingClientRect();
-    const scale = Math.min(rect.width / this.image.naturalWidth, rect.height / this.image.naturalHeight) * 0.94;
+    const bar = this.videoBar && !this.videoBar.hidden ? this.videoBar.offsetHeight + 8 : 0;
+    const available = Math.max(80, rect.height - bar);
+    const scale = Math.min(rect.width / width, available / height) * 0.94;
     this.view.scale = clamp(scale, 0.05, 8);
-    this.view.x = (rect.width - this.image.naturalWidth * this.view.scale) / 2;
-    this.view.y = (rect.height - this.image.naturalHeight * this.view.scale) / 2;
+    this.view.x = (rect.width - width * this.view.scale) / 2;
+    this.view.y = (available - height * this.view.scale) / 2;
     this.view.fitted = true;
     this.updateZoomLabel();
     this.render();
@@ -1752,6 +2089,25 @@ class Editor {
 
   // ---------------------------------------------------------- rendering
 
+  /// Annotation visibility at the current video time: the current moment is full, other moments
+  /// are faint ghosts that fade in as their time approaches. Images always render at full.
+  annotationOpacity(annotation, index) {
+    if (!this.isVideo || !this.video) return 1;
+    if (this.selected.has(index)) return 1;
+    if (typeof annotation.at !== "number") return 1;
+    const current = this.video.currentTime || 0;
+    const at = annotation.at;
+    const until = typeof annotation.until === "number" ? Math.max(at, annotation.until) : null;
+    const distance = until !== null && current >= at && current <= until
+      ? 0
+      : until !== null
+        ? (current < at ? at - current : current - until)
+        : Math.abs(current - at);
+    const opacity = Math.max(0.12, 1 - distance / 0.35);
+    if (!this.ghosts && opacity < 0.99) return 0;
+    return opacity;
+  }
+
   render() {
     if (!this.dpr) this.resize();
     const { ctx, canvas } = this;
@@ -1767,10 +2123,19 @@ class Editor {
     ctx.drawImage(this.image, 0, 0);
 
     this.annotations.forEach((annotation, index) => {
+      const opacity = this.annotationOpacity(annotation, index);
+      if (!opacity) return;
+      ctx.globalAlpha = opacity;
       this.paint(ctx, annotation, this.selected.has(index));
+      ctx.globalAlpha = 1;
     });
     this.annotations.forEach((annotation, index) => {
-      if (annotation.type !== "text") this.paintBadge(ctx, annotation, index + 1, 12 / this.view.scale, 2 / this.view.scale);
+      if (annotation.type === "text") return;
+      const opacity = this.annotationOpacity(annotation, index);
+      if (!opacity) return;
+      ctx.globalAlpha = opacity;
+      this.paintBadge(ctx, annotation, index + 1, 12 / this.view.scale, 2 / this.view.scale);
+      ctx.globalAlpha = 1;
     });
     if (this.draw) this.paint(ctx, this.draw, false);
     ctx.restore();
@@ -2173,7 +2538,11 @@ class Editor {
       if (!this.image || this.locked) return;
       // The options bar, the inline text editor and the "back to current" pill live inside the
       // stage. Capturing the pointer for marquee/pan on those would swallow their click events.
-      if (event.target.closest(".options, .text-editor, .viewing-bar")) return;
+      if (event.target.closest(".options, .text-editor, .viewing-bar, .video-bar")) return;
+
+      // Drawing on a moving video would capture a different frame than the one the human saw;
+      // any canvas interaction pauses first. The play button resumes.
+      if (this.isVideo && this.video && !this.video.paused) this.video.pause();
 
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 2) {
@@ -2328,6 +2697,9 @@ class Editor {
         this.draw = null;
         const width = Math.abs(drawing.end.x - drawing.start.x);
         const height = Math.abs(drawing.end.y - drawing.start.y);
+        const at = this.isVideo && this.video
+          ? { at: Number(this.video.currentTime.toFixed(3)) }
+          : {};
         if (drawing.type === "pen" && drawing.points.length > 1) {
           this.mutate(() => {
             this.annotations.push({
@@ -2336,6 +2708,7 @@ class Editor {
               color: drawing.color,
               width: drawing.width,
               points: drawing.points.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+              ...at,
             });
           });
         } else if (drawing.type === "rect" && (width > 2 || height > 2)) {
@@ -2347,6 +2720,7 @@ class Editor {
               width: drawing.width,
               start: { x: Math.round(drawing.start.x), y: Math.round(drawing.start.y) },
               end: { x: Math.round(drawing.end.x), y: Math.round(drawing.end.y) },
+              ...at,
             });
           });
         } else if (drawing.type === "ellipse" && (width > 2 || height > 2)) {
@@ -2358,6 +2732,7 @@ class Editor {
               width: drawing.width,
               start: { x: Math.round(drawing.start.x), y: Math.round(drawing.start.y) },
               end: { x: Math.round(drawing.end.x), y: Math.round(drawing.end.y) },
+              ...at,
             });
           });
         } else if (drawing.type === "arrow" && Math.hypot(width, height) > 4) {
@@ -2369,6 +2744,7 @@ class Editor {
               width: drawing.width,
               start: { x: Math.round(drawing.start.x), y: Math.round(drawing.start.y) },
               end: { x: Math.round(drawing.end.x), y: Math.round(drawing.end.y) },
+              ...at,
             });
           });
         }
@@ -2460,6 +2836,9 @@ class Editor {
         return;
       }
       if (text) {
+        const at = this.isVideo && this.video
+          ? { at: Number(this.video.currentTime.toFixed(3)) }
+          : {};
         this.mutate(() => {
           this.annotations.push({
             id: uid(),
@@ -2469,6 +2848,7 @@ class Editor {
             y: Math.round(point.y),
             size: this.textSize,
             text,
+            ...at,
           });
         });
       }
@@ -2511,9 +2891,13 @@ class Editor {
         const label = String(
           annotation.note || annotation.text || `${annotation.type}`,
         );
+        const at = typeof annotation.at === "number" ? timecode(annotation.at) : "";
+        const until = typeof annotation.until === "number" ? `–${timecode(annotation.until)}` : "";
         return `<div class="ann-row readonly">
           <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
-          <span class="label"><b>${escapeHtml(label)}</b><span>${escapeHtml(annotation.type)}</span></span>
+          <span class="label"><b>${escapeHtml(label)}</b><span>${escapeHtml(annotation.type)}${
+            at ? ` · ${escapeHtml(at + until)}` : ""
+          }</span></span>
         </div>`;
       }).join("") || `<div class="inspector-empty">No annotations in this round.</div>`;
       return;
@@ -2563,22 +2947,63 @@ class Editor {
             ? `freehand · ${annotation.points?.length || 0} points`
             : `${Math.round(annotation.start?.x ?? 0)}, ${Math.round(annotation.start?.y ?? 0)}`;
       const note = String(annotation.note || "").trim();
-      const meta = note ? escapeHtml(note) : annotation.type;
+      const primary = note ? escapeHtml(note) : label;
+      const at = typeof annotation.at === "number" ? timecode(annotation.at) : "";
+      const until = typeof annotation.until === "number" ? `–${timecode(annotation.until)}` : "";
+      const range = at ? `${at}${until}` : "";
+      const meta = `${annotation.type}${annotation.group ? " · group" : ""}${
+        range ? ` · ${range}` : ""
+      }`;
+      const rangeButton = this.isVideo && at
+        ? `<button class="end" data-end="${index}" aria-label="${
+          typeof annotation.until === "number" ? "Clear range end" : "Set range end at the current time"
+        }" title="${
+          typeof annotation.until === "number" ? "Clear the range end" : "Set the range end to the current time"
+        }">${typeof annotation.until === "number" ? "×" : "⏱"}</button>`
+        : "";
       return `
         <div class="ann-row" data-index="${index}" aria-current="${this.selected.has(index)}">
           <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
-          <span class="label"><b>${label}</b><span>${meta}${annotation.group ? " · group" : ""}</span></span>
+          <span class="label"><b title="${primary}">${primary}</b><span>${escapeHtml(meta)}</span></span>
+          ${rangeButton}
           <button class="del" data-delete="${index}" title="Delete">✕</button>
         </div>`;
     }).join("");
 
     $$(".ann-row", body).forEach((row) => {
       row.addEventListener("click", (event) => {
-        if (event.target.dataset.delete !== undefined) return;
+        if (event.target.dataset.delete !== undefined || event.target.dataset.end !== undefined) return;
         const index = Number(row.dataset.index);
         const additive = event.shiftKey || event.ctrlKey || event.metaKey;
         this.selectAt(index, additive);
-        if (!additive) this.revealSelection();
+        if (!additive) {
+          if (this.isVideo && typeof this.annotations[index].at === "number") {
+            this.seekTo(this.annotations[index].at, index);
+          } else {
+            this.revealSelection();
+          }
+        }
+      });
+    });
+    $$(".end", body).forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const index = Number(button.dataset.end);
+        const annotation = this.annotations[index];
+        if (!this.video || !annotation) return;
+        this.mutate(() => {
+          if (typeof annotation.until === "number") {
+            delete annotation.until;
+            return;
+          }
+          const at = annotation.at || 0;
+          const duration = Number(this.video.duration) || at + 1;
+          let end = Math.max(this.video.currentTime, at + 0.04);
+          // Clicking the range button while parked on the annotation would otherwise stamp a
+          // zero-length range that the agent cannot use. Give it a second of video.
+          if (end - at < 0.05) end = at + 1;
+          annotation.until = Number(Math.min(duration, end).toFixed(3));
+        });
       });
     });
     $$(".del", body).forEach((button) => {
@@ -2591,6 +3016,7 @@ class Editor {
         });
       });
     });
+    if (this.video) this.renderTimelineMarks();
   }
 
   revealSelection() {
@@ -2734,7 +3160,7 @@ class Editor {
         const composer = $("#composer-text");
         if (composer) composer.value = draft.prompt || "";
       }
-      await this.loadImage(this.meta.image);
+      await this.loadMedia(this.meta);
       this.selected.clear();
       this.renderHeader();
       this.renderInspector();
@@ -2837,7 +3263,7 @@ class Editor {
         this.history = [];
         this.future = [];
         this.ghosts = null;
-        await this.loadImage(this.meta.image);
+        await this.loadMedia(this.meta);
         this.fit();
         this.render();
         this.renderInspector();
@@ -3069,8 +3495,8 @@ class Editor {
     button.textContent = "Submitting…";
     try {
       const exportCanvas = document.createElement("canvas");
-      exportCanvas.width = this.image.naturalWidth;
-      exportCanvas.height = this.image.naturalHeight;
+      exportCanvas.width = this.mediaWidth();
+      exportCanvas.height = this.mediaHeight();
       const ctx = exportCanvas.getContext("2d");
       ctx.drawImage(this.image, 0, 0);
       for (const annotation of this.annotations) this.paint(ctx, annotation, false);
@@ -3081,8 +3507,8 @@ class Editor {
       const composer = $("#composer-text");
       const payload = {
         annotations: this.annotations,
-        width: this.image.naturalWidth,
-        height: this.image.naturalHeight,
+        width: this.mediaWidth(),
+        height: this.mediaHeight(),
         png: exportCanvas.toDataURL("image/png"),
         note: composer ? composer.value.trim() : "",
       };
@@ -3247,26 +3673,60 @@ const NewReview = {
     const drop = $("#drop");
     const file = $("#file");
     const preview = $("#drop-preview");
+    const videoPreview = $("#drop-video-preview");
     const label = $("#drop-label");
     let picked = null;
+    let pickedKind = null;
     let previewUrl = null;
+    const clearPreview = () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+      preview.hidden = true;
+      preview.removeAttribute("src");
+      if (videoPreview) {
+        videoPreview.pause();
+        videoPreview.hidden = true;
+        videoPreview.removeAttribute("src");
+      }
+    };
     const take = (candidate) => {
-      if (!candidate || !candidate.type.startsWith("image/")) {
-        $("#new-error").textContent = "That is not an image.";
+      const kind = candidate?.type.startsWith("video/")
+        ? "video"
+        : candidate?.type.startsWith("image/") ? "image" : null;
+      if (!kind) {
+        $("#new-error").textContent = "That is not an image or video.";
         return;
       }
       picked = candidate;
-      // Show the image itself: a filename and a size say nothing about what was captured.
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      pickedKind = kind;
+      clearPreview();
       previewUrl = URL.createObjectURL(candidate);
-      preview.src = previewUrl;
-      preview.hidden = false;
-      drop.classList.add("has-image");
-      label.textContent = `${candidate.name || "pasted image"} — ${Math.round(candidate.size / 1024)} KB · click to replace`;
+      const name = candidate.name || (kind === "video" ? "pasted video" : "pasted image");
+      const size = `${Math.round(candidate.size / 1024 / 1024 * 10) / 10} MB`;
+      if (kind === "video") {
+        if (videoPreview) {
+          videoPreview.src = previewUrl;
+          videoPreview.hidden = false;
+          videoPreview.addEventListener("loadedmetadata", () => {
+            if (videoPreview.videoWidth > 1920 && !label.textContent.includes("4K")) {
+              label.textContent += " · 4K — 1080p recommended";
+            }
+          }, { once: true });
+        }
+        drop.classList.add("has-image");
+        label.textContent = `${name} — ${size} · video · click to replace`;
+      } else {
+        preview.src = previewUrl;
+        preview.hidden = false;
+        drop.classList.add("has-image");
+        label.textContent = `${name} — ${Math.round(candidate.size / 1024)} KB · click to replace`;
+      }
       const title = $("#f-title");
       if (!title.value) {
-        const name = (candidate.name || "").replace(/\.[^.]+$/, "");
-        title.value = !name || name === "image" ? "Pasted screenshot" : name;
+        const stem = name.replace(/\.[^.]+$/, "");
+        title.value = !stem || stem === "image"
+          ? (kind === "video" ? "Pasted video" : "Pasted screenshot")
+          : stem;
       }
     };
     drop.addEventListener("click", () => file.click());
@@ -3280,8 +3740,9 @@ const NewReview = {
     );
     addEventListener("paste", (event) => {
       const items = [...(event.clipboardData?.items || [])];
-      const image = items.find((item) => item.type.startsWith("image/"));
-      const file = image?.getAsFile?.();
+      const media = items.find((item) =>
+        item.type.startsWith("image/") || item.type.startsWith("video/"));
+      const file = media?.getAsFile?.();
       if (!file) return;
       event.preventDefault();
       if (overlay.hidden) NewReview.open();
@@ -3295,6 +3756,47 @@ const NewReview = {
       if (overlay.hidden) NewReview.open();
       take(event.dataTransfer.files[0]);
     });
+    /// Read duration/dimensions and render the first frame as the poster before uploading.
+    const videoDetails = async () => {
+      let video = videoPreview;
+      let owned = false;
+      if (!video || !video.src) {
+        video = document.createElement("video");
+        video.muted = true;
+        video.src = URL.createObjectURL(picked);
+        owned = true;
+      }
+      if (!video.videoWidth || video.readyState < 2) {
+        await new Promise((resolve, reject) => {
+          video.onloadeddata = resolve;
+          video.onerror = () => reject(new Error("Could not read this video."));
+          video.load();
+        });
+      }
+      const duration = await resolvedDuration(video);
+      if (duration > 300) {
+        throw new Error("Video is longer than the 5 minute review limit. Trim the clip first.");
+      }
+      if (video.currentTime !== 0) {
+        await new Promise((resolve) => {
+          video.onseeked = resolve;
+          video.currentTime = 0;
+        });
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      const poster = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      const details = {
+        width: video.videoWidth,
+        height: video.videoHeight,
+        duration,
+        poster,
+      };
+      if (owned) URL.revokeObjectURL(video.src);
+      return details;
+    };
     $("#new-cancel").addEventListener("click", () => NewReview.close());
     $("#new-close")?.addEventListener("click", () => NewReview.close());
     $("#f-title")?.addEventListener("input", () => NewReview.suggestBranch());
@@ -3339,6 +3841,35 @@ const NewReview = {
         return;
       }
       $("#new-error").textContent = "Uploading…";
+      if (pickedKind === "video") {
+        try {
+          if (picked.size > 250 * 1024 * 1024) {
+            throw new Error("Video is larger than the 250 MB limit.");
+          }
+          const details = await videoDetails();
+          const form = new FormData();
+          form.append("video", picked, picked.name || "video.mp4");
+          if (details.poster) form.append("poster", details.poster, "poster.png");
+          form.append("title", $("#f-title").value.trim() || picked.name || "Video review");
+          form.append("url", pageUrl);
+          form.append("note", $("#f-note").value.trim());
+          form.append("project", project);
+          form.append("agent", "human");
+          if (details.duration > 0) {
+            form.append("duration_ms", String(Math.round(details.duration * 1000)));
+          }
+          form.append("width", String(details.width));
+          form.append("height", String(details.height));
+          if (branch) form.append("branch", branch);
+          const body = await api("/api/sessions/video", { method: "POST", body: form });
+          lastProject.remember(body.meta.project);
+          location.href = `/s/${encodeURIComponent(body.meta.id)}`;
+        } catch (error) {
+          $("#new-error").textContent = error.message;
+          submit.disabled = false;
+        }
+        return;
+      }
       try {
         const dataUrl = await new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -3389,9 +3920,14 @@ function renderGallery(rail) {
   box.hidden = false;
   box.innerHTML = sessions.map((session) => {
     const project = names.get(session.project || "inbox") || (session.project || "Inbox");
+    const video = session.media?.kind === "video";
+    const length = video && session.media?.duration_ms
+      ? timecode(session.media.duration_ms / 1000).replace(/\.\d+$/, "")
+      : "";
     return `<a class="card" data-session="${escapeHtml(session.id)}"
       href="/s/${encodeURIComponent(session.id)}">
       <img src="/sessions/${encodeURIComponent(session.id)}/image" loading="lazy" alt="" />
+      ${video ? `<span class="media-chip">▶${length ? ` ${escapeHtml(length)}` : ""}</span>` : ""}
       <div class="card-body">
         <b>${escapeHtml(session.title || session.id)}</b>
         <span>${escapeHtml(project)} · ${escapeHtml(relativeTime(session.submitted_at || session.created_at))} · ${escapeHtml(
@@ -3400,6 +3936,17 @@ function renderGallery(rail) {
       </div>
     </a>`;
   }).join("");
+  // An agent-supplied video may have no poster; hide the broken-image glyph instead of showing
+  // it on the card.
+  $$("img", box).forEach((img) => {
+    const mark = () => {
+      if (img.complete && img.naturalWidth === 0) {
+        img.closest(".card")?.classList.add("no-poster");
+      }
+    };
+    img.addEventListener("error", mark, { once: true });
+    mark();
+  });
 }
 
 async function bootList() {

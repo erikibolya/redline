@@ -284,6 +284,17 @@ async fn video_sessions_are_created_and_served_with_range_requests() {
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&bytes[..], &MP4[..4]);
 
+    // A range past the end is a 416, not a whole-file 200: a player must not mistake a bad seek
+    // for success and decode from the wrong offset.
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/media"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("range", "bytes=999999-")
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+
     let (status, _, _) = send(&h.app, authed("POST", "/api/sessions", payload(false))).await;
     assert_eq!(status, StatusCode::OK);
     let (status, _, body) = send(
@@ -299,6 +310,47 @@ async fn video_sessions_are_created_and_served_with_range_requests() {
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn video_sessions_accept_a_multipart_browser_upload() {
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nMultipart video\r\n",
+    );
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"duration_ms\"\r\n\r\n5000\r\n",
+    );
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"width\"\r\n\r\n1280\r\n",
+    );
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"height\"\r\n\r\n720\r\n",
+    );
+    body.extend_from_slice(b"--BOUND\r\nContent-Disposition: form-data; name=\"video\"; filename=\"clip.mp4\"\r\nContent-Type: video/mp4\r\n\r\n");
+    body.extend_from_slice(MP4);
+    body.extend_from_slice(b"\r\n--BOUND--\r\n");
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/sessions/video")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "multipart/form-data; boundary=BOUND")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, created) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["meta"]["media"]["kind"], "video");
+    assert_eq!(created["meta"]["media"]["width"], 1280);
+    let id = created["meta"]["id"].as_str().unwrap();
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/media"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
 }
 
 #[tokio::test]

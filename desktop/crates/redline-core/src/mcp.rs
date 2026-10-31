@@ -383,6 +383,15 @@ async fn review_video(ctx: &McpContext<'_>, args: &Value) -> Result<Value, Strin
         }
         (None, Some(path)) => {
             let path = std::path::PathBuf::from(&path);
+            let size = std::fs::metadata(&path)
+                .map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
+                .len();
+            if size as usize > crate::MAX_VIDEO_BYTES {
+                return Err(format!(
+                    "video is larger than {} MB",
+                    crate::MAX_VIDEO_BYTES / (1024 * 1024)
+                ));
+            }
             std::fs::read(&path).map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
         }
         (None, None) => return Err("provide video_base64 or video_path".to_string()),

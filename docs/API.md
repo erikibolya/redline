@@ -129,6 +129,21 @@ Annotations may carry `at` (seconds) and optional `until`; `review.md` prints `m
 MCP clients can use `review_video` instead of `review_screenshot`; `get_feedback` includes
 `media` and `video_url`.
 
+### `POST /api/sessions/video` (browser multipart)
+
+The New review dialog uploads a video as `multipart/form-data`:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `video` (or `file`) | yes | MP4/WebM bytes |
+| `poster` | no | first-frame PNG/JPEG for the rail/gallery card |
+| `title`, `note`, `url`, `project`, `branch`, `agent` | no | same as `POST /api/sessions` |
+| `duration_ms`, `width`, `height`, `fps` | no | metadata read by the browser |
+
+Limits: 250 MB per video, 5 minutes when `duration_ms` is sent, 8 MB poster. Magic bytes decide
+the container (HEIC/AVIF image brands are rejected); the uploaded filename never becomes the path.
+Response is the same `{meta, review_url, dir}` shape as `POST /api/sessions`.
+
 ### `GET /sessions/<id>/annotated.png`
 
 The last submitted annotated PNG. `404` before the first submission (or when the client did not

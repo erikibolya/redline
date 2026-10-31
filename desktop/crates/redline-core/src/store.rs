@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 use crate::model::{
     Annotation, AnnotationSet, ImageRef, MediaKind, MediaRef, Meta, Status, Submission,
 };
+use crate::MAX_VIDEO_BYTES;
 
 /// Same rule as v0.1: one leading alphanumeric, then alphanumerics/`.`/`_`/`-`, max 121 chars.
 /// This is what stops `../` and friends from escaping the sessions directory.
@@ -148,7 +149,12 @@ fn image_extension(name: &str) -> &'static str {
 /// Video format by magic bytes, not by the uploaded name (which never reaches the filename).
 fn video_extension(bytes: &[u8]) -> Option<&'static str> {
     if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
-        Some("mp4")
+        // HEIC/AVIF share the ISO-BMFF box layout but are still images; a poster mislabelled as
+        // a video would create a session that cannot play.
+        match &bytes[8..12] {
+            b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" | b"avif" | b"avis" => None,
+            _ => Some("mp4"),
+        }
     } else if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
         Some("webm")
     } else {
@@ -880,6 +886,23 @@ impl Store {
         if video.is_empty() {
             return Err(Error::BadRequest("empty video".to_string()));
         }
+        if video.len() > MAX_VIDEO_BYTES {
+            return Err(Error::BadRequest(format!(
+                "video is larger than {} MB",
+                MAX_VIDEO_BYTES / (1024 * 1024)
+            )));
+        }
+        if poster.is_some_and(|bytes| bytes.len() > crate::MAX_POSTER_BYTES) {
+            return Err(Error::BadRequest(format!(
+                "poster is larger than {} MB",
+                crate::MAX_POSTER_BYTES / (1024 * 1024)
+            )));
+        }
+        if duration_ms.is_some_and(|duration| duration > crate::MAX_VIDEO_DURATION_MS) {
+            return Err(Error::BadRequest(
+                "video is longer than the 5 minute limit".to_string(),
+            ));
+        }
         let extension = video_extension(video).ok_or_else(|| {
             Error::BadRequest("unsupported video format (MP4 or WebM)".to_string())
         })?;
@@ -973,9 +996,25 @@ impl Store {
         height: Option<u32>,
         fps: Option<f64>,
     ) -> Result<Meta> {
+        let size = fs::metadata(video)?.len();
+        if size as usize > MAX_VIDEO_BYTES {
+            return Err(Error::BadRequest(format!(
+                "video is larger than {} MB",
+                MAX_VIDEO_BYTES / (1024 * 1024)
+            )));
+        }
         let bytes = fs::read(video)?;
         let poster_bytes = match poster {
-            Some(path) => Some(fs::read(path)?),
+            Some(path) => {
+                let size = fs::metadata(path)?.len();
+                if size as usize > crate::MAX_POSTER_BYTES {
+                    return Err(Error::BadRequest(format!(
+                        "poster is larger than {} MB",
+                        crate::MAX_POSTER_BYTES / (1024 * 1024)
+                    )));
+                }
+                Some(fs::read(path)?)
+            }
             None => None,
         };
         let title = if title.is_empty() {

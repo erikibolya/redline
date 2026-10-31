@@ -58,6 +58,20 @@ function makePng(width = 1440, height = 900) {
   ]).toString("base64");
 }
 
+/** `mm:ss.mmm`, the same rendering as app.js `timecode()`; the inspector must print it. */
+function timecodeText(seconds) {
+  const total = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
+  const ms = total % 1000;
+  const totalSeconds = Math.floor(total / 1000);
+  const s = totalSeconds % 60;
+  const m = Math.floor(totalSeconds / 60) % 60;
+  const h = Math.floor(totalSeconds / 3600);
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  const mmm = String(ms).padStart(3, "0");
+  return h > 0 ? `${String(h).padStart(2, "0")}:${mm}:${ss}.${mmm}` : `${mm}:${ss}.${mmm}`;
+}
+
 const results = [];
 function check(name, condition, detail = "") {
   results.push({ name, ok: Boolean(condition), detail });
@@ -2182,6 +2196,227 @@ const main = async () => {
     .$eval('.session[aria-current="true"] .sub .branch', (el) => el.textContent.trim())
     .catch(() => "");
   check("the rail shows that feature branch", railBranch === newBranch, `${railBranch} vs ${newBranch}`);
+
+  // ---- video reviews: browser upload, playback, timecoded annotations, timeline
+  await page.goto(`${BASE}/`, { waitUntil: "networkidle2" });
+  await page.waitForSelector("#new-review", { timeout: 10000 });
+  await page.click("#new-review");
+  await page.waitForFunction(() => !document.querySelector("#overlay").hidden, { timeout: 5000 });
+  // Record a real WebM in the page: the upload path, the poster grab and the editor then use the
+  // same file a human would drop, without a binary fixture in the repository.
+  const recorded = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 180;
+    const ctx = canvas.getContext("2d");
+    const stream = canvas.captureStream(30);
+    const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
+      ? "video/webm;codecs=vp8"
+      : "video/webm";
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 300_000 });
+    const chunks = [];
+    recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+    const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
+    recorder.start();
+    for (let i = 0; i < 42; i += 1) {
+      ctx.fillStyle = `hsl(${i * 8}, 65%, 45%)`;
+      ctx.fillRect(0, 0, 320, 180);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 28px sans-serif";
+      ctx.fillText(`frame ${i}`, 24, 100);
+      await new Promise((resolve) => setTimeout(resolve, 33));
+    }
+    recorder.stop();
+    await stopped;
+    const blob = new Blob(chunks, { type: mime });
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([blob], "e2e-clip.webm", { type: mime }));
+    const input = document.querySelector("#file");
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return { bytes: blob.size, type: mime };
+  });
+  await page.waitForFunction(
+    () => !document.querySelector("#drop-video-preview").hidden,
+    { timeout: 10000 },
+  );
+  const videoDialog = await page.evaluate(() => ({
+    label: document.querySelector("#drop-label").textContent,
+    preview: document.querySelector("#drop-video-preview").src,
+  }));
+  check("a dropped video shows a playable preview in the New review dialog",
+    recorded.bytes > 0 && /video/.test(videoDialog.label)
+      && videoDialog.preview.startsWith("blob:"),
+    `${recorded.bytes} bytes · ${recorded.type}`);
+  await page.$eval("#f-title", (el) => {
+    el.value = "Video review";
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.select("#f-project", "e2e");
+  await page.click("#new-submit");
+  await page.waitForFunction(() => location.pathname.startsWith("/s/"), { timeout: 30000 });
+  const videoId = new URL(page.url()).pathname.split("/").pop();
+  const videoSession = await api(`/api/sessions/${videoId}`);
+  check("the upload stores a video session with duration, dimensions and a poster",
+    videoSession.meta.media?.kind === "video"
+      && videoSession.meta.media.duration_ms > 500
+      && videoSession.meta.media.width === 320
+      && videoSession.meta.media.height === 180
+      && videoSession.meta.poster === "poster.png",
+    JSON.stringify(videoSession.meta.media));
+  const posterResponse = await fetch(`${BASE}/sessions/${videoId}/image`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  const mediaResponse = await fetch(`${BASE}/sessions/${videoId}/media`, {
+    headers: { Authorization: `Bearer ${TOKEN}`, Range: "bytes=0-15" },
+  });
+  check("the poster is an image and the clip streams with Range",
+    posterResponse.status === 200
+      && posterResponse.headers.get("content-type") === "image/png"
+      && mediaResponse.status === 206
+      && mediaResponse.headers.get("content-range")?.startsWith("bytes 0-15/"),
+    `${posterResponse.status} / ${mediaResponse.status} ${mediaResponse.headers.get("content-range")}`);
+
+  await page.waitForFunction(() => window.redline?.video?.readyState >= 2, { timeout: 15000 });
+  const videoState = await page.evaluate(() => ({
+    kind: window.redline.meta.media.kind,
+    duration: window.redline.video.duration,
+    muted: window.redline.video.muted,
+    bar: !document.querySelector("#video-bar").hidden,
+    play: document.querySelector("#video-play").textContent,
+  }));
+  check("the editor loads the clip muted with the video bar and timeline",
+    videoState.kind === "video" && videoState.duration > 0.5
+      && videoState.muted && videoState.bar && videoState.play === "▶",
+    JSON.stringify(videoState));
+
+  await page.click("#video-play");
+  await page.waitForFunction(() => window.redline.video.currentTime > 0.1, { timeout: 5000 });
+  const playback = await page.evaluate(() => ({
+    paused: window.redline.video.paused,
+    label: document.querySelector("#video-play").textContent,
+  }));
+  await page.click("#video-play");
+  check("play starts the clip and the control turns into pause",
+    !playback.paused && playback.label === "❚❚", JSON.stringify(playback));
+
+  await page.keyboard.press("k");
+  await page.waitForFunction(() => !window.redline.video.paused, { timeout: 5000 });
+  await page.keyboard.press("k");
+  await page.waitForFunction(() => window.redline.video.paused, { timeout: 5000 });
+  const beforeStep = await page.evaluate(() => window.redline.video.currentTime);
+  await page.keyboard.press(".");
+  const afterStep = await page.evaluate(() => window.redline.video.currentTime);
+  check("K pauses and . steps one frame",
+    afterStep > beforeStep && afterStep - beforeStep < 0.18,
+    `${beforeStep.toFixed(3)} → ${afterStep.toFixed(3)}`);
+
+  await page.evaluate(() => window.redline.seekTo(0.5));
+  const stageRect = await page.$eval("#stage", (el) => {
+    const rect = el.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, w: rect.width, h: rect.height };
+  });
+  await page.evaluate(() => window.redline.setTool("rect"));
+  await drag(
+    page,
+    { x: stageRect.x + stageRect.w * 0.3, y: stageRect.y + stageRect.h * 0.3 },
+    { x: stageRect.x + stageRect.w * 0.5, y: stageRect.y + stageRect.h * 0.45 },
+  );
+  const videoAnnotation = await page.evaluate(() => ({
+    count: window.redline.annotations.length,
+    at: window.redline.annotations.at(-1)?.at,
+    paused: window.redline.video.paused,
+    row: document.querySelector(".ann-row .label span")?.textContent || "",
+  }));
+  check("drawing on the canvas stamps the annotation with the current video time",
+    videoAnnotation.count === 1
+      && Math.abs(videoAnnotation.at - 0.5) < 0.25
+      && videoAnnotation.paused,
+    JSON.stringify(videoAnnotation));
+  check("the inspector shows the annotation's timecode",
+    videoAnnotation.row.includes(timecodeText(videoAnnotation.at)),
+    `${videoAnnotation.row} vs ${timecodeText(videoAnnotation.at)}`);
+
+  const opacityAt = (seconds) => page.evaluate((at) => {
+    window.redline.selected.clear();
+    window.redline.seekTo(at);
+    return window.redline.annotationOpacity(window.redline.annotations[0], 0);
+  }, seconds);
+  const ghostFar = await opacityAt(0);
+  const ghostNear = await opacityAt(0.5);
+  check("an annotation from another moment is a faint ghost, current time is full",
+    ghostFar < 0.5 && ghostNear === 1, `${ghostFar} → ${ghostNear}`);
+
+  await page.evaluate(() => {
+    window.redline.selected.clear();
+    window.redline.seekTo(0);
+  });
+  await page.click("#video-ghosts");
+  const ghostsOff = await page.evaluate(() => ({
+    ghosts: window.redline.ghosts,
+    pressed: document.querySelector("#video-ghosts").getAttribute("aria-pressed"),
+    opacity: window.redline.annotationOpacity(window.redline.annotations[0], 0),
+  }));
+  await page.click("#video-ghosts");
+  check("the Ghosts toggle hides and restores the other moments",
+    ghostsOff.ghosts === false && ghostsOff.pressed === "false" && ghostsOff.opacity === 0,
+    JSON.stringify(ghostsOff));
+
+  await page.evaluate(() => window.redline.seekTo(1.2));
+  await page.click('.ann-row .end[data-end="0"]');
+  const range = await page.evaluate(() => window.redline.annotations[0]);
+  check("the inspector sets a range end at the current time",
+    Math.abs(range.until - 1.2) < 0.25 && range.at < range.until,
+    JSON.stringify({ at: range.at, until: range.until }));
+
+  const windowSpan = () => page.evaluate(() => {
+    const { start, end } = window.redline.videoWindow;
+    return end - start;
+  });
+  const spanBefore = await windowSpan();
+  await page.click("#timeline-zoom-in");
+  const spanZoomed = await windowSpan();
+  await page.click("#timeline-fit");
+  const spanFit = await windowSpan();
+  check("timeline zoom narrows the window and Fit restores the whole clip",
+    spanZoomed < spanBefore * 0.8 && Math.abs(spanFit - videoState.duration) < 0.2,
+    `${spanBefore.toFixed(2)} → ${spanZoomed.toFixed(2)} → ${spanFit.toFixed(2)}`);
+  const marks = await page.$$eval("#timeline-marks .timeline-mark", (nodes) => nodes.length);
+  const bands = await page.$$eval("#timeline-marks .timeline-range", (nodes) => nodes.length);
+  check("the timeline shows a marker and a range band for the timecoded annotation",
+    marks === 1 && bands === 1, `${marks} markers, ${bands} bands`);
+  const overviewMarks = await page.$$eval(
+    "#timeline-overview-marks .timeline-overview-mark",
+    (nodes) => nodes.length,
+  );
+  check("the overview keeps every annotation marker while the detail is zoomed",
+    overviewMarks === 1, `${overviewMarks} overview markers`);
+  const overviewBox = await (await page.$("#timeline-overview")).boundingBox();
+  await page.mouse.click(
+    overviewBox.x + overviewBox.width / 2,
+    overviewBox.y + overviewBox.height / 2,
+  );
+  const overviewSeek = await page.evaluate(() => window.redline.video.currentTime);
+  check("clicking the overview seeks to that point in the full clip",
+    Math.abs(overviewSeek - videoState.duration / 2) < 0.35,
+    `${overviewSeek.toFixed(3)} vs ${(videoState.duration / 2).toFixed(3)}`);
+
+  await page.evaluate(() => window.redline.seekTo(0.5));
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 15000 });
+  const submitted = await api(`/api/sessions/${videoId}`);
+  const annotations = submitted.annotations?.annotations || [];
+  const markdown = await (await fetch(`${BASE}/sessions/${videoId}/review.md`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  })).text().catch(() => "");
+  check("submitting a video review stores the at/until timecodes",
+    annotations.length === 1
+      && Math.abs(annotations[0].at - 0.5) < 0.25
+      && Math.abs(annotations[0].until - 1.2) < 0.25,
+    JSON.stringify(annotations[0] || null));
+  check("review.md prints the annotated range as a timecode",
+    /@ 00:00\.\d{3}–00:01\.\d{3}/.test(markdown),
+    (markdown.match(/@ [^\n]+/) || ["missing"])[0]);
 
   // ---- deleting the review that is open also returns to the dashboard
   const openDelete = await api("/api/sessions", {

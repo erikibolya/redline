@@ -253,6 +253,47 @@ const main = async () => {
     { timeout: 5000 },
   );
 
+  // ---- the brand is the icon alone, and as tall as the two-line title beside it (review LOGO,
+  // 2026-10-31, second round). A wordmark printed "RedLine" beside the session title as if it were
+  // a second heading. Sized to one 13 px font line the mark still read as a chip floating next to
+  // the title, so measure it against the *block* of text it stands beside — title plus subtitle —
+  // not against a font size. The block is the union of the two text lines, never the subline that
+  // also carries the branch chip.
+  const brandState = () => page.evaluate(() => {
+    const brand = document.querySelector(".header .brand");
+    const mark = brand?.querySelector(".brand-mark");
+    const title = document.querySelector(".header .title b");
+    const sub = document.querySelector(".header .title span");
+    if (!mark || !title || !sub) return null;
+    const markBox = mark.getBoundingClientRect();
+    const titleBox = title.getBoundingClientRect();
+    const block = Math.round(sub.getBoundingClientRect().bottom - titleBox.top);
+    const headerBox = document.querySelector(".header").getBoundingClientRect();
+    return {
+      text: (brand.textContent || "").trim(),
+      words: [...brand.childNodes].filter((node) => node.nodeType === 3 && node.textContent.trim()).length,
+      marks: brand.querySelectorAll(".brand-mark").length,
+      label: mark.getAttribute("aria-label") || "",
+      height: Math.round(markBox.height),
+      width: Math.round(markBox.width),
+      fontSize: Math.round(parseFloat(getComputedStyle(title).fontSize)),
+      block,
+      centre: Math.round(markBox.top + markBox.height / 2),
+      headerCentre: Math.round(headerBox.top + headerBox.height / 2),
+      aboveTitle: Math.round(titleBox.top) >= Math.round(markBox.top),
+    };
+  });
+  const brandEditor = await brandState();
+  check("the header brand is the icon alone — the wordmark is gone, the name is still announced",
+    brandEditor && brandEditor.words === 0 && brandEditor.text === ""
+      && brandEditor.marks === 1 && brandEditor.label === "RedLine",
+    JSON.stringify(brandEditor));
+  check("the brand icon is as tall as the two-line text block beside it, not a chip on one line",
+    brandEditor && brandEditor.height >= brandEditor.fontSize * 2 - 1
+      && Math.abs(brandEditor.height - brandEditor.block) <= 2
+      && Math.abs(brandEditor.centre - brandEditor.headerCentre) <= 1,
+    JSON.stringify(brandEditor));
+
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
   const chrome = await page.evaluate(() => {
     const header = document.querySelector(".header");
@@ -2440,6 +2481,12 @@ const main = async () => {
   check("the dashboard rail keeps the editor width",
     listBefore.handle && Math.abs(listBefore.rail - restored.rail) <= 2,
     `${restored.rail}px editor → ${listBefore.rail}px dashboard`);
+  const brandList = await brandState();
+  check("the dashboard carries the same icon-only brand as the editor",
+    brandList && brandList.words === 0 && brandList.text === ""
+      && brandList.marks === 1 && brandList.label === "RedLine"
+      && brandList.height === brandEditor.height,
+    JSON.stringify(brandList));
   const listHandle = await handleAt("#rail-resizer");
   await drag(page, listHandle, { x: listHandle.x + 40, y: listHandle.y });
   const listDragged = await listRail();

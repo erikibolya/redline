@@ -436,6 +436,21 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   bridge that sends no `jobs` is never handed a handoff job. Test the review prompt *forbids*
   handing off, the confirm → `next(job=handoff)` path, the MCP report, and the rail badge; a
   status label that merely says "confirmed" is not a handoff.
+- **A wordmark beside a title is a second title.** The shell header printed the icon *and*
+  `RedLine`, so the app name competed with the session title it sat next to, and the 22 px tile
+  stood half a head above the 13 px text (2026-10-31). The header now carries the icon alone, sized
+  to the title line it stands beside, with the name kept for screen readers (`aria-label`). Two
+  words of brand next to one word of content is a heading, not a mark; when a label is removed for
+  looks, keep it for assistive tech and measure the result in the e2e.
+
+- **A font size is not a text block.** The first fix sized the header mark to the title's 13 px
+  font, which measured "correct" against the e2e's `font-size` assertion and still looked like a
+  chip floating beside the title; the human had to draw the rectangle they wanted, twice
+  (2026-10-31). What the eye compares is the *block* — title plus its 11 px subtitle, ≈ 29 px — so
+  size an icon to the union of the visible lines it faces, measure that union in the e2e (never the
+  `.subline` wrapper, which also carries a taller chip), and check it is bigger than one line so a
+  one-line regression cannot pass. A styling assertion written against the same number the CSS was
+  written from proves nothing; measure the neighbours.
 
 ## 8. Working rules
 

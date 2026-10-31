@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The header carries the icon, not the wordmark — and the icon is as big as the text.** The shell
+  printed a 22 px tile *and* the word `RedLine` beside the session title, so the app name read as a
+  second heading and the tile overtopped the 13 px text next to it. The wordmark is gone on all four
+  pages (editor, dashboard, setup, servers), and the mark is now 28 px — the height of the two-line
+  title block it stands beside (13 px title + 11 px subtitle) — centred in the header row; screen
+  readers still hear the name through `role="img" aria-label="RedLine"`. The first fix sized it to
+  the title's *font size* (18 px), which still read as a chip floating next to the title. Covered by
+  an e2e measurement of both the editor and the dashboard header (no text node, mark within 2 px of
+  the title block, at least twice the font size).
 - **A failed run no longer looks like a working one, and no longer keeps the round locked.** The
   bridge reports "I could not run this" through `reply {state:"failed"}` instead of a normal
   answer; the server sets `agent_state=failed` and hands the review back (`status=open`,

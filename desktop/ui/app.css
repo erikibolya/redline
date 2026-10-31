@@ -371,6 +371,13 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 
 .rail-body { overflow-y: auto; padding: 8px; flex: 1; }
 .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 26px; }
+/* A gallery that only appears once the session list answers pushes everything below it down.
+   A cold visit paints one placeholder card of the real card's shape (same image aspect ratio,
+   same two text lines), so the answer replaces it without moving the page (2026-10-31). */
+.gallery.loading .card.skeleton { pointer-events: none; }
+.gallery .card.skeleton .thumb {
+  display: block; width: 100%; aspect-ratio: 16 / 10; background: var(--panel-2);
+}
 .gallery .card {
   position: relative;
   display: block; overflow: hidden; border: 1px solid var(--border); border-radius: 10px;

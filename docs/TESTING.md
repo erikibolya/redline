@@ -157,6 +157,23 @@ The block is the union of the title and subtitle lines, never the `.subline` tha
 branch chip. Text is not a substitute for geometry here: "the wordmark is gone" and "it is on par
 with the text" are measurements, not class names.
 
+## The dashboard's first paint (2026-10-31)
+
+A review submitted from the editor can send the human to `/` (a filter that no longer contains the
+open review, or a decision on it). That is a full page load, and the dashboard used to paint its
+chip row, rail and gallery only after `/api/sessions` answered — a blank page that filled in and
+pushed "Start a review" down.
+
+- Browser e2e: on `/`, interception holds `/api/sessions` and the page must already show three
+  filter chips, at least one rail row and at least one gallery card; the request is then released
+  and the top of the "Start a review" heading must not move (±2 px). The cache is then cleared and
+  the same measurement repeated against a cold visit, where one placeholder card
+  (`#gallery .card.skeleton`, same image aspect ratio and two text lines) reserves the row. A
+  placeholder that is not the card's shape would pass a "the gallery exists" check and still
+  shift the page.
+- Asserting "the chips exist" after a `waitForSelector` would have passed on the old code; the
+  test only means something while the request is held.
+
 ## Bug-fix protocol
 
 1. Reproduce the bug in the real UI (or the real API) and capture the failing state.

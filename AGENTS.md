@@ -482,6 +482,15 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   stepping, seeking and marker clicks stay, and a history round stays navigable — but disable
   visibly and explain on hover, and test the refusal (click the buttons, wheel the ruler) as well
   as the unlock after STOP.
+- **A page that paints after the network shifts everything below it.** Clicking a filter that no
+  longer contains the open review reloads `/`; the dashboard drew its chips, rail rows and gallery
+  only after `/api/sessions` answered, so the human saw a blank page, then cards popping in and
+  pushing "Start a review" down ~200 px (2026-10-31, recorded). Paint the shell from what the tab
+  already had (`sessionStorage`, written by the same `load`/poll that renders the rail) before the
+  request lands, render static chrome (the filter chips) on the first paint with its counts
+  deferred, and reserve the height of any data-driven block above static content. Test it with the
+  request *held* — a `waitForSelector` after the response proves nothing — and measure that a
+  heading below the block does not move when the response is released.
 
 ## 8. Working rules
 

@@ -735,6 +735,41 @@ const main = async () => {
   const noModal = await page.evaluate(() => !document.querySelector("#review-lock"));
   check("the submitted lock is a status toast, not a dimming modal", noModal);
 
+  // ---- the floating stage chrome follows the theme. The status pill and the read-only round
+  // bar sit over the screenshot, so in the light theme they must be light cards — a black
+  // capsule over a white stage was the one element that never changed.
+  const luma = (value) => {
+    const [r, g, b] = (value.match(/[\d.]+/g) || []).map(Number);
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  };
+  const alpha = (value) => Number((value.match(/[\d.]+/g) || [])[3] || 1);
+  const pill = await badgeStyles("#stage-status");
+  const viewingBar = await badgeStyles("#viewing-bar");
+  check("the status pill is a light card in the light theme, not a black pill",
+    pill && luma(pill.dark.background) < .3 && luma(pill.light.background) > .9
+      && luma(pill.dark.color) > .7 && luma(pill.light.color) < .3,
+    JSON.stringify(pill));
+  check("the read-only round bar honours the light theme too",
+    viewingBar && luma(viewingBar.dark.background) < .3 && luma(viewingBar.light.background) > .9
+      && luma(viewingBar.dark.color) > .6 && luma(viewingBar.light.color) < .35,
+    JSON.stringify(viewingBar));
+
+  // The scrim has to read as "locked" at a glance: the first pass (.18 dark, .10 light) was
+  // invisible on the light stage.
+  const scrim = await page.evaluate(() => {
+    const element = document.querySelector("#stage-dim");
+    const theme = document.documentElement.dataset.theme || "dark";
+    const read = () => getComputedStyle(element).backgroundColor;
+    document.documentElement.dataset.theme = "dark";
+    const dark = read();
+    document.documentElement.dataset.theme = "light";
+    const light = read();
+    document.documentElement.dataset.theme = theme;
+    return { dark, light };
+  });
+  check("the lock scrim is dark enough to notice in both themes",
+    alpha(scrim.dark) >= .26 && alpha(scrim.light) >= .16, JSON.stringify(scrim));
+
   // ---- a fresh load of a submitted session must not die before the event poll lands
   await page.reload({ waitUntil: "networkidle0" });
   let reloaded = { stage: "", status: "" };

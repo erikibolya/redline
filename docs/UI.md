@@ -305,8 +305,12 @@ do not move; it also clicks every close X.
   full-width hairline — a `border-top` on a rounded row paints only the segment between the two
   rounded corners, which reads as a broken frame. There is **no modal** — a single status toast in
   the middle of the stage says *"Agent is working — …"* (or *"Waiting for the agent…"*) above a
-  light scrim. While locked, wheel, zoom buttons, keyboard zoom and pan are frozen; STOP removes
-  the scrim and restores the view. Reading other panels is still allowed.
+  scrim that is dark enough to read as locked in both themes (`.28` dark, `.18` light; the first
+  pass at `.18`/`.10` was invisible on a light stage). The toast and the read-only round bar are
+  chrome, not dark-mode surfaces: both have a light-theme variant, because a black capsule over a
+  white screenshot reads as a hole in the picture. While locked, wheel, zoom buttons, keyboard
+  zoom and pan are frozen; STOP removes the scrim and restores the view. Reading other panels is
+  still allowed.
 - The composer's primary button becomes a red **STOP**; it asks *"Stop the agent and edit this
   review?"* and calls `POST /api/sessions/<id>/cancel`. The canvas unlocks with the annotations
   intact and the button returns to *Submit review*.

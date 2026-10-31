@@ -1806,6 +1806,86 @@ async fn the_round_on_the_canvas_is_not_listed_as_a_second_current() {
 }
 
 #[tokio::test]
+async fn every_round_reports_how_long_it_ran() {
+    // A round's cost is submit → hand-back: the next human submission, the agent's next
+    // picture, or `resolve`. History rows carried only a stamp, so a human could not tell what
+    // each version cost (2026-10-31).
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "durations", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let history = |h: &Harness| {
+        let request = Request::builder()
+            .uri(format!("/api/sessions/{id}/history"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap();
+        let app = h.app.clone();
+        async move {
+            let (_, _, body) = send(&app, request).await;
+            body["submissions"].as_array().cloned().unwrap_or_default()
+        }
+    };
+    let submit = |annotations: Value| {
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({
+                "annotations": annotations,
+                "png": format!("data:image/png;base64,{PNG_B64}"),
+            }),
+        )
+    };
+
+    send(
+        &h.app,
+        submit(json!([{"type": "rect", "start": {"x": 0, "y": 0}, "end": {"x": 4, "y": 4}}])),
+    )
+    .await;
+    let (status, _, _) = send(
+        &h.app,
+        submit(json!([{"type": "rect", "start": {"x": 0, "y": 0}, "end": {"x": 9, "y": 9}}])),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let rounds = history(&h).await;
+    assert_eq!(rounds.len(), 2, "{rounds:?}");
+    assert!(rounds[0]["started_at"].is_string(), "{rounds:?}");
+    // The newest round belongs to the agent: no cost yet.
+    assert!(
+        rounds[0].get("finished_at").is_none() && rounds[0].get("duration_secs").is_none(),
+        "a round still being worked on has no duration: {rounds:?}"
+    );
+    // An older round ends where the next human submission begins.
+    assert_eq!(
+        rounds[1]["finished_at"], rounds[0]["started_at"],
+        "the previous round ended when this one was submitted: {rounds:?}"
+    );
+    assert!(rounds[1]["duration_secs"].is_u64(), "{rounds:?}");
+
+    let (status, _, resolved) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/resolve"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rounds = history(&h).await;
+    assert_eq!(
+        rounds[0]["finished_at"], resolved["meta"]["resolved_at"],
+        "resolve is the end of the round the agent had: {rounds:?}"
+    );
+    assert!(rounds[0]["duration_secs"].is_u64(), "{rounds:?}");
+}
+
+#[tokio::test]
 async fn capture_without_a_browser_is_an_actionable_error() {
     let h = harness();
     let (status, _, body) = send(

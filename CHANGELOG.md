@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **A finished review says `done` in the rail, and every round says how long it ran.** A resolved
+  session that was neither `working` nor decided showed no badge at all, so finished tasks looked
+  like they were still in progress (2026-10-31). Resolved rows now carry a `done` badge and
+  resolved rows' subtitles print `· took 4m 12s`; an open round with nothing drawn on it says
+  `open` instead of staying blank. `GET /api/sessions/<id>/history` adds `started_at`,
+  `finished_at` and `duration_secs` per round — submit → the agent's next picture, the next human
+  submission, or `resolve` — and the History rows plus the conversation's run summary print the
+  cost. The fields are additive and omitted while a round is still running.
 - **The header carries the icon, not the wordmark — and the icon is as big as the text.** The shell
   printed a 22 px tile *and* the word `RedLine` beside the session title, so the app name read as a
   second heading and the tile overtopped the 13 px text next to it. The wordmark is gone on all four

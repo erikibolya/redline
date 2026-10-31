@@ -436,6 +436,17 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   bridge that sends no `jobs` is never handed a handoff job. Test the review prompt *forbids*
   handing off, the confirm → `next(job=handoff)` path, the MCP report, and the rail badge; a
   status label that merely says "confirmed" is not a handoff.
+- **A row with no badge is not a neutral row.** The rail badge chain covered working, feature
+  decisions, waiting/replied, unread and the annotation count — everything except a plain finished
+  review and an open round nobody had drawn on, so those rows were unlabelled cards and the human
+  asked where the labels had gone (2026-10-31). Every state a row can be in needs a word; add the
+  missing branches and test the *blank* cases, not only the states that already had a badge.
+- **A timestamp is not a duration.** History rows carried only the round's stamp, so "how long
+  did this version run?" had no answer even though the data was there: `annotations.json` keeps
+  `submitted_at`, the agent's `post_round` picture and `resolve` mark the hand-back. Derive
+  `finished_at`/`duration_secs` in `Store::history` (submit → next picture, next submit, or
+  resolve) and render it; do not guess a duration from two clock times the UI happens to keep.
+  Fast rounds can end in the same second as they started — compare with `>=`, not `>`.
 - **A wordmark beside a title is a second title.** The shell header printed the icon *and*
   `RedLine`, so the app name competed with the session title it sat next to, and the 22 px tile
   stood half a head above the 13 px text (2026-10-31). The header now carries the icon alone, sized

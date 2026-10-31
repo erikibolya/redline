@@ -1052,6 +1052,15 @@ const main = async () => {
       .filter((row) => row.dataset.round !== "current").length);
   check("history draws one row per round", rowsForRounds === repeated,
     `${rowsForRounds} rows, ${repeated} rounds`);
+  // Every version says what it cost: an earlier round ends where the next one was submitted
+  // (2026-10-31 — "every version should show how long it ran").
+  const historyTimes = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list .history-row .label span")]
+      .map((span) => span.textContent.trim()));
+  check("history rows say how long the round ran",
+    historyTimes.length > 0 && historyTimes.every((text) => text.includes("·")) &&
+      historyTimes.some((text) => /· took \d+[smh]/.test(text)),
+    JSON.stringify(historyTimes));
   const opened = await page.evaluate(() => {
     const rows = [...document.querySelectorAll("#history-list [data-round]")];
     // The newest round is still the canvas: clicking it returns to the live view, so open an
@@ -2106,6 +2115,58 @@ const main = async () => {
   check("Delete cancelled removes only cancelled features",
     !remaining.has(cancelMeId) && extra.every((id) => remaining.has(id)),
     JSON.stringify({ cancelMeId, extras: extra.map((id) => remaining.has(id)) }));
+
+  // ---- a finished review says so instead of showing no label at all, and the rail says how long
+  // its last run took (2026-10-31: done rows looked like they were still in progress).
+  const seenByThisBrowser = (sessionId) => page.evaluate((id) => {
+    const map = JSON.parse(localStorage.getItem("redline:seen") || "{}");
+    map[id] = new Date().toISOString();
+    localStorage.setItem("redline:seen", JSON.stringify(map));
+  }, sessionId);
+  const finishedReview = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "finished one", image_base64: makePng() }),
+  });
+  const finishedId = finishedReview.meta.id;
+  await api(`/api/sessions/${finishedId}/annotations`, {
+    method: "POST",
+    body: JSON.stringify({
+      annotations: [{ id: "f1", type: "rect", start: { x: 4, y: 4 }, end: { x: 40, y: 40 } }],
+    }),
+  });
+  await api(`/api/sessions/${finishedId}/resolve`, { method: "POST" });
+  // The rail's unread marker outranks every other badge; mark the rows looked-at so this test
+  // asserts the labels they keep *after* the human has seen them (the reported case).
+  await seenByThisBrowser(finishedId);
+  const openReview = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "open one", image_base64: makePng() }),
+  });
+  const openId = openReview.meta.id;
+  await seenByThisBrowser(openId);
+  await clickChip("All");
+  await page.evaluate(() => window.redline.rail.load());
+  await page.waitForFunction(
+    (ids) => ids.every((id) => document.querySelector(`.session[data-id="${id}"]`)),
+    { timeout: 5000 }, [finishedId, openId]);
+  const labels = await page.evaluate((ids) => ids.map((id) => {
+    const row = document.querySelector(`.session[data-id="${id}"]`);
+    const badge = row?.querySelector(".badge");
+    return {
+      badge: badge?.textContent.trim() || "",
+      className: badge?.className || "",
+      colour: badge ? getComputedStyle(badge).color : "",
+      sub: row?.querySelector(".sub")?.textContent || "",
+    };
+  }), [finishedId, openId]);
+  check("a finished review keeps a label in the rail",
+    labels[0].badge === "done" && labels[0].className.includes("done") && labels[0].colour !== "",
+    JSON.stringify(labels[0]));
+  check("the rail says how long the last run took",
+    /took \d+[smh]/.test(labels[0].sub), labels[0].sub);
+  check("a row with nothing drawn on it still says whose turn it is",
+    labels[1].badge === "open" && labels[1].className.includes("open"),
+    JSON.stringify(labels[1]));
 
   // ---- accessible names and a live region
   const a11y = await page.evaluate(() => ({

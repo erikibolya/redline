@@ -93,6 +93,9 @@ try {
         </select>
         <button class="chip" id="video-ghosts" type="button" aria-pressed="true"
                 title="Show annotations from other times as faint ghosts">Ghosts</button>
+        <button class="chip" id="video-new" type="button"
+                title="Post a new video as the next round">New video</button>
+        <input type="file" id="video-file" accept="video/*" hidden />
         <span class="grow"></span>
         <button class="btn small" id="timeline-zoom-out" type="button" title="Zoom out timeline">−</button>
         <button class="btn small" id="timeline-zoom-in" type="button" title="Zoom in timeline">+</button>
@@ -199,7 +202,7 @@ try {
     </section>
 
     <details class="disclosure" id="history-block">
-      <summary>History <span class="count" id="history-count">0</span></summary>
+      <summary>History <span class="count" id="history-count">0</span><span class="session-size" id="session-size"></span></summary>
       <div class="content"><div id="history-list" class="inspector-empty">No earlier submissions.</div></div>
     </details>
 

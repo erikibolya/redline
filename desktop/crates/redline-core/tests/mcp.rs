@@ -242,6 +242,112 @@ async fn review_video_creates_a_session_with_media_and_a_video_url() {
 }
 
 #[tokio::test]
+async fn feedback_lists_the_full_resolution_frames() {
+    use base64::Engine as _;
+    use redline_core::model::{Annotation, Submission};
+    use redline_core::store::FrameUpload;
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let (_dir, store) = setup();
+    let created = payload(
+        &call(
+            &store,
+            "review_video",
+            json!({
+                "title": "Checkout flow",
+                "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+                "duration_ms": 5000,
+            }),
+        )
+        .await,
+    );
+    let id = created["session_id"].as_str().unwrap().to_string();
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG_B64)
+        .unwrap();
+    let mut rect = Annotation::new("rect");
+    rect.fields.insert("at".to_string(), json!(1.25));
+    store
+        .submit_round(
+            &id,
+            &Submission {
+                note: Some("watch the button".to_string()),
+                annotations: vec![rect],
+                png: None,
+                width: Some(320),
+                height: Some(180),
+            },
+            Some(&png),
+            &[FrameUpload {
+                at: 1.25,
+                bytes: png.clone(),
+            }],
+        )
+        .unwrap();
+
+    let feedback = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
+    let frames = feedback["frames"].as_array().expect("frames");
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["at"], 1.25);
+    assert_eq!(frames[0]["mime"], "image/png");
+    assert!(frames[0]["url"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/sessions/{id}/frames/1.250.png?t={TOKEN}")));
+    assert!(feedback["annotated_png"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/session/{id}/annotated.png")));
+}
+
+#[tokio::test]
+async fn post_round_can_hand_back_a_new_video() {
+    use base64::Engine as _;
+    const WEBM: &[u8] = &[0x1A, 0x45, 0xDF, 0xA3, 4, 5, 6];
+    let (_dir, store) = setup();
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({"title": "Flow", "image_base64": PNG_B64}),
+        )
+        .await,
+    );
+    let id = created["session_id"].as_str().unwrap().to_string();
+
+    let result = call(
+        &store,
+        "post_round",
+        json!({
+            "session_id": id,
+            "note": "here is the fixed flow",
+            "video_base64": base64::engine::general_purpose::STANDARD.encode(WEBM),
+            "poster_base64": PNG_B64,
+            "duration_ms": 2500,
+        }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let posted = payload(&result);
+    assert_eq!(posted["posted"], true, "{posted}");
+    assert_eq!(posted["media"]["kind"], "video");
+    assert!(posted["video_url"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/sessions/{id}/media?t={TOKEN}")));
+
+    let meta = store.require(&id).unwrap();
+    assert_eq!(meta.status, redline_core::model::Status::Open);
+    assert_eq!(meta.image, "video.webm");
+    // The initial screenshot was never submitted, so it is not a round in history; replacing it
+    // with the agent's video simply frees the old file.
+    assert!(store.history(&id).unwrap().is_empty());
+    assert!(!store.dir(&id).unwrap().join("screenshot.png").is_file());
+    let thread = std::fs::read_to_string(store.dir(&id).unwrap().join("agent-thread.jsonl"))
+        .expect("agent thread");
+    assert!(thread.contains("here is the fixed flow"), "{thread}");
+}
+
+#[tokio::test]
 async fn feedback_includes_annotations_markdown_and_the_png_uri() {
     let (_dir, store) = setup();
     let created = payload(

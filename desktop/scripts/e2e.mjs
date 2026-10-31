@@ -1798,7 +1798,7 @@ const main = async () => {
   // The pen has its own move path (`translateAnnotation` shifts `points`) and bounds/hit test.
   const penBefore = await page.evaluate(() => window.redline.annotations[0].points[0]);
   await page.keyboard.press("v");
-  await drag(page, at(400, 264), at(430, 284));
+  await drag(page, at(410, 270), at(440, 290));
   const penMoved = await page.evaluate(() => ({
     point: window.redline.annotations[0].points[0],
     scale: window.redline.view.scale,
@@ -2454,11 +2454,14 @@ const main = async () => {
     muted: window.redline.video.muted,
     bar: !document.querySelector("#video-bar").hidden,
     play: document.querySelector("#video-play").textContent,
+    size: document.querySelector("#session-size")?.textContent || "",
   }));
   check("the editor loads the clip muted with the video bar and timeline",
     videoState.kind === "video" && videoState.duration > 0.5
       && videoState.muted && videoState.bar && videoState.play === "▶",
     JSON.stringify(videoState));
+  check("the History summary reports the session's disk use",
+    /[KMG]B/.test(videoState.size), videoState.size);
 
   await page.click("#video-play");
   await page.waitForFunction(() => window.redline.video.currentTime > 0.1, { timeout: 5000 });
@@ -2551,6 +2554,13 @@ const main = async () => {
   check("timeline zoom narrows the window and Fit restores the whole clip",
     spanZoomed < spanBefore * 0.8 && Math.abs(spanFit - videoState.duration) < 0.2,
     `${spanBefore.toFixed(2)} → ${spanZoomed.toFixed(2)} → ${spanFit.toFixed(2)}`);
+  const tickLabels = await page.$$eval(
+    "#timeline-ticks .timeline-tick",
+    (nodes) => nodes.map((node) => node.textContent.trim()),
+  );
+  check("the timeline ruler labels real timecodes, not a repeated zero",
+    new Set(tickLabels).size >= 2 && tickLabels[0].startsWith("0:00"),
+    tickLabels.join(" | "));
   const marks = await page.$$eval("#timeline-marks .timeline-mark", (nodes) => nodes.length);
   const bands = await page.$$eval("#timeline-marks .timeline-range", (nodes) => nodes.length);
   check("the timeline shows a marker and a range band for the timecoded annotation",
@@ -2571,22 +2581,202 @@ const main = async () => {
     Math.abs(overviewSeek - videoState.duration / 2) < 0.35,
     `${overviewSeek.toFixed(3)} vs ${(videoState.duration / 2).toFixed(3)}`);
 
+  // A second moment: the agent must receive one full frame per unique annotated time, not one
+  // picture of the frame that happened to be on the canvas at submit time.
+  await page.evaluate(() => window.redline.seekTo(1.15));
+  await page.evaluate(() => window.redline.setTool("rect"));
+  await drag(
+    page,
+    { x: stageRect.x + stageRect.w * 0.6, y: stageRect.y + stageRect.h * 0.3 },
+    { x: stageRect.x + stageRect.w * 0.78, y: stageRect.y + stageRect.h * 0.5 },
+  );
+  const secondMoment = await page.evaluate(() => window.redline.annotations.at(-1)?.at);
+  check("a second drawing gets its own timecode", Math.abs(secondMoment - 1.15) < 0.25,
+    String(secondMoment));
+
   await page.evaluate(() => window.redline.seekTo(0.5));
   await page.click("#submit");
-  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 15000 });
+  await page.waitForFunction(() => window.redline.meta?.status === "submitted", { timeout: 30000 });
   const submitted = await api(`/api/sessions/${videoId}`);
   const annotations = submitted.annotations?.annotations || [];
+  const frames = submitted.annotations?.frames || [];
   const markdown = await (await fetch(`${BASE}/sessions/${videoId}/review.md`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
   })).text().catch(() => "");
   check("submitting a video review stores the at/until timecodes",
-    annotations.length === 1
+    annotations.length === 2
       && Math.abs(annotations[0].at - 0.5) < 0.25
-      && Math.abs(annotations[0].until - 1.2) < 0.25,
-    JSON.stringify(annotations[0] || null));
+      && Math.abs(annotations[0].until - 1.2) < 0.25
+      && Math.abs(annotations[1].at - 1.15) < 0.25,
+    JSON.stringify(annotations.map((annotation) => ({ at: annotation.at, until: annotation.until }))));
   check("review.md prints the annotated range as a timecode",
     /@ 00:00\.\d{3}–00:01\.\d{3}/.test(markdown),
     (markdown.match(/@ [^\n]+/) || ["missing"])[0]);
+  check("review.md lists the full-resolution frames",
+    /### Frames/.test(markdown) && /00:00\.500: frames\/0\.500\.png/.test(markdown)
+      && /00:01\.150: frames\/1\.150\.png/.test(markdown),
+    (markdown.match(/### Frames[\s\S]{0,180}/) || ["missing"])[0]);
+  const frameResponse = await fetch(`${BASE}/sessions/${videoId}/${frames[0].file}`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  });
+  check("a captured frame is served as its own image",
+    frames.length === 2 && Math.abs(frames[0].at - 0.5) < 0.25
+      && frameResponse.status === 200
+      && frameResponse.headers.get("content-type") === "image/png",
+    `${frames.length} @ ${frames.map((frame) => frame.at).join(", ")}`);
+  const sheet = Buffer.from(await (await fetch(`${BASE}/sessions/${videoId}/annotated.png`, {
+    headers: { Authorization: `Bearer ${TOKEN}` },
+  })).arrayBuffer());
+  const sheetWidth = sheet.readUInt32BE(16);
+  const sheetHeight = sheet.readUInt32BE(20);
+  check("the contact sheet is a composed grid, not the current video frame",
+    sheetWidth > 1000 && sheetHeight > 300,
+    `${sheetWidth}×${sheetHeight}`);
+  const archivedFrames = await api(`/api/sessions/${videoId}/history`);
+  const archived = archivedFrames.submissions?.find((round) => round.stamp);
+  check("the round records its frames in history metadata",
+    Boolean(archived) && archived.frames === 2,
+    JSON.stringify(archived || null));
+
+  // ---- a new video becomes the next round, and the old clip stays in History
+  // The agent reads the round first so STOP keeps it in history instead of withdrawing it.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "get_feedback", arguments: { session_id: videoId } },
+    }),
+  });
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.waitForFunction(() => {
+    const button = document.querySelector("#submit");
+    return button && !button.disabled && button.textContent.includes("STOP");
+  }, { timeout: 5000 });
+  await page.click("#submit");
+  await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 15000 });
+  const newButton = await page.$eval("#video-new", (el) => ({ hidden: el.hidden }));
+  check("New video appears once the round is open", newButton.hidden === false,
+    JSON.stringify(newButton));
+
+  page.once("dialog", (dialog) => dialog.accept());
+  const chooserPromise = page.waitForFileChooser();
+  await page.click("#video-new");
+  const chooser = await chooserPromise;
+  await chooser.cancel();
+  check("New video asks before discarding the canvas", true);
+
+  const secondClip = await page.evaluate(async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 320;
+    canvas.height = 180;
+    const ctx = canvas.getContext("2d");
+    const stream = canvas.captureStream(30);
+    const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp8")
+      ? "video/webm;codecs=vp8"
+      : "video/webm";
+    const recorder = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 300_000 });
+    const chunks = [];
+    recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+    const stopped = new Promise((resolve) => { recorder.onstop = resolve; });
+    recorder.start();
+    for (let i = 0; i < 20; i += 1) {
+      ctx.fillStyle = `hsl(${210 + i * 3}, 60%, 42%)`;
+      ctx.fillRect(0, 0, 320, 180);
+      ctx.fillStyle = "#fff";
+      ctx.font = "bold 28px sans-serif";
+      ctx.fillText(`take 2 · ${i}`, 24, 100);
+      await new Promise((resolve) => setTimeout(resolve, 33));
+    }
+    recorder.stop();
+    await stopped;
+    const blob = new Blob(chunks, { type: mime });
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([blob], "take-2.webm", { type: mime }));
+    const input = document.querySelector("#video-file");
+    input.files = transfer.files;
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    return { bytes: blob.size };
+  });
+  await page.waitForFunction(
+    () => window.redline?.meta?.status === "open"
+      && window.redline.meta.media?.duration_ms
+      && window.redline.meta.media.duration_ms < 1200,
+    { timeout: 30000 },
+  );
+  const secondRound = await page.evaluate(() => ({
+    status: window.redline.meta.status,
+    duration: window.redline.meta.media.duration_ms,
+    annotations: window.redline.annotations.length,
+    file: window.redline.meta.image,
+    nextVisible: !document.querySelector("#video-new").hidden,
+  }));
+  check("a new video replaces the canvas and clears the annotations",
+    secondClip.bytes > 0 && secondRound.status === "open" && secondRound.duration < 1200
+      && secondRound.annotations === 0 && secondRound.file === "video.webm"
+      && secondRound.nextVisible,
+    JSON.stringify(secondRound));
+  const historyAfter = await api(`/api/sessions/${videoId}/history`);
+  const previous = historyAfter.submissions?.find((round) => round.media?.kind === "video");
+  const previousVideo = await fetch(
+    `${BASE}/sessions/${videoId}/history/${previous?.stamp}/video`,
+    { headers: { Authorization: `Bearer ${TOKEN}` } },
+  );
+  check("the previous clip is archived with its history round",
+    Boolean(previous) && previousVideo.status === 200
+      && previousVideo.headers.get("content-type") === "video/webm",
+    `${previous?.stamp} → ${previousVideo.status} ${previousVideo.headers.get("content-type")}`);
+
+  await page.evaluate(() => {
+    const block = document.querySelector("#history-block");
+    block.open = true;
+    block.dispatchEvent(new Event("toggle"));
+  });
+  await page.waitForSelector(`[data-round="${previous.stamp}"]`, { timeout: 5000 });
+  await page.waitForFunction((stamp) => {
+    const row = document.querySelector(`[data-round="${stamp}"]`);
+    if (!row) return false;
+    row.click();
+    return true;
+  }, { timeout: 5000 }, previous.stamp);
+  await page.waitForFunction(() => window.redline.viewing?.video === true, { timeout: 15000 });
+  const archivedView = await page.evaluate(() => ({
+    stamp: window.redline.viewing?.stamp,
+    duration: window.redline.video?.duration,
+    annotations: window.redline.annotations.length,
+    src: window.redline.video?.src || "",
+    nextHidden: document.querySelector("#video-new").hidden,
+    readonly: Boolean(document.querySelector(".ann-row.readonly")),
+    submitDisabled: document.querySelector("#submit").disabled,
+  }));
+  check("a history video round plays read-only with its own clip and annotations",
+    archivedView.stamp === previous.stamp && archivedView.duration > 1.0
+      && archivedView.annotations === 2 && archivedView.src.includes("/history/")
+      && archivedView.nextHidden && archivedView.readonly && archivedView.submitDisabled,
+    JSON.stringify(archivedView));
+  await page.click("#video-play");
+  await page.waitForFunction(() => window.redline.video.currentTime > 0.1, { timeout: 5000 });
+  const historyPlaying = await page.evaluate(() => ({
+    paused: window.redline.video.paused,
+    time: window.redline.video.currentTime,
+  }));
+  await page.click("#video-play");
+  check("a history video round plays on demand",
+    !historyPlaying.paused && historyPlaying.time > 0.1,
+    JSON.stringify(historyPlaying));
+  await page.click("#viewing-bar");
+  await page.waitForFunction(
+    () => !window.redline.viewing && (window.redline.video?.src || "").includes("/media"),
+    { timeout: 15000 },
+  );
+  const backLive = await page.evaluate(() => ({
+    duration: window.redline.video?.duration,
+    nextHidden: document.querySelector("#video-new").hidden,
+  }));
+  check("back to current restores the live clip and the new-video control",
+    backLive.duration < 1.2 && backLive.nextHidden === false,
+    JSON.stringify(backLive));
 
   // ---- deleting the review that is open also returns to the dashboard
   const openDelete = await api("/api/sessions", {

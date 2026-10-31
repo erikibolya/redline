@@ -525,3 +525,129 @@ fn a_video_longer_than_five_minutes_is_refused() {
         .expect_err("a six minute clip must not create a review");
     assert!(error.to_string().contains("5 minute"), "{error}");
 }
+
+const WEBM: &[u8] = &[0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x02, 0x03, 0x04];
+
+#[test]
+fn a_new_video_round_archives_the_previous_clip_and_reopens_the_review() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Checkout",
+            "",
+            "",
+            None,
+            None,
+            None,
+            Some(PNG),
+            Some(5000),
+            Some(320),
+            Some(180),
+            None,
+        )
+        .unwrap();
+    let mut rect = Annotation::new("rect");
+    rect.fields.insert("at".to_string(), json!(1.0));
+    store
+        .submit(
+            &meta.id,
+            &Submission {
+                note: Some("first pass".to_string()),
+                annotations: vec![rect],
+                png: None,
+                width: Some(320),
+                height: Some(180),
+            },
+        )
+        .unwrap();
+
+    let next = store
+        .new_video_round(
+            &meta.id,
+            WEBM,
+            Some(PNG),
+            Some(3000),
+            Some(320),
+            Some(180),
+            None,
+        )
+        .expect("new video round");
+    assert_eq!(next.status, Status::Open);
+    assert_eq!(
+        next.media.as_ref().map(|media| media.kind),
+        Some(MediaKind::Video)
+    );
+    assert_eq!(next.image, "video.webm");
+    assert_eq!(next.media.as_ref().unwrap().duration_ms, Some(3000));
+    assert_eq!(
+        next.media.as_ref().unwrap().mime.as_deref(),
+        Some("video/webm")
+    );
+    assert!(store.dir(&meta.id).unwrap().join("video.webm").is_file());
+    assert_eq!(store.annotations(&meta.id).unwrap().annotations.len(), 0);
+    assert!(!store.dir(&meta.id).unwrap().join("annotated.png").is_file());
+
+    let history = store.history(&meta.id).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(
+        history[0].media.as_ref().map(|media| media.kind),
+        Some(MediaKind::Video)
+    );
+    let archived = store
+        .history_video_path(&meta.id, &history[0].stamp)
+        .unwrap();
+    assert!(archived.is_file());
+    assert_eq!(archived.file_name().unwrap(), "video.mp4");
+}
+
+#[test]
+fn replacing_a_video_before_any_submission_does_not_add_history() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Draft",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    store
+        .new_video_round(&meta.id, WEBM, None, Some(2000), None, None, None)
+        .unwrap();
+    assert!(store.history(&meta.id).unwrap().is_empty());
+    assert!(store.dir(&meta.id).unwrap().join("video.webm").is_file());
+}
+
+#[test]
+fn a_screenshot_round_is_refused_on_a_video_session() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Video",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let error = store
+        .post_round(&meta.id, Some(PNG), "screenshot.png", "a fix", None, None)
+        .expect_err("a video review cannot take a screenshot round");
+    assert!(error.to_string().contains("post the next video"), "{error}");
+}

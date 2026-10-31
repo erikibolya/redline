@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Multipart, Path as RoutePath, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRequest, Multipart, Path as RoutePath, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -21,9 +21,8 @@ use crate::auth::{self, Auth};
 use crate::error::Error;
 use crate::mcp::{self, McpContext};
 use crate::model::{NewSession, Status, Submission};
-use crate::store::Store;
-use crate::MAX_BODY_BYTES;
-use crate::MAX_VIDEO_BYTES;
+use crate::store::{FrameUpload, Store};
+use crate::{MAX_BODY_BYTES, MAX_SUBMIT_BYTES, MAX_VIDEO_BYTES};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -110,6 +109,10 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/video",
             post(create_video_session).layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES + 1024 * 1024)),
         )
+        .route(
+            "/api/sessions/{id}/video",
+            post(replace_video).layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES + 1024 * 1024)),
+        )
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/agent/repos", post(sync_agent_repos))
         .route(
@@ -127,7 +130,10 @@ pub fn router(state: AppState) -> Router {
             get(get_session).delete(delete_session),
         )
         .route("/api/sessions/{id}/branch", put(set_session_branch))
-        .route("/api/sessions/{id}/annotations", post(submit))
+        .route(
+            "/api/sessions/{id}/annotations",
+            post(submit).layer(DefaultBodyLimit::max(MAX_SUBMIT_BYTES)),
+        )
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/api/sessions/{id}/reopen", post(reopen))
         .route("/api/sessions/{id}/confirm-feature", post(confirm_feature))
@@ -139,9 +145,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/events", get(agent_events))
         .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
         .route("/sessions/{id}/history/{file}", get(history_file))
+        .route("/sessions/{id}/history/{stamp}/video", get(history_video))
+        .route(
+            "/sessions/{id}/history/{stamp}/frames/{file}",
+            get(history_frame),
+        )
         .route("/api/capture", post(capture_session))
         .route("/sessions/{id}/image", get(image))
         .route("/sessions/{id}/media", get(media))
+        .route("/sessions/{id}/frames/{file}", get(frame))
         .route("/sessions/{id}/annotated.png", get(annotated))
         .route("/sessions/{id}/rounds/{name}", get(round_image))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
@@ -1016,7 +1028,10 @@ async fn get_session(
 ) -> Result<Json<Value>, Error> {
     let meta = state.store.require(&id)?;
     let annotations = state.store.annotations(&id)?;
-    Ok(Json(json!({ "meta": meta, "annotations": annotations })))
+    let disk_bytes = state.store.session_size(&id).unwrap_or(0);
+    Ok(Json(
+        json!({ "meta": meta, "annotations": annotations, "disk_bytes": disk_bytes }),
+    ))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1072,10 +1087,23 @@ async fn create_session(
 /// Browser video upload: multipart form with the video (`video`/`file`), optional `poster`, and
 /// the same metadata fields as `POST /api/sessions`. The route has its own body limit; JSON
 /// uploads stay bounded by `MAX_BODY_BYTES`.
-async fn create_video_session(
-    State(state): State<AppState>,
-    mut multipart: Multipart,
-) -> Result<Json<Value>, Error> {
+struct VideoForm {
+    video: Vec<u8>,
+    poster: Option<Vec<u8>>,
+    fields: BTreeMap<String, String>,
+}
+
+impl VideoForm {
+    fn field(&self, name: &str) -> Option<&str> {
+        self.fields
+            .get(name)
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+    }
+}
+
+/// Parse one multipart video upload (new session or new round) with the same fields and caps.
+async fn read_video_form(mut multipart: Multipart) -> Result<VideoForm, Error> {
     let mut fields = BTreeMap::<String, String>::new();
     let mut video: Option<Vec<u8>> = None;
     let mut poster: Option<Vec<u8>> = None;
@@ -1117,33 +1145,74 @@ async fn create_video_session(
             fields.insert(name, value);
         }
     }
-    let video = video.ok_or_else(|| Error::BadRequest("provide a video file".to_string()))?;
-    let field = |name: &str| {
-        fields
-            .get(name)
-            .map(String::as_str)
-            .filter(|v| !v.trim().is_empty())
-    };
-    let title = field("title").unwrap_or("Video review");
+    Ok(VideoForm {
+        video: video.ok_or_else(|| Error::BadRequest("provide a video file".to_string()))?,
+        poster,
+        fields,
+    })
+}
+
+/// Browser video upload: multipart form with the video (`video`/`file`), optional `poster`, and
+/// the same metadata fields as `POST /api/sessions`. The route has its own body limit; JSON
+/// uploads stay bounded by `MAX_BODY_BYTES`.
+async fn create_video_session(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<Json<Value>, Error> {
+    let form = read_video_form(multipart).await?;
+    let title = form.field("title").unwrap_or("Video review");
     let meta = state.store.create_video_from_bytes(
-        &video,
+        &form.video,
         title,
-        field("url").unwrap_or_default(),
-        field("note").unwrap_or_default(),
+        form.field("url").unwrap_or_default(),
+        form.field("note").unwrap_or_default(),
         None,
-        field("agent"),
-        field("project"),
-        poster.as_deref(),
-        field("duration_ms").and_then(|value| value.parse::<u64>().ok()),
-        field("width").and_then(|value| value.parse::<u32>().ok()),
-        field("height").and_then(|value| value.parse::<u32>().ok()),
-        field("fps").and_then(|value| value.parse::<f64>().ok()),
+        form.field("agent"),
+        form.field("project"),
+        form.poster.as_deref(),
+        form.field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok()),
+        form.field("width")
+            .and_then(|value| value.parse::<u32>().ok()),
+        form.field("height")
+            .and_then(|value| value.parse::<u32>().ok()),
+        form.field("fps")
+            .and_then(|value| value.parse::<f64>().ok()),
     )?;
-    let meta = if let Some(branch) = field("branch") {
+    let meta = if let Some(branch) = form.field("branch") {
         state.store.set_branch(&meta.id, Some(branch))?
     } else {
         meta
     };
+    let review_url = state.review_url(&meta.id);
+    Ok(Json(json!({
+        "meta": meta,
+        "review_url": review_url,
+        "dir": state.store.dir(&meta.id)?.display().to_string(),
+    })))
+}
+
+/// Post a new video as the next round of an existing review. The current round (annotations,
+/// contact sheet, frames and clip) is archived; the session reopens on the new clip.
+async fn replace_video(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    multipart: Multipart,
+) -> Result<Json<Value>, Error> {
+    let form = read_video_form(multipart).await?;
+    let meta = state.store.new_video_round(
+        &id,
+        &form.video,
+        form.poster.as_deref(),
+        form.field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok()),
+        form.field("width")
+            .and_then(|value| value.parse::<u32>().ok()),
+        form.field("height")
+            .and_then(|value| value.parse::<u32>().ok()),
+        form.field("fps")
+            .and_then(|value| value.parse::<f64>().ok()),
+    )?;
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({
         "meta": meta,
@@ -1274,9 +1343,34 @@ pub fn create_from_request(
 async fn submit(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
-    Json(body): Json<Submission>,
+    request: Request,
 ) -> Result<Json<Value>, Error> {
-    let (meta, annotations) = state.store.submit(&id, &body)?;
+    let multipart = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("multipart/form-data"));
+    let (body, contact_sheet, frames) = if multipart {
+        parse_multipart_submit(request).await?
+    } else {
+        let Json(body) = Json::<Submission>::from_request(request, &state)
+            .await
+            .map_err(|err| {
+                if err.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE {
+                    Error::UnsupportedMediaType(err.body_text())
+                } else {
+                    Error::BadRequest(err.body_text())
+                }
+            })?;
+        (body, None, Vec::new())
+    };
+    let (meta, annotations) = if multipart {
+        state
+            .store
+            .submit_round(&id, &body, contact_sheet.as_deref(), &frames)?
+    } else {
+        state.store.submit(&id, &body)?
+    };
     // Wake up whatever agent the host wired in; a dead endpoint must not fail the submission.
     if let Some(url) = state.webhook.clone() {
         let payload = json!({
@@ -1286,6 +1380,7 @@ async fn submit(
             "project": meta.project,
             "prompt": meta.prompt,
             "annotations": annotations.annotations.len(),
+            "frames": annotations.frames.len(),
             "submitted_at": meta.submitted_at,
             "review_url": state.review_url(&meta.id),
         });
@@ -1294,6 +1389,71 @@ async fn submit(
     Ok(Json(
         json!({ "ok": true, "meta": meta, "annotations": annotations }),
     ))
+}
+
+/// A video submit carries the annotations JSON, the contact sheet as a file and one file per
+/// unique annotated timestamp. Filenames are `<seconds>.<png|jpg>`; the JSON never contains the
+/// frames, so a 20-frame submission does not balloon the body with base64.
+async fn parse_multipart_submit(
+    request: Request,
+) -> Result<(Submission, Option<Vec<u8>>, Vec<FrameUpload>), Error> {
+    let mut multipart = Multipart::from_request(request, &())
+        .await
+        .map_err(|err| Error::BadRequest(format!("invalid multipart submit: {err}")))?;
+    let mut body: Option<Submission> = None;
+    let mut contact_sheet: Option<Vec<u8>> = None;
+    let mut frames = Vec::new();
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| Error::BadRequest(format!("invalid multipart submit: {err}")))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        match name.as_str() {
+            "annotations" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|err| Error::BadRequest(format!("cannot read annotations: {err}")))?;
+                body = Some(serde_json::from_str(&text).map_err(|err| {
+                    Error::BadRequest(format!("invalid annotations JSON: {err}"))
+                })?);
+            }
+            "png" | "contact_sheet" => {
+                let bytes = field.bytes().await.map_err(|err| {
+                    Error::BadRequest(format!("cannot read the contact sheet: {err}"))
+                })?;
+                contact_sheet = Some(bytes.to_vec());
+            }
+            "frames" => {
+                let file = field.file_name().unwrap_or_default().to_string();
+                let stem = std::path::Path::new(&file)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("");
+                let at = stem.parse::<f64>().map_err(|_| {
+                    Error::BadRequest("frame filenames must be seconds, e.g. 2.340.png".to_string())
+                })?;
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|err| Error::BadRequest(format!("cannot read frame {file}: {err}")))?;
+                frames.push(FrameUpload {
+                    at,
+                    bytes: bytes.to_vec(),
+                });
+            }
+            other => {
+                // Drain unknown fields instead of leaving the parser mid-stream.
+                let _ = field.bytes().await;
+                if other != "session" {
+                    tracing::debug!("ignoring submit field {other}");
+                }
+            }
+        }
+    }
+    let body = body.ok_or_else(|| Error::BadRequest("missing annotations field".to_string()))?;
+    Ok((body, contact_sheet, frames))
 }
 
 async fn resolve(
@@ -1518,6 +1678,18 @@ async fn image(
     Ok(serve_file(&path, None))
 }
 
+/// A full-resolution still captured at an annotation time.
+async fn frame(
+    State(state): State<AppState>,
+    RoutePath((id, file)): RoutePath<(String, String)>,
+) -> Result<Response, Error> {
+    let path = state.store.frame_path(&id, &file)?;
+    if !path.is_file() {
+        return Err(Error::NotFound(format!("{id}/frames/{file}")));
+    }
+    Ok(serve_file(&path, None))
+}
+
 /// Stream the video with Range support so the browser can seek without downloading it all.
 /// `ServeFile` also sets `Accept-Ranges`, `Content-Type` and the 206 `Content-Range`.
 async fn media(
@@ -1533,6 +1705,11 @@ async fn media(
     if !path.is_file() {
         return Err(Error::NotFound(format!("{id}/media")));
     }
+    serve_range(path, request).await
+}
+
+/// A video with `Accept-Ranges` and 206 responses, for the live clip and an archived round.
+async fn serve_range(path: PathBuf, request: Request) -> Result<Response, Error> {
     let service = ServeFile::new(path);
     let mut proxy = Request::builder()
         .uri(request.uri())
@@ -1549,6 +1726,30 @@ async fn media(
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     Ok(response)
+}
+
+/// The archived clip of a submitted video round.
+async fn history_video(
+    State(state): State<AppState>,
+    RoutePath((id, stamp)): RoutePath<(String, String)>,
+    request: Request,
+) -> Result<Response, Error> {
+    let path = state.store.history_video_path(&id, &stamp)?;
+    serve_range(path, request).await
+}
+
+/// A full-resolution frame archived with a video round.
+async fn history_frame(
+    State(state): State<AppState>,
+    RoutePath((id, stamp, file)): RoutePath<(String, String, String)>,
+) -> Result<Response, Error> {
+    let path = state.store.history_frame_path(&id, &stamp, &file)?;
+    if !path.is_file() {
+        return Err(Error::NotFound(format!(
+            "{id}/history/{stamp}/frames/{file}"
+        )));
+    }
+    Ok(serve_file(&path, None))
 }
 
 async fn annotated(

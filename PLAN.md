@@ -80,9 +80,10 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Next (ordered)
 
-0. **Video reviews** — phases 1–2 are in (`docs/VIDEO.md`): media core, browser upload, canvas
-   playback, timecoded annotations and ranges, ghosts, zoomable timeline. Phase 3 next: contact
-   sheet + full-resolution frames, video rounds in history and `post_round` video.
+0. **Video reviews** — phases 1–3 are in (`docs/VIDEO.md`): media core, browser upload, canvas
+   playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full
+   frames, new video rounds, history playback and `post_round` video. Phase 4 is the release
+   pass.
 1. **UX rework for 1.0** — see `docs/UX-PLAN.md`: projects instead of requests, a chat flow with a
    composer and visible agent status, notes attached to shapes instead of a text tool, RedLine
    branding. Ships as 0.8 → 0.10, before the rest of this list.
@@ -111,11 +112,11 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Testing plan
 
-- `cargo test --workspace` — 98 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+- `cargo test --workspace` — 110 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
-  helpers, video media/limits/timecodes, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 192 checks in real Chromium: every drawing tool is actually drawn
+  helpers, video media/limits/frames/rounds/timecodes, CLI end-to-end.
+- `desktop/scripts/e2e.sh` — 206 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the
@@ -123,7 +124,8 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
   MCP `ship_status` merged/failed, the rail's PR link and `ship failed ↻` retry, row delete,
   cancelled-only purge, the All filter, agent settings/branch display, rail reopen and bulk
   confirm, and the whole video path (recorded WebM upload, playback, timecoded draw, ghost
-  opacity, range, timeline zoom and submit).
+  opacity, range, timeline zoom, contact sheet + two frames, new video round, archived history
+  playback).
 - CI runs both on every push; releases are cut from tags only after green. The tool matrix,
   feature/bug protocol and release checklist live in `docs/TESTING.md`.
 

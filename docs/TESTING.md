@@ -133,9 +133,15 @@ same path a human does: upload, play, draw, range, zoom, submit.
   far annotation is a 0.12 ghost and the current one is full; the ⏱ button sets `until`; zoom
   narrows the window and Fit restores it; the timeline shows a marker and a range band; `K`
   pauses and `.` steps a frame; the submit persists `at`/`until`; `review.md` prints the range.
-
-Contact sheet, full-resolution frames, video rounds in history and `post_round` video are phase 3
-and are not covered yet.
+- Frames and rounds: two annotated moments produce two `frames/*.png` files served as PNG, a
+  1014×394 contact sheet (not the current frame), and `### Frames` entries in `review.md`; the
+  history entry records `frames: 2`. STOP after `get_feedback` keeps the round, **New video**
+  asks first, a second recorded clip becomes the live 0.63 s round with empty annotations, the
+  previous clip answers `200 video/webm` under `history/<stamp>/video`, and clicking the history
+  row plays that clip read-only with its two annotations; *Back to current* restores the new
+  live clip and the New video control.
+- Rust `tests/api.rs` also covers `multipart` submit dedupe/limits, `POST
+  /api/sessions/{id}/video` + archived-range, and MCP `post_round` video in `tests/mcp.rs`.
 
 ## Feature protocol
 
@@ -154,7 +160,8 @@ and are not covered yet.
 - [ ] `desktop/scripts/e2e.sh` green (see `PLAN.md` for the current count)
 - [ ] the tool matrix covers rectangle, ellipse, arrow, pen, select/move, note, undo, submit
 - [ ] video: upload a real clip, pause on a frame, draw a point and a range, scrub to another
-      time (ghost), zoom the timeline, submit, and check the agent feedback timecodes
+      time (ghost), zoom the timeline, submit, check the agent feedback timecodes/frames/contact
+      sheet, post a new clip and replay the previous round from History
 - [ ] agent concurrency: settings save, branch shown in the rail, claim limits/branch locks green,
       and two claims run in separate worktrees
 - [ ] every changed UI control was clicked by the e2e; every changed endpoint has a Rust test

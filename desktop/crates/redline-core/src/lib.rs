@@ -35,6 +35,11 @@ pub const MAX_POSTER_BYTES: usize = 8 * 1024 * 1024;
 /// Product limit for a review clip. The UI checks the browser's duration and the server rejects a
 /// declared duration over the limit; a client that omits duration is bounded by the byte cap.
 pub const MAX_VIDEO_DURATION_MS: u64 = 5 * 60 * 1000;
+/// Per-submission full-frame cap: 20 unique annotated timestamps, ~60 MB of frames.
+pub const MAX_FRAME_COUNT: usize = 20;
+pub const MAX_FRAMES_BYTES: usize = 60 * 1024 * 1024;
+/// Multipart submit body: the contact sheet plus the frames, with room for MIME overhead.
+pub const MAX_SUBMIT_BYTES: usize = 80 * 1024 * 1024;
 
 /// Protocol version reported to MCP clients.
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";

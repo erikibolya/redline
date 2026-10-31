@@ -1,9 +1,8 @@
 # Video reviews — design and delivery plan
 
-Status: **phase 2 implemented in `feat/video-editor`** (server media core + browser upload, canvas
-playback, timecoded annotations and ranges, ghost visibility, zoomable timeline with overview,
-ruler and markers). Contact sheet/full frames, video rounds in history and `post_round` video are
-phase 3.
+Status: **phase 3 implemented in `feat/video-frames`** (server media core, browser upload, canvas
+playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full frames,
+new video rounds/history playback and agent `post_round` video). Phase 4 is the release pass.
 
 ## 0. Decisions from the product owner (2026-10-31)
 
@@ -56,6 +55,7 @@ In:
 - inspector rows with timecodes; clicking a row seeks the video;
 - submit: annotations JSON + timecoded `review.md` + a labelled contact sheet **and**
   full-resolution frames for the unique annotated timestamps (bounded; see §7);
+- post a new video as the next round; the previous clip and its round move to history;
 - history: view a previous video round read-only, seek and inspect its annotations;
 - MCP/API: create a video review, read timecoded feedback, post a new video round;
 - poster image used by the dashboard gallery and rail;
@@ -217,7 +217,7 @@ sessions/<id>/
 
 Policy: **move** the old video into history when a new video is posted (no duplicate bytes);
 keep the current video on annotation-only resubmits; keep the existing 20-round retention and show
-session disk usage (warning at 2 GB) rather than silently deleting videos.
+session disk usage in the History summary (red past 2 GB) rather than silently deleting videos.
 
 ## 5. Server and API
 
@@ -245,35 +245,42 @@ The current `MAX_BODY_BYTES` is 60 MB and the JSON path base64-encodes everythin
 
 - Image reviews keep the existing JSON submit (`annotations` + one base64 `png`).
 - Video reviews use a multipart submit on `POST /api/sessions/{id}/annotations`:
-  - `annotations` — the JSON `Submission` (with `at`/`until`),
-  - `png` — the contact sheet,
-  - `frames` — zero or more full-resolution PNG files named by their timecode
-    (`2.340.png`), capped per §7.
-  The server writes `frames/` and reuses the existing submission/archive path. A JSON-only video
-  submit is still accepted for agents/tests with annotations but no visual frames; the server
-  then has no contact sheet to serve and says so.
+  - `annotations` — the JSON `Submission` (with `at`/`until`; no `png` inside),
+  - `png` — the composed contact sheet,
+  - `frames` — zero or more full-resolution files named by their timecode
+    (`2.340.png` or `2.340.jpg`), capped at 20 unique times / 60 MB.
+  The browser captures one frame per unique annotated millisecond; when PNG exceeds the budget it
+  re-encodes the same full-resolution frames as JPEG rather than dropping any. The server validates
+  PNG/JPEG magic bytes, writes `frames/`, records `AnnotationSet.frames` and archives the files
+  with the round. A JSON-only video submit is still accepted (annotations, no sheet/frames).
 
 ### 5.3 Serving and seeking
 
-- `GET /sessions/{id}/media` (or `/video`) streams the file with `Accept-Ranges`, `Content-Type`
-  and `206 Partial Content` for `Range`. The current `serve_file` reads the whole file and has no
-  range support; video seeking needs a range-capable handler (tower-http `ServeFile` or a small
-  reader).
+- `GET /sessions/{id}/media` streams the file with `Accept-Ranges`, `Content-Type` and
+  `206 Partial Content` for `Range` via `ServeFile`. The live URL is cache-busted per load: a
+  media element happily reuses `.../media?v=video.webm` after a new round replaced the file.
 - `GET /sessions/{id}/image` keeps serving the image; for a video session it serves `poster.png`
   so the existing gallery/rail card code keeps working.
-- `GET /sessions/{id}/annotated.png` remains the contact sheet for videos.
-- Optional later: `GET /sessions/{id}/frame?at=2.340` (server-side frame extraction with ffmpeg)
-  for agents/tools that want full-resolution frames.
+- `GET /sessions/{id}/annotated.png` is the contact sheet for videos.
+- `GET /sessions/{id}/frames/{file}` serves a full-resolution still.
+- `POST /api/sessions/{id}/video` (multipart) posts the next video round: the current round is
+  archived (annotations, sheet, frames and the clip under `history/<stamp>/video.*`), the clip is
+  replaced and the session reopens with empty annotations.
+- `GET /sessions/{id}/history/{stamp}/video` plays an archived round with `Range`;
+  `/history/{stamp}/frames/{file}` serves its archived stills.
+- Optional later: `GET /sessions/{id}/frame?at=2.340` (server-side extraction with ffmpeg).
 
 ### 5.4 Store / model
 
-- `Store::create_video`, `Store::attach_media`, `Store::submit` (media-aware), `archive_round`
-  (move video), `review_markdown` (timecodes).
+- `Store::create_video_from_bytes/path`, `Store::submit_round` (sheet + frames),
+  `Store::new_video_round`, `archive_round` (frames and video), `review_markdown` (timecodes and
+  frames).
 - MIME validation by magic bytes, not just the extension; reject `text/html` and executables.
-- `MAX_BODY_BYTES` stays for JSON; the multipart route has its own (configurable) limit and
-  streams to disk.
-- `ServeFile` / range tests; cache headers stay `no-store` for API, but video bytes may be cached
-  with a valid range/ETag policy (seek performance); decide.
+- `MAX_BODY_BYTES` stays for JSON; the multipart create route allows 251 MB and the multipart
+  submit allows 80 MB. The parser still buffers the video in memory (a known follow-up; the caps
+  are enforced).
+- `ServeFile` / range tests; cache headers stay `no-store`, but the browser cache is bypassed
+  with a per-load query because media elements are stubborn.
 
 ## 6. Browser/editor engine
 
@@ -423,10 +430,10 @@ timeline; the contact sheet tile; a full frame; the poster card.
 2. **Editor and browser upload** — multipart upload from the New review dialog, video
    load/draw/fit, video bar, basic controls, zoomable timeline with overview strip and markers,
    ghost/fade annotation visibility, pause/draw, annotation `at`/`until`, inspector timecodes;
-   e2e with a recorded fixture. *(implemented in `feat/video-editor`)*
+   e2e with a recorded fixture. *(merged as `feat/video-editor`, PR #62)*
 3. **Submit and agent output** — contact sheet + full-resolution frames for unique annotation
-   times, `review.md` timecodes, `annotated.png`, MCP `review_video`/`get_feedback` frames,
-   history viewer, poster cards.
+   times, `review.md` timecodes, `annotated.png`, MCP `get_feedback` frames, new video rounds and
+   history playback, `post_round` video. *(implemented in `feat/video-frames`)*
 4. **Polish and release** — desktop upload/codec/limits, accessibility/touch, docs, full e2e,
    version bump/release.
 

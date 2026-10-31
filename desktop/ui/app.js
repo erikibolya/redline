@@ -129,6 +129,63 @@ function resolvedDuration(video) {
   });
 }
 
+/// Read a dropped/picked video's duration, dimensions and first frame. Shared by the New review
+/// dialog and the editor's "New video" button; always revokes the object URL.
+async function readVideoFile(file) {
+  if (!file || !file.type.startsWith("video/")) {
+    throw new Error("That is not a video.");
+  }
+  if (file.size > 250 * 1024 * 1024) {
+    throw new Error("Video is larger than the 250 MB limit.");
+  }
+  const video = document.createElement("video");
+  video.muted = true;
+  video.preload = "auto";
+  video.src = URL.createObjectURL(file);
+  try {
+    await new Promise((resolve, reject) => {
+      video.onloadeddata = resolve;
+      video.onerror = () => reject(new Error("Could not read this video (unsupported codec?)."));
+    });
+    const duration = await resolvedDuration(video);
+    if (duration > 300) {
+      throw new Error("Video is longer than the 5 minute review limit. Trim the clip first.");
+    }
+    if (video.currentTime !== 0) {
+      await new Promise((resolve) => {
+        video.onseeked = resolve;
+        video.currentTime = 0;
+      });
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    const poster = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    return {
+      width: video.videoWidth,
+      height: video.videoHeight,
+      duration,
+      poster,
+    };
+  } finally {
+    URL.revokeObjectURL(video.src);
+  }
+}
+
+/// Human-readable byte count for the session-size warning.
+function formatBytes(bytes) {
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = Number(bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
 /// `mm:ss.mmm` (or `hh:mm:ss.mmm`) for video timecodes.
 function timecode(seconds) {
   const total = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
@@ -1365,6 +1422,7 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
+      this.showSessionSize(data.disk_bytes || 0);
       lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
       this.serverAnnotations = JSON.stringify(server);
@@ -1418,7 +1476,7 @@ class Editor {
   }
 
   get isVideo() {
-    return this.meta?.media?.kind === "video" && Boolean(this.video);
+    return Boolean(this.video);
   }
 
   mediaWidth() {
@@ -1429,10 +1487,8 @@ class Editor {
     return this.video?.videoHeight || this.image?.naturalHeight || 0;
   }
 
-  /// Load the session media: an image stays an Image, a video becomes an HTMLVideoElement drawn
-  /// into the same canvas. Video playback is muted in v1.
-  loadMedia(meta) {
-    if (meta?.media?.kind !== "video") return this.loadImage(meta?.image || "");
+  /// Load a video element from any session URL (live clip or archived round) into the canvas.
+  loadVideoFrom(url) {
     if (this.video) this.video.pause();
     return new Promise((resolve) => {
       const video = document.createElement("video");
@@ -1448,16 +1504,26 @@ class Editor {
         this.video = video;
         this.videoWindow = { start: 0, end: duration };
         this.bindVideo(video);
-        resolve();
+        resolve(video);
       };
       video.onerror = () => {
         this.image = null;
         this.video = null;
+        this.syncVideoBar();
         this.showStageMessage("Video missing", "Could not play this video (unsupported codec?).");
-        resolve();
+        resolve(null);
       };
-      video.src = `/sessions/${encodeURIComponent(this.sessionId)}/media?v=${encodeURIComponent(meta.image)}`;
+      video.src = url;
     });
+  }
+
+  /// Load the session media: an image stays an Image, a video becomes an HTMLVideoElement drawn
+  /// into the same canvas. Video playback is muted in v1.
+  loadMedia(meta) {
+    if (meta?.media?.kind !== "video") return this.loadImage(meta?.image || "");
+    return this.loadVideoFrom(
+      `/sessions/${encodeURIComponent(this.sessionId)}/media?v=${encodeURIComponent(meta.image)}&r=${Date.now()}`,
+    );
   }
 
   bindVideo(video) {
@@ -1512,6 +1578,8 @@ class Editor {
     }
     const speed = $("#video-speed");
     if (speed) speed.value = String(video.playbackRate || 1);
+    const next = $("#video-new");
+    if (next) next.hidden = !video || this.locked || Boolean(this.viewing);
     const overview = $("#timeline-window");
     if (overview && duration > 0) {
       overview.style.left = `${(window.start / duration) * 100}%`;
@@ -1539,7 +1607,7 @@ class Editor {
     for (let at = first; at <= end + 1e-6; at += step) {
       const left = ((at - start) / span) * 100;
       const short = step < 1
-        ? timecode(at).replace(/^0?(\d+):(\d{2})\.\d(\d{2})$/, (_, m, s, tenth) => `${m}:${s}.${tenth}`)
+        ? timecode(at).replace(/^0?(\d+):(\d{2})\.(\d)\d{2}$/, (_, m, s, tenth) => `${m}:${s}.${tenth}`)
         : timecode(at).replace(/\.\d+$/, "");
       // Keep the edge labels inside the bar: half a label hanging over the end reads clipped.
       const place = left < 2
@@ -1598,6 +1666,55 @@ class Editor {
       : "";
   }
 
+  /// Replace the clip with the next round. The server archives the previous round (annotations,
+  /// contact sheet, frames and video) and reopens the session; unsaved canvas marks are lost, so
+  /// ask first.
+  pickNewVideo() {
+    if (!this.video || this.locked || this.viewing) return;
+    if (this.annotations.length && !confirm(
+      "Post a new video as the next round? Unsaved annotations will be discarded; the submitted round (if any) stays in History.",
+    )) return;
+    $("#video-file")?.click();
+  }
+
+  async uploadNewVideo(file) {
+    const button = $("#video-new");
+    const label = button?.textContent || "New video";
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Uploading…";
+    }
+    try {
+      const details = await readVideoFile(file);
+      const form = new FormData();
+      form.append("video", file, file.name || "video.mp4");
+      if (details.poster) form.append("poster", details.poster, "poster.png");
+      if (details.duration > 0) {
+        form.append("duration_ms", String(Math.round(details.duration * 1000)));
+      }
+      form.append("width", String(details.width));
+      form.append("height", String(details.height));
+      const body = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/video`, {
+        method: "POST",
+        body: form,
+      });
+      this.meta = body.meta;
+      this.drafts.delete(this.sessionId);
+      this.annotations = [];
+      this.selected.clear();
+      this.viewing = null;
+      await this.load(this.sessionId);
+      await this.rail.load();
+    } catch (error) {
+      alert(`Could not post the new video: ${error.message}`);
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = label;
+      }
+    }
+  }
+
   seekTo(seconds, selectIndex = -1) {
     if (!this.video) return;
     this.video.currentTime = Math.min(this.video.duration || 0, Math.max(0, seconds));
@@ -1642,6 +1759,12 @@ class Editor {
       this.ghosts = !this.ghosts;
       ghosts.setAttribute("aria-pressed", String(this.ghosts));
       this.render();
+    });
+    $("#video-new")?.addEventListener("click", () => this.pickNewVideo());
+    $("#video-file")?.addEventListener("change", (event) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (file) this.uploadNewVideo(file);
     });
     $("#timeline-zoom-in")?.addEventListener("click", () => this.zoomTimeline(1 / 1.6));
     $("#timeline-zoom-out")?.addEventListener("click", () => this.zoomTimeline(1.6));
@@ -1690,6 +1813,19 @@ class Editor {
     box.innerHTML = `<div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p></div>`;
   }
 
+  /// Files stay on disk, including every video round, so the History summary carries the real
+  /// size and turns red past 2 GB instead of letting the archive grow silently.
+  showSessionSize(bytes) {
+    const label = $("#session-size");
+    if (!label) return;
+    label.textContent = formatBytes(bytes);
+    const warn = bytes > 2 * 1024 * 1024 * 1024;
+    label.classList.toggle("warn", warn);
+    label.title = warn
+      ? "Over 2 GB. Videos are kept in history; delete old rounds you no longer need."
+      : "Session size on disk";
+  }
+
   renderHeader() {
     $("#session-title").textContent = this.meta.title || this.meta.id;
     const bits = [this.meta.id, this.meta.image_width && this.meta.image_height
@@ -1711,10 +1847,12 @@ class Editor {
     button.classList.toggle("stop", waiting);
     const composer = $("#composer-text");
     if (composer) {
-      composer.disabled = waiting;
+      composer.disabled = waiting || Boolean(this.viewing);
       composer.placeholder = waiting
         ? "Waiting for the agent — press STOP to edit again"
-        : "What should change? Sent with the annotations…";
+        : this.viewing
+          ? "Read-only historical round — back to current to edit"
+          : "What should change? Sent with the annotations…";
     }
     this.updateLock();
     const stageStatus = $("#stage-status");
@@ -3131,7 +3269,7 @@ class Editor {
           <span class="label">
             <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
             <span>${escapeHtml(stampTime(round.stamp))} · ${plural(round.annotations, "annotation")}${
-              round.source ? " · image" : ""
+              round.media?.kind === "video" ? " · video" : round.source ? " · image" : ""
             }</span>
           </span>
         </div>`);
@@ -3176,11 +3314,6 @@ class Editor {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const set = await response.json();
       const round = (this.historyEntries || []).find((entry) => entry.stamp === stamp);
-      const file = round?.source ? `${stamp}-source.png` : `${stamp}.png`;
-      const image = await this.loadImageFrom(
-        `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(file)}`,
-      );
-      if (!image) return;
       if (!this.viewing) {
         this.live = {
           image: this.image,
@@ -3188,15 +3321,33 @@ class Editor {
           meta: this.meta,
           count: this.annotations.length,
         };
+        if (this.video) this.video.pause();
       }
+      // A video round plays in the same canvas and video bar; an image round keeps the source
+      // PNG viewer. Both are read-only: `viewing` guards every mutation.
+      const historyVideo = round?.media?.kind === "video";
+      let image;
+      if (historyVideo) {
+        image = await this.loadVideoFrom(
+          `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(stamp)}/video`,
+        );
+      } else {
+        const file = round?.source ? `${stamp}-source.png` : `${stamp}.png`;
+        image = await this.loadImageFrom(
+          `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(file)}`,
+        );
+      }
+      if (!image) return;
       this.viewing = {
         stamp,
         round: round?.round || 0,
         annotations: Array.isArray(set.annotations) ? set.annotations : [],
+        video: historyVideo,
       };
       this.image = image;
       this.annotations = this.viewing.annotations;
       this.selected.clear();
+      this.syncVideoBar();
       this.updateViewingBar();
       this.renderHeader();
       this.renderInspector();
@@ -3252,6 +3403,10 @@ class Editor {
       const button = $(id);
       if (button) button.disabled = this.locked;
     });
+    // A history round is read-only: submitting the canvas would send the archived annotations as
+    // a new live round, so the primary action is disabled until Back to current.
+    const submit = $("#submit");
+    if (submit) submit.disabled = Boolean(this.viewing);
     const dim = $("#stage-dim");
     if (dim) dim.hidden = !this.locked;
     if (this.locked) {
@@ -3267,6 +3422,7 @@ class Editor {
     // The inspector was rendered before the meta arrived on a reload: re-render it, or a
     // submitted round still shows its delete buttons and write toolbar.
     if (before !== this.locked) this.renderInspector();
+    if (this.video) this.syncVideoBar();
   }
 
   updateViewingBar() {
@@ -3551,7 +3707,209 @@ class Editor {
 
   // ---------------------------------------------------------- submit
 
+  /// Seek the video and wait until the decoded frame is ready to draw. `seeked` alone can fire
+  /// before the new frame is composited, so give the renderer two turns.
+  async seekFrame(at) {
+    const video = this.video;
+    if (!video) return;
+    if (Math.abs(video.currentTime - at) > 0.0005) {
+      await new Promise((resolve) => {
+        const done = () => {
+          video.removeEventListener("seeked", done);
+          resolve();
+        };
+        video.addEventListener("seeked", done);
+        video.currentTime = at;
+      });
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }
+
+  /// Capture the full-resolution frame at `at` as a Blob (PNG, with a JPEG fallback when the
+  /// 60 MB budget is exceeded).
+  async captureFrame(at, type = "image/png", quality = 0.92) {
+    await this.seekFrame(at);
+    const canvas = document.createElement("canvas");
+    canvas.width = this.mediaWidth();
+    canvas.height = this.mediaHeight();
+    canvas.getContext("2d").drawImage(this.image, 0, 0);
+    return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+  }
+
+  /// The contact sheet: one tile per unique annotation time, with that moment's annotations
+  /// painted over the frame and a timecode label. This is what `annotated.png` carries for video.
+  async makeContactSheet(tiles) {
+    const width = this.mediaWidth();
+    const height = this.mediaHeight();
+    const tileW = 480;
+    const tileH = Math.max(1, Math.round((tileW * height) / width));
+    const labelH = 30;
+    const headerH = 54;
+    const pad = 20;
+    const gap = 14;
+    const cols = Math.min(3, Math.max(1, tiles.length));
+    const rows = Math.max(1, Math.ceil(tiles.length / 3));
+    const canvas = document.createElement("canvas");
+    canvas.width = pad * 2 + cols * tileW + (cols - 1) * gap;
+    canvas.height = headerH + pad * 2 + rows * (tileH + labelH) + (rows - 1) * gap;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#f8fafc";
+    ctx.font = "600 20px -apple-system, 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(this.meta.title || "Video review", pad, 34);
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "12px -apple-system, 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(
+      `${tiles.length} annotated moment${tiles.length === 1 ? "" : "s"} · click any timecode in RedLine`,
+      pad,
+      50,
+    );
+    for (let index = 0; index < tiles.length; index += 1) {
+      const tile = tiles[index];
+      const col = index % 3;
+      const row = Math.floor(index / 3);
+      const x = pad + col * (tileW + gap);
+      const y = headerH + pad + row * (tileH + labelH + gap);
+      const image = await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = URL.createObjectURL(tile.blob);
+      });
+      if (image) {
+        ctx.drawImage(image, x, y, tileW, tileH);
+        URL.revokeObjectURL(image.src);
+      }
+      ctx.strokeStyle = "#334155";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, tileW - 1, tileH - 1);
+      ctx.fillStyle = "#111827";
+      ctx.fillRect(x, y + tileH, tileW, labelH);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "600 14px ui-monospace, SFMono-Regular, Menlo, monospace";
+      const numbers = tile.annotations.map((annotation) => annotation.index + 1).join(", ");
+      ctx.fillText(
+        `${timecode(tile.at)}${numbers ? ` · annotation${numbers.includes(",") ? "s" : ""} ${numbers}` : ""}`,
+        x + 10,
+        y + tileH + 20,
+      );
+      // Paint the annotations that belong to this moment at the tile's scale.
+      const scale = tileW / width;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+      for (const entry of tile.annotations) {
+        const annotation = entry.annotation;
+        this.paint(ctx, annotation, false);
+        if (annotation.type !== "text") {
+          this.paintBadge(ctx, annotation, entry.index + 1, 15 / scale, 2 / scale);
+        }
+      }
+      ctx.restore();
+    }
+    return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  }
+
+  /// Video submit: capture the annotated moments, build the contact sheet, and send both the
+  /// contact sheet and the full-resolution stills as multipart. The JSON path stays for images.
+  async submitVideo(button, label) {
+    const note = $("#composer-text")?.value.trim() || "";
+    const times = [...new Set(
+      this.annotations
+        .filter((annotation) => typeof annotation.at === "number")
+        .map((annotation) => Math.round(annotation.at * 1000)),
+    )].sort((a, b) => a - b).slice(0, 20);
+    const origin = this.video.currentTime;
+    const wasPlaying = !this.video.paused;
+    this.video.pause();
+    try {
+      const captures = [];
+      for (let index = 0; index < times.length; index += 1) {
+        button.textContent = `Frame ${index + 1}/${times.length}…`;
+        const at = times[index] / 1000;
+        const blob = await this.captureFrame(at);
+        if (blob) captures.push({ at, blob, ext: "png" });
+      }
+      // The product cap is ~60 MB of full frames. PNG keeps text crisp; a photographic clip can
+      // blow the budget, so re-encode at full resolution as JPEG rather than dropping frames.
+      let total = captures.reduce((sum, capture) => sum + capture.blob.size, 0);
+      for (const quality of [0.92, 0.85, 0.78]) {
+        if (total <= 60 * 1024 * 1024) break;
+        captures.length = 0;
+        for (let index = 0; index < times.length; index += 1) {
+          const blob = await this.captureFrame(times[index] / 1000, "image/jpeg", quality);
+          if (blob) captures.push({ at: times[index] / 1000, blob, ext: "jpg" });
+        }
+        total = captures.reduce((sum, capture) => sum + capture.blob.size, 0);
+      }
+      const tiles = times.map((ms) => {
+        const at = ms / 1000;
+        const matching = this.annotations
+          .map((annotation, index) => ({ annotation, index }))
+          .filter(({ annotation }) => typeof annotation.at === "number"
+            && Math.round(annotation.at * 1000) === ms);
+        return { at, blob: captures.find((capture) => Math.round(capture.at * 1000) === ms)?.blob, annotations: matching };
+      }).filter((tile) => tile.blob);
+      if (!tiles.length) {
+        // A video review can be submitted with a note and no timecoded shapes: still give the
+        // agent a visual of the current frame.
+        button.textContent = "Contact sheet…";
+        const blob = await this.captureFrame(origin);
+        if (blob) {
+          const current = this.annotations
+            .map((annotation, index) => ({ annotation, index }));
+          tiles.push({ at: origin, blob, annotations: current });
+        }
+      }
+      button.textContent = "Contact sheet…";
+      const sheet = await this.makeContactSheet(tiles);
+      const form = new FormData();
+      form.append("annotations", JSON.stringify({
+        annotations: this.annotations,
+        width: this.mediaWidth(),
+        height: this.mediaHeight(),
+        note,
+      }));
+      if (sheet) form.append("png", sheet, "contact-sheet.png");
+      for (const capture of captures) {
+        form.append("frames", capture.blob, `${capture.at.toFixed(3)}.${capture.ext}`);
+      }
+      button.textContent = "Uploading…";
+      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/annotations`, {
+        method: "POST",
+        body: form,
+      });
+      if (result?.meta) this.meta = result.meta;
+      this.drafts.delete(this.sessionId);
+      this.syncDirty();
+      this.serverAnnotations = JSON.stringify(this.annotations);
+      const composer = $("#composer-text");
+      if (composer) composer.value = "";
+      this.renderHeader();
+      this.renderInspector();
+      this.renderConversation();
+      if ($("#history-block")?.open) this.loadHistory();
+      await this.loadConversation({ quiet: true });
+      this.seenConversation();
+      document.activeElement?.blur?.();
+      await this.rail.load();
+      button.textContent = "Submitted ✓";
+      setTimeout(() => {
+        button.disabled = false;
+        this.renderHeader();
+      }, 1400);
+    } finally {
+      if (this.video) {
+        this.video.currentTime = Math.min(origin, this.video.duration || origin);
+        if (wasPlaying) this.video.play().catch(() => {});
+      }
+    }
+    void label;
+  }
+
   async submit() {
+    if (this.viewing) return;
     if (this.meta?.status === "submitted") return this.stop();
     if (!this.image) return;
     const button = $("#submit");
@@ -3559,6 +3917,10 @@ class Editor {
     button.disabled = true;
     button.textContent = "Submitting…";
     try {
+      if (this.isVideo) {
+        await this.submitVideo(button, label);
+        return;
+      }
       const exportCanvas = document.createElement("canvas");
       exportCanvas.width = this.mediaWidth();
       exportCanvas.height = this.mediaHeight();
@@ -3822,46 +4184,7 @@ const NewReview = {
       take(event.dataTransfer.files[0]);
     });
     /// Read duration/dimensions and render the first frame as the poster before uploading.
-    const videoDetails = async () => {
-      let video = videoPreview;
-      let owned = false;
-      if (!video || !video.src) {
-        video = document.createElement("video");
-        video.muted = true;
-        video.src = URL.createObjectURL(picked);
-        owned = true;
-      }
-      if (!video.videoWidth || video.readyState < 2) {
-        await new Promise((resolve, reject) => {
-          video.onloadeddata = resolve;
-          video.onerror = () => reject(new Error("Could not read this video."));
-          video.load();
-        });
-      }
-      const duration = await resolvedDuration(video);
-      if (duration > 300) {
-        throw new Error("Video is longer than the 5 minute review limit. Trim the clip first.");
-      }
-      if (video.currentTime !== 0) {
-        await new Promise((resolve) => {
-          video.onseeked = resolve;
-          video.currentTime = 0;
-        });
-      }
-      const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      canvas.getContext("2d").drawImage(video, 0, 0);
-      const poster = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
-      const details = {
-        width: video.videoWidth,
-        height: video.videoHeight,
-        duration,
-        poster,
-      };
-      if (owned) URL.revokeObjectURL(video.src);
-      return details;
-    };
+    const videoDetails = () => readVideoFile(picked);
     $("#new-cancel").addEventListener("click", () => NewReview.close());
     $("#new-close")?.addEventListener("click", () => NewReview.close());
     $("#f-title")?.addEventListener("input", () => NewReview.suggestBranch());

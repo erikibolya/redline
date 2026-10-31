@@ -709,20 +709,44 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
 .ann-row .end:hover { background: var(--accent); color: #fff; }
 .inspector-empty { color: var(--muted); text-align: center; padding: 22px 10px; font-size: 12px; }
 /* History rounds are a list of small, bounded rows — no dead space around them. */
-#history-list .history-row.live {
-  background: rgba(47, 129, 247, .10);
-  border-color: rgba(47, 129, 247, .28);
-}
 #history-list .history-row.selected { border-color: var(--accent); background: var(--panel-3); }
-#history-list .history-row.selected.live { background: rgba(47, 129, 247, .16); }
+/* The live round is not a different kind of card: it keeps the same fill and border as the
+   archived rounds, and only its glyph turns green so it stands out. When it is the row being
+   viewed (the normal live state) it must not also wear the selection outline. */
+#history-list .history-row.live,
+#history-list .history-row.live.selected { background: var(--panel-2); border-color: var(--border); }
+#history-list .history-row.live .glyph {
+  background: rgba(22, 163, 74, .16); border-color: rgba(22, 163, 74, .45); color: var(--ok);
+}
+[data-theme="light"] #history-list .history-row.live .glyph {
+  background: #dcfce7; border-color: #86efac; color: #15803d;
+}
 .history-list { display: flex; flex-direction: column; gap: 4px; }
 .history-row {
   padding: 4px 6px; gap: 6px; border-radius: 6px;
   background: var(--panel-2); border-color: var(--border);
+  /* A history row is two lines (title + timestamp), so centring the glyph across the row left it
+     floating between them. The marker belongs to the title line: start the row at the top and
+     lift the glyph by half the difference between the title's line box and the glyph. */
+  align-items: flex-start;
 }
-.history-row + .history-row { margin-top: 0; border-top-color: var(--border); }
+/* History rows are 4px apart and each owns all four corners. The generic `.ann-row + .ann-row`
+   divider squares the top corners for a stacked list, which left every round below the first
+   looking chopped off; restore the radius here. */
+.history-row + .history-row {
+  margin-top: 0; border-top-color: var(--border);
+  border-top-left-radius: 6px; border-top-right-radius: 6px;
+}
 .history-row:hover { background: var(--panel-3); }
-.history-row .glyph { width: 18px; height: 18px; border-radius: 4px; font-size: 10px; }
+.history-row .glyph {
+  width: 18px; height: 18px; border-radius: 4px; font-size: 10px;
+  /* The title line is 11px × the body's 1.45 line-height; lift the 18px glyph by half the
+     difference so its centre meets the centre of "Current"/"Round N", not of the whole row. */
+  margin-top: calc((1.45 * 11px - 18px) / 2);
+  /* A centred em box is not a centred digit: digits have no descender, so the numeral sat ~2px
+     high in the square. Pad the top to put the ink in the middle of the box. */
+  padding-top: 2px;
+}
 .history-row .label b { font-size: 11px; }
 .history-row .label span { font-size: 10px; }
 .history-row .del { padding: 2px; font-size: 11px; line-height: 1; }

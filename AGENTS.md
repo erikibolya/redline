@@ -256,6 +256,22 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   the annotation list read as a stack of open frames. A divider spans the row: square the top
   corners (or use a pseudo-element), and assert it in the e2e — a "broken border" is invisible to
   every DOM test that does not measure the row.
+- **A shared list class is not a shared shape.** The history rows reuse `.ann-row`, so the
+  divider's squared top corners also reached them — but history rows are 4 px apart and each owns
+  its whole border, so every round below the first looked chopped off. A style that exists for one
+  list must be scoped to it (or restored on the other). Assert the radius of *every* row, not
+  just the first.
+- **A highlight is not the only way to mark a live row.** The live history row tinted its fill and
+  border blue, so it read as a different kind of card; the human asked for the same card as every
+  other round with only the glyph green. Colour the smallest marker that has to stand out, and keep
+  selection (which round you are viewing) a separate signal.
+
+- **A centred icon is not an aligned icon.** A history row is two lines (title + timestamp) and
+  `.ann-row` centres its glyph on the whole row, so the round number and the live bullet floated
+  *between* "Round N" and the date instead of sitting beside the title (two annotations on the same
+  column). Align the glyph to the title's line box, not to the card. And a centred *em box* is not a
+  centred digit: digits have no descender, so the numeral sat ~2 px high inside its square — pad the
+  top and assert the ink centre, not just the element's centre.
 
 - **A grid column resize is not a canvas resize.** Moving `--rail` or `--inspector` reflows the
   layout, but the `<canvas>` bitmap keeps its old pixel size until `resize()` runs — so the stage

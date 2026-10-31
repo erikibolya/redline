@@ -883,7 +883,12 @@ const main = async () => {
   const second = at(700, 485);
   await page.mouse.click(second.x, second.y);
   await page.keyboard.up("Shift");
-  const selected = await page.evaluate(() => window.redline.selected.size);
+  let selected = 0;
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    selected = await page.evaluate(() => window.redline.selected.size);
+    if (selected === 2) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   check("shift-click builds a multi-selection", selected === 2, `${selected} selected`);
 
   const alignVisible = await page.$eval('[data-align="left"]', (el) => !el.classList.contains("hidden"));
@@ -1075,10 +1080,15 @@ const main = async () => {
   // ---- z-order
   await page.mouse.click(rectA.x, rectA.y);
   await page.click('[data-layer="front"]');
-  const last = await page.evaluate(() => {
-    const list = window.redline.annotations;
-    return { type: list[list.length - 1].type, x: list[list.length - 1].start?.x };
-  });
+  let last = { type: "", x: 0 };
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    last = await page.evaluate(() => {
+      const list = window.redline.annotations;
+      return { type: list[list.length - 1].type, x: list[list.length - 1].start?.x };
+    });
+    if (last.type === "rect") break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   check("bring to front moves the selection last in paint order", last.type === "rect", JSON.stringify(last));
 
   // ---- diff between the archived round and now
@@ -1272,7 +1282,9 @@ const main = async () => {
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
   await page.waitForSelector('#chips [data-filter="resolved"]', { timeout: 10000 });
   let cancelDashboard = {};
-  for (let attempt = 0; attempt < 25; attempt += 1) {
+  // The dashboard may be restored from the back-forward cache and refresh asynchronously; a
+  // loaded CI runner needed more than the old 5 s budget.
+  for (let attempt = 0; attempt < 60; attempt += 1) {
     cancelDashboard = await page.evaluate((sessionId) => ({
       selected: Boolean(document.querySelector('.session[aria-current="true"]')),
       card: Boolean(document.querySelector(`#gallery .card[data-session="${sessionId}"]`)),
@@ -1414,8 +1426,81 @@ const main = async () => {
   });
   check("selected row is outlined on every side",
     borders[0] === borders[1] && borders[1] === borders[2], borders.join(" / "));
+  // A history row is a card, not a stacked list item: the shared `.ann-row + .ann-row` divider
+  // squared the top corners, so every round below the first looked chopped off.
+  const radii = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list .history-row")].map((row) => {
+      const style = getComputedStyle(row);
+      return [
+        style.borderTopLeftRadius, style.borderTopRightRadius,
+        style.borderBottomRightRadius, style.borderBottomLeftRadius,
+      ];
+    }),
+  );
+  check("every history row keeps all four rounded corners",
+    radii.length > 1 && radii.every((corners) => corners.every((radius) => radius === corners[0])),
+    JSON.stringify(radii));
+  // A history row is two lines (title + timestamp). The glyph column marks the title, so it has
+  // to line up with "Round N", not float in the middle of the card; and the digit inside its
+  // square has to be optically centred (its ink has no descender, so a centred em box sits high).
+  const glyphLook = await page.evaluate(() =>
+    [...document.querySelectorAll("#history-list .history-row")].map((row) => {
+      const glyphEl = row.querySelector(".glyph");
+      const glyph = glyphEl.getBoundingClientRect();
+      const title = row.querySelector(".label b");
+      const titleBox = title.getBoundingClientRect();
+      const style = getComputedStyle(glyphEl);
+      const range = document.createRange();
+      range.selectNodeContents(glyphEl);
+      const text = range.getBoundingClientRect();
+      const ctx = document.createElement("canvas").getContext("2d");
+      ctx.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      const metrics = ctx.measureText(glyphEl.textContent.trim());
+      const baseline = text.top + metrics.fontBoundingBoxAscent;
+      const inkCentre = baseline - (metrics.actualBoundingBoxAscent - metrics.actualBoundingBoxDescent) / 2;
+      return {
+        title: title.textContent,
+        marker: glyphEl.textContent.trim(),
+        line: +(((glyph.top + glyph.bottom) - (titleBox.top + titleBox.bottom)) / 2).toFixed(2),
+        ink: +(inkCentre - (glyph.top + glyph.bottom) / 2).toFixed(2),
+        size: glyph.height,
+      };
+    }),
+  );
+  check("every history glyph is centred on the title line, not on the card",
+    glyphLook.length > 1 && glyphLook.every((row) => Math.abs(row.line) <= 1),
+    JSON.stringify(glyphLook));
+  const numbered = glyphLook.filter((row) => /^\d+$/.test(row.marker));
+  check("the round number is centred inside its square",
+    numbered.length > 0 && numbered.every((row) => Math.abs(row.ink) <= 1),
+    JSON.stringify(glyphLook));
   await page.click("#viewing-bar");
   await page.waitForFunction(() => window.redline.viewing === null, { timeout: 5000 });
+  // `showCurrent` reloads the list; the stale rows still contain `current`, so wait for the
+  // live row to also be the selected one before reading its look.
+  await page.waitForFunction(
+    () => Boolean(document.querySelector("#history-list .history-row.live.selected")),
+    { timeout: 5000 },
+  );
+  // The live round is identified by its green glyph, not by a different fill or border.
+  const liveLook = await page.evaluate(() => {
+    const live = document.querySelector("#history-list .history-row.live");
+    const other = [...document.querySelectorAll("#history-list .history-row")]
+      .find((row) => row !== live);
+    const liveStyle = getComputedStyle(live);
+    const glyph = getComputedStyle(live.querySelector(".glyph"));
+    return {
+      live: [liveStyle.backgroundColor, liveStyle.borderTopColor],
+      other: other ? [getComputedStyle(other).backgroundColor,
+        getComputedStyle(other).borderTopColor] : [],
+      glyph: glyph.color,
+    };
+  });
+  check("the live history row looks like the other rounds",
+    liveLook.other.length === 2 && liveLook.live.join() === liveLook.other.join(),
+    JSON.stringify(liveLook));
+  check("the live history row is marked by a green glyph",
+    ["rgb(22, 163, 74)", "rgb(21, 128, 61)"].includes(liveLook.glyph), liveLook.glyph);
 
   // ---- unsent annotations survive a session switch
   await page.keyboard.press("r");

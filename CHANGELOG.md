@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **A history glyph belongs to the round's title, not to the middle of the card.** A history row
+  is two lines (title + timestamp), and `.ann-row` centres its glyph on the whole row, so the
+  bullet and the round number floated between "Current"/"Round N" and the date — two annotations
+  on the same column. The row now starts at the top and the glyph is lifted to the title's line
+  box. The number inside its square was also ~2 px high: a centred em box has no descender to
+  balance the digit, so it got a top pad. The e2e measures every glyph against its title's line
+  and the digit's ink against the square.
+
+- **History rows are cards, not a chopped stacked list.** They reuse `.ann-row`, whose divider
+  squares the top corners of every row after the first, so each archived round looked cut off
+  (the rows sit 4 px apart and each owns its whole border). The radius is restored per history
+  row. The live round no longer tints its fill and border blue either: it is the same card as the
+  archived rounds, with a green glyph as the only marker, and the accent outline is left to the
+  round currently being viewed. The e2e measures the radius of every row and compares the live
+  row's fill and border with a sibling's.
+
 - **Video media core.** The server can create a video session (MP4/WebM, magic-byte validation),
   store a poster and duration/dimensions, serve the clip with HTTP `Range` for seeking, and write
   timecoded annotations (`at`/`until`) into `annotations.json` and `review.md`. MCP gains

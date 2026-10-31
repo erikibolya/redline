@@ -412,9 +412,25 @@ fn ensure_worktree(config: &AgentConfig, repo: &Path, work_key: &str) -> Result<
         .ok_or_else(|| format!("worktree path is not UTF-8: {}", path.display()))?;
     let branch_ref = format!("refs/heads/{work_key}");
     let branch_exists = git_ok(repo, &["show-ref", "--verify", "--quiet", &branch_ref]);
+    let remote_ref = format!("refs/remotes/origin/{work_key}");
+    let remote_exists = git_ok(repo, &["show-ref", "--verify", "--quiet", &remote_ref]);
     let base = worktree_base(repo);
     let output = if branch_exists {
         git(repo, &["worktree", "add", path_arg, work_key])?
+    } else if remote_exists {
+        // The review may have been pushed from another clone; the handoff must start from those
+        // commits, not from a fresh branch at dev's tip.
+        git(
+            repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                work_key,
+                path_arg,
+                &format!("origin/{work_key}"),
+            ],
+        )?
     } else {
         git(repo, &["worktree", "add", "-b", work_key, path_arg, base])?
     };
@@ -459,16 +475,23 @@ fn release_worktree(config: &AgentConfig, repo: &Path, work_key: &str) {
     }
 }
 
-fn claim_next(config: &AgentConfig) -> Result<Option<(Value, Value)>, String> {
+fn claim_next(config: &AgentConfig) -> Result<Option<(Value, Value, String)>, String> {
     let value = api_post(
         config,
         "/api/agent/next",
-        &json!({ "agent_id": config.agent_id }),
+        // Declare the jobs this bridge can run. An old server ignores it; an old bridge sends no
+        // jobs and is never handed a confirmed feature it would treat as another review round.
+        &json!({ "agent_id": config.agent_id, "jobs": ["review", "handoff"] }),
     )?;
     if value["session"].is_null() {
         return Ok(None);
     }
-    Ok(Some((value["session"].clone(), value["claim"].clone())))
+    let job = value["job"].as_str().unwrap_or("review").to_string();
+    Ok(Some((
+        value["session"].clone(),
+        value["claim"].clone(),
+        job,
+    )))
 }
 
 fn claim_heartbeat(config: &AgentConfig, id: &str) -> Result<(), String> {
@@ -516,6 +539,11 @@ Project: {project}
 Feature branch: {branch}
 Work in this worktree only. Commit and push this branch; do not switch branches or rewrite
 published history.
+
+This is a review round, not a handoff. Do NOT open a pull request, run the repository's
+feature-ready flow, merge, tag or publish a release. The human's ✓ Confirm feature queues a
+separate handoff run; opening a PR now would hand off a feature they have not accepted. Pushing
+the branch is allowed and expected.
 Prompt from the human: {prompt}
 
 The human's annotations (JSON):
@@ -527,9 +555,10 @@ The rendered feedback:
 Your job:
 1. Read the repository's AGENTS.md and follow it.
 2. Implement what the annotations ask for. Keep the change minimal and in the style of the
-   codebase. Run the tests you can run. You may build and deploy with the repository's own
-   scripts when the review needs a visual result — the human expects a screenshot of the change.
-   Never rewrite published git history; leave the repository in a state a human can review.
+   codebase. Run the tests you can run. You may build and deploy to a dev/preview environment
+   with the repository's own scripts when the review needs a visual result — the human expects a
+   screenshot of the change. Never merge or deploy to production. Never rewrite published git
+   history; leave the repository in a state a human can review.
 3. Narrate as you work through the RedLine MCP endpoint with curl — one line per meaningful step,
    at most six:
    curl -s -H "Authorization: Bearer $REDLINE_TOKEN" -H 'content-type: application/json' \
@@ -551,12 +580,83 @@ interpretation and say what you assumed in the reply."#,
     )
 }
 
+/// The second run a feature gets: the human already confirmed it, so the agent may perform the
+/// integration's handoff (here: open the PR and merge). This is deliberately separate from
+/// `prompt_for`: the review run is forbidden to hand off, and only this prompt grants that
+/// permission.
+fn handoff_prompt_for(session: &Value, repo: &Path, branch: &str) -> String {
+    let id = session["id"].as_str().unwrap_or_default();
+    let project = session["project"].as_str().unwrap_or("Inbox");
+    let prompt = session["prompt"]
+        .as_str()
+        .or_else(|| session["note"].as_str())
+        .unwrap_or("(none)");
+    let handoff = &session["handoff"];
+    let previous_url = handoff["url"].as_str().unwrap_or("");
+    let previous = if let Some(message) = handoff["message"].as_str().filter(|m| !m.is_empty()) {
+        let reuse = if previous_url.is_empty() {
+            String::new()
+        } else {
+            format!(" Reuse the existing link: {previous_url}")
+        };
+        format!("A previous handoff attempt reported: {message}.{reuse}")
+    } else if !previous_url.is_empty() {
+        format!("A previous attempt left a link; reuse it: {previous_url}")
+    } else {
+        String::new()
+    };
+    format!(
+        r#"You are performing the handoff for a feature the human has already confirmed in RedLine.
+This is not a review round: do not redo the annotations, do not create a new review and do not
+post a round.
+
+Review id: {id}
+Project: {project}
+Feature branch: {branch}
+Worktree: {repo}
+The original request was: {prompt}
+{previous}
+
+The human confirmed this feature. Nobody is watching; do not ask questions.
+
+Your job (the reference git handoff):
+1. Read the repository's AGENTS.md and follow its shipping rules. Work only in this worktree
+   and on this branch.
+2. Make sure the branch is pushed. If the review left uncommitted changes, commit them on this
+   branch first. Never rewrite published git history.
+3. Open or reuse a pull request from this branch into the integration branch (dev if it exists,
+   otherwise main). Use the repository's own feature-ready flow if it has one (this repository:
+   `feature-ready "<summary>"`). Never open a second PR when one already exists for this branch.
+4. Wait for the required checks. Do not merge on red. Fix failures caused by this branch, push,
+   and wait again. Do not merge into main when the repository integrates through dev.
+5. Report the result through RedLine's MCP endpoint:
+   curl -s -H "Authorization: Bearer $REDLINE_TOKEN" -H 'content-type: application/json' \
+     -d '{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"handoff_status","arguments":{{"session_id":"{id}","state":"done","label":"merged","url":"https://github.com/OWNER/REPO/pull/N","message":"merge commit ..."}}}}}}' \
+     "$REDLINE_URL/mcp"
+   - `done` + label "merged" only when GitHub says the PR is merged.
+   - `failed` with a short label and message when checks fail, the PR is still open, or you
+     cannot merge. Include the PR URL in `url` so the human can click it.
+6. Do not create a RedLine review or post a round for this handoff. Do not send a reply; the
+   human sees the handoff state in the rail.
+
+If the branch is already merged, report the existing PR as done/merged. If there is nothing to
+ship, report failed with the reason."#,
+        id = id,
+        project = project,
+        branch = branch,
+        repo = repo.display(),
+        prompt = prompt,
+        previous = previous,
+    )
+}
+
 /// Run one `opencode run` to completion. `Ok(true)` means the process exited successfully.
 fn run_opencode(
     config: &AgentConfig,
     session_id: &str,
     prompt: &str,
     repo: &Path,
+    handoff: bool,
 ) -> Result<(bool, String), String> {
     let mut command = Command::new(&config.opencode_bin);
     command.arg("run");
@@ -601,7 +701,15 @@ fn run_opencode(
         if last_check.elapsed() >= Duration::from_secs(2) {
             last_check = Instant::now();
             if let Ok(value) = api_get(config, &format!("/api/sessions/{session_id}")) {
-                if value["meta"]["status"].as_str() != Some("submitted") {
+                // A review run lives while the round is submitted. A handoff run lives while
+                // the feature is still confirmed; reopening or cancelling it kills the handoff.
+                let alive = if handoff {
+                    value["meta"]["feature_confirmed_at"].is_string()
+                        && value["meta"]["handoff"].is_object()
+                } else {
+                    value["meta"]["status"].as_str() == Some("submitted")
+                };
+                if !alive {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err("stopped by the human".to_string());
@@ -652,7 +760,12 @@ fn handle_claimed(
     repo: &Path,
     work_key: &str,
     owned: &Arc<Mutex<HashSet<String>>>,
+    job: &str,
 ) {
+    if job == "handoff" {
+        handle_handoff_claimed(config, session, repo, work_key, owned);
+        return;
+    }
     let id = session["id"].as_str().unwrap_or_default().to_string();
     if let Ok(mut set) = owned.lock() {
         set.insert(id.clone());
@@ -690,7 +803,7 @@ fn handle_claimed(
     );
 
     let prompt = prompt_for(session, &feedback, &worktree, work_key);
-    let output = match run_opencode(config, &id, &prompt, &worktree) {
+    let output = match run_opencode(config, &id, &prompt, &worktree, false) {
         Ok((true, output)) => {
             eprintln!("redline-agent: {id} finished ({} bytes)", output.len());
             output
@@ -757,6 +870,179 @@ fn handle_claimed(
             if let Ok(mut set) = owned.lock() {
                 set.remove(&id);
             }
+        }
+    }
+}
+
+/// A handoff job failed before or during the agent run. Report it on the rail and release the
+/// claim; keep the worktree so a retry starts from the same commits.
+fn fail_handoff_claim(
+    config: &AgentConfig,
+    id: &str,
+    owned: &Arc<Mutex<HashSet<String>>>,
+    message: String,
+) {
+    let _ = mcp(
+        config,
+        "handoff_status",
+        json!({ "session_id": id, "state": "failed", "message": message }),
+    );
+    let _ = claim_release(config, id);
+    if let Ok(mut set) = owned.lock() {
+        set.remove(id);
+    }
+}
+
+/// The branch a confirmed feature should hand off. A v0.21 review can carry `session/<id>` in
+/// git while its meta was later renamed to `feat/...`; the commits live on the session branch,
+/// so prefer it when the fancy name has no commits.
+fn handoff_branch(repo: &Path, work_key: &str, id: &str) -> String {
+    let branch_ref = format!("refs/heads/{work_key}");
+    if git_ok(repo, &["show-ref", "--verify", "--quiet", &branch_ref]) {
+        return work_key.to_string();
+    }
+    let legacy = format!("session/{id}");
+    let legacy_ref = format!("refs/heads/{legacy}");
+    if git_ok(repo, &["show-ref", "--verify", "--quiet", &legacy_ref]) {
+        eprintln!("redline-agent: handing off {id} on the legacy branch {legacy}");
+        return legacy;
+    }
+    work_key.to_string()
+}
+
+fn branch_exists(repo: &Path, branch: &str) -> bool {
+    git_ok(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ],
+    ) || git_ok(
+        repo,
+        &[
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/origin/{branch}"),
+        ],
+    )
+}
+
+fn handle_handoff_claimed(
+    config: &AgentConfig,
+    session: &Value,
+    repo: &Path,
+    work_key: &str,
+    owned: &Arc<Mutex<HashSet<String>>>,
+) {
+    let id = session["id"].as_str().unwrap_or_default().to_string();
+    if let Ok(mut set) = owned.lock() {
+        set.insert(id.clone());
+    }
+    let branch = handoff_branch(repo, work_key, &id);
+    eprintln!("redline-agent: handing off {id} on {branch}");
+    if !branch_exists(repo, &branch) {
+        fail_handoff_claim(
+            config,
+            &id,
+            owned,
+            format!("The branch {branch} has no commits to hand off; nothing was opened."),
+        );
+        return;
+    }
+    let worktree = match ensure_worktree(config, repo, &branch) {
+        Ok(path) => path,
+        Err(err) => {
+            fail_handoff_claim(
+                config,
+                &id,
+                owned,
+                format!("I cannot start the handoff: {err}."),
+            );
+            return;
+        }
+    };
+    let _ = mcp(
+        config,
+        "progress",
+        json!({
+            "session_id": id,
+            "message": "Performing the confirmed feature's handoff: opening the pull request",
+            "state": "step"
+        }),
+    );
+    let prompt = handoff_prompt_for(session, &worktree, &branch);
+    let output = match run_opencode(config, &id, &prompt, &worktree, true) {
+        Ok((true, output)) => {
+            eprintln!(
+                "redline-agent: {id} handoff run finished ({} bytes)",
+                output.len()
+            );
+            output
+        }
+        Ok((false, output)) => {
+            eprintln!("redline-agent: {id} handoff run failed");
+            fail_handoff_claim(
+                config,
+                &id,
+                owned,
+                format!("The handoff run failed: {}", first_line(&output)),
+            );
+            return;
+        }
+        Err(err) if err == "stopped by the human" => {
+            eprintln!("redline-agent: {id} handoff stopped by the human");
+            let _ = claim_release(config, &id);
+            if let Ok(mut set) = owned.lock() {
+                set.remove(&id);
+            }
+            return;
+        }
+        Err(err) => {
+            eprintln!("redline-agent: {id} handoff bridge error: {err}");
+            fail_handoff_claim(config, &id, owned, format!("Agent bridge error: {err}"));
+            return;
+        }
+    };
+    if !output.is_empty() {
+        eprintln!(
+            "redline-agent: {id} handoff output tail: {}",
+            tail(&output, 400)
+        );
+    }
+    std::thread::sleep(Duration::from_secs(2));
+    let meta = api_get(config, &format!("/api/sessions/{id}")).ok();
+    let status = meta
+        .as_ref()
+        .and_then(|value| value["meta"]["handoff"]["status"].as_str())
+        .unwrap_or_default()
+        .to_string();
+    match status.as_str() {
+        "done" => {
+            eprintln!("redline-agent: {id} handoff done");
+            let _ = claim_release(config, &id);
+            if let Ok(mut set) = owned.lock() {
+                set.remove(&id);
+            }
+            release_worktree(config, repo, &branch);
+        }
+        "failed" => {
+            eprintln!("redline-agent: {id} handoff failed; keeping {work_key} for a retry");
+            let _ = claim_release(config, &id);
+            if let Ok(mut set) = owned.lock() {
+                set.remove(&id);
+            }
+        }
+        _ => {
+            eprintln!("redline-agent: {id} finished without a handoff result");
+            fail_handoff_claim(
+                config,
+                &id,
+                owned,
+                "The handoff run finished without reporting done or failed.".to_string(),
+            );
         }
     }
 }
@@ -848,7 +1134,7 @@ fn worker_loop(
         }
 
         match claim_next(&config) {
-            Ok(Some((session, claim))) => {
+            Ok(Some((session, claim, job))) => {
                 let work_key = claim["work_key"].as_str().unwrap_or_default().to_string();
                 let repo = match api_get(&config, "/api/projects")
                     .and_then(|projects| project_repo(&config, &projects, &session))
@@ -856,19 +1142,28 @@ fn worker_loop(
                     Ok(repo) => repo,
                     Err(err) => {
                         let id = session["id"].as_str().unwrap_or_default();
-                        fail_claim(
-                            &config,
-                            id,
-                            &owned,
-                            format!("I cannot resolve the project repository: {err}."),
-                        );
+                        if job == "handoff" {
+                            fail_handoff_claim(
+                                &config,
+                                id,
+                                &owned,
+                                format!("I cannot resolve the project repository: {err}."),
+                            );
+                        } else {
+                            fail_claim(
+                                &config,
+                                id,
+                                &owned,
+                                format!("I cannot resolve the project repository: {err}."),
+                            );
+                        }
                         if wait(&cancel, config.poll) {
                             return;
                         }
                         continue;
                     }
                 };
-                handle_claimed(&config, &session, &repo, &work_key, &owned);
+                handle_claimed(&config, &session, &repo, &work_key, &owned, &job);
                 if cancel.load(Ordering::Relaxed) {
                     return;
                 }
@@ -956,6 +1251,55 @@ mod tests {
         assert!(prompt.contains("alignment"));
         assert!(prompt.contains("/tmp/repo"));
         assert!(prompt.contains("feat/prompt-test"));
+        // The review run must never hand off a feature the human has not confirmed.
+        assert!(prompt.contains("Do NOT open a pull request"));
+        assert!(prompt.contains("separate handoff run"));
+    }
+
+    #[test]
+    fn a_handoff_prompt_grants_the_pr_and_reports_through_mcp() {
+        let session = json!({
+            "id": "20260101-120000-handoff",
+            "project": "RedLine UI",
+            "prompt": "make it green",
+            "handoff": {
+                "status": "failed",
+                "message": "checks are red",
+                "url": "https://github.com/o/r/pull/7",
+            },
+        });
+        let prompt = handoff_prompt_for(&session, Path::new("/tmp/repo"), "feat/handoff-test");
+        assert!(prompt.contains("already confirmed"));
+        assert!(prompt.contains("feat/handoff-test"));
+        assert!(prompt.contains("/tmp/repo"));
+        assert!(prompt.contains("feature-ready"));
+        assert!(prompt.contains("handoff_status"));
+        assert!(prompt.contains("\"state\":\"done\""));
+        assert!(prompt.contains("\"label\":\"merged\""));
+        assert!(prompt.contains("checks are red"));
+        assert!(prompt.contains("https://github.com/o/r/pull/7"));
+    }
+
+    #[test]
+    fn a_handoff_prefers_the_legacy_branch_that_holds_the_commits() {
+        if !git_available() {
+            eprintln!("git not installed; skipping handoff branch test");
+            return;
+        }
+        let root = temp_root("handoff-branch");
+        let repo = init_repo(&root);
+        let id = "20260101-120000-demo";
+        git_in(&repo, &["branch", &format!("session/{id}")]);
+        assert_eq!(
+            handoff_branch(&repo, "feat/handoff-test", id),
+            format!("session/{id}")
+        );
+        git_in(&repo, &["branch", "feat/handoff-test"]);
+        assert_eq!(
+            handoff_branch(&repo, "feat/handoff-test", id),
+            "feat/handoff-test"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     fn temp_root(name: &str) -> PathBuf {

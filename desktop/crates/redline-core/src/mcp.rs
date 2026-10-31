@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
-use crate::model::{AnnotationSet, Meta, Status};
-use crate::store::Store;
+use crate::model::{AnnotationSet, HandoffStatus, Meta, Status};
+use crate::store::{HandoffReport, Store};
 use crate::MCP_PROTOCOL_VERSION;
 
 pub struct McpContext<'a> {
@@ -93,6 +93,31 @@ pub fn tool_definitions() -> Value {
             }
         },
         {
+            "name": "review_video",
+            "description": "Upload a video (MP4 or WebM) and open a review session for the human. Returns the session id and a review URL. Set wait_seconds to block until they submit.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "video_base64": { "type": "string", "description": "Base64 MP4/WebM, optionally a data: URL. Prefer video_path for large clips." },
+                    "video_path": { "type": "string", "description": "Absolute path on the machine running redline." },
+                    "poster_base64": { "type": "string", "description": "Optional first-frame PNG/JPEG (base64) used for the rail/gallery thumbnail." },
+                    "duration_ms": { "type": "number", "description": "Video duration in milliseconds, when known." },
+                    "width": { "type": "number" }, "height": { "type": "number" }, "fps": { "type": "number" },
+                    "title": { "type": "string", "description": "What is being reviewed, e.g. 'Checkout flow'." },
+                    "url": { "type": "string", "description": "Page URL the video came from." },
+                    "note": { "type": "string", "description": "What the human should look at." },
+                    "project": { "type": "string", "description": "Project name or slug; created on first use. Default: Inbox." },
+                    "branch": { "type": "string", "description": "Feature branch this review belongs to. RedLine uses it as the branch-lock key." },
+                    "wait_seconds": { "type": "number", "description": "Block up to this long for a submission (default 0)." }
+                },
+                "required": ["title"],
+                "oneOf": [
+                    { "required": ["video_base64"] },
+                    { "required": ["video_path"] }
+                ]
+            }
+        },
+        {
             "name": "capture_review",
             "description": "Screenshot a URL with headless Chromium, then open a review session for it. Requires the :browser image or REDLINE_CHROME on the server.",
             "inputSchema": {
@@ -170,7 +195,14 @@ pub fn tool_definitions() -> Value {
                     "session_id": { "type": "string" },
                     "note": { "type": "string", "description": "Short message for the human." },
                     "image_base64": { "type": "string" },
-                    "image_path": { "type": "string" }
+                    "image_path": { "type": "string" },
+                    "video_base64": { "type": "string", "description": "MP4/WebM base64; posts a new video round." },
+                    "video_path": { "type": "string", "description": "Absolute path on the server; posts a new video round." },
+                    "poster_base64": { "type": "string", "description": "Optional first-frame image for a video round." },
+                    "duration_ms": { "type": "number" },
+                    "width": { "type": "number" },
+                    "height": { "type": "number" },
+                    "fps": { "type": "number" }
                 },
                 "required": ["session_id"]
             }
@@ -212,6 +244,25 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": ["session_id"]
             }
+        },
+        {
+            "name": "handoff_status",
+            "description": "Report the result of a confirmed feature's handoff. Generic: the integration decides what 'done' means (merged PR, deployment, publication, …) and may attach a label, a URL and a detail message. The human's rail shows this state. Only call it for a feature the human confirmed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string" },
+                    "state": {
+                        "type": "string",
+                        "enum": ["done", "failed"],
+                        "description": "done = the integration finished its post-confirmation action; failed = it could not finish (the rail offers a retry)."
+                    },
+                    "label": { "type": "string", "description": "Short rail label chosen by the integration, e.g. merged, deployed, published." },
+                    "url": { "type": "string", "description": "Optional link to the PR/environment/document." },
+                    "message": { "type": "string", "description": "Detail or failure reason, shown in the rail's tooltip." }
+                },
+                "required": ["session_id", "state"]
+            }
         }
     ])
 }
@@ -228,6 +279,7 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
 
     let outcome = match name {
         "review_screenshot" => review_screenshot(ctx, &args).await,
+        "review_video" => review_video(ctx, &args).await,
         "get_feedback" => get_feedback(ctx, &args),
         "wait_for_feedback" => wait_for_feedback(ctx, &args).await,
         "list_reviews" => list_reviews(ctx, &args),
@@ -237,6 +289,7 @@ async fn call_tool(ctx: &McpContext<'_>, params: &Value) -> Result<Value, Value>
         "progress" => progress(ctx, &args),
         "reply" => reply(ctx, &args),
         "resolve" => resolve(ctx, &args),
+        "handoff_status" => handoff_status(ctx, &args),
         "capture_review" => capture_review(ctx, &args).await,
         other => Err(format!("unknown tool: {other}")),
     };
@@ -328,6 +381,102 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
         None
     };
 
+    Ok(json!({
+        "session_id": meta.id,
+        "status": meta.status.as_str(),
+        "title": meta.title,
+        "review_url": review_url(ctx, &meta.id),
+        "dir": ctx.store.dir(&meta.id).map(|p| p.display().to_string()).unwrap_or_default(),
+        "feedback": feedback,
+    }))
+}
+
+async fn review_video(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+    use base64::Engine as _;
+
+    let title = string_arg(args, "title").unwrap_or_else(|| "Video review".to_string());
+    let bytes = match (
+        string_arg(args, "video_base64"),
+        string_arg(args, "video_path"),
+    ) {
+        (Some(encoded), _) => {
+            let raw = encoded
+                .split_once(',')
+                .map(|(_, data)| data)
+                .unwrap_or(&encoded);
+            base64::engine::general_purpose::STANDARD
+                .decode(raw.trim())
+                .map_err(|err| format!("video_base64 is not valid base64: {err}"))?
+        }
+        (None, Some(path)) => {
+            let path = std::path::PathBuf::from(&path);
+            let size = std::fs::metadata(&path)
+                .map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
+                .len();
+            if size as usize > crate::MAX_VIDEO_BYTES {
+                return Err(format!(
+                    "video is larger than {} MB",
+                    crate::MAX_VIDEO_BYTES / (1024 * 1024)
+                ));
+            }
+            std::fs::read(&path).map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
+        }
+        (None, None) => return Err("provide video_base64 or video_path".to_string()),
+    };
+    let poster = match string_arg(args, "poster_base64") {
+        Some(encoded) => {
+            let raw = encoded
+                .split_once(',')
+                .map(|(_, data)| data)
+                .unwrap_or(&encoded);
+            Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(raw.trim())
+                    .map_err(|err| format!("poster_base64 is not valid base64: {err}"))?,
+            )
+        }
+        None => None,
+    };
+    let meta = ctx
+        .store
+        .create_video_from_bytes(
+            &bytes,
+            &title,
+            args.get("url").and_then(Value::as_str).unwrap_or_default(),
+            args.get("note").and_then(Value::as_str).unwrap_or_default(),
+            None,
+            Some("mcp"),
+            args.get("project").and_then(Value::as_str),
+            poster.as_deref(),
+            args.get("duration_ms").and_then(Value::as_u64),
+            args.get("width").and_then(Value::as_u64).map(|v| v as u32),
+            args.get("height").and_then(Value::as_u64).map(|v| v as u32),
+            args.get("fps").and_then(Value::as_f64),
+        )
+        .map_err(|err| err.to_string())?;
+    let meta = if let Some(branch) = string_arg(args, "branch") {
+        ctx.store
+            .set_branch(&meta.id, Some(&branch))
+            .map_err(|err| err.to_string())?
+    } else {
+        meta
+    };
+    let wait = args
+        .get("wait_seconds")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0) as u64;
+    let meta = if wait > 0 {
+        wait_for_status(ctx.store, &meta.id, wait.min(3600))
+            .await
+            .unwrap_or(meta)
+    } else {
+        meta
+    };
+    let feedback = if meta.status == Status::Submitted {
+        Some(feedback_payload(ctx, &meta))
+    } else {
+        None
+    };
     Ok(json!({
         "session_id": meta.id,
         "status": meta.status.as_str(),
@@ -487,6 +636,7 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
                 "feature_state": meta.feature_state(),
                 "feature_confirmed_at": meta.feature_confirmed_at,
                 "feature_cancelled_at": meta.feature_cancelled_at,
+                "handoff": meta.handoff,
                 "created_at": meta.created_at,
                 "submitted_at": meta.submitted_at,
                 "project": meta.project,
@@ -524,6 +674,80 @@ fn post_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     use base64::Engine as _;
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
     let note = string_arg(args, "note").unwrap_or_default();
+    let video_base64 = string_arg(args, "video_base64");
+    let video_path = string_arg(args, "video_path");
+    if video_base64.is_some() || video_path.is_some() {
+        let bytes = match (video_base64, video_path) {
+            (Some(encoded), _) => {
+                let raw = encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(&encoded);
+                base64::engine::general_purpose::STANDARD
+                    .decode(raw.trim())
+                    .map_err(|err| format!("video_base64 is not valid base64: {err}"))?
+            }
+            (None, Some(path)) => {
+                let path = std::path::PathBuf::from(&path);
+                let size = std::fs::metadata(&path)
+                    .map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
+                    .len();
+                if size as usize > crate::MAX_VIDEO_BYTES {
+                    return Err(format!(
+                        "video is larger than {} MB",
+                        crate::MAX_VIDEO_BYTES / (1024 * 1024)
+                    ));
+                }
+                std::fs::read(&path)
+                    .map_err(|err| format!("cannot read video_path {path:?}: {err}"))?
+            }
+            (None, None) => unreachable!(),
+        };
+        let poster = match string_arg(args, "poster_base64") {
+            Some(encoded) => {
+                let raw = encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(&encoded);
+                Some(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(raw.trim())
+                        .map_err(|err| format!("poster_base64 is not valid base64: {err}"))?,
+                )
+            }
+            None => None,
+        };
+        let meta = ctx
+            .store
+            .new_video_round(
+                &id,
+                &bytes,
+                poster.as_deref(),
+                args.get("duration_ms").and_then(Value::as_u64),
+                args.get("width").and_then(Value::as_u64).map(|v| v as u32),
+                args.get("height").and_then(Value::as_u64).map(|v| v as u32),
+                args.get("fps").and_then(Value::as_f64),
+            )
+            .map_err(|err| err.to_string())?;
+        // The clip replaces the canvas, so a note must also land in the conversation or the human
+        // sees a silent new round with no explanation.
+        if !note.is_empty() {
+            let _ = reply(ctx, &json!({ "session_id": &id, "message": &note }));
+        }
+        return Ok(json!({
+            "session_id": id,
+            "posted": true,
+            "status": meta.status.as_str(),
+            "media": meta.media,
+            "video_url": format!(
+                "{}/sessions/{}/media?t={}",
+                ctx.base_url.trim_end_matches('/'),
+                meta.id,
+                ctx.token
+            ),
+        }));
+    }
+
     let (bytes, name) = match (
         string_arg(args, "image_base64"),
         string_arg(args, "image_path"),
@@ -655,12 +879,51 @@ fn resolve(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     )
 }
 
+/// The handoff's only write into RedLine: a generic status plus the integration's label, URL
+/// and message. The server never learns what git or a deployment is.
+fn handoff_status(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+    let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    let state = string_arg(args, "state").ok_or("state is required")?;
+    let status = match state.as_str() {
+        "done" => HandoffStatus::Done,
+        "failed" => HandoffStatus::Failed,
+        other => return Err(format!("state must be done or failed, not {other:?}")),
+    };
+    let label = string_arg(args, "label");
+    let url = string_arg(args, "url");
+    if let Some(url) = url.as_deref() {
+        if !(url.starts_with("https://") || url.starts_with("http://")) {
+            return Err("url must be an http(s) URL".to_string());
+        }
+    }
+    let message = string_arg(args, "message");
+    let meta = ctx
+        .store
+        .report_handoff(
+            &id,
+            HandoffReport {
+                status,
+                label,
+                url,
+                message,
+            },
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(json!({
+        "session_id": meta.id,
+        "feature_state": meta.feature_state(),
+        "handoff": meta.handoff,
+    }))
+}
+
 fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
     let set: AnnotationSet = ctx.store.annotations(&meta.id).unwrap_or(AnnotationSet {
         session: meta.id.clone(),
         title: None,
         url: None,
         image: None,
+        media: None,
+        frames: Vec::new(),
         annotations: Vec::new(),
         submitted_at: None,
     });
@@ -678,12 +941,35 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         "feature_state": meta.feature_state(),
         "feature_confirmed_at": meta.feature_confirmed_at,
         "feature_cancelled_at": meta.feature_cancelled_at,
+        "handoff": meta.handoff,
         "title": meta.title,
         "url": meta.url,
         "note": meta.note,
         "prompt": meta.prompt,
         "agent_state": meta.agent_state,
         "submitted_at": meta.submitted_at,
+        "media": meta.media,
+        "video_url": meta.media.as_ref()
+            .filter(|media| media.kind == crate::model::MediaKind::Video)
+            .map(|_| format!(
+                "{}/sessions/{}/media?t={}",
+                ctx.base_url.trim_end_matches('/'),
+                meta.id,
+                ctx.token
+            )),
+        "frames": set.frames.iter().map(|frame| {
+            json!({
+                "at": frame.at,
+                "mime": frame.mime,
+                "url": format!(
+                    "{}/sessions/{}/frames/{}?t={}",
+                    ctx.base_url.trim_end_matches('/'),
+                    meta.id,
+                    frame.file.trim_start_matches("frames/"),
+                    ctx.token
+                ),
+            })
+        }).collect::<Vec<_>>(),
         "annotations": set.annotations,
         "markdown": markdown,
         "annotated_png": has_png.then(|| format!("redline://session/{}/annotated.png", meta.id)),

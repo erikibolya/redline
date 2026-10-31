@@ -44,8 +44,16 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
 ```
 
 - `open` (CLI) copies the screenshot and writes `meta.json` + an empty `annotations.json`.
+- A video session stores `video.mp4` (or `.webm`), `poster.png`, and `media` metadata in
+  `meta.json`; `GET /sessions/<id>/media` serves the clip with HTTP `Range`, while `/image` serves
+  the poster so the rail/gallery cards keep working.
 - The browser loads the session; annotations are kept only in the page until **Submit review**.
 - Submit writes `annotations.json`, `annotated.png`, `review.md` and flips `meta.status`.
+  Video annotations may carry `at`/`until` seconds; `review.md` prints timecodes. A video submit
+  also writes `frames/` (one still per unique annotated time) and `annotated.png` is the contact
+  sheet.
+- A new video round archives the previous one under `history/<stamp>/video.*` (with its sheet and
+  frames) and reopens the session on the new clip.
 - `wait` polls `meta.status`; no push/websocket.
 
 ## Data flow
@@ -53,8 +61,10 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
 1. Agent captures a screenshot and runs `redline.py open`.
 2. Session folder is created; `meta.json` stores title/url/note/status.
 3. Agent opens `http://127.0.0.1:8788/s/<id>` (browser tool or human).
-4. Editor fetches `/api/sessions/<id>`, then loads `/sessions/<id>/image`.
-5. Human draws; canvas keeps an in-memory annotation array.
+4. Editor fetches `/api/sessions/<id>`, then loads `/sessions/<id>/image` (a poster for a video
+   session; the clip itself comes from `/sessions/<id>/media` with `Range`).
+5. Human draws; canvas keeps an in-memory annotation array. A video frame is drawn into the same
+   canvas and drawing pauses playback, so each annotation carries `at` (and optional `until`).
 6. Submit sends `{annotations, width, height, png}` to the server.
 7. Server validates the session id, writes the three output files, returns the updated meta.
 8. Agent polls/reads the folder; turns text notes into changes.
@@ -84,12 +94,20 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   "resolved_at": null,
   "feature_confirmed_at": null,
   "feature_cancelled_at": null,
+  "handoff": null,
   "branch": "feat/button-hover",
   "image": "screenshot.png",
   "image_width": 1440,
   "image_height": 900
 }
 ```
+
+`handoff` is present only when the human confirms a feature with the optional handoff (v0.23). It
+records `status` (`requested`, `running`, `done`, `failed`) and the integration's `label`, `url`
+and `message` — "merged" + a PR URL for the reference git bridge, "deployed" + an environment URL
+for a deploy, or anything else. The server never runs git or deploys; confirmation queues the
+record and the integration's handoff job fills it in. A review run is not a handoff: it pushes and
+replies.
 
 `annotations.json` (written on submission):
 
@@ -99,6 +117,7 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   "title": "…",
   "url": "…",
   "image": { "file": "screenshot.png", "width": 1440, "height": 900 },
+  "media": { "kind": "image", "file": "screenshot.png", "width": 1440, "height": 900 },
   "annotations": [],
   "submitted_at": "…"
 }
@@ -115,9 +134,13 @@ global runs, 1 per project and a 120 s lease. A claim is `running` or `waiting`;
 the branch lock but does not consume an execution slot.
 
 The server is the authority. The bridge asks `POST /api/agent/next`, heartbeats, and marks
-`waiting` when the human has the ball. The branch key is `meta.branch`, falling back to
-`session/<id>`; RedLine never touches git. `redline-agent` runs `REDLINE_AGENT_WORKERS` claim
-workers (default 4), each with its own worktree under
+`waiting` when the human has the ball. The branch key is `Meta::work_key()`: `meta.branch`, or
+the derived `feat/<title-slug>-<id-tail>` for a v0.21 `session/<id>` fallback; RedLine never
+touches git. The bridge advertises `jobs: ["review","handoff"]` on `next`; the response's `job`
+selects the review prompt or the handoff prompt. A handoff claim reuses the waiting review
+claim's `work_key` (the branch the agent actually worked on) and marks
+`meta.handoff.status=running`.
+`redline-agent` runs `REDLINE_AGENT_WORKERS` claim workers (default 4), each with its own worktree under
 `<repo_root>/.redline-worktrees/<repo>-<hash>/<branch>-<hash>`, and running heartbeats every
 `lease/3`. A resolved round releases the claim and removes a clean worktree; a dirty one is left
 for inspection. The OpenCode server must see the worktree path just like the repository itself.

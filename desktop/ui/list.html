@@ -99,7 +99,7 @@ Ctrl+Enter submit · [ toggle sessions · ] toggle inspector</div>
     <div class="dialog-head">
       <div>
         <h2 id="new-title">New review</h2>
-        <p class="hint">Drop a screenshot — or click to choose a file. Then say what to look at.</p>
+        <p class="hint">Drop an image or video — or click to choose a file. Then say what to look at.</p>
       </div>
       <button type="button" class="btn icon dialog-close" id="new-close" aria-label="Close">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -108,9 +108,10 @@ Ctrl+Enter submit · [ toggle sessions · ] toggle inspector</div>
     <div class="dialog-body">
       <div class="drop" id="drop">
         <img class="drop-preview" id="drop-preview" alt="Selected screenshot" hidden />
-        <span class="drop-label" id="drop-label">Drop an image, or click to browse</span>
+        <video class="drop-preview" id="drop-video-preview" muted playsinline controls hidden></video>
+        <span class="drop-label" id="drop-label">Drop an image or video, or click to browse</span>
       </div>
-      <input type="file" id="file" accept="image/*" hidden />
+      <input type="file" id="file" accept="image/*,video/*" hidden />
       <label for="f-title">Title</label>
       <input id="f-title" type="text" placeholder="Button / default" />
       <label for="f-project">Project</label>

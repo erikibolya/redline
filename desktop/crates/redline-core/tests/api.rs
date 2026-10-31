@@ -221,6 +221,390 @@ async fn repo_sync_reports_an_online_agent() {
     assert_eq!(body["online"], 1);
     assert_eq!(body["agents"][0]["agent_id"], "holly");
     assert_eq!(body["agents"][0]["online"], true);
+    assert_eq!(body["agents"][0]["jobs"], json!(["review"]));
+}
+
+#[tokio::test]
+async fn video_sessions_are_created_and_served_with_range_requests() {
+    use base64::Engine as _;
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let payload = |with_poster: bool| {
+        let mut body = json!({
+            "title": "Checkout flow",
+            "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+            "duration_ms": 5000,
+            "width": 1280,
+            "height": 720,
+            "fps": 30,
+        });
+        if with_poster {
+            body["poster_base64"] = json!(PNG_B64);
+        }
+        body
+    };
+    let (status, _, created) = send(&h.app, authed("POST", "/api/sessions", payload(true))).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["meta"]["media"]["kind"], "video");
+    assert_eq!(created["meta"]["media"]["duration_ms"], 5000);
+    assert_eq!(created["meta"]["image"], "video.mp4");
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, session) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(session["meta"]["media"]["mime"], "video/mp4");
+
+    // The image route is the poster, so existing rail/gallery <img> cards keep working.
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/image"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+
+    // Range requests are what let the browser seek without downloading the whole clip.
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/media"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("range", "bytes=0-3")
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.headers().get("content-range").unwrap(),
+        &format!("bytes 0-3/{}", MP4.len())
+    );
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], &MP4[..4]);
+
+    // A range past the end is a 416, not a whole-file 200: a player must not mistake a bad seek
+    // for success and decode from the wrong offset.
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/media"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("range", "bytes=999999-")
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
+
+    let (status, _, _) = send(&h.app, authed("POST", "/api/sessions", payload(false))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({
+                "title": "not a video",
+                "video_base64": base64::engine::general_purpose::STANDARD.encode(b"plain text"),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
+async fn video_sessions_accept_a_multipart_browser_upload() {
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nMultipart video\r\n",
+    );
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"duration_ms\"\r\n\r\n5000\r\n",
+    );
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"width\"\r\n\r\n1280\r\n",
+    );
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"height\"\r\n\r\n720\r\n",
+    );
+    body.extend_from_slice(b"--BOUND\r\nContent-Disposition: form-data; name=\"video\"; filename=\"clip.mp4\"\r\nContent-Type: video/mp4\r\n\r\n");
+    body.extend_from_slice(MP4);
+    body.extend_from_slice(b"\r\n--BOUND--\r\n");
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/sessions/video")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "multipart/form-data; boundary=BOUND")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, created) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["meta"]["media"]["kind"], "video");
+    assert_eq!(created["meta"]["media"]["width"], 1280);
+    let id = created["meta"]["id"].as_str().unwrap();
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/media"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn video_submissions_carry_a_contact_sheet_and_full_frames() {
+    use base64::Engine as _;
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({
+                "title": "Checkout video",
+                "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+                "poster_base64": PNG_B64,
+                "duration_ms": 5000,
+                "width": 320,
+                "height": 180,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG_B64)
+        .unwrap();
+
+    let annotations = json!({
+        "note": "look at the button",
+        "width": 320,
+        "height": 180,
+        "annotations": [
+            {"id": "a", "type": "rect", "color": "#e11d48", "width": 3,
+             "start": {"x": 10, "y": 20}, "end": {"x": 90, "y": 80}, "at": 1.0},
+            {"id": "b", "type": "rect", "color": "#e11d48", "width": 3,
+             "start": {"x": 30, "y": 40}, "end": {"x": 120, "y": 100}, "at": 2.0}
+        ]
+    });
+    let mut body = Vec::new();
+    let boundary = "BOUND";
+    let mut field = |name: &str, filename: &str, content_type: &str, bytes: &[u8]| {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        if filename.is_empty() {
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            );
+        } else {
+            body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    };
+    field("annotations", "", "", annotations.to_string().as_bytes());
+    field("png", "contact-sheet.png", "image/png", &png);
+    field("frames", "2.000.png", "image/png", &png);
+    field("frames", "1.000.png", "image/png", &png);
+    // The same millisecond must be captured once even when two annotations share it.
+    field("frames", "1.000.png", "image/png", &png);
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{id}/annotations"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, saved) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    let set = &saved["annotations"];
+    assert_eq!(set["frames"].as_array().unwrap().len(), 2, "{set}");
+    assert_eq!(set["frames"][0]["at"], 1.0);
+    assert_eq!(set["frames"][0]["file"], "frames/1.000.png");
+    assert_eq!(set["frames"][1]["at"], 2.0);
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/frames/1.000.png"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/review.md"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    let markdown = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(markdown.contains("### Frames"), "{markdown}");
+    assert!(
+        markdown.contains("00:02.000: frames/2.000.png"),
+        "{markdown}"
+    );
+
+    // The frames are archived with the round; the live folder is replaced by the next submit.
+    let dir = h.store.dir(&id).unwrap();
+    let history = dir.join("history");
+    let archived = std::fs::read_dir(&history)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .find(|entry| entry.file_name().to_string_lossy().ends_with("-frames"))
+        .expect("archived frames");
+    assert!(archived.path().join("1.000.png").is_file());
+    assert!(archived.path().join("2.000.png").is_file());
+
+    // The archived stills are served for the history viewer, not only present on disk.
+    let rounds = h.store.history(&id).unwrap();
+    let stamp = &rounds[0].stamp;
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/history/{stamp}/frames/1.000.png"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_new_video_can_replace_the_current_round() {
+    use base64::Engine as _;
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    const WEBM: &[u8] = &[0x1A, 0x45, 0xDF, 0xA3, 9, 8, 7, 6];
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({
+                "title": "Replaceable clip",
+                "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+                "poster_base64": PNG_B64,
+                "duration_ms": 5000,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({
+                "annotations": [
+                    {"type": "rect", "start": {"x": 1, "y": 2}, "end": {"x": 3, "y": 4}, "at": 1.0}
+                ],
+                "width": 320,
+                "height": 180
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (history_status, _, history) = send(
+        &h.app,
+        Request::builder()
+            .uri(format!("/api/sessions/{id}/history"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(history_status, StatusCode::OK, "{history}");
+    let stamp = history["submissions"][0]["stamp"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(history["submissions"][0]["media"]["kind"], "video");
+
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG_B64)
+        .unwrap();
+    let boundary = "ROUND";
+    let mut body = Vec::new();
+    let mut field = |name: &str, filename: &str, content_type: &str, bytes: &[u8]| {
+        body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        if filename.is_empty() {
+            body.extend_from_slice(
+                format!("Content-Disposition: form-data; name=\"{name}\"\r\n\r\n").as_bytes(),
+            );
+        } else {
+            body.extend_from_slice(
+                format!(
+                    "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    };
+    field("video", "second.webm", "video/webm", WEBM);
+    field("poster", "poster.png", "image/png", &png);
+    field("duration_ms", "", "", b"3000");
+    field("width", "", "", b"320");
+    field("height", "", "", b"180");
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{id}/video"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, replaced) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{replaced}");
+    assert_eq!(replaced["meta"]["status"], "open");
+    assert_eq!(replaced["meta"]["image"], "video.webm");
+    assert_eq!(replaced["meta"]["media"]["mime"], "video/webm");
+    assert_eq!(replaced["meta"]["media"]["duration_ms"], 3000);
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/history/{stamp}/video"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("range", "bytes=0-3")
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.headers().get("content-range").unwrap(),
+        &format!("bytes 0-3/{}", MP4.len())
+    );
+
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/media"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..4], &WEBM[..4]);
 }
 
 #[tokio::test]
@@ -295,6 +679,7 @@ async fn create_submit_and_read_back_round_trip() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(session["meta"]["status"], "submitted");
+    assert!(session["disk_bytes"].as_u64().unwrap() > 0, "{session}");
     assert_eq!(
         session["annotations"]["annotations"][0]["text"],
         "Move this up"
@@ -543,6 +928,204 @@ async fn features_can_be_confirmed_cancelled_and_reopened() {
     )
     .await;
     assert_eq!(body["meta"]["feature_cancelled_at"], Value::Null);
+}
+
+#[tokio::test]
+async fn confirming_a_feature_queues_a_handoff_and_reports_it() {
+    let h = harness();
+    let (_, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "hand off", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    // A pending review is not a handoff, even when the bridge advertises the capability.
+    let (_, _, before) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/next",
+            json!({"agent_id": "agent", "jobs": ["review", "handoff"]}),
+        ),
+    )
+    .await;
+    assert!(before["session"].is_null(), "{before}");
+
+    // Confirming without a handoff records only the human's decision.
+    let (status, _, plain) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/confirm-feature"),
+            json!({"handoff": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plain}");
+    assert!(plain["meta"]["handoff"].is_null(), "{plain}");
+    let (_, _, _) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
+    )
+    .await;
+
+    let (status, _, confirmed) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/confirm-feature"),
+            json!({"handoff": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{confirmed}");
+    assert_eq!(confirmed["meta"]["handoff"]["status"], "requested");
+
+    let (status, _, next) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/next",
+            json!({"agent_id": "agent", "jobs": ["review", "handoff"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["job"], "handoff");
+    assert_eq!(next["session"]["id"], id);
+    assert_eq!(next["session"]["handoff"]["status"], "running");
+    let (_, _, presence) = send(&h.app, authed("GET", "/api/agent/status", json!({}))).await;
+    assert_eq!(
+        presence["agents"][0]["jobs"],
+        json!(["review", "handoff"]),
+        "the bridge's capability must be visible to the UI"
+    );
+
+    // An old bridge that does not advertise the job must never receive it.
+    let (status, _, _) = release_claim(&h, &id, "agent").await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, old_bridge) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "agent"})),
+    )
+    .await;
+    assert!(old_bridge["session"].is_null(), "{old_bridge}");
+
+    // The integration reports a generic done result through MCP.
+    let (status, _, reported) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "handoff_status",
+                    "arguments": {
+                        "session_id": id,
+                        "state": "done",
+                        "label": "merged",
+                        "url": "https://github.com/erikibolya/redline/pull/46",
+                        "message": "merge commit 456a2c5"
+                    }
+                }
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reported}");
+    let text = reported["result"]["content"][0]["text"].as_str().unwrap();
+    let result: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(result["handoff"]["status"], "done");
+    assert_eq!(result["handoff"]["label"], "merged");
+    assert_eq!(
+        result["handoff"]["url"],
+        "https://github.com/erikibolya/redline/pull/46"
+    );
+
+    let (_, _, meta) = send(
+        &h.app,
+        authed("GET", &format!("/api/sessions/{id}"), json!({})),
+    )
+    .await;
+    assert_eq!(meta["meta"]["handoff"]["status"], "done");
+    assert_eq!(
+        meta["meta"]["handoff"]["url"],
+        "https://github.com/erikibolya/redline/pull/46"
+    );
+
+    // A re-opened feature loses the handoff; handing it off again is refused until confirmed.
+    let (_, _, reopened) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
+    )
+    .await;
+    assert!(reopened["meta"]["handoff"].is_null());
+    let (status, _, refused) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/handoff"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+}
+
+#[tokio::test]
+async fn a_handoff_reuses_the_legacy_branch_a_waiting_review_claim_owns() {
+    let h = harness();
+    let id = submitted_session(&h, "p1", "feat/handoff-wait").await;
+    let legacy = format!("session/{id}");
+    let (status, _, claimed) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/claims",
+            json!({"session_id": id, "agent_id": "agent", "work_key": legacy}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+    assert_eq!(claimed["claim"]["work_key"], legacy);
+    let (status, _, waiting) = claim_state(&h, &id, "agent", "waiting").await;
+    assert_eq!(status, StatusCode::OK, "{waiting}");
+    assert_eq!(waiting["claim"]["state"], "waiting");
+
+    let (status, _, _) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/resolve"), json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/confirm-feature"),
+            json!({"handoff": true}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, next) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/next",
+            json!({"agent_id": "agent", "jobs": ["review", "handoff"]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["job"], "handoff");
+    assert_eq!(next["claim"]["work_key"], legacy);
+    assert_eq!(next["session"]["handoff"]["status"], "running");
 }
 
 #[tokio::test]

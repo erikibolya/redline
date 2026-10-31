@@ -105,6 +105,101 @@ function clockTime(at) {
   return date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 }
 
+/// MediaRecorder and some streamed WebMs report `Infinity` as duration until the browser seeks
+/// past the buffered end. Asking for a huge time makes Chromium compute the real value.
+function resolvedDuration(video) {
+  if (Number.isFinite(video.duration) && video.duration > 0) {
+    return Promise.resolve(video.duration);
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      video.removeEventListener("durationchange", finish);
+      resolve(Number.isFinite(video.duration) ? video.duration : 0);
+    };
+    video.addEventListener("durationchange", finish);
+    try {
+      video.currentTime = 1e101;
+    } catch {
+      finish();
+    }
+    setTimeout(finish, 1500);
+  });
+}
+
+/// Read a dropped/picked video's duration, dimensions and first frame. Shared by the New review
+/// dialog and the editor's "New video" button; always revokes the object URL.
+async function readVideoFile(file) {
+  if (!file || !file.type.startsWith("video/")) {
+    throw new Error("That is not a video.");
+  }
+  if (file.size > 250 * 1024 * 1024) {
+    throw new Error("Video is larger than the 250 MB limit.");
+  }
+  const video = document.createElement("video");
+  video.muted = true;
+  video.preload = "auto";
+  video.src = URL.createObjectURL(file);
+  try {
+    await new Promise((resolve, reject) => {
+      video.onloadeddata = resolve;
+      video.onerror = () => reject(new Error("Could not read this video (unsupported codec?)."));
+    });
+    const duration = await resolvedDuration(video);
+    if (duration > 300) {
+      throw new Error("Video is longer than the 5 minute review limit. Trim the clip first.");
+    }
+    if (video.currentTime !== 0) {
+      await new Promise((resolve) => {
+        video.onseeked = resolve;
+        video.currentTime = 0;
+      });
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d").drawImage(video, 0, 0);
+    const poster = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+    return {
+      width: video.videoWidth,
+      height: video.videoHeight,
+      duration,
+      poster,
+    };
+  } finally {
+    URL.revokeObjectURL(video.src);
+  }
+}
+
+/// Human-readable byte count for the session-size warning.
+function formatBytes(bytes) {
+  if (!bytes) return "";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = Number(bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}
+
+/// `mm:ss.mmm` (or `hh:mm:ss.mmm`) for video timecodes.
+function timecode(seconds) {
+  const total = Math.max(0, Math.round((Number(seconds) || 0) * 1000));
+  const ms = total % 1000;
+  const totalSeconds = Math.floor(total / 1000);
+  const s = totalSeconds % 60;
+  const m = Math.floor(totalSeconds / 60) % 60;
+  const h = Math.floor(totalSeconds / 3600);
+  const mm = String(m).padStart(2, "0");
+  const ss = String(s).padStart(2, "0");
+  const mmm = String(ms).padStart(3, "0");
+  return h > 0 ? `${String(h).padStart(2, "0")}:${mm}:${ss}.${mmm}` : `${mm}:${ss}.${mmm}`;
+}
+
 /** History stamps are the UTC submission time with every ':' and '+' flattened to '-' by the store. */
 function stampTime(stamp) {
   const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})/.exec(String(stamp ?? ""));
@@ -210,7 +305,7 @@ async function api(path, options = {}) {
  * looks different on every platform. This is a small `<dialog>` built on first use, shared by
  * the editor and the sessions page. It returns the chosen action value, or null when dismissed.
  */
-function askFeature({ title, body, actions }) {
+function askFeature({ title, body, actions, checkbox = null }) {
   return new Promise((resolve) => {
     let dialog = $("#feature-dialog");
     if (!dialog) {
@@ -238,7 +333,27 @@ function askFeature({ title, body, actions }) {
       return;
     }
     $("#feature-dialog-title").textContent = title;
-    $("#feature-dialog-body").textContent = body;
+    const bodyEl = $("#feature-dialog-body");
+    bodyEl.textContent = body;
+    // The dialog is shared: remove the previous optional checkbox/hint before adding a new one.
+    $("#feature-dialog-check-wrap")?.remove();
+    $("#feature-dialog-check-hint")?.remove();
+    if (checkbox) {
+      const wrap = document.createElement("label");
+      wrap.id = "feature-dialog-check-wrap";
+      wrap.className = "feature-check";
+      wrap.innerHTML = `<input type="checkbox" id="feature-dialog-check"${
+        checkbox.checked ? " checked" : ""
+      }><span>${escapeHtml(checkbox.label)}</span>`;
+      bodyEl.insertAdjacentElement("afterend", wrap);
+      if (checkbox.hint) {
+        const hint = document.createElement("p");
+        hint.id = "feature-dialog-check-hint";
+        hint.className = "field-hint";
+        hint.textContent = checkbox.hint;
+        wrap.insertAdjacentElement("afterend", hint);
+      }
+    }
     const container = $("#feature-actions");
     container.innerHTML = "";
     for (const action of actions) {
@@ -326,43 +441,80 @@ function askBranch(current, submitted = false) {
   });
 }
 
+/** True when an online bridge advertised the post-confirmation handoff capability. */
+const handoffCapableAgent = () => Boolean(
+  AgentStatus.data?.agents?.some((agent) =>
+    agent.online && (agent.jobs || ["review"]).includes("handoff")));
+
+/** The optional handoff opt-in shown in the confirm dialog. */
+function handoffCheckbox() {
+  const capable = handoffCapableAgent();
+  return {
+    checked: capable,
+    label: capable
+      ? "Hand off to the agent after confirming"
+      : "Hand off after confirming (no connected agent supports it yet)",
+    hint: capable
+      ? "The agent performs the integration's post-confirmation workflow (for example open and merge a PR)."
+      : "The review will just be confirmed; without a handoff-capable agent it stays in your hands.",
+  };
+}
+
 /**
- * Confirm, cancel, reopen or delete a feature. Returns the server response, `{deleted: true}`,
- * or `null` when the human dismissed the dialog.
+ * Confirm, cancel, reopen, hand off or delete a feature. Returns the server response,
+ * `{deleted: true}`, or `null` when the human dismissed the dialog.
  */
-async function featureAction(action, id, title, state = "pending") {
+async function featureAction(action, id, title, session = {}) {
   const path = `/api/sessions/${encodeURIComponent(id)}`;
+  const state = session.feature_state
+    || (session.feature_confirmed_at ? "confirmed"
+      : session.feature_cancelled_at ? "cancelled" : "pending");
+  const handoff = session.handoff || null;
+  const canRetryHandoff = state === "confirmed" && handoff?.status === "failed";
+  const canHandoff = state === "confirmed" && !handoff;
   if (action === "confirm") {
     const choice = await askFeature({
       title: "Confirm this feature?",
-      body: `“${title}” will be marked as confirmed and closed. Your agent may now open a pull request and merge it into the integration branch.`,
+      body: `“${title}” will be marked as confirmed and closed. If you hand it off, the integration may finish the work (open a pull request, deploy, publish, …).`,
       actions: [
         { value: "keep", label: "Keep working" },
         { value: "confirm", label: "Confirm feature", kind: "primary" },
       ],
+      checkbox: handoffCheckbox(),
     });
     if (choice !== "confirm") return null;
-    return api(`${path}/confirm-feature`, { method: "POST" });
+    const handoffChecked = Boolean($("#feature-dialog-check")?.checked);
+    return api(`${path}/confirm-feature`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ handoff: handoffChecked }),
+    });
   }
   if (action === "menu") {
     const decided = state !== "pending";
+    const note = handoff
+      ? ` The last handoff is ${handoff.status}${handoff.message ? `: ${handoff.message}` : ""}.`
+      : "";
+    const actions = [{ value: "keep", label: "Keep working" }];
+    if (canRetryHandoff) {
+      actions.push({ value: "handoff", label: "Retry handoff", kind: "primary" });
+    } else if (canHandoff) {
+      actions.push({ value: "handoff", label: "Hand off", kind: "primary" });
+    }
+    if (decided) {
+      actions.push({ value: "reopen", label: "Reopen" });
+    } else {
+      actions.push({ value: "cancel-feature", label: "Cancel feature" });
+    }
+    actions.push({ value: "delete", label: "Delete files…", kind: "danger" });
     const choice = await askFeature({
       title: "What should happen to this feature?",
       body: decided
-        ? `“${title}” is ${state}. Reopen returns it to the queue; Delete files removes the screenshot and annotations permanently.`
+        ? `“${title}” is ${state}.${note} Reopen returns it to the queue; Delete files removes the screenshot and annotations permanently.`
         : `“${title}” has no decision yet. Cancel feature closes it without merging and keeps the screenshot and annotations; Delete files removes them permanently.`,
-      actions: decided
-        ? [
-            { value: "keep", label: "Keep working" },
-            { value: "reopen", label: "Reopen" },
-            { value: "delete", label: "Delete files…", kind: "danger" },
-          ]
-        : [
-            { value: "keep", label: "Keep working" },
-            { value: "cancel-feature", label: "Cancel feature" },
-            { value: "delete", label: "Delete files…", kind: "danger" },
-          ],
+      actions,
     });
+    if (choice === "handoff") return api(`${path}/handoff`, { method: "POST" });
     if (choice === "reopen") return api(`${path}/reopen`, { method: "POST" });
     if (choice === "cancel-feature") return api(`${path}/cancel-feature`, { method: "POST" });
     if (choice === "delete") {
@@ -374,12 +526,49 @@ async function featureAction(action, id, title, state = "pending") {
   if (action === "reopen") {
     return api(`${path}/reopen`, { method: "POST" });
   }
+  if (action === "handoff") {
+    return api(`${path}/handoff`, { method: "POST" });
+  }
   return null;
 }
 
 const featureState = (session) => session.feature_state
   || (session.feature_confirmed_at ? "confirmed"
     : session.feature_cancelled_at ? "cancelled" : "pending");
+
+/** A generic handoff badge: queued/running, the integration's label + link, or a retry. */
+function handoffBadge(session) {
+  const handoff = session.handoff;
+  if (!handoff) return "";
+  const status = handoff.status;
+  const url = handoff.url || "";
+  const label = handoff.label
+    || (status === "done" ? "done" : status === "failed" ? "handoff failed" : "");
+  const title = handoff.message || `Handoff ${status}`;
+  if (status === "requested") {
+    return `<span class="badge handoff requested" title="Waiting for an agent that supports handoff">
+      handoff queued</span>`;
+  }
+  if (status === "running") {
+    return `<span class="badge handoff running" title="The agent is performing the handoff">
+      <span class="spin" aria-hidden="true"></span>handing off</span>`;
+  }
+  if (status === "done") {
+    return url
+      ? `<a class="badge handoff done handoff-link" href="${escapeHtml(url)}" target="_blank"
+            rel="noopener" title="${escapeHtml(title)}">${escapeHtml(label)}</a>`
+      : `<span class="badge handoff done" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+  }
+  if (status === "failed") {
+    // The retry lives in the row actions (↻) and the feature menu; the badge keeps the label and
+    // link (a PR/environment the human may need to open) without pretending to be a button.
+    return url
+      ? `<a class="badge handoff failed handoff-link" href="${escapeHtml(url)}" target="_blank"
+            rel="noopener" title="${escapeHtml(title)}">${escapeHtml(label)}</a>`
+      : `<span class="badge handoff failed" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+  }
+  return "";
+}
 
 /* ---------------------------------------------------------------- agent settings */
 
@@ -549,10 +738,14 @@ const AgentStatus = {
       : online
         ? `${online} agent${online === 1 ? "" : "s"} connected`
         : "No agent connected";
+    const handoffCapable = agents.some((agent) =>
+      agent.online && (agent.jobs || ["review"]).includes("handoff"));
     const title = !data
       ? "Could not read the agent status from this server"
       : online
-        ? `Connected: ${agents.filter((agent) => agent.online).map((agent) => agent.agent_id).join(", ")}`
+        ? `Connected: ${agents.filter((agent) => agent.online).map((agent) => agent.agent_id).join(", ")}${
+          handoffCapable ? "" : " — review only (no handoff capability)"
+        }`
         : "No agent is polling this server — submitted reviews will wait";
     $$("#agent-status").forEach((chip) => {
       chip.classList.toggle("online", Boolean(data && online));
@@ -973,7 +1166,7 @@ class Rail {
         // An agent currently running outranks "new" and the annotation count: it is the one
         // state that changes a few seconds later without the human touching anything. A feature
         // decision is the human's answer to the session, so it outranks the unread marker.
-        const badge = working
+        const baseBadge = working
           ? `<span class="badge work" title="The agent is working on this review">
             <span class="spin" aria-hidden="true"></span>working</span>`
           : feature === "confirmed"
@@ -989,6 +1182,11 @@ class Rail {
                   : annotations
                     ? `<span class="badge" title="${plural(annotations, "annotation")}">${annotations}</span>`
                     : "";
+        // The handoff badge sits beside the confirmation: "confirmed" is the decision, while
+        // "handoff queued" / "merged" / "handoff failed" is what the integration did with it.
+        const badge = feature === "confirmed" && session.handoff
+          ? `${baseBadge}${handoffBadge(session)}`
+          : baseBadge;
         parts.push(`
           <div class="session ${escapeHtml(session.status)}${working ? " working" : ""}${
             decided ? ` feature-${feature}` : ""
@@ -1017,6 +1215,9 @@ class Rail {
               ${decided
                 ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
                 : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>`}
+              ${session.handoff?.status === "failed"
+                ? `<button class="act" data-act="handoff" title="Retry handoff">↻</button>`
+                : ""}
               <button class="act" data-act="menu"
                       title="${decided ? "Feature actions (reopen or delete)" : "Feature actions (cancel or delete)"}">✕</button>
             </span>
@@ -1032,6 +1233,10 @@ class Rail {
         event.stopPropagation();
         this.onAction?.(button.dataset.act, button.closest(".session").dataset.id);
       });
+    });
+    // A handoff link opens the integration's URL; it may not select the review row behind it.
+    $$(".session .handoff-link", this.body).forEach((control) => {
+      control.addEventListener("click", (event) => event.stopPropagation());
     });
     $$(".rail-project", this.body).forEach((header) => {
       const toggle = () => {
@@ -1084,6 +1289,11 @@ class Editor {
     this.sessionId = root.dataset.sessionId;
     this.meta = null;
     this.image = null;
+    this.video = null;
+    this.videoBar = $("#video-bar");
+    this.videoWindow = { start: 0, end: 0 };
+    this.ghosts = true;
+    this.videoFrame = null;
     this.annotations = [];
     this.history = [];
     this.future = [];
@@ -1123,16 +1333,19 @@ class Editor {
       onAction: (action, id) => this.railAction(action, id),
       onPurge: (ids) => this.purgeSessions(ids),
       onBulk: async (action, ids) => {
+        let bulkHandoff = false;
         if (action === "confirm") {
           const choice = await askFeature({
             title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
-            body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
+            body: "Each selected session will be marked as confirmed and closed. A checked handoff lets the integration finish the work (open a pull request, deploy, publish, …).",
             actions: [
               { value: "keep", label: "Keep working" },
               { value: "confirm", label: "Confirm features", kind: "primary" },
             ],
+            checkbox: handoffCheckbox(),
           });
           if (choice !== "confirm") return;
+          bulkHandoff = Boolean($("#feature-dialog-check")?.checked);
         }
         if (action === "delete"
           && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
@@ -1141,7 +1354,11 @@ class Editor {
             if (action === "delete") {
               await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
             } else {
-              await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, { method: "POST" });
+              await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ handoff: bulkHandoff }),
+              });
             }
           }
         } catch (error) {
@@ -1170,6 +1387,7 @@ class Editor {
     this.bindChrome();
     this.bindPanels();
     this.bindCanvas();
+    this.bindVideoBar();
     this.bindKeyboard();
     this.syncToolButtons();
     $("#color").value = this.color;
@@ -1186,11 +1404,12 @@ class Editor {
     try {
       const session = this.rail.sessions.find((s) => s.id === id);
       const title = session?.title || id;
-      const result = await featureAction(action, id, title, featureState(session || {}));
+      const result = await featureAction(action, id, title, session || {});
       if (!result) return;
-      const finished = result.deleted
+      // A handoff retry does not close the review; the confirmed stamp is already there.
+      const finished = action !== "handoff" && (result.deleted
         || Boolean(result.meta?.feature_confirmed_at)
-        || Boolean(result.meta?.feature_cancelled_at);
+        || Boolean(result.meta?.feature_cancelled_at));
       if (id === this.sessionId && finished) {
         // The decision closed the review on screen; the dashboard is the next useful place.
         location.href = "/";
@@ -1256,6 +1475,7 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
+      this.showSessionSize(data.disk_bytes || 0);
       lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
       this.serverAnnotations = JSON.stringify(server);
@@ -1273,7 +1493,7 @@ class Editor {
       this.renderHeader();
       this.loadHistory();
       this.startConversationPolling();
-      await this.loadImage(this.meta.image);
+      await this.loadMedia(this.meta);
       this.fit();
       this.render();
     } catch (error) {
@@ -1287,6 +1507,10 @@ class Editor {
   }
 
   loadImage(name) {
+    if (this.video) this.video.pause();
+    this.video = null;
+    if (this.videoBar) this.videoBar.hidden = true;
+    this.stage.classList.remove("video-mode");
     return new Promise((resolve) => {
       const image = new Image();
       image.onload = () => {
@@ -1304,6 +1528,333 @@ class Editor {
     });
   }
 
+  get isVideo() {
+    return Boolean(this.video);
+  }
+
+  mediaWidth() {
+    return this.video?.videoWidth || this.image?.naturalWidth || 0;
+  }
+
+  mediaHeight() {
+    return this.video?.videoHeight || this.image?.naturalHeight || 0;
+  }
+
+  /// Load a video element from any session URL (live clip or archived round) into the canvas.
+  loadVideoFrom(url) {
+    if (this.video) this.video.pause();
+    return new Promise((resolve) => {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.preload = "auto";
+      video.onloadedmetadata = async () => {
+        // A MediaRecorder WebM only learns its duration after a seek; without this the whole
+        // timeline would collapse to a zero-length window.
+        const duration = await resolvedDuration(video);
+        video.currentTime = 0;
+        this.image = video;
+        this.video = video;
+        this.videoWindow = { start: 0, end: duration };
+        this.bindVideo(video);
+        resolve(video);
+      };
+      video.onerror = () => {
+        this.image = null;
+        this.video = null;
+        this.syncVideoBar();
+        this.showStageMessage("Video missing", "Could not play this video (unsupported codec?).");
+        resolve(null);
+      };
+      video.src = url;
+    });
+  }
+
+  /// Load the session media: an image stays an Image, a video becomes an HTMLVideoElement drawn
+  /// into the same canvas. Video playback is muted in v1.
+  loadMedia(meta) {
+    if (meta?.media?.kind !== "video") return this.loadImage(meta?.image || "");
+    return this.loadVideoFrom(
+      `/sessions/${encodeURIComponent(this.sessionId)}/media?v=${encodeURIComponent(meta.image)}&r=${Date.now()}`,
+    );
+  }
+
+  bindVideo(video) {
+    const draw = () => { if (this.video === video) this.render(); };
+    video.addEventListener("seeked", draw);
+    video.addEventListener("timeupdate", () => {
+      this.syncVideoBar();
+      draw();
+    });
+    video.addEventListener("play", () => { this.syncVideoBar(); this.frameLoop(); });
+    video.addEventListener("pause", () => this.syncVideoBar());
+    video.addEventListener("loadedmetadata", () => {
+      this.videoWindow = { start: 0, end: video.duration || 0 };
+      this.syncVideoBar();
+    });
+    this.syncVideoBar();
+  }
+
+  frameLoop() {
+    if (!this.video || this.video.paused) return;
+    this.render();
+    if (this.video.requestVideoFrameCallback) {
+      this.videoFrame = this.video.requestVideoFrameCallback(() => this.frameLoop());
+    } else {
+      this.videoFrame = requestAnimationFrame(() => this.frameLoop());
+    }
+  }
+
+  syncVideoBar() {
+    const bar = this.videoBar;
+    if (!bar) return;
+    const video = this.video;
+    bar.hidden = !video;
+    this.stage.classList.toggle("video-mode", Boolean(video));
+    if (!video) return;
+    const duration = Number.isFinite(video.duration) ? video.duration : 0;
+    const window = this.videoWindow;
+    const span = Math.max(0.001, window.end - window.start);
+    const seek = $("#video-seek");
+    if (seek) {
+      seek.min = String(window.start);
+      seek.max = String(window.end);
+      seek.step = "0.001";
+      seek.value = String(Math.min(window.end, Math.max(window.start, video.currentTime)));
+    }
+    const time = $("#video-time");
+    if (time) time.textContent = `${timecode(video.currentTime)} / ${timecode(duration)}`;
+    const play = $("#video-play");
+    if (play) {
+      play.setAttribute("aria-label", video.paused ? "Play video" : "Pause video");
+      play.textContent = video.paused ? "▶" : "❚❚";
+    }
+    const speed = $("#video-speed");
+    if (speed) speed.value = String(video.playbackRate || 1);
+    const next = $("#video-new");
+    if (next) next.hidden = !video || this.locked || Boolean(this.viewing);
+    const overview = $("#timeline-window");
+    if (overview && duration > 0) {
+      overview.style.left = `${(window.start / duration) * 100}%`;
+      overview.style.width = `${(span / duration) * 100}%`;
+    }
+    this.renderTimelineMarks();
+    this.renderTimelineTicks();
+  }
+
+  /// A ruler under the detail slider. The step follows the zoom window, so a 1 s window shows
+  /// tenths and a 10 min window shows minutes.
+  renderTimelineTicks() {
+    const ticks = $("#timeline-ticks");
+    if (!ticks || !this.video) return;
+    const { start, end } = this.videoWindow;
+    const span = end - start;
+    if (!(span > 0.01)) {
+      ticks.innerHTML = "";
+      return;
+    }
+    const steps = [0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1800];
+    const step = steps.find((candidate) => span / candidate <= 5) || 3600;
+    const first = Math.ceil((start - 1e-9) / step) * step;
+    const labels = [];
+    for (let at = first; at <= end + 1e-6; at += step) {
+      const left = ((at - start) / span) * 100;
+      const short = step < 1
+        ? timecode(at).replace(/^0?(\d+):(\d{2})\.(\d)\d{2}$/, (_, m, s, tenth) => `${m}:${s}.${tenth}`)
+        : timecode(at).replace(/\.\d+$/, "");
+      // Keep the edge labels inside the bar: half a label hanging over the end reads clipped.
+      const place = left < 2
+        ? "left:0;transform:none"
+        : left > 98
+          ? "left:100%;transform:translateX(-100%)"
+          : `left:${left}%;transform:translateX(-50%)`;
+      labels.push(`<span class="timeline-tick" style="${place}">${escapeHtml(short)}</span>`);
+    }
+    ticks.innerHTML = labels.join("");
+  }
+
+  renderTimelineMarks() {
+    const layer = $("#timeline-marks");
+    if (!layer) return;
+    const window = this.videoWindow;
+    const span = Math.max(0.001, window.end - window.start);
+    layer.innerHTML = this.annotations
+      .map((annotation, index) => {
+        if (typeof annotation.at !== "number") return "";
+        if (annotation.at < window.start || annotation.at > window.end) return "";
+        const at = annotation.at;
+        const left = ((at - window.start) / span) * 100;
+        const active = Math.abs((this.video?.currentTime || 0) - at) < 0.2;
+        const hasRange = typeof annotation.until === "number" && annotation.until > at;
+        const range = hasRange
+          ? `<span class="timeline-range" style="left:${left}%;width:${
+            (Math.min(window.end, annotation.until) - at) / span * 100
+          }%;background:${escapeHtml(annotation.color || "#e11d48")}"></span>`
+          : "";
+        return `${range}<button class="timeline-mark${active ? " active" : ""}" data-mark="${index}"
+          style="left:${left}%;background:${escapeHtml(annotation.color || "#e11d48")}"
+          title="${escapeHtml(timecode(at))}${hasRange ? `–${escapeHtml(timecode(annotation.until))}` : ""} · annotation ${index + 1}"
+          aria-label="Seek to annotation ${index + 1} at ${escapeHtml(timecode(at))}"></button>`;
+      })
+      .join("");
+
+    // The overview always shows every annotation, even when the zoomed window has moved away
+    // from it: the strip is the map of the whole clip.
+    const overview = $("#timeline-overview-marks");
+    if (!overview) return;
+    const duration = Number.isFinite(this.video?.duration) ? this.video.duration : 0;
+    overview.innerHTML = duration > 0
+      ? this.annotations.map((annotation) => {
+        if (typeof annotation.at !== "number") return "";
+        const color = escapeHtml(annotation.color || "#e11d48");
+        const left = (annotation.at / duration) * 100;
+        const hasRange = typeof annotation.until === "number" && annotation.until > annotation.at;
+        const band = hasRange
+          ? `<span class="timeline-overview-band" style="left:${left}%;width:${
+            (Math.min(duration, annotation.until) - annotation.at) / duration * 100
+          }%;background:${color}"></span>`
+          : "";
+        return `${band}<span class="timeline-overview-mark" style="left:${left}%;background:${color}"></span>`;
+      }).join("")
+      : "";
+  }
+
+  /// Replace the clip with the next round. The server archives the previous round (annotations,
+  /// contact sheet, frames and video) and reopens the session; unsaved canvas marks are lost, so
+  /// ask first.
+  pickNewVideo() {
+    if (!this.video || this.locked || this.viewing) return;
+    if (this.annotations.length && !confirm(
+      "Post a new video as the next round? Unsaved annotations will be discarded; the submitted round (if any) stays in History.",
+    )) return;
+    $("#video-file")?.click();
+  }
+
+  async uploadNewVideo(file) {
+    const button = $("#video-new");
+    const label = button?.textContent || "New video";
+    if (button) {
+      button.disabled = true;
+      button.textContent = "Uploading…";
+    }
+    try {
+      const details = await readVideoFile(file);
+      const form = new FormData();
+      form.append("video", file, file.name || "video.mp4");
+      if (details.poster) form.append("poster", details.poster, "poster.png");
+      if (details.duration > 0) {
+        form.append("duration_ms", String(Math.round(details.duration * 1000)));
+      }
+      form.append("width", String(details.width));
+      form.append("height", String(details.height));
+      const body = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/video`, {
+        method: "POST",
+        body: form,
+      });
+      this.meta = body.meta;
+      this.drafts.delete(this.sessionId);
+      this.annotations = [];
+      this.selected.clear();
+      this.viewing = null;
+      await this.load(this.sessionId);
+      await this.rail.load();
+    } catch (error) {
+      alert(`Could not post the new video: ${error.message}`);
+    } finally {
+      if (button) {
+        button.disabled = false;
+        button.textContent = label;
+      }
+    }
+  }
+
+  seekTo(seconds, selectIndex = -1) {
+    if (!this.video) return;
+    this.video.currentTime = Math.min(this.video.duration || 0, Math.max(0, seconds));
+    if (selectIndex >= 0) this.select(selectIndex);
+    this.syncVideoBar();
+    this.render();
+  }
+
+  zoomTimeline(factor, center) {
+    if (!this.video) return;
+    const duration = this.video.duration || 0;
+    const window = this.videoWindow;
+    const span = Math.max(0.1, window.end - window.start);
+    const next = Math.min(duration, Math.max(0.25, span * factor));
+    const anchor = center ?? this.video.currentTime ?? window.start;
+    let start = anchor - ((anchor - window.start) / span) * next;
+    start = Math.max(0, Math.min(duration - next, start));
+    this.videoWindow = { start, end: start + next };
+    this.syncVideoBar();
+    this.render();
+  }
+
+  bindVideoBar() {
+    const play = $("#video-play");
+    play?.addEventListener("click", () => {
+      if (!this.video) return;
+      if (this.video.paused) this.video.play().catch(() => {});
+      else this.video.pause();
+    });
+    const step = (direction) => {
+      if (!this.video) return;
+      const fps = Number(this.meta?.media?.fps) || 30;
+      this.seekTo(this.video.currentTime + direction / fps);
+    };
+    $("#video-step-back")?.addEventListener("click", () => step(-1));
+    $("#video-step-forward")?.addEventListener("click", () => step(1));
+    $("#video-speed")?.addEventListener("change", (event) => {
+      if (this.video) this.video.playbackRate = Number(event.target.value) || 1;
+    });
+    const ghosts = $("#video-ghosts");
+    ghosts?.addEventListener("click", () => {
+      this.ghosts = !this.ghosts;
+      ghosts.setAttribute("aria-pressed", String(this.ghosts));
+      this.render();
+    });
+    $("#video-new")?.addEventListener("click", () => this.pickNewVideo());
+    $("#video-file")?.addEventListener("change", (event) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (file) this.uploadNewVideo(file);
+    });
+    $("#timeline-zoom-in")?.addEventListener("click", () => this.zoomTimeline(1 / 1.6));
+    $("#timeline-zoom-out")?.addEventListener("click", () => this.zoomTimeline(1.6));
+    $("#timeline-fit")?.addEventListener("click", () => {
+      if (!this.video) return;
+      this.videoWindow = { start: 0, end: this.video.duration || 0 };
+      this.syncVideoBar();
+      this.render();
+    });
+    $("#video-seek")?.addEventListener("input", (event) => {
+      if (this.video) this.seekTo(Number(event.target.value));
+    });
+    $("#video-timeline")?.addEventListener("wheel", (event) => {
+      if (!this.video) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = event.currentTarget.getBoundingClientRect();
+      const at = this.videoWindow.start
+        + ((event.clientX - rect.left) / Math.max(1, rect.width))
+          * (this.videoWindow.end - this.videoWindow.start);
+      this.zoomTimeline(event.deltaY < 0 ? 1 / 1.2 : 1.2, at);
+    }, { passive: false });
+    $("#timeline-overview")?.addEventListener("click", (event) => {
+      if (!this.video || !this.video.duration) return;
+      const rect = event.currentTarget.getBoundingClientRect();
+      this.seekTo(((event.clientX - rect.left) / Math.max(1, rect.width)) * this.video.duration);
+    });
+    $("#timeline-marks")?.addEventListener("click", (event) => {
+      const mark = event.target.closest("[data-mark]");
+      if (!mark) return;
+      event.stopPropagation();
+      const index = Number(mark.dataset.mark);
+      const at = this.annotations[index]?.at;
+      if (typeof at === "number") this.seekTo(at, index);
+    });
+  }
+
   showStageMessage(title, text) {
     let box = $("#stage-empty");
     if (!box) {
@@ -1313,6 +1864,19 @@ class Editor {
       this.stage.appendChild(box);
     }
     box.innerHTML = `<div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(text)}</p></div>`;
+  }
+
+  /// Files stay on disk, including every video round, so the History summary carries the real
+  /// size and turns red past 2 GB instead of letting the archive grow silently.
+  showSessionSize(bytes) {
+    const label = $("#session-size");
+    if (!label) return;
+    label.textContent = formatBytes(bytes);
+    const warn = bytes > 2 * 1024 * 1024 * 1024;
+    label.classList.toggle("warn", warn);
+    label.title = warn
+      ? "Over 2 GB. Videos are kept in history; delete old rounds you no longer need."
+      : "Session size on disk";
   }
 
   renderHeader() {
@@ -1336,10 +1900,12 @@ class Editor {
     button.classList.toggle("stop", waiting);
     const composer = $("#composer-text");
     if (composer) {
-      composer.disabled = waiting;
+      composer.disabled = waiting || Boolean(this.viewing);
       composer.placeholder = waiting
         ? "Waiting for the agent — press STOP to edit again"
-        : "What should change? Sent with the annotations…";
+        : this.viewing
+          ? "Read-only historical round — back to current to edit"
+          : "What should change? Sent with the annotations…";
     }
     this.updateLock();
     const stageStatus = $("#stage-status");
@@ -1617,6 +2183,28 @@ class Editor {
       }
       if (typing(event)) return;
 
+      // Video transport, matching the usual editor keys. Drawing tools keep their letters.
+      if (this.video && !meta) {
+        const key = event.key.toLowerCase();
+        if (key === "k") {
+          event.preventDefault();
+          if (this.video.paused) this.video.play().catch(() => {});
+          else this.video.pause();
+          return;
+        }
+        if (key === "j" || key === "l") {
+          event.preventDefault();
+          this.seekTo(this.video.currentTime + (key === "j" ? -1 : 1));
+          return;
+        }
+        if (key === "," || key === ".") {
+          event.preventDefault();
+          const fps = Number(this.meta?.media?.fps) || 30;
+          this.seekTo(this.video.currentTime + (key === "," ? -1 : 1) / fps);
+          return;
+        }
+      }
+
       const map = { v: "select", r: "rect", e: "ellipse", a: "arrow", p: "pen" };
       if (map[event.key.toLowerCase()] && !meta) {
         this.setTool(map[event.key.toLowerCase()]);
@@ -1707,11 +2295,16 @@ class Editor {
 
   fit() {
     if (!this.image) return;
+    const width = this.mediaWidth();
+    const height = this.mediaHeight();
+    if (!width || !height) return;
     const rect = this.stage.getBoundingClientRect();
-    const scale = Math.min(rect.width / this.image.naturalWidth, rect.height / this.image.naturalHeight) * 0.94;
+    const bar = this.videoBar && !this.videoBar.hidden ? this.videoBar.offsetHeight + 8 : 0;
+    const available = Math.max(80, rect.height - bar);
+    const scale = Math.min(rect.width / width, available / height) * 0.94;
     this.view.scale = clamp(scale, 0.05, 8);
-    this.view.x = (rect.width - this.image.naturalWidth * this.view.scale) / 2;
-    this.view.y = (rect.height - this.image.naturalHeight * this.view.scale) / 2;
+    this.view.x = (rect.width - width * this.view.scale) / 2;
+    this.view.y = (available - height * this.view.scale) / 2;
     this.view.fitted = true;
     this.updateZoomLabel();
     this.render();
@@ -1752,6 +2345,25 @@ class Editor {
 
   // ---------------------------------------------------------- rendering
 
+  /// Annotation visibility at the current video time: the current moment is full, other moments
+  /// are faint ghosts that fade in as their time approaches. Images always render at full.
+  annotationOpacity(annotation, index) {
+    if (!this.isVideo || !this.video) return 1;
+    if (this.selected.has(index)) return 1;
+    if (typeof annotation.at !== "number") return 1;
+    const current = this.video.currentTime || 0;
+    const at = annotation.at;
+    const until = typeof annotation.until === "number" ? Math.max(at, annotation.until) : null;
+    const distance = until !== null && current >= at && current <= until
+      ? 0
+      : until !== null
+        ? (current < at ? at - current : current - until)
+        : Math.abs(current - at);
+    const opacity = Math.max(0.12, 1 - distance / 0.35);
+    if (!this.ghosts && opacity < 0.99) return 0;
+    return opacity;
+  }
+
   render() {
     if (!this.dpr) this.resize();
     const { ctx, canvas } = this;
@@ -1767,10 +2379,19 @@ class Editor {
     ctx.drawImage(this.image, 0, 0);
 
     this.annotations.forEach((annotation, index) => {
+      const opacity = this.annotationOpacity(annotation, index);
+      if (!opacity) return;
+      ctx.globalAlpha = opacity;
       this.paint(ctx, annotation, this.selected.has(index));
+      ctx.globalAlpha = 1;
     });
     this.annotations.forEach((annotation, index) => {
-      if (annotation.type !== "text") this.paintBadge(ctx, annotation, index + 1, 12 / this.view.scale, 2 / this.view.scale);
+      if (annotation.type === "text") return;
+      const opacity = this.annotationOpacity(annotation, index);
+      if (!opacity) return;
+      ctx.globalAlpha = opacity;
+      this.paintBadge(ctx, annotation, index + 1, 12 / this.view.scale, 2 / this.view.scale);
+      ctx.globalAlpha = 1;
     });
     if (this.draw) this.paint(ctx, this.draw, false);
     ctx.restore();
@@ -2173,7 +2794,11 @@ class Editor {
       if (!this.image || this.locked) return;
       // The options bar, the inline text editor and the "back to current" pill live inside the
       // stage. Capturing the pointer for marquee/pan on those would swallow their click events.
-      if (event.target.closest(".options, .text-editor, .viewing-bar")) return;
+      if (event.target.closest(".options, .text-editor, .viewing-bar, .video-bar")) return;
+
+      // Drawing on a moving video would capture a different frame than the one the human saw;
+      // any canvas interaction pauses first. The play button resumes.
+      if (this.isVideo && this.video && !this.video.paused) this.video.pause();
 
       this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (this.pointers.size === 2) {
@@ -2328,6 +2953,9 @@ class Editor {
         this.draw = null;
         const width = Math.abs(drawing.end.x - drawing.start.x);
         const height = Math.abs(drawing.end.y - drawing.start.y);
+        const at = this.isVideo && this.video
+          ? { at: Number(this.video.currentTime.toFixed(3)) }
+          : {};
         if (drawing.type === "pen" && drawing.points.length > 1) {
           this.mutate(() => {
             this.annotations.push({
@@ -2336,6 +2964,7 @@ class Editor {
               color: drawing.color,
               width: drawing.width,
               points: drawing.points.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+              ...at,
             });
           });
         } else if (drawing.type === "rect" && (width > 2 || height > 2)) {
@@ -2347,6 +2976,7 @@ class Editor {
               width: drawing.width,
               start: { x: Math.round(drawing.start.x), y: Math.round(drawing.start.y) },
               end: { x: Math.round(drawing.end.x), y: Math.round(drawing.end.y) },
+              ...at,
             });
           });
         } else if (drawing.type === "ellipse" && (width > 2 || height > 2)) {
@@ -2358,6 +2988,7 @@ class Editor {
               width: drawing.width,
               start: { x: Math.round(drawing.start.x), y: Math.round(drawing.start.y) },
               end: { x: Math.round(drawing.end.x), y: Math.round(drawing.end.y) },
+              ...at,
             });
           });
         } else if (drawing.type === "arrow" && Math.hypot(width, height) > 4) {
@@ -2369,6 +3000,7 @@ class Editor {
               width: drawing.width,
               start: { x: Math.round(drawing.start.x), y: Math.round(drawing.start.y) },
               end: { x: Math.round(drawing.end.x), y: Math.round(drawing.end.y) },
+              ...at,
             });
           });
         }
@@ -2460,6 +3092,9 @@ class Editor {
         return;
       }
       if (text) {
+        const at = this.isVideo && this.video
+          ? { at: Number(this.video.currentTime.toFixed(3)) }
+          : {};
         this.mutate(() => {
           this.annotations.push({
             id: uid(),
@@ -2469,6 +3104,7 @@ class Editor {
             y: Math.round(point.y),
             size: this.textSize,
             text,
+            ...at,
           });
         });
       }
@@ -2511,9 +3147,13 @@ class Editor {
         const label = String(
           annotation.note || annotation.text || `${annotation.type}`,
         );
+        const at = typeof annotation.at === "number" ? timecode(annotation.at) : "";
+        const until = typeof annotation.until === "number" ? `–${timecode(annotation.until)}` : "";
         return `<div class="ann-row readonly">
           <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
-          <span class="label"><b>${escapeHtml(label)}</b><span>${escapeHtml(annotation.type)}</span></span>
+          <span class="label"><b>${escapeHtml(label)}</b><span>${escapeHtml(annotation.type)}${
+            at ? ` · ${escapeHtml(at + until)}` : ""
+          }</span></span>
         </div>`;
       }).join("") || `<div class="inspector-empty">No annotations in this round.</div>`;
       return;
@@ -2563,22 +3203,63 @@ class Editor {
             ? `freehand · ${annotation.points?.length || 0} points`
             : `${Math.round(annotation.start?.x ?? 0)}, ${Math.round(annotation.start?.y ?? 0)}`;
       const note = String(annotation.note || "").trim();
-      const meta = note ? escapeHtml(note) : annotation.type;
+      const primary = note ? escapeHtml(note) : label;
+      const at = typeof annotation.at === "number" ? timecode(annotation.at) : "";
+      const until = typeof annotation.until === "number" ? `–${timecode(annotation.until)}` : "";
+      const range = at ? `${at}${until}` : "";
+      const meta = `${annotation.type}${annotation.group ? " · group" : ""}${
+        range ? ` · ${range}` : ""
+      }`;
+      const rangeButton = this.isVideo && at
+        ? `<button class="end" data-end="${index}" aria-label="${
+          typeof annotation.until === "number" ? "Clear range end" : "Set range end at the current time"
+        }" title="${
+          typeof annotation.until === "number" ? "Clear the range end" : "Set the range end to the current time"
+        }">${typeof annotation.until === "number" ? "×" : "⏱"}</button>`
+        : "";
       return `
         <div class="ann-row" data-index="${index}" aria-current="${this.selected.has(index)}">
           <span class="ann-num" style="background:${escapeHtml(annotation.color || "#e11d48")}">${index + 1}</span>
-          <span class="label"><b>${label}</b><span>${meta}${annotation.group ? " · group" : ""}</span></span>
+          <span class="label"><b title="${primary}">${primary}</b><span>${escapeHtml(meta)}</span></span>
+          ${rangeButton}
           <button class="del" data-delete="${index}" title="Delete">✕</button>
         </div>`;
     }).join("");
 
     $$(".ann-row", body).forEach((row) => {
       row.addEventListener("click", (event) => {
-        if (event.target.dataset.delete !== undefined) return;
+        if (event.target.dataset.delete !== undefined || event.target.dataset.end !== undefined) return;
         const index = Number(row.dataset.index);
         const additive = event.shiftKey || event.ctrlKey || event.metaKey;
         this.selectAt(index, additive);
-        if (!additive) this.revealSelection();
+        if (!additive) {
+          if (this.isVideo && typeof this.annotations[index].at === "number") {
+            this.seekTo(this.annotations[index].at, index);
+          } else {
+            this.revealSelection();
+          }
+        }
+      });
+    });
+    $$(".end", body).forEach((button) => {
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const index = Number(button.dataset.end);
+        const annotation = this.annotations[index];
+        if (!this.video || !annotation) return;
+        this.mutate(() => {
+          if (typeof annotation.until === "number") {
+            delete annotation.until;
+            return;
+          }
+          const at = annotation.at || 0;
+          const duration = Number(this.video.duration) || at + 1;
+          let end = Math.max(this.video.currentTime, at + 0.04);
+          // Clicking the range button while parked on the annotation would otherwise stamp a
+          // zero-length range that the agent cannot use. Give it a second of video.
+          if (end - at < 0.05) end = at + 1;
+          annotation.until = Number(Math.min(duration, end).toFixed(3));
+        });
       });
     });
     $$(".del", body).forEach((button) => {
@@ -2591,6 +3272,7 @@ class Editor {
         });
       });
     });
+    if (this.video) this.renderTimelineMarks();
   }
 
   revealSelection() {
@@ -2640,7 +3322,7 @@ class Editor {
           <span class="label">
             <b>Round ${round.round}${round.current ? " (current)" : ""}</b>
             <span>${escapeHtml(stampTime(round.stamp))} · ${plural(round.annotations, "annotation")}${
-              round.source ? " · image" : ""
+              round.media?.kind === "video" ? " · video" : round.source ? " · image" : ""
             }</span>
           </span>
         </div>`);
@@ -2685,11 +3367,6 @@ class Editor {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const set = await response.json();
       const round = (this.historyEntries || []).find((entry) => entry.stamp === stamp);
-      const file = round?.source ? `${stamp}-source.png` : `${stamp}.png`;
-      const image = await this.loadImageFrom(
-        `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(file)}`,
-      );
-      if (!image) return;
       if (!this.viewing) {
         this.live = {
           image: this.image,
@@ -2697,15 +3374,33 @@ class Editor {
           meta: this.meta,
           count: this.annotations.length,
         };
+        if (this.video) this.video.pause();
       }
+      // A video round plays in the same canvas and video bar; an image round keeps the source
+      // PNG viewer. Both are read-only: `viewing` guards every mutation.
+      const historyVideo = round?.media?.kind === "video";
+      let image;
+      if (historyVideo) {
+        image = await this.loadVideoFrom(
+          `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(stamp)}/video`,
+        );
+      } else {
+        const file = round?.source ? `${stamp}-source.png` : `${stamp}.png`;
+        image = await this.loadImageFrom(
+          `/sessions/${encodeURIComponent(this.sessionId)}/history/${encodeURIComponent(file)}`,
+        );
+      }
+      if (!image) return;
       this.viewing = {
         stamp,
         round: round?.round || 0,
         annotations: Array.isArray(set.annotations) ? set.annotations : [],
+        video: historyVideo,
       };
       this.image = image;
       this.annotations = this.viewing.annotations;
       this.selected.clear();
+      this.syncVideoBar();
       this.updateViewingBar();
       this.renderHeader();
       this.renderInspector();
@@ -2734,7 +3429,7 @@ class Editor {
         const composer = $("#composer-text");
         if (composer) composer.value = draft.prompt || "";
       }
-      await this.loadImage(this.meta.image);
+      await this.loadMedia(this.meta);
       this.selected.clear();
       this.renderHeader();
       this.renderInspector();
@@ -2761,6 +3456,10 @@ class Editor {
       const button = $(id);
       if (button) button.disabled = this.locked;
     });
+    // A history round is read-only: submitting the canvas would send the archived annotations as
+    // a new live round, so the primary action is disabled until Back to current.
+    const submit = $("#submit");
+    if (submit) submit.disabled = Boolean(this.viewing);
     const dim = $("#stage-dim");
     if (dim) dim.hidden = !this.locked;
     if (this.locked) {
@@ -2776,6 +3475,7 @@ class Editor {
     // The inspector was rendered before the meta arrived on a reload: re-render it, or a
     // submitted round still shows its delete buttons and write toolbar.
     if (before !== this.locked) this.renderInspector();
+    if (this.video) this.syncVideoBar();
   }
 
   updateViewingBar() {
@@ -2837,7 +3537,7 @@ class Editor {
         this.history = [];
         this.future = [];
         this.ghosts = null;
-        await this.loadImage(this.meta.image);
+        await this.loadMedia(this.meta);
         this.fit();
         this.render();
         this.renderInspector();
@@ -3060,7 +3760,209 @@ class Editor {
 
   // ---------------------------------------------------------- submit
 
+  /// Seek the video and wait until the decoded frame is ready to draw. `seeked` alone can fire
+  /// before the new frame is composited, so give the renderer two turns.
+  async seekFrame(at) {
+    const video = this.video;
+    if (!video) return;
+    if (Math.abs(video.currentTime - at) > 0.0005) {
+      await new Promise((resolve) => {
+        const done = () => {
+          video.removeEventListener("seeked", done);
+          resolve();
+        };
+        video.addEventListener("seeked", done);
+        video.currentTime = at;
+      });
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  }
+
+  /// Capture the full-resolution frame at `at` as a Blob (PNG, with a JPEG fallback when the
+  /// 60 MB budget is exceeded).
+  async captureFrame(at, type = "image/png", quality = 0.92) {
+    await this.seekFrame(at);
+    const canvas = document.createElement("canvas");
+    canvas.width = this.mediaWidth();
+    canvas.height = this.mediaHeight();
+    canvas.getContext("2d").drawImage(this.image, 0, 0);
+    return new Promise((resolve) => canvas.toBlob(resolve, type, quality));
+  }
+
+  /// The contact sheet: one tile per unique annotation time, with that moment's annotations
+  /// painted over the frame and a timecode label. This is what `annotated.png` carries for video.
+  async makeContactSheet(tiles) {
+    const width = this.mediaWidth();
+    const height = this.mediaHeight();
+    const tileW = 480;
+    const tileH = Math.max(1, Math.round((tileW * height) / width));
+    const labelH = 30;
+    const headerH = 54;
+    const pad = 20;
+    const gap = 14;
+    const cols = Math.min(3, Math.max(1, tiles.length));
+    const rows = Math.max(1, Math.ceil(tiles.length / 3));
+    const canvas = document.createElement("canvas");
+    canvas.width = pad * 2 + cols * tileW + (cols - 1) * gap;
+    canvas.height = headerH + pad * 2 + rows * (tileH + labelH) + (rows - 1) * gap;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#0f172a";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#f8fafc";
+    ctx.font = "600 20px -apple-system, 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(this.meta.title || "Video review", pad, 34);
+    ctx.fillStyle = "#94a3b8";
+    ctx.font = "12px -apple-system, 'Segoe UI', system-ui, sans-serif";
+    ctx.fillText(
+      `${tiles.length} annotated moment${tiles.length === 1 ? "" : "s"} · click any timecode in RedLine`,
+      pad,
+      50,
+    );
+    for (let index = 0; index < tiles.length; index += 1) {
+      const tile = tiles[index];
+      const col = index % 3;
+      const row = Math.floor(index / 3);
+      const x = pad + col * (tileW + gap);
+      const y = headerH + pad + row * (tileH + labelH + gap);
+      const image = await new Promise((resolve) => {
+        const img = new Image();
+        img.onload = () => resolve(img);
+        img.onerror = () => resolve(null);
+        img.src = URL.createObjectURL(tile.blob);
+      });
+      if (image) {
+        ctx.drawImage(image, x, y, tileW, tileH);
+        URL.revokeObjectURL(image.src);
+      }
+      ctx.strokeStyle = "#334155";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x + 0.5, y + 0.5, tileW - 1, tileH - 1);
+      ctx.fillStyle = "#111827";
+      ctx.fillRect(x, y + tileH, tileW, labelH);
+      ctx.fillStyle = "#e2e8f0";
+      ctx.font = "600 14px ui-monospace, SFMono-Regular, Menlo, monospace";
+      const numbers = tile.annotations.map((annotation) => annotation.index + 1).join(", ");
+      ctx.fillText(
+        `${timecode(tile.at)}${numbers ? ` · annotation${numbers.includes(",") ? "s" : ""} ${numbers}` : ""}`,
+        x + 10,
+        y + tileH + 20,
+      );
+      // Paint the annotations that belong to this moment at the tile's scale.
+      const scale = tileW / width;
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.scale(scale, scale);
+      for (const entry of tile.annotations) {
+        const annotation = entry.annotation;
+        this.paint(ctx, annotation, false);
+        if (annotation.type !== "text") {
+          this.paintBadge(ctx, annotation, entry.index + 1, 15 / scale, 2 / scale);
+        }
+      }
+      ctx.restore();
+    }
+    return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  }
+
+  /// Video submit: capture the annotated moments, build the contact sheet, and send both the
+  /// contact sheet and the full-resolution stills as multipart. The JSON path stays for images.
+  async submitVideo(button, label) {
+    const note = $("#composer-text")?.value.trim() || "";
+    const times = [...new Set(
+      this.annotations
+        .filter((annotation) => typeof annotation.at === "number")
+        .map((annotation) => Math.round(annotation.at * 1000)),
+    )].sort((a, b) => a - b).slice(0, 20);
+    const origin = this.video.currentTime;
+    const wasPlaying = !this.video.paused;
+    this.video.pause();
+    try {
+      const captures = [];
+      for (let index = 0; index < times.length; index += 1) {
+        button.textContent = `Frame ${index + 1}/${times.length}…`;
+        const at = times[index] / 1000;
+        const blob = await this.captureFrame(at);
+        if (blob) captures.push({ at, blob, ext: "png" });
+      }
+      // The product cap is ~60 MB of full frames. PNG keeps text crisp; a photographic clip can
+      // blow the budget, so re-encode at full resolution as JPEG rather than dropping frames.
+      let total = captures.reduce((sum, capture) => sum + capture.blob.size, 0);
+      for (const quality of [0.92, 0.85, 0.78]) {
+        if (total <= 60 * 1024 * 1024) break;
+        captures.length = 0;
+        for (let index = 0; index < times.length; index += 1) {
+          const blob = await this.captureFrame(times[index] / 1000, "image/jpeg", quality);
+          if (blob) captures.push({ at: times[index] / 1000, blob, ext: "jpg" });
+        }
+        total = captures.reduce((sum, capture) => sum + capture.blob.size, 0);
+      }
+      const tiles = times.map((ms) => {
+        const at = ms / 1000;
+        const matching = this.annotations
+          .map((annotation, index) => ({ annotation, index }))
+          .filter(({ annotation }) => typeof annotation.at === "number"
+            && Math.round(annotation.at * 1000) === ms);
+        return { at, blob: captures.find((capture) => Math.round(capture.at * 1000) === ms)?.blob, annotations: matching };
+      }).filter((tile) => tile.blob);
+      if (!tiles.length) {
+        // A video review can be submitted with a note and no timecoded shapes: still give the
+        // agent a visual of the current frame.
+        button.textContent = "Contact sheet…";
+        const blob = await this.captureFrame(origin);
+        if (blob) {
+          const current = this.annotations
+            .map((annotation, index) => ({ annotation, index }));
+          tiles.push({ at: origin, blob, annotations: current });
+        }
+      }
+      button.textContent = "Contact sheet…";
+      const sheet = await this.makeContactSheet(tiles);
+      const form = new FormData();
+      form.append("annotations", JSON.stringify({
+        annotations: this.annotations,
+        width: this.mediaWidth(),
+        height: this.mediaHeight(),
+        note,
+      }));
+      if (sheet) form.append("png", sheet, "contact-sheet.png");
+      for (const capture of captures) {
+        form.append("frames", capture.blob, `${capture.at.toFixed(3)}.${capture.ext}`);
+      }
+      button.textContent = "Uploading…";
+      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/annotations`, {
+        method: "POST",
+        body: form,
+      });
+      if (result?.meta) this.meta = result.meta;
+      this.drafts.delete(this.sessionId);
+      this.syncDirty();
+      this.serverAnnotations = JSON.stringify(this.annotations);
+      const composer = $("#composer-text");
+      if (composer) composer.value = "";
+      this.renderHeader();
+      this.renderInspector();
+      this.renderConversation();
+      if ($("#history-block")?.open) this.loadHistory();
+      await this.loadConversation({ quiet: true });
+      this.seenConversation();
+      document.activeElement?.blur?.();
+      await this.rail.load();
+      button.textContent = "Submitted ✓";
+      setTimeout(() => {
+        button.disabled = false;
+        this.renderHeader();
+      }, 1400);
+    } finally {
+      if (this.video) {
+        this.video.currentTime = Math.min(origin, this.video.duration || origin);
+        if (wasPlaying) this.video.play().catch(() => {});
+      }
+    }
+    void label;
+  }
+
   async submit() {
+    if (this.viewing) return;
     if (this.meta?.status === "submitted") return this.stop();
     if (!this.image) return;
     const button = $("#submit");
@@ -3068,9 +3970,13 @@ class Editor {
     button.disabled = true;
     button.textContent = "Submitting…";
     try {
+      if (this.isVideo) {
+        await this.submitVideo(button, label);
+        return;
+      }
       const exportCanvas = document.createElement("canvas");
-      exportCanvas.width = this.image.naturalWidth;
-      exportCanvas.height = this.image.naturalHeight;
+      exportCanvas.width = this.mediaWidth();
+      exportCanvas.height = this.mediaHeight();
       const ctx = exportCanvas.getContext("2d");
       ctx.drawImage(this.image, 0, 0);
       for (const annotation of this.annotations) this.paint(ctx, annotation, false);
@@ -3081,8 +3987,8 @@ class Editor {
       const composer = $("#composer-text");
       const payload = {
         annotations: this.annotations,
-        width: this.image.naturalWidth,
-        height: this.image.naturalHeight,
+        width: this.mediaWidth(),
+        height: this.mediaHeight(),
         png: exportCanvas.toDataURL("image/png"),
         note: composer ? composer.value.trim() : "",
       };
@@ -3247,26 +4153,60 @@ const NewReview = {
     const drop = $("#drop");
     const file = $("#file");
     const preview = $("#drop-preview");
+    const videoPreview = $("#drop-video-preview");
     const label = $("#drop-label");
     let picked = null;
+    let pickedKind = null;
     let previewUrl = null;
+    const clearPreview = () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      previewUrl = null;
+      preview.hidden = true;
+      preview.removeAttribute("src");
+      if (videoPreview) {
+        videoPreview.pause();
+        videoPreview.hidden = true;
+        videoPreview.removeAttribute("src");
+      }
+    };
     const take = (candidate) => {
-      if (!candidate || !candidate.type.startsWith("image/")) {
-        $("#new-error").textContent = "That is not an image.";
+      const kind = candidate?.type.startsWith("video/")
+        ? "video"
+        : candidate?.type.startsWith("image/") ? "image" : null;
+      if (!kind) {
+        $("#new-error").textContent = "That is not an image or video.";
         return;
       }
       picked = candidate;
-      // Show the image itself: a filename and a size say nothing about what was captured.
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      pickedKind = kind;
+      clearPreview();
       previewUrl = URL.createObjectURL(candidate);
-      preview.src = previewUrl;
-      preview.hidden = false;
-      drop.classList.add("has-image");
-      label.textContent = `${candidate.name || "pasted image"} — ${Math.round(candidate.size / 1024)} KB · click to replace`;
+      const name = candidate.name || (kind === "video" ? "pasted video" : "pasted image");
+      const size = `${Math.round(candidate.size / 1024 / 1024 * 10) / 10} MB`;
+      if (kind === "video") {
+        if (videoPreview) {
+          videoPreview.src = previewUrl;
+          videoPreview.hidden = false;
+          videoPreview.addEventListener("loadedmetadata", () => {
+            if (videoPreview.videoWidth > 1920 && !label.textContent.includes("4K")) {
+              label.textContent += " · 4K — 1080p recommended";
+            }
+          }, { once: true });
+        }
+        drop.classList.add("has-image");
+        label.textContent = `${name} — ${size} · video · click to replace`;
+      } else {
+        preview.src = previewUrl;
+        preview.hidden = false;
+        drop.classList.add("has-image");
+        label.textContent = `${name} — ${Math.round(candidate.size / 1024)} KB · click to replace`;
+      }
       const title = $("#f-title");
       if (!title.value) {
-        const name = (candidate.name || "").replace(/\.[^.]+$/, "");
-        title.value = !name || name === "image" ? "Pasted screenshot" : name;
+        const stem = name.replace(/\.[^.]+$/, "");
+        title.value = !stem || stem === "image"
+          ? (kind === "video" ? "Pasted video" : "Pasted screenshot")
+          : stem;
       }
     };
     drop.addEventListener("click", () => file.click());
@@ -3280,8 +4220,9 @@ const NewReview = {
     );
     addEventListener("paste", (event) => {
       const items = [...(event.clipboardData?.items || [])];
-      const image = items.find((item) => item.type.startsWith("image/"));
-      const file = image?.getAsFile?.();
+      const media = items.find((item) =>
+        item.type.startsWith("image/") || item.type.startsWith("video/"));
+      const file = media?.getAsFile?.();
       if (!file) return;
       event.preventDefault();
       if (overlay.hidden) NewReview.open();
@@ -3295,6 +4236,8 @@ const NewReview = {
       if (overlay.hidden) NewReview.open();
       take(event.dataTransfer.files[0]);
     });
+    /// Read duration/dimensions and render the first frame as the poster before uploading.
+    const videoDetails = () => readVideoFile(picked);
     $("#new-cancel").addEventListener("click", () => NewReview.close());
     $("#new-close")?.addEventListener("click", () => NewReview.close());
     $("#f-title")?.addEventListener("input", () => NewReview.suggestBranch());
@@ -3339,6 +4282,35 @@ const NewReview = {
         return;
       }
       $("#new-error").textContent = "Uploading…";
+      if (pickedKind === "video") {
+        try {
+          if (picked.size > 250 * 1024 * 1024) {
+            throw new Error("Video is larger than the 250 MB limit.");
+          }
+          const details = await videoDetails();
+          const form = new FormData();
+          form.append("video", picked, picked.name || "video.mp4");
+          if (details.poster) form.append("poster", details.poster, "poster.png");
+          form.append("title", $("#f-title").value.trim() || picked.name || "Video review");
+          form.append("url", pageUrl);
+          form.append("note", $("#f-note").value.trim());
+          form.append("project", project);
+          form.append("agent", "human");
+          if (details.duration > 0) {
+            form.append("duration_ms", String(Math.round(details.duration * 1000)));
+          }
+          form.append("width", String(details.width));
+          form.append("height", String(details.height));
+          if (branch) form.append("branch", branch);
+          const body = await api("/api/sessions/video", { method: "POST", body: form });
+          lastProject.remember(body.meta.project);
+          location.href = `/s/${encodeURIComponent(body.meta.id)}`;
+        } catch (error) {
+          $("#new-error").textContent = error.message;
+          submit.disabled = false;
+        }
+        return;
+      }
       try {
         const dataUrl = await new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -3389,9 +4361,14 @@ function renderGallery(rail) {
   box.hidden = false;
   box.innerHTML = sessions.map((session) => {
     const project = names.get(session.project || "inbox") || (session.project || "Inbox");
+    const video = session.media?.kind === "video";
+    const length = video && session.media?.duration_ms
+      ? timecode(session.media.duration_ms / 1000).replace(/\.\d+$/, "")
+      : "";
     return `<a class="card" data-session="${escapeHtml(session.id)}"
       href="/s/${encodeURIComponent(session.id)}">
       <img src="/sessions/${encodeURIComponent(session.id)}/image" loading="lazy" alt="" />
+      ${video ? `<span class="media-chip">▶${length ? ` ${escapeHtml(length)}` : ""}</span>` : ""}
       <div class="card-body">
         <b>${escapeHtml(session.title || session.id)}</b>
         <span>${escapeHtml(project)} · ${escapeHtml(relativeTime(session.submitted_at || session.created_at))} · ${escapeHtml(
@@ -3400,6 +4377,17 @@ function renderGallery(rail) {
       </div>
     </a>`;
   }).join("");
+  // An agent-supplied video may have no poster; hide the broken-image glyph instead of showing
+  // it on the card.
+  $$("img", box).forEach((img) => {
+    const mark = () => {
+      if (img.complete && img.naturalWidth === 0) {
+        img.closest(".card")?.classList.add("no-poster");
+      }
+    };
+    img.addEventListener("error", mark, { once: true });
+    mark();
+  });
 }
 
 async function bootList() {
@@ -3418,7 +4406,7 @@ async function bootList() {
       try {
         const session = rail.sessions.find((s) => s.id === id);
         const title = session?.title || id;
-        const result = await featureAction(action, id, title, featureState(session || {}));
+        const result = await featureAction(action, id, title, session || {});
         if (result) await refresh();
       } catch (error) {
         alert(`Could not ${action}: ${error.message}`);
@@ -3431,16 +4419,19 @@ async function bootList() {
       await refresh();
     },
     onBulk: async (action, ids) => {
+      let bulkHandoff = false;
       if (action === "confirm") {
         const choice = await askFeature({
           title: `Confirm ${ids.length} feature${ids.length === 1 ? "" : "s"}?`,
-          body: "Each selected session will be marked as confirmed and closed. Your agent may open a pull request and merge it into the integration branch.",
+          body: "Each selected session will be marked as confirmed and closed. A checked handoff lets the integration finish the work (open a pull request, deploy, publish, …).",
           actions: [
             { value: "keep", label: "Keep working" },
             { value: "confirm", label: "Confirm features", kind: "primary" },
           ],
+          checkbox: handoffCheckbox(),
         });
         if (choice !== "confirm") return;
+        bulkHandoff = Boolean($("#feature-dialog-check")?.checked);
       }
       if (action === "delete"
         && !confirm(`Delete ${ids.length} session(s)? Their files go too.`)) return;
@@ -3449,7 +4440,11 @@ async function bootList() {
           if (action === "delete") {
             await api(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
           } else {
-            await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, { method: "POST" });
+            await api(`/api/sessions/${encodeURIComponent(id)}/confirm-feature`, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({ handoff: bulkHandoff }),
+            });
           }
         }
       } catch (error) {

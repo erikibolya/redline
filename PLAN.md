@@ -6,7 +6,7 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.22.0` on holly — `https://redline.ibolya.cz`, container
+**Shipped and in production:** `v0.23.0` on holly — `https://redline.ibolya.cz`, container
 `ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
 
 ## What exists today
@@ -80,7 +80,11 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Next (ordered)
 
-0. **UX rework for 1.0** — see `docs/UX-PLAN.md`: projects instead of requests, a chat flow with a
+0. **Video reviews** — phases 1–3 are in (`docs/VIDEO.md`): media core, browser upload, canvas
+   playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full
+   frames, new video rounds, history playback and `post_round` video. Phase 4 is the release
+   pass.
+1. **UX rework for 1.0** — see `docs/UX-PLAN.md`: projects instead of requests, a chat flow with a
    composer and visible agent status, notes attached to shapes instead of a text tool, RedLine
    branding. Ships as 0.8 → 0.10, before the rest of this list.
 1. Code signing (blocked on a certificate — the pipeline is ready).
@@ -98,24 +102,33 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
 - No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
 - Repo routing is single-agent: all agents watch the same queue; a claim/filter router is next.
-- **Feature confirmation is a signal, not a git action.** RedLine records `feature_state`; each
-  agent maps `confirmed` to its own workflow (this repo: feature branch → PR → required checks →
-  merge into `dev`). There is no server-side GitHub token.
+- **Feature confirmation is a decision, not a git action.** RedLine records `feature_state` and,
+  only when the human ticks the optional handoff, queues a generic **handoff job** (v0.23). The
+  bridge claims it only when it advertises the job, and the integration performs its own
+  post-confirmation action (the reference bridge opens/merges a PR; another may deploy or publish)
+  and reports `label`/`url`/`message` through `handoff_status`. RedLine still has no server-side
+  GitHub token and never runs git itself. A review run is not a handoff: it pushes the branch and
+  replies, it must not open a PR.
 - No server-side pagination; the rail renders everything it gets.
 - Text notes have a fixed font family, one size per note.
 
 ## Testing plan
 
-- `cargo test --workspace` — 81 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+- `cargo test --workspace` — 111 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
-  helpers, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 114 checks in real Chromium: every drawing tool is actually drawn
+  helpers, video media/limits/frames/rounds/timecodes, CLI end-to-end.
+- `desktop/scripts/e2e.sh` — 207 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the
-  replied-but-still-running state, feature confirm/cancel/delete menus, row delete, cancelled-only
-  purge, the All filter, agent settings/branch display, rail reopen and bulk confirm.
+  replied-but-still-running state, feature confirm/cancel/delete menus, the confirm → handoff
+  queue, MCP `handoff_status` done/failed with label/link, the rail's link and `handoff failed ↻`
+  retry, row delete,
+  cancelled-only purge, the All filter, agent settings/branch display, rail reopen and bulk
+  confirm, and the whole video path (recorded WebM upload, playback, timecoded draw, ghost
+  opacity, range, timeline zoom, contact sheet + two frames, new video round, archived history
+  playback).
 - CI runs both on every push; releases are cut from tags only after green. The tool matrix,
   feature/bug protocol and release checklist live in `docs/TESTING.md`.
 

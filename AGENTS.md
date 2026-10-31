@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.22.0.** Live in production on holly:
+**Current release: v0.23.0.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -69,7 +69,8 @@ desktop/
   install-unraid.sh       idempotent install/upgrade of the container
   docker-compose.example.yml
 docs/                     DESKTOP.md (ADR), UI.md (UI plan/status), API.md, ARCHITECTURE.md,
-                          WORKFLOW.md, TESTING.md (tool matrix + release gate), PLAN.md at the root
+                          WORKFLOW.md, TESTING.md (tool matrix + release gate),
+                          INTEGRATIONS.md (MCP contract for review/handoff agents), PLAN.md at the root
 static/, redline.py       v0.1 Python implementation, frozen; do not add features to it
 ```
 
@@ -86,8 +87,10 @@ REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh     # prints ok/FAIL per
 # Release gate: docs/TESTING.md — tool matrix, feature protocol and the checklist.
 
 # Ship a feature (dev is protected; never push it directly)
+# A review run is not a handoff: push the branch and reply, do NOT open a PR or merge.
+# The human's ✓ Confirm feature can queue a generic handoff; the bridge runs the handoff prompt:
 git push origin feat/my-feature
-feature-ready "what changed and why"
+feature-ready "what changed and why"   # only in the handoff run, after the confirmation
 # draft PR -> ready -> required CI -> auto-merge -> dev build
 
 # Release (only after an explicit yes; main is protected)
@@ -146,14 +149,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   /api/agent/repos`) and runs each review in its project's repo. Also embedded in the desktop app
   (tray → *Start local agent*); see `docs/LOCAL-AGENT.md`.
 - `redline-core` — session folder store (`meta.json`, `annotations.json`, `review.md`,
-  `annotated.png`, `history/`), project folders (`sessions/projects/<slug>/`, v0.10; optional
-  `repo` key + `agent`), axum HTTP API, bearer/cookie auth, MCP JSON-RPC, headless capture
-  (shells out to Chromium), annotation diffing, loopback HTTP client.
+  `annotated.png`, `frames/`, `history/`), project folders (`sessions/projects/<slug>/`, v0.10;
+  optional `repo` key + `agent`), axum HTTP API, bearer/cookie auth, MCP JSON-RPC, headless
+  capture (shells out to Chromium), annotation diffing, loopback HTTP client.
 - Auth: token from `/data/token`; `Authorization: Bearer`, `redline_token` cookie (set by
   `/s/<id>?t=…` → 307), or `?t=`. `Sec-Fetch-Site: cross-site` is refused.
-- MCP tools: `review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`,
-  `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`.
-  Resources: `redline://session/<id>/{annotated.png,review.md}`.
+- MCP tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`, `wait_for_feedback`,
+  `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`,
+  `handoff_status`. Resources: `redline://session/<id>/{annotated.png,review.md}`.
 - Agent state: `get_feedback` stamps `seen_by_agent_at` and sets `agent_state=received`;
   `progress` appends to `agent-events.jsonl` and sets `working`; `reply` sets `replied`.
   The editor polls meta + thread + events every 5 s and renders them as a conversation.
@@ -167,11 +170,27 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `app.css` the design tokens incl. light theme. Served from the binary at `/static/*`.
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform
   (`scale/x/y`) applied in `render()`, so zoom is crisp and pointer mapping is `(screen - view)/scale`.
+  A video session draws `<video>` into the same canvas via `loadMedia()`; `annotationOpacity()`
+  makes other moments ghosts and `videoWindow` drives the zoomable timeline. A video submit
+  captures `frames/` and a contact sheet; a new clip is a new round whose predecessor lives under
+  `history/<stamp>/video.*` and replays read-only.
 
 ## 7. Lessons already paid for (do not relearn)
 
 - **Pointer capture in the stage swallows clicks** on children (options bar). Guard:
-  `if (event.target.closest(".options, .text-editor")) return;`.
+  `if (event.target.closest(".options, .text-editor, .viewing-bar, .video-bar")) return;`.
+  The video bar was added inside the stage and its play button did nothing until it joined that
+  guard; the timeline wheel also needs `stopPropagation()` or it zooms the canvas while zooming
+  the ruler.
+- **A media element ignores `no-store` when the URL stays the same.** Replacing a review's clip
+  rewrote `video.webm`, but `<video src="/sessions/<id>/media?v=video.webm">` kept playing the
+  previous round. Cache-bust the live URL per load (`&r=<timestamp>`), not just with the file
+  name; the history URL already carries the unique round stamp.
+- **A MediaRecorder WebM has no duration until it is seeked.** `video.duration` is `Infinity`
+  straight after metadata, which collapses the timeline to a zero-length window. Seek past the
+  buffered end once (`currentTime = 1e101`, wait for `durationchange`), then reset to 0; the
+  upload's poster/duration must wait for the resolved value too. A 250 MB cap is not a length
+  cap: the server also rejects a declared duration over five minutes.
 - **Text entry**: `pointerdown` must `preventDefault()` (else mousedown focus-steals and the empty
   editor commits), focus synchronously, and `commit()` must be idempotent (removal fires `blur`).
 - **`RunEvent::ExitRequested` is vetoed** to keep the tray app alive; a quit/restart must set a
@@ -246,6 +265,22 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   the annotation list read as a stack of open frames. A divider spans the row: square the top
   corners (or use a pseudo-element), and assert it in the e2e — a "broken border" is invisible to
   every DOM test that does not measure the row.
+- **A shared list class is not a shared shape.** The history rows reuse `.ann-row`, so the
+  divider's squared top corners also reached them — but history rows are 4 px apart and each owns
+  its whole border, so every round below the first looked chopped off. A style that exists for one
+  list must be scoped to it (or restored on the other). Assert the radius of *every* row, not
+  just the first.
+- **A highlight is not the only way to mark a live row.** The live history row tinted its fill and
+  border blue, so it read as a different kind of card; the human asked for the same card as every
+  other round with only the glyph green. Colour the smallest marker that has to stand out, and keep
+  selection (which round you are viewing) a separate signal.
+
+- **A centred icon is not an aligned icon.** A history row is two lines (title + timestamp) and
+  `.ann-row` centres its glyph on the whole row, so the round number and the live bullet floated
+  *between* "Round N" and the date instead of sitting beside the title (two annotations on the same
+  column). Align the glyph to the title's line box, not to the card. And a centred *em box* is not a
+  centred digit: digits have no descender, so the numeral sat ~2 px high inside its square — pad the
+  top and assert the ink centre, not just the element's centre.
 
 - **A grid column resize is not a canvas resize.** Moving `--rail` or `--inspector` reflows the
   layout, but the `<canvas>` bitmap keeps its old pixel size until `resize()` runs — so the stage
@@ -328,6 +363,19 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   (2026-10-30). Derive "current" from what the canvas actually shows (saved annotations + picture
   equal the newest archived row), let *Current* appear only when the canvas differs from every
   round, and test the resolved case *and* the agent-posted-picture case that still needs it.
+- **A confirmation is permission, not a status label.** The review prompt let agents follow the
+  repo's shipping rules during a review run, so overnight every review was already opened and
+  merged into `dev` before the human woke up; by morning there was nothing left to confirm
+  (2026-10-31). A review run must push the branch and reply, never open a PR or merge. The human's
+  ✓ optionally queues a **generic handoff** (`handoff.status=requested`); the bridge advertises
+  `jobs: ["review","handoff"]` on `/api/agent/next`, claims it after the review claim is waiting or
+  released, and runs a prompt that explicitly grants the post-confirmation action. The reference
+  git bridge opens/merges the PR and reports `handoff_status` with `state=done`, `label=merged`,
+  the PR `url` and a `message`; the rail shows that label + link or `handoff failed ↻`. Another
+  integration can use the same job for a deploy/publish, or confirm without a handoff. An old
+  bridge that sends no `jobs` is never handed a handoff job. Test the review prompt *forbids*
+  handing off, the confirm → `next(job=handoff)` path, the MCP report, and the rail badge; a
+  status label that merely says "confirmed" is not a handoff.
 
 ## 8. Working rules
 

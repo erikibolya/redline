@@ -10,12 +10,34 @@ use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
-use crate::model::{Annotation, AnnotationSet, ImageRef, Meta, Status, Submission};
+use crate::model::{
+    Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind, MediaRef,
+    Meta, Status, Submission,
+};
+use crate::{MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_VIDEO_BYTES};
+
+/// A frame from the browser, captured at an annotation time. `at` is seconds into the video.
+#[derive(Debug, Clone)]
+pub struct FrameUpload {
+    pub at: f64,
+    pub bytes: Vec<u8>,
+}
 
 /// Same rule as v0.1: one leading alphanumeric, then alphanumerics/`.`/`_`/`-`, max 121 chars.
 /// This is what stops `../` and friends from escaping the sessions directory.
 /// The virtual project that holds sessions created without one (legacy flat folders).
 pub const INBOX: &str = "inbox";
+
+/// What an integration reports about a handoff. Kept as an input shape so the store, not the
+/// MCP surface, owns the persisted fields. `label`/`url`/`message` are integration vocabulary:
+/// "merged" + a PR URL, "deployed" + an environment URL, or anything else.
+#[derive(Debug, Clone)]
+pub struct HandoffReport {
+    pub status: HandoffStatus,
+    pub label: Option<String>,
+    pub url: Option<String>,
+    pub message: Option<String>,
+}
 
 pub fn valid_id(id: &str) -> bool {
     let mut chars = id.chars();
@@ -124,6 +146,18 @@ pub fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false)
 }
 
+/// A fresh requested handoff, carrying the label/URL/message from a previous failed attempt. A
+/// retry must not make the rail — or the integration — forget which PR/deployment it was.
+fn requested_handoff(meta: &Meta, at: String) -> Handoff {
+    let mut handoff = Handoff::requested(at);
+    if let Some(previous) = &meta.handoff {
+        handoff.label = previous.label.clone();
+        handoff.url = previous.url.clone();
+        handoff.message = previous.message.clone();
+    }
+    handoff
+}
+
 /// Image extensions we are willing to write into a session folder. Anything else is stored as
 /// `.png` rather than trusted: the value ends up in a filename.
 fn image_extension(name: &str) -> &'static str {
@@ -140,6 +174,64 @@ fn image_extension(name: &str) -> &'static str {
         "gif" => ".gif",
         "svg" => ".svg",
         _ => ".png",
+    }
+}
+
+/// Frame format by magic bytes; the browser sends PNG unless the 60 MB budget forced JPEG.
+fn frame_extension(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+        Some(("png", "image/png"))
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(("jpg", "image/jpeg"))
+    } else {
+        None
+    }
+}
+
+/// Validate a video/poster/duration before any folder is created. Returns the container
+/// extension so callers write the same file name the media reference describes.
+fn validate_video(
+    video: &[u8],
+    poster: Option<&[u8]>,
+    duration_ms: Option<u64>,
+) -> Result<&'static str> {
+    if video.is_empty() {
+        return Err(Error::BadRequest("empty video".to_string()));
+    }
+    if video.len() > MAX_VIDEO_BYTES {
+        return Err(Error::BadRequest(format!(
+            "video is larger than {} MB",
+            MAX_VIDEO_BYTES / (1024 * 1024)
+        )));
+    }
+    if poster.is_some_and(|bytes| bytes.len() > crate::MAX_POSTER_BYTES) {
+        return Err(Error::BadRequest(format!(
+            "poster is larger than {} MB",
+            crate::MAX_POSTER_BYTES / (1024 * 1024)
+        )));
+    }
+    if duration_ms.is_some_and(|duration| duration > crate::MAX_VIDEO_DURATION_MS) {
+        return Err(Error::BadRequest(
+            "video is longer than the 5 minute limit".to_string(),
+        ));
+    }
+    video_extension(video)
+        .ok_or_else(|| Error::BadRequest("unsupported video format (MP4 or WebM)".to_string()))
+}
+
+/// Video format by magic bytes, not by the uploaded name (which never reaches the filename).
+fn video_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        // HEIC/AVIF share the ISO-BMFF box layout but are still images; a poster mislabelled as
+        // a video would create a session that cannot play.
+        match &bytes[8..12] {
+            b"heic" | b"heix" | b"heim" | b"heis" | b"mif1" | b"msf1" | b"avif" | b"avis" => None,
+            _ => Some("mp4"),
+        }
+    } else if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        Some("webm")
+    } else {
+        None
     }
 }
 
@@ -176,7 +268,33 @@ fn num(value: f64) -> String {
     }
 }
 
-pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
+/// `mm:ss.mmm` (or `hh:mm:ss.mmm` for long clips) for video timecodes.
+fn timecode(seconds: f64) -> String {
+    let total = (seconds.max(0.0) * 1000.0).round() as u64;
+    let ms = total % 1000;
+    let total_seconds = total / 1000;
+    let s = total_seconds % 60;
+    let m = (total_seconds / 60) % 60;
+    let h = total_seconds / 3600;
+    if h > 0 {
+        format!("{h:02}:{m:02}:{s:02}.{ms:03}")
+    } else {
+        format!("{m:02}:{s:02}.{ms:03}")
+    }
+}
+
+/// The `@ mm:ss.mmm` (or `@ start–end`) prefix for a video annotation.
+fn annotation_time(annotation: &Annotation) -> String {
+    match (annotation.at(), annotation.until()) {
+        (Some(at), Some(until)) => {
+            format!(" @ {}–{}", timecode(at), timecode(until.max(at)))
+        }
+        (Some(at), None) => format!(" @ {}", timecode(at)),
+        _ => String::new(),
+    }
+}
+
+pub fn review_markdown(meta: &Meta, annotations: &[Annotation], frames: &[FrameRef]) -> String {
     let mut lines = vec![format!("# Visual review: {}", meta.title), String::new()];
     if !meta.url.is_empty() {
         lines.push(format!("- Page: {}", meta.url));
@@ -186,6 +304,21 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
     }
     if let Some(prompt) = meta.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
         lines.push(format!("- Prompt: {}", prompt));
+    }
+    if let Some(media) = &meta.media {
+        lines.push(format!(
+            "- Media: {:?}{}{}",
+            media.kind,
+            media
+                .duration_ms
+                .map(|duration| format!(", duration {}", timecode(duration as f64 / 1000.0)))
+                .unwrap_or_default(),
+            media
+                .width
+                .zip(media.height)
+                .map(|(w, h)| format!(", {w}×{h}"))
+                .unwrap_or_default(),
+        ));
     }
     lines.push(format!("- Status: {}", meta.status.as_str()));
     lines.push(format!(
@@ -205,9 +338,10 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
         lines.push(String::new());
         for note in &text_notes {
             lines.push(format!(
-                "- ({}, {}): {}",
+                "- ({}, {}){}: {}",
                 num(note.number("x").unwrap_or_default()),
                 num(note.number("y").unwrap_or_default()),
+                annotation_time(note),
                 note.text_of().unwrap_or_default()
             ));
         }
@@ -243,17 +377,46 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
             } else {
                 format!(" — \u{201c}{note}\u{201d}")
             };
-            lines.push(format!("- {}. {}{}{}", index + 1, name, coords, note));
+            lines.push(format!(
+                "- {}. {}{}{}{}",
+                index + 1,
+                name,
+                coords,
+                annotation_time(item),
+                note
+            ));
+        }
+        lines.push(String::new());
+    }
+
+    if !frames.is_empty() {
+        lines.push("### Frames".to_string());
+        lines.push(String::new());
+        for frame in frames {
+            lines.push(format!("- {}: {}", timecode(frame.at), frame.file));
         }
         lines.push(String::new());
     }
 
     lines.push("## For the agent".to_string());
     lines.push(String::new());
-    lines.push(
-        "Use `annotations.json` for coordinates and text; `annotated.png` is the visual reference."
-            .to_string(),
-    );
+    if meta
+        .media
+        .as_ref()
+        .is_some_and(|media| media.kind == MediaKind::Video)
+    {
+        lines.push(
+            "Use `annotations.json` for coordinates, text, `at`/`until` and the `frames` list; \
+             `annotated.png` is a contact sheet of the annotated moments and `frames/` holds the \
+             full-resolution stills. The video itself is available at `/sessions/<id>/media`."
+                .to_string(),
+        );
+    } else {
+        lines.push(
+            "Use `annotations.json` for coordinates and text; `annotated.png` is the visual reference."
+                .to_string(),
+        );
+    }
     lines.push(String::new());
     lines.join("\n")
 }
@@ -267,6 +430,12 @@ pub struct HistoryEntry {
     /// The round's source screenshot (`<stamp>-source.png`) is available for the read-only viewer.
     #[serde(default)]
     pub source: bool,
+    /// The round's media: a video round has its clip under `history/<stamp>/video.*`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaRef>,
+    /// Number of full-resolution frames captured with this round.
+    #[serde(default)]
+    pub frames: usize,
     /// 1-based round number, oldest first.
     #[serde(default)]
     pub round: usize,
@@ -321,14 +490,67 @@ fn archive_round(
         let bytes = fs::read(&png)?;
         write_atomic(&history.join(format!("{safe}.png")), &bytes)?;
     }
-    // The source screenshot lets the viewer re-render the round crisply and read-only.
+    // The source screenshot lets the viewer re-render the round crisply and read-only. Videos
+    // need a different source path/history contract (phase 3); never write video bytes into a
+    // `.png`, which would produce a broken viewer image.
+    let is_video = set.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video);
     let source_path = dir.join(source);
-    if source_path.is_file() {
+    if !is_video && source_path.is_file() {
         let bytes = fs::read(&source_path)?;
         write_atomic(&history.join(format!("{safe}-source.png")), &bytes)?;
     }
+    // The live `frames/` directory is replaced by the next submission, so the full-resolution
+    // stills of this round must be copied beside it or they are lost for the agent.
+    if !set.frames.is_empty() {
+        let frames = history.join(format!("{safe}-frames"));
+        if frames.exists() {
+            fs::remove_dir_all(&frames)?;
+        }
+        fs::create_dir_all(&frames)?;
+        for frame in &set.frames {
+            let name = Path::new(&frame.file)
+                .file_name()
+                .map(|name| name.to_owned())
+                .unwrap_or_default();
+            let bytes = fs::read(dir.join(&frame.file))?;
+            write_atomic(&frames.join(name), &bytes)?;
+        }
+    }
     prune_history(&history, 20)?;
     Ok(())
+}
+
+/// Store the frames of a submission and return their references. An identical millisecond is
+/// captured once even if two annotations share it. Replacing the directory is safe because the
+/// previous round was archived on its submit.
+fn write_frames(dir: &Path, frames: &[FrameUpload]) -> Result<Vec<FrameRef>> {
+    let folder = dir.join("frames");
+    if folder.exists() {
+        fs::remove_dir_all(&folder)?;
+    }
+    if frames.is_empty() {
+        return Ok(Vec::new());
+    }
+    fs::create_dir_all(&folder)?;
+    let mut refs = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    for frame in frames {
+        let key = (frame.at * 1000.0).round() as i64;
+        if !seen.insert(key) {
+            continue;
+        }
+        let (extension, mime) = frame_extension(&frame.bytes)
+            .ok_or_else(|| Error::BadRequest("frames must be PNG or JPEG images".to_string()))?;
+        let name = format!("{:.3}.{extension}", key as f64 / 1000.0);
+        write_atomic(&folder.join(&name), &frame.bytes)?;
+        refs.push(FrameRef {
+            at: key as f64 / 1000.0,
+            file: format!("frames/{name}"),
+            mime: Some(mime.to_string()),
+        });
+    }
+    refs.sort_by(|a, b| a.at.partial_cmp(&b.at).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(refs)
 }
 
 /// Whether two archived rounds carry the same picture. Two rounds without a picture are the same
@@ -362,6 +584,8 @@ fn prune_history(history: &std::path::Path, keep: usize) -> Result<()> {
         let _ = fs::remove_file(history.join(format!("{oldest}.json")));
         let _ = fs::remove_file(history.join(format!("{oldest}.png")));
         let _ = fs::remove_file(history.join(format!("{oldest}-source.png")));
+        let _ = fs::remove_dir_all(history.join(format!("{oldest}-frames")));
+        let _ = fs::remove_dir_all(history.join(format!("{oldest}")));
     }
     Ok(())
 }
@@ -631,6 +855,8 @@ impl Store {
                 title: None,
                 url: None,
                 image: None,
+                media: None,
+                frames: Vec::new(),
                 annotations: Vec::new(),
                 submitted_at: None,
             }))
@@ -757,10 +983,13 @@ impl Store {
             image: format!("screenshot{extension}"),
             image_width: None,
             image_height: None,
+            media: None,
+            poster: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
             feature_confirmed_at: None,
             feature_cancelled_at: None,
+            handoff: None,
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
@@ -774,6 +1003,261 @@ impl Store {
             &dir.join("annotations.json"),
             &json!({ "session": sid, "annotations": [] }),
         )?;
+        Ok(meta)
+    }
+
+    /// Create a video session from bytes already in memory (MCP uploads, HTTP `video_base64`).
+    /// The video is validated by magic bytes; the optional poster is served by the image route
+    /// so the existing gallery/rail cards keep working.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_video_from_bytes(
+        &self,
+        video: &[u8],
+        title: &str,
+        url: &str,
+        note: &str,
+        id: Option<&str>,
+        agent: Option<&str>,
+        project: Option<&str>,
+        poster: Option<&[u8]>,
+        duration_ms: Option<u64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f64>,
+    ) -> Result<Meta> {
+        let extension = validate_video(video, poster, duration_ms)?;
+        self.ensure()?;
+        let project = match project.map(str::trim).filter(|name| !name.is_empty()) {
+            Some(name) => Some(self.ensure_project(name)?),
+            None => None,
+        };
+        let parent = match &project {
+            Some(project) => self.projects_root().join(&project.slug),
+            None => self.root.clone(),
+        };
+        let sid = self.new_id(title, id)?;
+        let dir = parent.join(&sid);
+        fs::create_dir(&dir).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::Exists(sid.clone())
+            } else {
+                Error::Io(err)
+            }
+        })?;
+
+        let file = format!("video.{extension}");
+        write_atomic(&dir.join(&file), video)?;
+        let has_poster = poster.is_some_and(|bytes| !bytes.is_empty());
+        if let Some(poster) = poster.filter(|bytes| !bytes.is_empty()) {
+            write_atomic(&dir.join("poster.png"), poster)?;
+        }
+
+        let title = if title.is_empty() {
+            sid.clone()
+        } else {
+            title.to_string()
+        };
+        let branch = default_branch(&title, &sid);
+        let media = MediaRef {
+            kind: MediaKind::Video,
+            file: file.clone(),
+            mime: Some(format!("video/{extension}")),
+            width,
+            height,
+            duration_ms,
+            fps,
+        };
+        let meta = Meta {
+            id: sid.clone(),
+            title,
+            url: url.to_string(),
+            note: note.to_string(),
+            status: Status::Open,
+            created_at: now(),
+            submitted_at: None,
+            image: file,
+            image_width: width,
+            image_height: height,
+            media: Some(media),
+            poster: has_poster.then(|| "poster.png".to_string()),
+            agent: agent.map(str::to_string),
+            resolved_at: None,
+            feature_confirmed_at: None,
+            feature_cancelled_at: None,
+            handoff: None,
+            prompt: None,
+            seen_by_agent_at: None,
+            agent_state: None,
+            cancelled_at: None,
+            round_stamp: None,
+            project: project.as_ref().map(|project| project.slug.clone()),
+            branch: Some(branch),
+        };
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        write_json(
+            &dir.join("annotations.json"),
+            &json!({ "session": sid, "annotations": [] }),
+        )?;
+        Ok(meta)
+    }
+
+    /// Create a video session from a file on this machine (the CLI/MCP path).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_video_from_path(
+        &self,
+        video: &Path,
+        title: &str,
+        url: &str,
+        note: &str,
+        id: Option<&str>,
+        project: Option<&str>,
+        poster: Option<&Path>,
+        duration_ms: Option<u64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f64>,
+    ) -> Result<Meta> {
+        let size = fs::metadata(video)?.len();
+        if size as usize > MAX_VIDEO_BYTES {
+            return Err(Error::BadRequest(format!(
+                "video is larger than {} MB",
+                MAX_VIDEO_BYTES / (1024 * 1024)
+            )));
+        }
+        let bytes = fs::read(video)?;
+        let poster_bytes = match poster {
+            Some(path) => {
+                let size = fs::metadata(path)?.len();
+                if size as usize > crate::MAX_POSTER_BYTES {
+                    return Err(Error::BadRequest(format!(
+                        "poster is larger than {} MB",
+                        crate::MAX_POSTER_BYTES / (1024 * 1024)
+                    )));
+                }
+                Some(fs::read(path)?)
+            }
+            None => None,
+        };
+        let title = if title.is_empty() {
+            video.file_stem().and_then(|s| s.to_str()).unwrap_or("")
+        } else {
+            title
+        };
+        self.create_video_from_bytes(
+            &bytes,
+            title,
+            url,
+            note,
+            id,
+            None,
+            project,
+            poster_bytes.as_deref(),
+            duration_ms,
+            width,
+            height,
+            fps,
+        )
+    }
+
+    /// Post a new video into an existing review. The current round is archived (annotations,
+    /// contact sheet, frames and the clip itself); the session returns to `open` with an empty
+    /// canvas so the human can annotate the new clip and submit it as the next round.
+    pub fn new_video_round(
+        &self,
+        id: &str,
+        video: &[u8],
+        poster: Option<&[u8]>,
+        duration_ms: Option<u64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f64>,
+    ) -> Result<Meta> {
+        let extension = validate_video(video, poster, duration_ms)?;
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let set = self.annotations(id)?;
+        let has_round = meta.status == Status::Submitted
+            || !set.annotations.is_empty()
+            || dir.join("annotated.png").is_file()
+            || !set.frames.is_empty();
+        let stamp = if has_round {
+            let stamp = meta
+                .round_stamp
+                .clone()
+                .unwrap_or_else(|| unique_round_stamp(&dir, &now()));
+            archive_round(&dir, &stamp, &set, &meta.image)?;
+            Some(stamp)
+        } else {
+            None
+        };
+
+        // Write the new clip under a temporary name before touching the old one: a failed write
+        // must leave the current round playable.
+        let temp = format!("video.new.{extension}");
+        write_atomic(&dir.join(&temp), video)?;
+
+        if let Some(stamp) = &stamp {
+            let media_dir = dir.join("history").join(safe_stamp(stamp));
+            if meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video) {
+                fs::create_dir_all(&media_dir)?;
+                let source = dir.join(&meta.image);
+                if source.is_file() {
+                    let old_extension = Path::new(&meta.image)
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .unwrap_or("webm");
+                    fs::rename(&source, media_dir.join(format!("video.{old_extension}")))?;
+                }
+                if let Some(poster) = meta.poster.as_deref() {
+                    let old_poster = dir.join(poster);
+                    if old_poster.is_file() {
+                        fs::rename(&old_poster, media_dir.join("poster.png"))?;
+                    }
+                }
+            }
+        }
+
+        let file = format!("video.{extension}");
+        fs::rename(dir.join(&temp), dir.join(&file))?;
+        if meta.image != file && stamp.is_none() {
+            let _ = fs::remove_file(dir.join(&meta.image));
+        }
+        let has_poster = poster.is_some_and(|bytes| !bytes.is_empty());
+        if let Some(poster) = poster.filter(|bytes| !bytes.is_empty()) {
+            write_atomic(&dir.join("poster.png"), poster)?;
+        } else {
+            let _ = fs::remove_file(dir.join("poster.png"));
+        }
+        let _ = fs::remove_file(dir.join("annotated.png"));
+        let _ = fs::remove_file(dir.join("review.md"));
+        let _ = fs::remove_dir_all(dir.join("frames"));
+        write_json(
+            &dir.join("annotations.json"),
+            &json!({ "session": id, "annotations": [] }),
+        )?;
+
+        meta.image = file.clone();
+        meta.image_width = width;
+        meta.image_height = height;
+        meta.media = Some(MediaRef {
+            kind: MediaKind::Video,
+            file,
+            mime: Some(format!("video/{extension}")),
+            width,
+            height,
+            duration_ms,
+            fps,
+        });
+        meta.poster = has_poster.then(|| "poster.png".to_string());
+        meta.status = Status::Open;
+        meta.submitted_at = None;
+        meta.round_stamp = None;
+        meta.seen_by_agent_at = None;
+        meta.agent_state = None;
+        meta.feature_confirmed_at = None;
+        meta.feature_cancelled_at = None;
+        meta.prompt = None;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
 
@@ -840,6 +1324,8 @@ impl Store {
                 let _ = fs::remove_file(history.join(format!("{stamp}.json")));
                 let _ = fs::remove_file(history.join(format!("{stamp}.png")));
                 let _ = fs::remove_file(history.join(format!("{stamp}-source.png")));
+                let _ = fs::remove_dir_all(history.join(format!("{stamp}-frames")));
+                let _ = fs::remove_dir_all(history.join(&stamp));
             }
         }
         meta.status = Status::Open;
@@ -867,6 +1353,13 @@ impl Store {
         let mut meta = self.require(id)?;
         let stamp = now();
 
+        if image.is_some() && meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video)
+        {
+            return Err(Error::BadRequest(
+                "a video review cannot take a screenshot round; post the next video".to_string(),
+            ));
+        }
+
         let mut image_file = meta.image.clone();
         if let Some(bytes) = image {
             let extension = image_extension(image_name);
@@ -886,6 +1379,8 @@ impl Store {
                 width,
                 height,
             }),
+            media: meta.media.clone(),
+            frames: Vec::new(),
             annotations: Vec::new(),
             submitted_at: None,
         };
@@ -897,6 +1392,7 @@ impl Store {
         // New work after a decision makes the feature pending again.
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
+        meta.handoff = None;
         meta.agent_state = Some("replied".to_string());
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
 
@@ -911,8 +1407,55 @@ impl Store {
         Ok(meta)
     }
 
-    /// Write a submission: `annotations.json`, `meta.json`, `review.md`, and `annotated.png`.
+    /// Write a submission: `annotations.json`, `meta.json`, `review.md`, `annotated.png` and the
+    /// captured frames. The JSON path (images and older clients) has no frames; a video review
+    /// uploads them as multipart and calls [`Store::submit_round`] with the extracted bytes.
     pub fn submit(&self, id: &str, submission: &Submission) -> Result<(Meta, AnnotationSet)> {
+        let png = match &submission.png {
+            Some(png) => {
+                let raw = png.split_once(',').map(|(_, data)| data).unwrap_or(png);
+                use base64::Engine as _;
+                Some(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(raw.trim())
+                        .map_err(|err| Error::BadRequest(format!("invalid png payload: {err}")))?,
+                )
+            }
+            None => None,
+        };
+        self.submit_round(id, submission, png.as_deref(), &[])
+    }
+
+    /// The single submit choke point: validates everything first, then writes the frames, the
+    /// contact sheet, the annotations, the meta and the archive.
+    pub fn submit_round(
+        &self,
+        id: &str,
+        submission: &Submission,
+        contact_sheet: Option<&[u8]>,
+        frames: &[FrameUpload],
+    ) -> Result<(Meta, AnnotationSet)> {
+        if frames.len() > MAX_FRAME_COUNT {
+            return Err(Error::BadRequest(format!(
+                "at most {MAX_FRAME_COUNT} annotated timestamps per submission"
+            )));
+        }
+        let total: usize = frames.iter().map(|frame| frame.bytes.len()).sum();
+        if total > MAX_FRAMES_BYTES {
+            return Err(Error::BadRequest(format!(
+                "frames are larger than {} MB",
+                MAX_FRAMES_BYTES / (1024 * 1024)
+            )));
+        }
+        if frames
+            .iter()
+            .any(|frame| !frame.at.is_finite() || frame.at < 0.0)
+        {
+            return Err(Error::BadRequest(
+                "frame timecodes must be finite and non-negative".to_string(),
+            ));
+        }
+
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         let submitted_at = now();
@@ -925,6 +1468,7 @@ impl Store {
         meta.agent_state = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
+        meta.handoff = None;
         if let Some(prompt) = submission.note.as_deref() {
             let prompt = prompt.trim();
             if !prompt.is_empty() {
@@ -938,6 +1482,7 @@ impl Store {
             meta.image_height = Some(height);
         }
 
+        let frame_refs = write_frames(&dir, frames)?;
         let set = AnnotationSet {
             session: id.to_string(),
             title: Some(meta.title.clone()),
@@ -947,6 +1492,8 @@ impl Store {
                 width: submission.width,
                 height: submission.height,
             }),
+            media: meta.media.clone(),
+            frames: frame_refs,
             annotations: submission.annotations.clone(),
             submitted_at: Some(submitted_at.clone()),
         };
@@ -955,16 +1502,13 @@ impl Store {
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         write_atomic(
             &dir.join("review.md"),
-            review_markdown(&meta, &set.annotations).as_bytes(),
+            review_markdown(&meta, &set.annotations, &set.frames).as_bytes(),
         )?;
 
-        if let Some(png) = &submission.png {
-            let raw = png.split_once(',').map(|(_, data)| data).unwrap_or(png);
-            use base64::Engine as _;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(raw.trim())
-                .map_err(|err| Error::BadRequest(format!("invalid png payload: {err}")))?;
-            write_atomic(&dir.join("annotated.png"), &bytes)?;
+        if let Some(bytes) = contact_sheet {
+            if !bytes.is_empty() {
+                write_atomic(&dir.join("annotated.png"), bytes)?;
+            }
         }
 
         // The round exists as soon as it is submitted, not when the next one replaces it.
@@ -990,21 +1534,116 @@ impl Store {
         meta.resolved_at = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
+        meta.handoff = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
 
-    /// The human says the feature is complete. RedLine only records the decision and closes the
-    /// review; the agent maps `feature_state == "confirmed"` to its own workflow (open a PR,
-    /// merge it, deploy — whatever the project uses).
-    pub fn confirm_feature(&self, id: &str) -> Result<Meta> {
+    /// The human says the feature is complete. RedLine records the decision and, when the human
+    /// asked for one, queues a generic **handoff**. An integration claims it and does whatever
+    /// its workflow means (PR + merge, deploy, publish, …); RedLine never runs git itself.
+    /// Repeating the confirmation retries a failed handoff; a done handoff is left alone.
+    pub fn confirm_feature(&self, id: &str, handoff: bool) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         let stamp = now();
         meta.status = Status::Resolved;
         meta.resolved_at.get_or_insert_with(|| stamp.clone());
-        meta.feature_confirmed_at = Some(stamp);
+        meta.feature_confirmed_at = Some(stamp.clone());
         meta.feature_cancelled_at = None;
+        if handoff {
+            if !meta.handoff.as_ref().is_some_and(Handoff::is_done) {
+                let next = requested_handoff(&meta, stamp);
+                meta.handoff = Some(next);
+            }
+        } else if !meta.handoff.as_ref().is_some_and(Handoff::is_done) {
+            // Confirming without a handoff clears a stale failed/queued one.
+            meta.handoff = None;
+        }
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// Queue (or retry) a handoff for a confirmed feature. Used by the rail's retry action and
+    /// by callers that need to hand off a feature confirmed before v0.23. A retry keeps the
+    /// label/URL/message from the failed attempt so the integration can reuse them.
+    pub fn request_handoff(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        if meta.feature_confirmed_at.is_none() {
+            return Err(Error::BadRequest(
+                "confirm the feature before handing it off".to_string(),
+            ));
+        }
+        if meta.handoff.as_ref().is_some_and(Handoff::is_done) {
+            return Ok(meta);
+        }
+        let next = requested_handoff(&meta, now());
+        meta.handoff = Some(next);
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The integration claimed the handoff. Idempotent: an already done/failed handoff is left
+    /// as reported, so a duplicate claim cannot rewind the rail.
+    pub fn mark_handoff_running(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let Some(mut handoff) = meta.handoff.take() else {
+            return Err(Error::BadRequest("no handoff is queued".to_string()));
+        };
+        if !handoff.status.claimable() {
+            meta.handoff = Some(handoff);
+            return Ok(meta);
+        }
+        handoff.status = HandoffStatus::Running;
+        handoff.started_at.get_or_insert_with(now);
+        meta.handoff = Some(handoff);
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// Record what the integration's handoff did. `done` and `failed` are terminal; the MCP
+    /// surface validates that. A report for a feature the human reopened or cancelled in the
+    /// meantime is refused rather than resurrecting a dead decision.
+    pub fn report_handoff(&self, id: &str, report: HandoffReport) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        if meta.feature_confirmed_at.is_none() {
+            return Err(Error::BadRequest(
+                "the feature is not confirmed; ignoring the handoff result".to_string(),
+            ));
+        }
+        let stamp = now();
+        let mut handoff = meta
+            .handoff
+            .take()
+            .unwrap_or_else(|| Handoff::requested(stamp.clone()));
+        handoff.status = report.status;
+        let label = report.label.filter(|label| !label.trim().is_empty());
+        let message = report.message.filter(|message| !message.trim().is_empty());
+        if report.status == HandoffStatus::Done {
+            // "done" is the integration's new outcome; do not keep a previous "PR open" label
+            // or a failure message.
+            handoff.label = label.map(|label| label.trim().to_string());
+            handoff.message = message.map(|message| message.trim().to_string());
+        } else {
+            if let Some(label) = label {
+                handoff.label = Some(label.trim().to_string());
+            }
+            handoff.message = Some(
+                message
+                    .map(|message| message.trim().to_string())
+                    .unwrap_or_else(|| "the integration reported a failed handoff".to_string()),
+            );
+        }
+        if let Some(url) = report.url.filter(|url| !url.trim().is_empty()) {
+            handoff.url = Some(url.trim().to_string());
+        }
+        if report.status.terminal() {
+            handoff.finished_at = Some(stamp);
+        }
+        meta.handoff = Some(handoff);
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
@@ -1019,6 +1658,7 @@ impl Store {
         meta.resolved_at.get_or_insert_with(|| stamp.clone());
         meta.feature_cancelled_at = Some(stamp);
         meta.feature_confirmed_at = None;
+        meta.handoff = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
@@ -1063,12 +1703,16 @@ impl Store {
                 .as_ref()
                 .and_then(|set| set.image.as_ref())
                 .and_then(|image| image.file.clone());
+            let media = set.as_ref().and_then(|set| set.media.clone());
+            let frames = set.as_ref().map(|set| set.frames.len()).unwrap_or(0);
             entries.push((
                 HistoryEntry {
                     png: history.join(format!("{stamp}.png")).is_file(),
                     source: history.join(format!("{stamp}-source.png")).is_file(),
                     stamp,
                     annotations: set.map(|set| set.annotations.len()).unwrap_or(0),
+                    media,
+                    frames,
                     round: 0,
                     current: false,
                 },
@@ -1105,6 +1749,25 @@ impl Store {
         Ok(entries.into_iter().map(|(entry, _, _)| entry).collect())
     }
 
+    /// Total bytes of a session folder (screenshots, videos, history). Used to warn before the
+    /// archive grows into tens of gigabytes; RedLine never deletes rounds silently.
+    pub fn session_size(&self, id: &str) -> Result<u64> {
+        fn walk(path: &Path) -> std::io::Result<u64> {
+            let mut total = 0;
+            for entry in fs::read_dir(path)? {
+                let entry = entry?;
+                let meta = entry.metadata()?;
+                total += if meta.is_dir() {
+                    walk(&entry.path())?
+                } else {
+                    meta.len()
+                };
+            }
+            Ok(total)
+        }
+        Ok(walk(&self.dir(id)?)?)
+    }
+
     pub fn history_file(&self, id: &str, name: &str) -> Result<PathBuf> {
         if name.contains('/') || name.contains('\\') || name.contains("..") {
             return Err(Error::BadRequest("invalid history file".to_string()));
@@ -1115,8 +1778,48 @@ impl Store {
         Ok(self.dir(id)?.join("history").join(name))
     }
 
+    /// The archived clip of a submitted video round (`history/<stamp>/video.*`).
+    pub fn history_video_path(&self, id: &str, stamp: &str) -> Result<PathBuf> {
+        let dir = self.dir(id)?.join("history").join(safe_stamp(stamp));
+        for extension in ["mp4", "webm"] {
+            let path = dir.join(format!("video.{extension}"));
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+        Err(Error::NotFound(format!("{id}/history/{stamp}/video")))
+    }
+
+    /// A full-resolution frame archived with a video round.
+    pub fn history_frame_path(&self, id: &str, stamp: &str, file: &str) -> Result<PathBuf> {
+        if file.contains('/')
+            || file.contains('\\')
+            || file.contains("..")
+            || !(file.ends_with(".png") || file.ends_with(".jpg") || file.ends_with(".jpeg"))
+        {
+            return Err(Error::BadRequest("invalid frame name".to_string()));
+        }
+        Ok(self
+            .dir(id)?
+            .join("history")
+            .join(format!("{}-frames", safe_stamp(stamp)))
+            .join(file))
+    }
+
     pub fn image_path(&self, meta: &Meta) -> Result<PathBuf> {
         Ok(self.dir(&meta.id)?.join(&meta.image))
+    }
+
+    /// The poster/thumbnail served by `/sessions/<id>/image`; falls back to the media file for
+    /// legacy image sessions (which have no separate poster).
+    pub fn poster_path(&self, meta: &Meta) -> Result<PathBuf> {
+        if meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video)
+            && meta.poster.is_none()
+        {
+            return Err(Error::NotFound(format!("{}/poster.png", meta.id)));
+        }
+        let name = meta.poster.as_deref().unwrap_or(&meta.image);
+        Ok(self.dir(&meta.id)?.join(name))
     }
 
     pub fn file_path(&self, id: &str, name: &str) -> Result<PathBuf> {
@@ -1124,5 +1827,17 @@ impl Store {
             return Err(Error::BadRequest("invalid file name".to_string()));
         }
         Ok(self.dir(id)?.join(name))
+    }
+
+    /// A full-resolution still captured at an annotation time (`frames/<at>.<png|jpg>`).
+    pub fn frame_path(&self, id: &str, name: &str) -> Result<PathBuf> {
+        if name.contains('/')
+            || name.contains('\\')
+            || name.contains("..")
+            || !(name.ends_with(".png") || name.ends_with(".jpg") || name.ends_with(".jpeg"))
+        {
+            return Err(Error::BadRequest("invalid frame name".to_string()));
+        }
+        Ok(self.dir(id)?.join("frames").join(name))
     }
 }

@@ -15,6 +15,8 @@ pub enum Error {
     #[error("{0}")]
     Conflict(String),
     #[error("{0}")]
+    UnsupportedMediaType(String),
+    #[error("{0}")]
     Io(#[from] std::io::Error),
     #[error("{0}")]
     Json(#[from] serde_json::Error),
@@ -28,6 +30,7 @@ impl Error {
             Error::InvalidId | Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::Exists(_) | Error::Conflict(_) => StatusCode::CONFLICT,
             Error::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Error::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Error::Json(_) => StatusCode::BAD_REQUEST,
             Error::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

@@ -1,8 +1,75 @@
 # Changelog
 
-## Unreleased
+## 0.23.0 — 2026-10-31
 
-_(nothing yet)_
+- **A history glyph belongs to the round's title, not to the middle of the card.** A history row
+  is two lines (title + timestamp), and `.ann-row` centres its glyph on the whole row, so the
+  bullet and the round number floated between "Current"/"Round N" and the date — two annotations
+  on the same column. The row now starts at the top and the glyph is lifted to the title's line
+  box. The number inside its square was also ~2 px high: a centred em box has no descender to
+  balance the digit, so it got a top pad. The e2e measures every glyph against its title's line
+  and the digit's ink against the square.
+
+- **History rows are cards, not a chopped stacked list.** They reuse `.ann-row`, whose divider
+  squares the top corners of every row after the first, so each archived round looked cut off
+  (the rows sit 4 px apart and each owns its whole border). The radius is restored per history
+  row. The live round no longer tints its fill and border blue either: it is the same card as the
+  archived rounds, with a green glyph as the only marker, and the accent outline is left to the
+  round currently being viewed. The e2e measures the radius of every row and compares the live
+  row's fill and border with a sibling's.
+
+- **A feature is confirmed first, then optionally handed off — and the rail says what happened.**
+  The review prompt let an agent follow its repository's shipping rules mid-review, so overnight
+  runs opened and merged PRs before the human confirmed anything; by morning every review was
+  already touched. A review run now pushes its branch and replies but must not open a PR, merge or
+  release. The confirm dialog has an optional **handoff** checkbox (default on only when an online
+  bridge advertises `jobs: ["review","handoff"]`); confirming without it records only the decision.
+  With it, the server queues a generic `handoff` (`requested` → `running` → `done`/`failed`); the
+  integration performs its own post-confirmation action and reports a `label`, `url` and `message`
+  through MCP `handoff_status`. The reference git bridge opens/merges a PR and reports
+  `label=merged` + the PR URL; a deploy integration can report `label=deployed` + an environment;
+  an integration with no post-confirmation action simply confirms without a handoff. The rail
+  shows `handoff queued`, `handing off`, the integration's label with its link, or a red
+  `handoff failed` label with a row `↻` retry; a retry keeps the label/URL/message from the
+  failed attempt. Old bridges that send no `jobs` are never handed a handoff job, and an old
+  presence file is review-only.
+  Rust tests cover the opt-in queue, the capability gate, the generic MCP report and the state
+  reset; the browser e2e checks the review-only default, confirms with a handoff, reports
+  done/failed through MCP, follows the link and retries. The e2e's cancel dashboard check and two
+  selection/z-order checks now poll instead of assuming an instant.
+- **Feature details in `docs/INTEGRATIONS.md`.** The MCP contract is redocumented as a generic
+  decision (`feature_state`) plus an optional handoff (`requested`/`running`/`done`/`failed`,
+  `label`/`url`/`message`) and the `jobs` capability — with git, deploy and no-handoff examples.
+  RedLine still runs no git and holds no GitHub token; the git workflow lives in the reference
+  `redline-agent` bridge.
+- **Video media core.** The server can create a video session (MP4/WebM, magic-byte validation),
+  store a poster and duration/dimensions, serve the clip with HTTP `Range` for seeking, and write
+  timecoded annotations (`at`/`until`) into `annotations.json` and `review.md`. MCP gains
+  `review_video` (server path or base64) and `get_feedback` returns `media` plus a tokenised
+  `video_url`. Limits: 250 MB, five minutes when declared, 8 MB poster; HEIC/AVIF are rejected as
+  videos. Rust tests cover the media model, range 206/416, poster and timecoded Markdown.
+- **Video reviews in the editor.** The New review dialog accepts a dropped, picked or pasted
+  video, shows a muted preview and uploads the clip with its first-frame poster
+  (`POST /api/sessions/video`). The canvas plays the video with play/pause, frame stepping,
+  speed, a full-duration overview and a zoomable timeline with a time ruler and annotation
+  markers/range bands. Drawing pauses playback and stamps the annotation with `at`; the inspector
+  adds an optional `until` range and shows `mm:ss.mmm` timecodes. Annotations from other moments
+  render as ~12 % ghosts that fade in near their time, with a Ghosts toggle. Keyboard `K` play/
+  pause, `J`/`L` ±1 s, `,`/`.` frame step. Gallery cards use the poster and a `▶ mm:ss` chip.
+  Contact sheets, full-resolution frames, video rounds in history and `post_round` video are the
+  next phase. Browser e2e covers the real upload, playback, timecoded draw, ghost opacity, range,
+  zoom and persisted submit (182 checks).
+- **Contact sheets, full frames and new video rounds.** A video submit now captures one
+  full-resolution frame per unique annotated timestamp (20 / ~60 MB cap, full-resolution JPEG
+  fallback), paints the moment's annotations over each tile of a labelled contact sheet in
+  `annotated.png`, writes `frames/` and lists both in `review.md` and `get_feedback`. The editor's
+  **New video** button posts the next clip: the previous round (annotations, sheet, frames and
+  clip) is archived under `history/<stamp>/` and the review reopens on the new video. History
+  plays archived video rounds read-only with their annotations, and MCP `post_round` accepts
+  `video_base64`/`video_path`. The live `/media` URL is cache-busted so a replaced clip cannot be
+  served from the previous round. Rust tests cover frame storage/limit/archive, new-round
+  archiving and MCP video rounds; browser e2e covers the composed sheet, two timecoded frames,
+  the new-video flow and history playback, plus the 2 GB session-size warning (207 checks).
 
 ## 0.22.0 — 2026-10-31
 

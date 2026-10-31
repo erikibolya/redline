@@ -79,6 +79,42 @@ try {
     <div class="stage-status" id="stage-status" hidden></div>
     <div class="viewing-bar" id="viewing-bar" hidden></div>
 
+    <div class="video-bar" id="video-bar" hidden>
+      <div class="video-controls">
+        <button class="btn icon" id="video-play" type="button" aria-label="Play video">▶</button>
+        <span class="video-time" id="video-time">00:00.000 / 00:00.000</span>
+        <button class="btn small" id="video-step-back" type="button" title="Previous frame">◀</button>
+        <button class="btn small" id="video-step-forward" type="button" title="Next frame">▶</button>
+        <select class="video-speed" id="video-speed" aria-label="Playback speed">
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.5">1.5×</option>
+          <option value="2">2×</option>
+        </select>
+        <button class="chip" id="video-ghosts" type="button" aria-pressed="true"
+                title="Show annotations from other times as faint ghosts">Ghosts</button>
+        <button class="chip" id="video-new" type="button"
+                title="Post a new video as the next round">New video</button>
+        <input type="file" id="video-file" accept="video/*" hidden />
+        <span class="grow"></span>
+        <button class="btn small" id="timeline-zoom-out" type="button" title="Zoom out timeline">−</button>
+        <button class="btn small" id="timeline-zoom-in" type="button" title="Zoom in timeline">+</button>
+        <button class="btn small" id="timeline-fit" type="button" title="Fit the whole video">Fit</button>
+      </div>
+      <div class="timeline" id="video-timeline">
+        <div class="timeline-overview" id="timeline-overview" title="Full video; the window is the zoomed detail">
+          <div class="timeline-window" id="timeline-window"></div>
+          <div class="timeline-overview-marks" id="timeline-overview-marks"></div>
+        </div>
+        <div class="timeline-detail">
+          <div class="timeline-marks" id="timeline-marks"></div>
+          <input type="range" id="video-seek" min="0" max="1" step="0.001" value="0"
+                 aria-label="Video timeline" />
+          <div class="timeline-ticks" id="timeline-ticks"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="options">
       <button class="tool" data-tool="select" aria-pressed="true" title="Select / move (V)">
         <svg viewBox="0 0 24 24"><path d="M4 3l7 17 2.5-6.5L20 11z"/></svg>
@@ -166,7 +202,7 @@ try {
     </section>
 
     <details class="disclosure" id="history-block">
-      <summary>History <span class="count" id="history-count">0</span></summary>
+      <summary>History <span class="count" id="history-count">0</span><span class="session-size" id="session-size"></span></summary>
       <div class="content"><div id="history-list" class="inspector-empty">No earlier submissions.</div></div>
     </details>
 
@@ -190,7 +226,7 @@ try {
     <div class="dialog-head">
       <div>
         <h2 id="new-title">New review</h2>
-        <p class="hint">Drop a screenshot, paste it with <b>Ctrl+V</b>, or click to choose a file. Then say what to look at.</p>
+        <p class="hint">Drop an image or video, paste it with <b>Ctrl+V</b>, or click to choose a file. Then say what to look at.</p>
       </div>
       <button type="button" class="btn icon dialog-close" id="new-close" aria-label="Close">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -199,9 +235,10 @@ try {
     <div class="dialog-body">
       <div class="drop" id="drop">
         <img class="drop-preview" id="drop-preview" alt="Selected screenshot" hidden />
-        <span class="drop-label" id="drop-label">Drop an image, or click to browse</span>
+        <video class="drop-preview" id="drop-video-preview" muted playsinline controls hidden></video>
+        <span class="drop-label" id="drop-label">Drop an image or video, or click to browse</span>
       </div>
-      <input type="file" id="file" accept="image/*" hidden />
+      <input type="file" id="file" accept="image/*,video/*" hidden />
       <label for="f-title">Title</label>
       <input id="f-title" type="text" placeholder="Button / default" />
       <label for="f-project">Project</label>

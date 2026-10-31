@@ -6,21 +6,23 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Path as RoutePath, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRequest, Multipart, Path as RoutePath, Request, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 
 use crate::agent::{AgentControl, AgentSettings, ClaimError, ClaimRequest, ClaimState};
 use crate::auth::{self, Auth};
 use crate::error::Error;
 use crate::mcp::{self, McpContext};
 use crate::model::{NewSession, Status, Submission};
-use crate::store::Store;
-use crate::MAX_BODY_BYTES;
+use crate::store::{FrameUpload, Store};
+use crate::{MAX_BODY_BYTES, MAX_SUBMIT_BYTES, MAX_VIDEO_BYTES};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -103,6 +105,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/servers/{id}/probe", get(probe_server))
         .route("/api/servers/{id}", delete(remove_server))
         .route("/api/sessions", get(list_sessions).post(create_session))
+        .route(
+            "/api/sessions/video",
+            post(create_video_session).layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES + 1024 * 1024)),
+        )
+        .route(
+            "/api/sessions/{id}/video",
+            post(replace_video).layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES + 1024 * 1024)),
+        )
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/agent/repos", post(sync_agent_repos))
         .route(
@@ -120,19 +130,33 @@ pub fn router(state: AppState) -> Router {
             get(get_session).delete(delete_session),
         )
         .route("/api/sessions/{id}/branch", put(set_session_branch))
-        .route("/api/sessions/{id}/annotations", post(submit))
+        .route(
+            "/api/sessions/{id}/annotations",
+            post(submit).layer(DefaultBodyLimit::max(MAX_SUBMIT_BYTES)),
+        )
         .route("/api/sessions/{id}/resolve", post(resolve))
         .route("/api/sessions/{id}/reopen", post(reopen))
         .route("/api/sessions/{id}/confirm-feature", post(confirm_feature))
         .route("/api/sessions/{id}/cancel-feature", post(cancel_feature))
+        .route("/api/sessions/{id}/handoff", post(request_handoff))
+        // Pre-release v0.23 clients used this name; keep it as an alias while the field moves to
+        // the generic handoff vocabulary.
+        .route("/api/sessions/{id}/ship", post(request_handoff))
         .route("/api/sessions/{id}/cancel", post(cancel))
         .route("/api/sessions/{id}/history", get(history))
         .route("/api/sessions/{id}/thread", get(agent_thread))
         .route("/api/sessions/{id}/events", get(agent_events))
         .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
         .route("/sessions/{id}/history/{file}", get(history_file))
+        .route("/sessions/{id}/history/{stamp}/video", get(history_video))
+        .route(
+            "/sessions/{id}/history/{stamp}/frames/{file}",
+            get(history_frame),
+        )
         .route("/api/capture", post(capture_session))
         .route("/sessions/{id}/image", get(image))
+        .route("/sessions/{id}/media", get(media))
+        .route("/sessions/{id}/frames/{file}", get(frame))
         .route("/sessions/{id}/annotated.png", get(annotated))
         .route("/sessions/{id}/rounds/{name}", get(round_image))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
@@ -514,7 +538,7 @@ async fn sync_agent_repos(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?
-        .touch(&agent);
+        .touch(&agent, None);
     if body.repos.len() > 200 {
         return Err(Error::BadRequest(
             "too many repositories (max 200)".to_string(),
@@ -577,6 +601,11 @@ struct AgentRelease {
 #[derive(Debug, serde::Deserialize)]
 struct NextBody {
     agent_id: String,
+    /// Job kinds this bridge understands. Older bridges omit it and only ever receive review
+    /// work; a new bridge sends `["review", "handoff"]`, so a confirmed feature is not handed to
+    /// a client that would treat it as another annotation round.
+    #[serde(default)]
+    jobs: Option<Vec<String>>,
 }
 
 fn claim_error(err: ClaimError) -> Error {
@@ -727,7 +756,7 @@ async fn claim_session(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-    agent.touch(&body.agent_id);
+    agent.touch(&body.agent_id, None);
     let settings = agent.settings().clone();
     let max_parallel = project_max(&state, &project, &settings);
     let claim = agent
@@ -766,7 +795,7 @@ async fn claim_heartbeat(
             .agent
             .lock()
             .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-        agent.touch(&body.agent_id);
+        agent.touch(&body.agent_id, None);
         agent
             .heartbeat(&id, &body.agent_id, lease_seconds)
             .map_err(claim_error)?
@@ -787,7 +816,7 @@ async fn claim_state(
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
     let settings = agent.settings().clone();
     let max_parallel = project_max(&state, &project, &settings);
-    agent.touch(&body.agent_id);
+    agent.touch(&body.agent_id, None);
     let claim = agent
         .set_state(
             &id,
@@ -811,7 +840,7 @@ async fn claim_release(
             .agent
             .lock()
             .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-        agent.touch(&body.agent_id);
+        agent.touch(&body.agent_id, None);
         agent.release(&id, &body.agent_id).map_err(claim_error)?
     };
     Ok(Json(json!({ "ok": true, "claim": claim })))
@@ -837,11 +866,12 @@ async fn agent_next(
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-    agent.touch(&body.agent_id);
+    agent.touch(&body.agent_id, body.jobs.as_deref());
     let settings = agent.settings().clone();
     let claims = agent.claims();
     let mut blocked = "empty";
 
+    // Review work first: a human waiting for a fix should not queue behind a handoff.
     for mut meta in sessions {
         if let Some(claim) = claims.iter().find(|claim| claim.session_id == meta.id) {
             if claim.agent_id != body.agent_id {
@@ -874,6 +904,7 @@ async fn agent_next(
                 return Ok(Json(json!({
                     "session": meta,
                     "claim": claim,
+                    "job": "review",
                     "limits": { "max_parallel": settings.max_parallel, "project_max": max_parallel },
                 })));
             }
@@ -881,6 +912,76 @@ async fn agent_next(
             Err(ClaimError::BranchLocked { .. }) => blocked = "branch_locked",
             Err(ClaimError::SessionClaimed { .. }) => blocked = "claimed",
             Err(err) => return Err(claim_error(err)),
+        }
+    }
+
+    let can_handoff = body
+        .jobs
+        .as_ref()
+        .is_some_and(|jobs| jobs.iter().any(|job| job == "handoff"));
+    if can_handoff {
+        let mut handoffs = state.store.list()?;
+        handoffs.retain(|meta| {
+            meta.feature_confirmed_at.is_some()
+                && meta
+                    .handoff
+                    .as_ref()
+                    .is_some_and(|handoff| handoff.status.claimable())
+        });
+        handoffs.sort_by_key(|meta| {
+            meta.handoff
+                .as_ref()
+                .and_then(|handoff| handoff.requested_at.clone())
+                .unwrap_or_else(|| meta.created_at.clone())
+        });
+        for meta in handoffs {
+            let existing = claims.iter().find(|claim| claim.session_id == meta.id);
+            if let Some(claim) = existing {
+                if claim.agent_id != body.agent_id {
+                    blocked = "claimed";
+                    continue;
+                }
+                if claim.state == ClaimState::Running {
+                    blocked = "running";
+                    continue;
+                }
+            }
+            let project = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
+            let max_parallel = project_max(&state, &project, &settings);
+            // A waiting review claim carries the branch the agent actually worked on. It can be
+            // a v0.21 `session/<id>` name even when the meta now reads as `feat/...`; the
+            // handoff must use the branch with the commits, not the derived label.
+            let work_key = existing
+                .map(|claim| claim.work_key.clone())
+                .unwrap_or_else(|| meta.work_key());
+            let request = ClaimRequest {
+                session_id: meta.id.clone(),
+                agent_id: body.agent_id.clone(),
+                project,
+                work_key,
+                state: ClaimState::Running,
+                global_max: settings.max_parallel,
+                project_max: max_parallel,
+                lease_seconds: settings.lease_seconds,
+            };
+            match agent.try_claim(request) {
+                Ok(claim) => {
+                    let meta = state.store.mark_handoff_running(&meta.id).map_err(|err| {
+                        let _ = agent.release(&meta.id, &body.agent_id);
+                        err
+                    })?;
+                    return Ok(Json(json!({
+                        "session": meta,
+                        "claim": claim,
+                        "job": "handoff",
+                        "limits": { "max_parallel": settings.max_parallel, "project_max": max_parallel },
+                    })));
+                }
+                Err(ClaimError::AtCapacity { .. }) => blocked = "at_capacity",
+                Err(ClaimError::BranchLocked { .. }) => blocked = "branch_locked",
+                Err(ClaimError::SessionClaimed { .. }) => blocked = "claimed",
+                Err(err) => return Err(claim_error(err)),
+            }
         }
     }
 
@@ -930,7 +1031,10 @@ async fn get_session(
 ) -> Result<Json<Value>, Error> {
     let meta = state.store.require(&id)?;
     let annotations = state.store.annotations(&id)?;
-    Ok(Json(json!({ "meta": meta, "annotations": annotations })))
+    let disk_bytes = state.store.session_size(&id).unwrap_or(0);
+    Ok(Json(
+        json!({ "meta": meta, "annotations": annotations, "disk_bytes": disk_bytes }),
+    ))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -953,6 +1057,11 @@ async fn set_session_branch(
     if meta.status == Status::Submitted {
         return Err(Error::Conflict(
             "stop the review before renaming its branch".to_string(),
+        ));
+    }
+    if meta.handoff.is_some() {
+        return Err(Error::Conflict(
+            "this feature already has a handoff; reopen it before renaming the branch".to_string(),
         ));
     }
     let branch = body
@@ -978,12 +1087,216 @@ async fn create_session(
     })))
 }
 
+/// Browser video upload: multipart form with the video (`video`/`file`), optional `poster`, and
+/// the same metadata fields as `POST /api/sessions`. The route has its own body limit; JSON
+/// uploads stay bounded by `MAX_BODY_BYTES`.
+struct VideoForm {
+    video: Vec<u8>,
+    poster: Option<Vec<u8>>,
+    fields: BTreeMap<String, String>,
+}
+
+impl VideoForm {
+    fn field(&self, name: &str) -> Option<&str> {
+        self.fields
+            .get(name)
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+    }
+}
+
+/// Parse one multipart video upload (new session or new round) with the same fields and caps.
+async fn read_video_form(mut multipart: Multipart) -> Result<VideoForm, Error> {
+    let mut fields = BTreeMap::<String, String>::new();
+    let mut video: Option<Vec<u8>> = None;
+    let mut poster: Option<Vec<u8>> = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| Error::BadRequest(format!("invalid multipart upload: {err}")))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        if name == "video" || name == "file" {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|err| Error::BadRequest(format!("cannot read video field: {err}")))?;
+            if bytes.len() > MAX_VIDEO_BYTES {
+                return Err(Error::BadRequest(format!(
+                    "video is larger than {} MB",
+                    MAX_VIDEO_BYTES / (1024 * 1024)
+                )));
+            }
+            video = Some(bytes.to_vec());
+        } else if name == "poster" {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|err| Error::BadRequest(format!("cannot read poster field: {err}")))?;
+            if bytes.len() > crate::MAX_POSTER_BYTES {
+                return Err(Error::BadRequest(format!(
+                    "poster is larger than {} MB",
+                    crate::MAX_POSTER_BYTES / (1024 * 1024)
+                )));
+            }
+            poster = Some(bytes.to_vec());
+        } else {
+            let value = field
+                .text()
+                .await
+                .map_err(|err| Error::BadRequest(format!("cannot read {name}: {err}")))?;
+            fields.insert(name, value);
+        }
+    }
+    Ok(VideoForm {
+        video: video.ok_or_else(|| Error::BadRequest("provide a video file".to_string()))?,
+        poster,
+        fields,
+    })
+}
+
+/// Browser video upload: multipart form with the video (`video`/`file`), optional `poster`, and
+/// the same metadata fields as `POST /api/sessions`. The route has its own body limit; JSON
+/// uploads stay bounded by `MAX_BODY_BYTES`.
+async fn create_video_session(
+    State(state): State<AppState>,
+    multipart: Multipart,
+) -> Result<Json<Value>, Error> {
+    let form = read_video_form(multipart).await?;
+    let title = form.field("title").unwrap_or("Video review");
+    let meta = state.store.create_video_from_bytes(
+        &form.video,
+        title,
+        form.field("url").unwrap_or_default(),
+        form.field("note").unwrap_or_default(),
+        None,
+        form.field("agent"),
+        form.field("project"),
+        form.poster.as_deref(),
+        form.field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok()),
+        form.field("width")
+            .and_then(|value| value.parse::<u32>().ok()),
+        form.field("height")
+            .and_then(|value| value.parse::<u32>().ok()),
+        form.field("fps")
+            .and_then(|value| value.parse::<f64>().ok()),
+    )?;
+    let meta = if let Some(branch) = form.field("branch") {
+        state.store.set_branch(&meta.id, Some(branch))?
+    } else {
+        meta
+    };
+    let review_url = state.review_url(&meta.id);
+    Ok(Json(json!({
+        "meta": meta,
+        "review_url": review_url,
+        "dir": state.store.dir(&meta.id)?.display().to_string(),
+    })))
+}
+
+/// Post a new video as the next round of an existing review. The current round (annotations,
+/// contact sheet, frames and clip) is archived; the session reopens on the new clip.
+async fn replace_video(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    multipart: Multipart,
+) -> Result<Json<Value>, Error> {
+    let form = read_video_form(multipart).await?;
+    let meta = state.store.new_video_round(
+        &id,
+        &form.video,
+        form.poster.as_deref(),
+        form.field("duration_ms")
+            .and_then(|value| value.parse::<u64>().ok()),
+        form.field("width")
+            .and_then(|value| value.parse::<u32>().ok()),
+        form.field("height")
+            .and_then(|value| value.parse::<u32>().ok()),
+        form.field("fps")
+            .and_then(|value| value.parse::<f64>().ok()),
+    )?;
+    let review_url = state.review_url(&meta.id);
+    Ok(Json(json!({
+        "meta": meta,
+        "review_url": review_url,
+        "dir": state.store.dir(&meta.id)?.display().to_string(),
+    })))
+}
+
 /// Shared by `POST /api/sessions` and the MCP `review_screenshot` tool.
 pub fn create_from_request(
     state: &AppState,
     body: NewSession,
 ) -> crate::Result<crate::model::Meta> {
     use base64::Engine as _;
+
+    let has_video = body.video_base64.is_some() || body.video_path.is_some();
+    if has_video {
+        let bytes = match (body.video_base64.as_deref(), body.video_path.as_deref()) {
+            (Some(encoded), _) => {
+                let raw = encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(encoded);
+                base64::engine::general_purpose::STANDARD
+                    .decode(raw.trim())
+                    .map_err(|err| Error::BadRequest(format!("invalid video_base64: {err}")))?
+            }
+            (None, Some(path)) => {
+                let size = std::fs::metadata(path)?.len();
+                if size as usize > crate::MAX_VIDEO_BYTES {
+                    return Err(Error::BadRequest(format!(
+                        "video is larger than {} MB",
+                        crate::MAX_VIDEO_BYTES / (1024 * 1024)
+                    )));
+                }
+                std::fs::read(path)?
+            }
+            (None, None) => unreachable!(),
+        };
+        if bytes.len() > crate::MAX_VIDEO_BYTES {
+            return Err(Error::BadRequest(format!(
+                "video is larger than {} MB",
+                crate::MAX_VIDEO_BYTES / (1024 * 1024)
+            )));
+        }
+        let poster = match body.poster_base64.as_deref() {
+            Some(encoded) => {
+                let raw = encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(encoded);
+                Some(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(raw.trim())
+                        .map_err(|err| {
+                            Error::BadRequest(format!("invalid poster_base64: {err}"))
+                        })?,
+                )
+            }
+            None => None,
+        };
+        let meta = state.store.create_video_from_bytes(
+            &bytes,
+            &body.title,
+            &body.url,
+            &body.note,
+            body.id.as_deref(),
+            body.agent.as_deref(),
+            body.project.as_deref(),
+            poster.as_deref(),
+            body.duration_ms,
+            body.width,
+            body.height,
+            body.fps,
+        )?;
+        return if let Some(branch) = body.branch.as_deref() {
+            state.store.set_branch(&meta.id, Some(branch))
+        } else {
+            Ok(meta)
+        };
+    }
 
     let (bytes, name) = match (body.image_base64.as_deref(), body.image_path.as_deref()) {
         (Some(encoded), _) => {
@@ -1033,9 +1346,34 @@ pub fn create_from_request(
 async fn submit(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
-    Json(body): Json<Submission>,
+    request: Request,
 ) -> Result<Json<Value>, Error> {
-    let (meta, annotations) = state.store.submit(&id, &body)?;
+    let multipart = request
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("multipart/form-data"));
+    let (body, contact_sheet, frames) = if multipart {
+        parse_multipart_submit(request).await?
+    } else {
+        let Json(body) = Json::<Submission>::from_request(request, &state)
+            .await
+            .map_err(|err| {
+                if err.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE {
+                    Error::UnsupportedMediaType(err.body_text())
+                } else {
+                    Error::BadRequest(err.body_text())
+                }
+            })?;
+        (body, None, Vec::new())
+    };
+    let (meta, annotations) = if multipart {
+        state
+            .store
+            .submit_round(&id, &body, contact_sheet.as_deref(), &frames)?
+    } else {
+        state.store.submit(&id, &body)?
+    };
     // Wake up whatever agent the host wired in; a dead endpoint must not fail the submission.
     if let Some(url) = state.webhook.clone() {
         let payload = json!({
@@ -1045,6 +1383,7 @@ async fn submit(
             "project": meta.project,
             "prompt": meta.prompt,
             "annotations": annotations.annotations.len(),
+            "frames": annotations.frames.len(),
             "submitted_at": meta.submitted_at,
             "review_url": state.review_url(&meta.id),
         });
@@ -1053,6 +1392,71 @@ async fn submit(
     Ok(Json(
         json!({ "ok": true, "meta": meta, "annotations": annotations }),
     ))
+}
+
+/// A video submit carries the annotations JSON, the contact sheet as a file and one file per
+/// unique annotated timestamp. Filenames are `<seconds>.<png|jpg>`; the JSON never contains the
+/// frames, so a 20-frame submission does not balloon the body with base64.
+async fn parse_multipart_submit(
+    request: Request,
+) -> Result<(Submission, Option<Vec<u8>>, Vec<FrameUpload>), Error> {
+    let mut multipart = Multipart::from_request(request, &())
+        .await
+        .map_err(|err| Error::BadRequest(format!("invalid multipart submit: {err}")))?;
+    let mut body: Option<Submission> = None;
+    let mut contact_sheet: Option<Vec<u8>> = None;
+    let mut frames = Vec::new();
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|err| Error::BadRequest(format!("invalid multipart submit: {err}")))?
+    {
+        let name = field.name().unwrap_or_default().to_string();
+        match name.as_str() {
+            "annotations" => {
+                let text = field
+                    .text()
+                    .await
+                    .map_err(|err| Error::BadRequest(format!("cannot read annotations: {err}")))?;
+                body = Some(serde_json::from_str(&text).map_err(|err| {
+                    Error::BadRequest(format!("invalid annotations JSON: {err}"))
+                })?);
+            }
+            "png" | "contact_sheet" => {
+                let bytes = field.bytes().await.map_err(|err| {
+                    Error::BadRequest(format!("cannot read the contact sheet: {err}"))
+                })?;
+                contact_sheet = Some(bytes.to_vec());
+            }
+            "frames" => {
+                let file = field.file_name().unwrap_or_default().to_string();
+                let stem = std::path::Path::new(&file)
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("");
+                let at = stem.parse::<f64>().map_err(|_| {
+                    Error::BadRequest("frame filenames must be seconds, e.g. 2.340.png".to_string())
+                })?;
+                let bytes = field
+                    .bytes()
+                    .await
+                    .map_err(|err| Error::BadRequest(format!("cannot read frame {file}: {err}")))?;
+                frames.push(FrameUpload {
+                    at,
+                    bytes: bytes.to_vec(),
+                });
+            }
+            other => {
+                // Drain unknown fields instead of leaving the parser mid-stream.
+                let _ = field.bytes().await;
+                if other != "session" {
+                    tracing::debug!("ignoring submit field {other}");
+                }
+            }
+        }
+    }
+    let body = body.ok_or_else(|| Error::BadRequest("missing annotations field".to_string()))?;
+    Ok((body, contact_sheet, frames))
 }
 
 async fn resolve(
@@ -1076,11 +1480,23 @@ async fn reopen(
     Ok(Json(json!({ "meta": state.store.reopen(&id)? })))
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+struct ConfirmBody {
+    /// Opt in to a post-confirmation handoff. Default false so a non-git integration (or a
+    /// human who only wants the decision recorded) is not handed a job it does not understand.
+    #[serde(default)]
+    handoff: bool,
+}
+
 async fn confirm_feature(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
+    body: Option<Json<ConfirmBody>>,
 ) -> Result<Json<Value>, Error> {
-    Ok(Json(json!({ "meta": state.store.confirm_feature(&id)? })))
+    let handoff = body.map(|Json(body)| body.handoff).unwrap_or(false);
+    Ok(Json(
+        json!({ "meta": state.store.confirm_feature(&id, handoff)? }),
+    ))
 }
 
 async fn cancel_feature(
@@ -1088,6 +1504,15 @@ async fn cancel_feature(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     Ok(Json(json!({ "meta": state.store.cancel_feature(&id)? })))
+}
+
+/// Queue (or retry) a handoff for a feature the human already confirmed. Used by the rail's
+/// retry action after a failed handoff, and by scripts for features confirmed before v0.23.
+async fn request_handoff(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    Ok(Json(json!({ "meta": state.store.request_handoff(&id)? })))
 }
 
 async fn history(
@@ -1259,7 +1684,87 @@ async fn image(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Response, Error> {
     let meta = state.store.require(&id)?;
-    Ok(serve_file(&state.store.image_path(&meta)?, None))
+    let path =
+        if meta.media.as_ref().map(|media| media.kind) == Some(crate::model::MediaKind::Video) {
+            state.store.poster_path(&meta)?
+        } else {
+            state.store.image_path(&meta)?
+        };
+    Ok(serve_file(&path, None))
+}
+
+/// A full-resolution still captured at an annotation time.
+async fn frame(
+    State(state): State<AppState>,
+    RoutePath((id, file)): RoutePath<(String, String)>,
+) -> Result<Response, Error> {
+    let path = state.store.frame_path(&id, &file)?;
+    if !path.is_file() {
+        return Err(Error::NotFound(format!("{id}/frames/{file}")));
+    }
+    Ok(serve_file(&path, None))
+}
+
+/// Stream the video with Range support so the browser can seek without downloading it all.
+/// `ServeFile` also sets `Accept-Ranges`, `Content-Type` and the 206 `Content-Range`.
+async fn media(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    request: Request,
+) -> Result<Response, Error> {
+    let meta = state.store.require(&id)?;
+    if meta.media.as_ref().map(|media| media.kind) != Some(crate::model::MediaKind::Video) {
+        return Err(Error::NotFound(format!("{id}/media")));
+    }
+    let path = state.store.image_path(&meta)?;
+    if !path.is_file() {
+        return Err(Error::NotFound(format!("{id}/media")));
+    }
+    serve_range(path, request).await
+}
+
+/// A video with `Accept-Ranges` and 206 responses, for the live clip and an archived round.
+async fn serve_range(path: PathBuf, request: Request) -> Result<Response, Error> {
+    let service = ServeFile::new(path);
+    let mut proxy = Request::builder()
+        .uri(request.uri())
+        .body(Body::empty())
+        .map_err(|err| Error::BadRequest(err.to_string()))?;
+    *proxy.headers_mut() = request.headers().clone();
+    let response = service
+        .oneshot(proxy)
+        .await
+        .expect("ServeFile is infallible");
+    let (parts, body) = response.into_parts();
+    let mut response = Response::from_parts(parts, Body::new(body));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+/// The archived clip of a submitted video round.
+async fn history_video(
+    State(state): State<AppState>,
+    RoutePath((id, stamp)): RoutePath<(String, String)>,
+    request: Request,
+) -> Result<Response, Error> {
+    let path = state.store.history_video_path(&id, &stamp)?;
+    serve_range(path, request).await
+}
+
+/// A full-resolution frame archived with a video round.
+async fn history_frame(
+    State(state): State<AppState>,
+    RoutePath((id, stamp, file)): RoutePath<(String, String, String)>,
+) -> Result<Response, Error> {
+    let path = state.store.history_frame_path(&id, &stamp, &file)?;
+    if !path.is_file() {
+        return Err(Error::NotFound(format!(
+            "{id}/history/{stamp}/frames/{file}"
+        )));
+    }
+    Ok(serve_file(&path, None))
 }
 
 async fn annotated(

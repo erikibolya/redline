@@ -135,6 +135,28 @@ pub struct AgentPresence {
     /// Derived at read time from `last_seen`, never trusted from the file.
     #[serde(default)]
     pub online: bool,
+    /// Job kinds this bridge advertised on `/api/agent/next`. `review` is always present; an
+    /// integration that can perform a post-confirmation handoff adds `handoff`. An old presence
+    /// file (or an old bridge that sends no `jobs`) is review-only.
+    #[serde(default = "default_jobs")]
+    pub jobs: Vec<String>,
+}
+
+fn default_jobs() -> Vec<String> {
+    vec!["review".to_string()]
+}
+
+/// Keep the capability list to the jobs the server understands. `review` is the baseline; a
+/// bridge that sends no jobs is still a review bridge.
+fn normalize_jobs(jobs: &[String]) -> Vec<String> {
+    let mut out = default_jobs();
+    if jobs
+        .iter()
+        .any(|job| job.trim().eq_ignore_ascii_case("handoff"))
+    {
+        out.push("handoff".to_string());
+    }
+    out
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -199,18 +221,24 @@ impl AgentControl {
 
     /// Record that an agent bridge is alive. Called from every agent-facing endpoint; the repo
     /// sync alone beats every 60 s, so an idle bridge is still visible.
-    pub fn touch(&mut self, agent_id: &str) {
+    pub fn touch(&mut self, agent_id: &str, jobs: Option<&[String]>) {
         let id = agent_id.trim();
         if id.is_empty() {
             return;
         }
         let now = now();
+        // A repo sync/claim does not know the job list; keep what the last `next` advertised.
+        let jobs = jobs
+            .map(normalize_jobs)
+            .or_else(|| self.agents.get(id).map(|presence| presence.jobs.clone()))
+            .unwrap_or_else(default_jobs);
         self.agents.insert(
             id.to_string(),
             AgentPresence {
                 agent_id: id.to_string(),
                 last_seen: now,
                 online: true,
+                jobs,
             },
         );
         // Bound the file without dropping the last-seen history the status panel shows.

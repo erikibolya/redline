@@ -1,5 +1,5 @@
-use redline_core::model::{Annotation, Status, Submission};
-use redline_core::store::{default_branch, valid_id, Store};
+use redline_core::model::{Annotation, HandoffStatus, MediaKind, Status, Submission};
+use redline_core::store::{default_branch, valid_id, HandoffReport, Store};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -154,7 +154,12 @@ fn a_new_round_clears_the_feature_decision() {
     let meta = store
         .create_from_bytes(PNG, "shot.png", "Feature", "", "", None, None, None)
         .unwrap();
-    store.confirm_feature(&meta.id).unwrap();
+    let confirmed = store.confirm_feature(&meta.id, true).unwrap();
+    assert_eq!(
+        confirmed.handoff.as_ref().map(|handoff| handoff.status),
+        Some(HandoffStatus::Requested),
+        "confirming with a handoff must queue one"
+    );
 
     let submission = Submission {
         note: None,
@@ -166,6 +171,70 @@ fn a_new_round_clears_the_feature_decision() {
     let (meta, _) = store.submit(&meta.id, &submission).unwrap();
     assert_eq!(meta.status, Status::Submitted);
     assert_eq!(meta.feature_state(), "pending");
+    assert!(meta.handoff.is_none(), "new work drops the old handoff");
+
+    // Confirming without a handoff records the decision only; a non-git integration can do this.
+    let confirmed = store.confirm_feature(&meta.id, false).unwrap();
+    assert!(confirmed.handoff.is_none());
+    store.reopen(&meta.id).unwrap();
+
+    store.confirm_feature(&meta.id, true).unwrap();
+    let running = store.mark_handoff_running(&meta.id).unwrap();
+    assert_eq!(
+        running.handoff.as_ref().map(|handoff| handoff.status),
+        Some(HandoffStatus::Running)
+    );
+
+    let failed = store
+        .report_handoff(
+            &meta.id,
+            HandoffReport {
+                status: HandoffStatus::Failed,
+                label: Some("PR #7 open".to_string()),
+                url: Some("https://github.com/o/r/pull/7".to_string()),
+                message: Some("checks are red".to_string()),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        failed
+            .handoff
+            .as_ref()
+            .and_then(|handoff| handoff.message.as_deref()),
+        Some("checks are red")
+    );
+
+    // A retry keeps the label/URL/message from the failed attempt; the integration can reuse it.
+    let retried = store.request_handoff(&meta.id).unwrap();
+    let retried_handoff = retried.handoff.unwrap();
+    assert_eq!(retried_handoff.status, HandoffStatus::Requested);
+    assert_eq!(retried_handoff.label.as_deref(), Some("PR #7 open"));
+    assert_eq!(
+        retried_handoff.url.as_deref(),
+        Some("https://github.com/o/r/pull/7")
+    );
+    assert_eq!(retried_handoff.message.as_deref(), Some("checks are red"));
+
+    store.mark_handoff_running(&meta.id).unwrap();
+    let done = store
+        .report_handoff(
+            &meta.id,
+            HandoffReport {
+                status: HandoffStatus::Done,
+                label: Some("merged".to_string()),
+                url: Some("https://github.com/o/r/pull/7".to_string()),
+                message: Some("merge commit abc123".to_string()),
+            },
+        )
+        .unwrap();
+    let handoff = done.handoff.unwrap();
+    assert_eq!(handoff.status, HandoffStatus::Done);
+    assert_eq!(handoff.label.as_deref(), Some("merged"));
+    assert_eq!(
+        handoff.url.as_deref(),
+        Some("https://github.com/o/r/pull/7")
+    );
+    assert_eq!(handoff.message.as_deref(), Some("merge commit abc123"));
 
     store.cancel_feature(&meta.id).unwrap();
     let meta = store
@@ -173,6 +242,10 @@ fn a_new_round_clears_the_feature_decision() {
         .unwrap();
     assert_eq!(meta.status, Status::Open);
     assert_eq!(meta.feature_state(), "pending");
+    assert!(
+        meta.handoff.is_none(),
+        "a new round clears the handoff state"
+    );
 }
 
 #[test]
@@ -321,4 +394,300 @@ fn a_review_created_without_a_branch_already_has_its_feature_branch() {
     let branch = meta.branch.as_deref().unwrap_or_default();
     assert!(branch.starts_with("feat/checkbox-group-"), "{branch}");
     assert!(!branch.starts_with("session/"), "{branch}");
+}
+
+/// Minimal MP4 magic bytes; the store validates the container, not the codec payload.
+const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+
+#[test]
+fn video_sessions_keep_media_metadata_and_timecoded_annotations() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Checkout flow",
+            "http://localhost/checkout",
+            "watch the transition",
+            None,
+            None,
+            None,
+            Some(PNG),
+            Some(5_000),
+            Some(1280),
+            Some(720),
+            Some(30.0),
+        )
+        .expect("create video");
+    let media = meta.media.as_ref().expect("media metadata");
+    assert_eq!(media.kind, MediaKind::Video);
+    assert_eq!(media.file, "video.mp4");
+    assert_eq!(media.duration_ms, Some(5_000));
+    assert_eq!(meta.image, "video.mp4");
+    assert!(store.poster_path(&meta).unwrap().is_file());
+
+    let mut rect = Annotation::new("rect");
+    rect.fields
+        .insert("start".to_string(), json!({"x": 1, "y": 2}));
+    rect.fields
+        .insert("end".to_string(), json!({"x": 3, "y": 4}));
+    rect.fields.insert("at".to_string(), json!(1.25));
+    rect.fields.insert("until".to_string(), json!(2.5));
+    let submission = Submission {
+        note: None,
+        annotations: vec![rect],
+        png: None,
+        width: Some(1280),
+        height: Some(720),
+    };
+    let (_meta, set) = store.submit(&meta.id, &submission).expect("submit");
+    assert_eq!(set.media.as_ref().map(|m| m.kind), Some(MediaKind::Video));
+
+    let review = std::fs::read_to_string(store.dir(&meta.id).unwrap().join("review.md")).unwrap();
+    assert!(review.contains("Media: Video"), "{review}");
+    assert!(review.contains("@ 00:01.250–00:02.500"), "{review}");
+
+    let saved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(store.dir(&meta.id).unwrap().join("meta.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["media"]["kind"], "video");
+    assert_eq!(saved["media"]["duration_ms"], 5000);
+
+    // The clip lives inside the session folder, so deleting the review deletes the video too.
+    let folder = store.dir(&meta.id).unwrap();
+    assert!(folder.join("video.mp4").is_file());
+    store.remove(&meta.id).expect("remove video session");
+    assert!(!folder.exists());
+}
+
+#[test]
+fn video_uploads_are_bounded_before_they_are_read() {
+    let (dir, store) = store();
+    let path = dir.path().join("huge.webm");
+    let file = std::fs::File::create(&path).unwrap();
+    file.set_len(redline_core::MAX_VIDEO_BYTES as u64 + 1)
+        .unwrap();
+    let error = store
+        .create_video_from_path(
+            &path, "Huge", "", "", None, None, None, None, None, None, None,
+        )
+        .expect_err("oversized video must be refused");
+    assert!(error.to_string().contains("250 MB"), "{error}");
+}
+
+#[test]
+fn a_heic_image_is_not_accepted_as_an_mp4() {
+    let (_dir, store) = store();
+    let heic = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic";
+    let error = store
+        .create_video_from_bytes(
+            heic,
+            "Not a video",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect_err("an image container must not become a video session");
+    assert!(error.to_string().contains("unsupported video"), "{error}");
+}
+
+#[test]
+fn a_video_longer_than_five_minutes_is_refused() {
+    let (_dir, store) = store();
+    let error = store
+        .create_video_from_bytes(
+            MP4,
+            "Too long",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(redline_core::MAX_VIDEO_DURATION_MS + 1),
+            None,
+            None,
+            None,
+        )
+        .expect_err("a six minute clip must not create a review");
+    assert!(error.to_string().contains("5 minute"), "{error}");
+}
+
+const WEBM: &[u8] = &[0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x02, 0x03, 0x04];
+
+#[test]
+fn a_new_video_round_archives_the_previous_clip_and_reopens_the_review() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Checkout",
+            "",
+            "",
+            None,
+            None,
+            None,
+            Some(PNG),
+            Some(5000),
+            Some(320),
+            Some(180),
+            None,
+        )
+        .unwrap();
+    let mut rect = Annotation::new("rect");
+    rect.fields.insert("at".to_string(), json!(1.0));
+    store
+        .submit(
+            &meta.id,
+            &Submission {
+                note: Some("first pass".to_string()),
+                annotations: vec![rect],
+                png: None,
+                width: Some(320),
+                height: Some(180),
+            },
+        )
+        .unwrap();
+
+    let next = store
+        .new_video_round(
+            &meta.id,
+            WEBM,
+            Some(PNG),
+            Some(3000),
+            Some(320),
+            Some(180),
+            None,
+        )
+        .expect("new video round");
+    assert_eq!(next.status, Status::Open);
+    assert_eq!(
+        next.media.as_ref().map(|media| media.kind),
+        Some(MediaKind::Video)
+    );
+    assert_eq!(next.image, "video.webm");
+    assert_eq!(next.media.as_ref().unwrap().duration_ms, Some(3000));
+    assert_eq!(
+        next.media.as_ref().unwrap().mime.as_deref(),
+        Some("video/webm")
+    );
+    assert!(store.dir(&meta.id).unwrap().join("video.webm").is_file());
+    assert_eq!(store.annotations(&meta.id).unwrap().annotations.len(), 0);
+    assert!(!store.dir(&meta.id).unwrap().join("annotated.png").is_file());
+
+    let history = store.history(&meta.id).unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(
+        history[0].media.as_ref().map(|media| media.kind),
+        Some(MediaKind::Video)
+    );
+    let archived = store
+        .history_video_path(&meta.id, &history[0].stamp)
+        .unwrap();
+    assert!(archived.is_file());
+    assert_eq!(archived.file_name().unwrap(), "video.mp4");
+}
+
+#[test]
+fn replacing_a_video_before_any_submission_does_not_add_history() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Draft",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    store
+        .new_video_round(&meta.id, WEBM, None, Some(2000), None, None, None)
+        .unwrap();
+    assert!(store.history(&meta.id).unwrap().is_empty());
+    assert!(store.dir(&meta.id).unwrap().join("video.webm").is_file());
+}
+
+#[test]
+fn a_screenshot_round_is_refused_on_a_video_session() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Video",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let error = store
+        .post_round(&meta.id, Some(PNG), "screenshot.png", "a fix", None, None)
+        .expect_err("a video review cannot take a screenshot round");
+    assert!(error.to_string().contains("post the next video"), "{error}");
+}
+
+#[test]
+fn a_pre_release_ship_record_is_read_as_a_generic_handoff() {
+    use redline_core::model::Meta;
+    let meta: Meta = serde_json::from_value(json!({
+        "id": "legacy",
+        "title": "Legacy feature",
+        "status": "resolved",
+        "created_at": "2026-10-31T10:00:00+00:00",
+        "image": "screenshot.png",
+        "feature_confirmed_at": "2026-10-31T10:00:00+00:00",
+        "ship": {
+            "status": "merged",
+            "requested_at": "2026-10-31T10:00:00+00:00",
+            "started_at": "2026-10-31T10:01:00+00:00",
+            "finished_at": "2026-10-31T10:02:00+00:00",
+            "pr_url": "https://github.com/o/r/pull/46",
+            "pr_number": 46,
+            "merge_commit": "abc123",
+            "error": "merge commit abc123"
+        }
+    }))
+    .unwrap();
+    let handoff = meta.handoff.expect("legacy ship must become a handoff");
+    assert_eq!(handoff.status, HandoffStatus::Done);
+    assert_eq!(
+        handoff.url.as_deref(),
+        Some("https://github.com/o/r/pull/46")
+    );
+    assert_eq!(handoff.message.as_deref(), Some("merge commit abc123"));
+
+    let opened: Meta = serde_json::from_value(json!({
+        "id": "legacy-open",
+        "title": "Legacy open",
+        "status": "resolved",
+        "created_at": "2026-10-31T10:00:00+00:00",
+        "image": "screenshot.png",
+        "feature_confirmed_at": "2026-10-31T10:00:00+00:00",
+        "ship": { "status": "opened" }
+    }))
+    .unwrap();
+    assert_eq!(
+        opened.handoff.map(|handoff| handoff.status),
+        Some(HandoffStatus::Running)
+    );
 }

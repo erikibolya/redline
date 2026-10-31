@@ -93,6 +93,48 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   historical round (read-only viewer) the main button also drags the picture.
 - Image is centred; the stage has a dark checkerboard so transparent PNGs read correctly.
 
+## Video reviews (unreleased)
+
+- **New review** accepts `video/*` from the picker, drag & drop and paste. The drop zone shows a
+  muted `<video>` preview, the file name/size, and warns when the clip is 4K. The dialog reads
+  duration, width and height, renders the first frame as the poster, and uploads with
+  `POST /api/sessions/video` (multipart). Limits: 5 minutes, 250 MB.
+- **Stage**: a video is drawn into the same canvas as a screenshot, so zoom, pan, tools, grouping
+  and the history viewer keep working. The video is muted; there are no audio controls in v1.
+- **Video bar**: play/pause, `mm:ss.mmm / mm:ss.mmm`, previous/next frame, 0.5×/1×/1.5×/2×, a
+  Ghosts toggle, timeline zoom `−`/`+`, and `Fit`. Clicking the canvas pauses playback before a
+  shape starts, so an annotation always belongs to the frame the human saw.
+- **Timeline**: an overview strip shows the full duration and the zoom window; the detail slider
+  has a time ruler that adapts to the zoom (tenths for a short window, minutes for a long one).
+  Wheel over the timeline zooms around the pointer, `Fit` restores the whole clip. Annotation
+  markers use the annotation colour; a range draws a band between `at` and `until`. Clicking a
+  marker seeks to it and selects the row.
+- **Timecoded annotations**: each annotation gets `at` (seconds) when it is drawn or typed, and
+  an optional `until` set from the ⏱ button in the inspector (clicking it while parked on the
+  annotation gives a one-second default instead of a zero-length range). The inspector shows
+  `rect · 00:02.340–00:02.900`; clicking a row seeks there.
+- **Visibility**: the current moment is full opacity; annotations from other times stay as ~12 %
+  ghosts and fade to full within 350 ms of their time. Ranges are full between their boundaries.
+  The selected annotation stays full while it is being edited; `Ghosts` hides everything that is
+  not current.
+- **Keyboard**: `K` play/pause, `J`/`L` jump one second, `,`/`.` step one frame. Space remains
+  canvas pan, not play.
+- **Submit** captures one full-resolution frame per unique annotated time (20 / ~60 MB cap, JPEG
+  fallback), composes a labelled contact-sheet grid into `annotated.png`, and uploads both with
+  the annotations JSON as multipart. Each tile shows its timecode, annotation numbers and those
+  annotations painted over the frame.
+- **New video** (next to Ghosts, hidden while submitted or viewing history) asks before discarding
+  unsaved marks, uploads the clip and reopens the review on it. The previous round - annotations,
+  contact sheet, frames and the clip itself - moves to History.
+- **History**: a video round plays in the same canvas and video bar, read-only; its annotations
+  are shown with their timecodes and the previous clip is streamed from
+  `/sessions/<id>/history/<stamp>/video`. *Back to current* restores the live clip.
+- **Gallery**: a video card uses the poster and shows a `▶ mm:ss` chip; a poster-less agent video
+  falls back to a `▶ video` placeholder instead of a broken image.
+- **Disk use**: the History summary shows the session's real folder size and turns red past 2 GB.
+  RedLine keeps every round (20 max) and never deletes a video silently; the warning tells the
+  human which reviews are worth pruning.
+
 ## Tools and interaction
 
 | Key | Tool | Notes |
@@ -159,17 +201,29 @@ and converts them).
 ## Feature confirmation (v0.21)
 
 Each session is one feature. The rail's row actions carry the human's decision; agents map
-`confirmed` to their own workflow (open a PR, merge into the integration branch) and treat
-`cancelled` as "do not ship".
+`confirmed` to their own workflow (open a PR and merge, deploy, publish, or nothing) and treat
+`cancelled` as "do not proceed".
 
 - **✓ Confirm feature** opens a dialog that explains the consequence and only then calls
   `POST /api/sessions/<id>/confirm-feature`. The session becomes `resolved` and keeps
   `feature_confirmed_at`; the rail shows a green-tinted `confirmed` badge and dot. Cancelled
   features get a red-tinted `cancelled` badge; both keep their solid text/border colours in the
   light theme, so the decision never reads as a black pill on the dark rail.
+- **The confirm dialog has an optional handoff checkbox (v0.23).** It defaults to on when an
+  online agent advertises the `handoff` capability; otherwise it says so and starts off. The
+  server records the decision either way and queues `handoff.status=requested` only when checked.
+  A non-git integration can confirm without a handoff; a git integration uses the same job.
+- **The rail shows the handoff outcome beside `confirmed`:** `handoff queued` (waiting for an
+  agent), `handing off` (run active), the integration's `label` with its `url` (`merged` + PR
+  link for the reference bridge; `deployed` + environment link for a deploy), or a red
+  `handoff failed` label/link whose retry is the row's `↻` action (also **Retry handoff** in the
+  feature menu), calling `POST /api/sessions/<id>/handoff`. The review run itself never opens a
+  PR, so a feature cannot sneak into `dev` overnight; the handoff run is a separate bridge job. A
+  pre-v0.23 confirmed feature has no `handoff` record and keeps the plain `confirmed` badge.
 - **✕ Feature actions** opens one dialog with **Keep working**, **Cancel feature** and
   **Delete files…**. Cancel calls `POST /api/sessions/<id>/cancel-feature`: the review closes
-  with `feature_cancelled_at`, nothing is merged and the screenshot/annotations stay in **Done**.
+  with `feature_cancelled_at`, nothing is handed off or merged, and the screenshot/annotations
+  stay in **Done**.
   Delete files… removes them permanently. A decided feature gets **Reopen** instead of Cancel in
   the same menu. The row itself never deletes on a single click.
 - **↺ Reopen** clears both feature stamps and returns the session to `open`.
@@ -273,6 +327,9 @@ do not move; it also clicks every close X.
   zoom buttons plus `+`/`-`/`0`/`1` keep working. Space+drag works even when a history row still
   has keyboard focus; the pointer being over the stage is what arms space. The live "agent is
   working" toast is hidden while an archived round is on screen.
+- Every history row is its own card (4 px apart, all four corners rounded). The live round keeps
+  the same fill and border as the archived ones; only its glyph is green, and the accent outline
+  marks the round currently being viewed.
 - The ghost (`◫`), diff (`Δ`) and open-PNG (`↗`) buttons and the `Ghost · …` chip were removed;
   the diff endpoint remains for agents.
 - The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History

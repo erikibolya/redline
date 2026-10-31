@@ -74,10 +74,12 @@ async fn initialize_and_tool_list_are_well_formed() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
     assert!(names.contains(&"review_screenshot"));
+    assert!(names.contains(&"review_video"));
     assert!(names.contains(&"wait_for_feedback"));
     assert!(names.contains(&"get_feedback"));
     assert!(names.contains(&"list_reviews"));
     assert!(names.contains(&"resolve"));
+    assert!(names.contains(&"handoff_status"));
 
     // Notifications get no response at all.
     let notification = handle(
@@ -118,6 +120,240 @@ async fn review_screenshot_creates_a_session_the_human_can_open() {
         store.image_path(&meta).unwrap().is_file(),
         "screenshot written"
     );
+}
+
+#[tokio::test]
+async fn handoff_status_records_a_generic_result_only_for_a_confirmed_feature() {
+    let (_dir, store) = setup();
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({
+                "title": "hand off",
+                "image_base64": format!("data:image/png;base64,{PNG_B64}")
+            }),
+        )
+        .await,
+    );
+    let id = created["session_id"].as_str().unwrap().to_string();
+
+    let refused = call(
+        &store,
+        "handoff_status",
+        json!({
+            "session_id": id,
+            "state": "done",
+            "label": "merged",
+            "url": "https://github.com/o/r/pull/7"
+        }),
+    )
+    .await;
+    assert_eq!(refused["isError"], true, "{refused}");
+    assert!(refused["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("not confirmed"));
+
+    store.confirm_feature(&id, true).unwrap();
+    let done = call(
+        &store,
+        "handoff_status",
+        json!({
+            "session_id": id,
+            "state": "done",
+            "label": "merged",
+            "url": "https://github.com/o/r/pull/7",
+            "message": "merge commit abc123"
+        }),
+    )
+    .await;
+    assert_eq!(done["isError"], false, "{done}");
+    let handoff = payload(&done)["handoff"].clone();
+    assert_eq!(handoff["status"], "done");
+    assert_eq!(handoff["label"], "merged");
+    assert_eq!(handoff["url"], "https://github.com/o/r/pull/7");
+    assert_eq!(handoff["message"], "merge commit abc123");
+    assert_eq!(
+        store.require(&id).unwrap().handoff.unwrap().status,
+        redline_core::model::HandoffStatus::Done
+    );
+
+    // A failed report keeps the link and carries the integration's reason. The rail offers a
+    // retry; the next attempt can reuse the URL.
+    let failed = call(
+        &store,
+        "handoff_status",
+        json!({
+            "session_id": id,
+            "state": "failed",
+            "label": "PR #7 open",
+            "url": "https://github.com/o/r/pull/7",
+            "message": "checks are red"
+        }),
+    )
+    .await;
+    assert_eq!(failed["isError"], false, "{failed}");
+    let handoff = payload(&failed)["handoff"].clone();
+    assert_eq!(handoff["status"], "failed");
+    assert_eq!(handoff["label"], "PR #7 open");
+    assert_eq!(handoff["message"], "checks are red");
+
+    // A URL must be a real link; a malformed one is refused before it reaches the rail.
+    let bad_url = call(
+        &store,
+        "handoff_status",
+        json!({"session_id": id, "state": "done", "label": "merged", "url": "ftp://x"}),
+    )
+    .await;
+    assert_eq!(bad_url["isError"], true, "{bad_url}");
+}
+
+#[tokio::test]
+async fn review_video_creates_a_session_with_media_and_a_video_url() {
+    use base64::Engine as _;
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let (_dir, store) = setup();
+    let result = call(
+        &store,
+        "review_video",
+        json!({
+            "title": "Checkout flow",
+            "note": "watch the transition",
+            "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+            "poster_base64": PNG_B64,
+            "duration_ms": 5000,
+            "width": 1280,
+            "height": 720,
+        }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let created = payload(&result);
+    let id = created["session_id"].as_str().unwrap().to_string();
+    let meta = store.require(&id).unwrap();
+    assert_eq!(
+        meta.media.as_ref().map(|media| media.kind),
+        Some(redline_core::model::MediaKind::Video)
+    );
+    assert!(store.image_path(&meta).unwrap().is_file(), "video written");
+    assert!(
+        store.poster_path(&meta).unwrap().is_file(),
+        "poster written"
+    );
+
+    let feedback = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
+    assert_eq!(feedback["media"]["kind"], "video");
+    assert!(feedback["video_url"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/sessions/{id}/media?t={TOKEN}")));
+}
+
+#[tokio::test]
+async fn feedback_lists_the_full_resolution_frames() {
+    use base64::Engine as _;
+    use redline_core::model::{Annotation, Submission};
+    use redline_core::store::FrameUpload;
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let (_dir, store) = setup();
+    let created = payload(
+        &call(
+            &store,
+            "review_video",
+            json!({
+                "title": "Checkout flow",
+                "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+                "duration_ms": 5000,
+            }),
+        )
+        .await,
+    );
+    let id = created["session_id"].as_str().unwrap().to_string();
+    let png = base64::engine::general_purpose::STANDARD
+        .decode(PNG_B64)
+        .unwrap();
+    let mut rect = Annotation::new("rect");
+    rect.fields.insert("at".to_string(), json!(1.25));
+    store
+        .submit_round(
+            &id,
+            &Submission {
+                note: Some("watch the button".to_string()),
+                annotations: vec![rect],
+                png: None,
+                width: Some(320),
+                height: Some(180),
+            },
+            Some(&png),
+            &[FrameUpload {
+                at: 1.25,
+                bytes: png.clone(),
+            }],
+        )
+        .unwrap();
+
+    let feedback = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
+    let frames = feedback["frames"].as_array().expect("frames");
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0]["at"], 1.25);
+    assert_eq!(frames[0]["mime"], "image/png");
+    assert!(frames[0]["url"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/sessions/{id}/frames/1.250.png?t={TOKEN}")));
+    assert!(feedback["annotated_png"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/session/{id}/annotated.png")));
+}
+
+#[tokio::test]
+async fn post_round_can_hand_back_a_new_video() {
+    use base64::Engine as _;
+    const WEBM: &[u8] = &[0x1A, 0x45, 0xDF, 0xA3, 4, 5, 6];
+    let (_dir, store) = setup();
+    let created = payload(
+        &call(
+            &store,
+            "review_screenshot",
+            json!({"title": "Flow", "image_base64": PNG_B64}),
+        )
+        .await,
+    );
+    let id = created["session_id"].as_str().unwrap().to_string();
+
+    let result = call(
+        &store,
+        "post_round",
+        json!({
+            "session_id": id,
+            "note": "here is the fixed flow",
+            "video_base64": base64::engine::general_purpose::STANDARD.encode(WEBM),
+            "poster_base64": PNG_B64,
+            "duration_ms": 2500,
+        }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let posted = payload(&result);
+    assert_eq!(posted["posted"], true, "{posted}");
+    assert_eq!(posted["media"]["kind"], "video");
+    assert!(posted["video_url"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/sessions/{id}/media?t={TOKEN}")));
+
+    let meta = store.require(&id).unwrap();
+    assert_eq!(meta.status, redline_core::model::Status::Open);
+    assert_eq!(meta.image, "video.webm");
+    // The initial screenshot was never submitted, so it is not a round in history; replacing it
+    // with the agent's video simply frees the old file.
+    assert!(store.history(&id).unwrap().is_empty());
+    assert!(!store.dir(&id).unwrap().join("screenshot.png").is_file());
+    let thread = std::fs::read_to_string(store.dir(&id).unwrap().join("agent-thread.jsonl"))
+        .expect("agent thread");
+    assert!(thread.contains("here is the fixed flow"), "{thread}");
 }
 
 #[tokio::test]
@@ -166,7 +402,7 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
     );
 
     // The human's feature decision reaches the agent through the same payload.
-    store.confirm_feature(&id).unwrap();
+    store.confirm_feature(&id, false).unwrap();
     let confirmed = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
     assert_eq!(confirmed["status"], "resolved");
     assert_eq!(confirmed["feature_state"], "confirmed");

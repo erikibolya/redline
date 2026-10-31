@@ -9,8 +9,8 @@
 set -euo pipefail
 
 IMAGE="${REDLINE_IMAGE:-ghcr.io/erikibolya/redline:browser}"
-NAME="redline-e2e"
-DATA="/mnt/user/appdata/redline-e2e"
+NAME="${E2E_NAME:-redline-e2e}"
+DATA="${E2E_DATA:-/mnt/user/appdata/redline-e2e}"
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }

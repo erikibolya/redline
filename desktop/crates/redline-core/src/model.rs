@@ -23,6 +23,13 @@ pub struct Meta {
     pub image_width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_height: Option<u32>,
+    /// Image or video metadata (v0.23). Missing means a legacy image session; `image` still names
+    /// the media file for older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaRef>,
+    /// First-frame thumbnail for a video session (v0.23); served by `/sessions/<id>/image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
     /// Who asked for the review (agent name, "cli", "mcp"). Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -35,6 +42,12 @@ pub struct Meta {
     /// When the human cancelled the feature without shipping it (v0.21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature_cancelled_at: Option<String>,
+    /// The confirmed feature's optional handoff (v0.23). `confirm_feature` queues it when the
+    /// human asks for one; an integration claims it and reports a generic label/URL/message via
+    /// MCP `handoff_status`. RedLine never runs git, deploys or publishes anything itself.
+    /// `ship` is accepted as a read alias for meta written by the pre-release v0.23 build.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "ship")]
+    pub handoff: Option<Handoff>,
     /// The prompt the human wrote when submitting a round (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -55,9 +68,117 @@ pub struct Meta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Feature branch the agent is working on (v0.22). Set at session creation or on the first
-    /// claim; the fallback is `session/<id>`. RedLine uses it as the branch-lock key.
+    /// claim; v0.21's `session/<id>` fallback is read back as `feat/<title-slug>-<id-tail>`.
+    /// RedLine uses it as the branch-lock key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Image,
+    Video,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaRef {
+    pub kind: MediaKind,
+    /// File name inside the session folder (`screenshot.png`, `video.mp4`).
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Nominal frames per second, when the producer knows it. Variable-frame-rate videos may
+    /// omit it; the UI steps by a nominal frame then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
+}
+
+/// What an optional post-confirmation handoff is doing (v0.23). The server queues `requested`
+/// when the human asks for a handoff; an integration claims it (`running`) and reports a generic
+/// result through MCP `handoff_status` (`done`, `failed`). The `label`/`url`/`message` are the
+/// integration's own vocabulary — "merged" + a PR URL for git, "deployed" + an environment URL
+/// for a deploy, or anything else. RedLine itself never runs git or deploys.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Handoff {
+    pub status: HandoffStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<String>,
+    /// Human-readable outcome chosen by the integration, e.g. "merged", "deployed", "PR #46".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// Optional link: a pull request, a deployment, a published document. `pr_url` is the
+    /// pre-release v0.23 spelling, accepted so old meta files still load.
+    #[serde(default, alias = "pr_url", skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Detail or failure reason, shown in the rail's tooltip. `error` is the pre-release v0.23
+    /// spelling, accepted so old meta files still load.
+    #[serde(default, alias = "error", skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HandoffStatus {
+    Requested,
+    /// `opened` is the pre-release v0.23 spelling for a handoff still in progress.
+    #[serde(alias = "opened")]
+    Running,
+    /// `merged` is the pre-release v0.23 spelling for a finished handoff.
+    #[serde(alias = "merged")]
+    Done,
+    /// `closed` is the pre-release v0.23 spelling for a failed handoff (a closed PR).
+    #[serde(alias = "closed")]
+    Failed,
+}
+
+impl HandoffStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HandoffStatus::Requested => "requested",
+            HandoffStatus::Running => "running",
+            HandoffStatus::Done => "done",
+            HandoffStatus::Failed => "failed",
+        }
+    }
+
+    /// The bridge may claim a handoff that is queued or whose previous run went away.
+    pub fn claimable(self) -> bool {
+        matches!(self, HandoffStatus::Requested | HandoffStatus::Running)
+    }
+
+    /// The integration has answered; the rail can stop saying "handing off".
+    pub fn terminal(self) -> bool {
+        matches!(self, HandoffStatus::Done | HandoffStatus::Failed)
+    }
+}
+
+impl Handoff {
+    pub fn requested(at: impl Into<String>) -> Self {
+        Self {
+            status: HandoffStatus::Requested,
+            requested_at: Some(at.into()),
+            started_at: None,
+            finished_at: None,
+            label: None,
+            url: None,
+            message: None,
+        }
+    }
+
+    pub fn is_done(&self) -> bool {
+        self.status == HandoffStatus::Done
+    }
 }
 
 /// A conversation area: one agent + one piece of work, holding its sessions and history.
@@ -194,6 +315,16 @@ impl Annotation {
     pub fn is_text(&self) -> bool {
         self.kind == "text"
     }
+
+    /// Video timestamp in seconds, when this annotation belongs to a moment (v0.23).
+    pub fn at(&self) -> Option<f64> {
+        self.number("at")
+    }
+
+    /// End of a time-range annotation in seconds (v0.23). Absent means a point annotation.
+    pub fn until(&self) -> Option<f64> {
+        self.number("until")
+    }
 }
 
 /// `annotations.json` after a submission.
@@ -206,10 +337,27 @@ pub struct AnnotationSet {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageRef>,
+    /// Image or video metadata for the round (v0.23).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaRef>,
+    /// Full-resolution frames captured at the unique annotation times (v0.23). The contact sheet
+    /// stays `annotated.png`; these are the individual frames the agent can zoom into.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub frames: Vec<FrameRef>,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submitted_at: Option<String>,
+}
+
+/// One captured video frame: `at` is the timecode the human annotated, `file` is relative to the
+/// session folder (`frames/12.340.png`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FrameRef {
+    pub at: f64,
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -257,11 +405,27 @@ pub struct NewSession {
     /// Absolute path on the machine running redline. Convenience for local agents.
     #[serde(default)]
     pub image_path: Option<String>,
+    /// Video upload (v0.23): base64 or an absolute path on the server; `media` becomes video.
+    #[serde(default)]
+    pub video_base64: Option<String>,
+    #[serde(default)]
+    pub video_path: Option<String>,
+    /// Optional first-frame thumbnail for a video (base64 PNG).
+    #[serde(default)]
+    pub poster_base64: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub fps: Option<f64>,
     /// Project name or slug (v0.10). Created on first use; omitted means the Inbox.
     #[serde(default)]
     pub project: Option<String>,
-    /// Feature branch the agent is working on (v0.22). Optional; the bridge falls back to
-    /// `session/<id>` when it claims the work.
+    /// Feature branch the agent is working on (v0.22). Optional; the server derives
+    /// `feat/<title-slug>-<id-tail>` when it is empty. v0.21's `session/<id>` is not produced.
     #[serde(default)]
     pub branch: Option<String>,
 }

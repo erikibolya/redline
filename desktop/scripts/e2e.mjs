@@ -1121,6 +1121,9 @@ const main = async () => {
       accept: accept?.textContent.trim() || "",
       primary: Boolean(accept?.classList.contains("primary")),
       count: document.querySelectorAll("#feature-actions button").length,
+      checkbox: document.querySelector("#feature-dialog-check")?.checked,
+      checkLabel: document.querySelector("#feature-dialog-check-wrap")?.textContent.trim() || "",
+      hint: document.querySelector("#feature-dialog-check-hint")?.textContent.trim() || "",
     };
   });
   check("confirming a feature asks for agreement first",
@@ -1129,6 +1132,12 @@ const main = async () => {
       && confirmDialog.body.includes("pull request")
       && confirmDialog.primary && confirmDialog.count === 2,
     JSON.stringify(confirmDialog));
+  // The e2e's simulated bridge only advertises review work, so the handoff option starts off.
+  check("a review-only agent leaves the handoff option off",
+    confirmDialog.checkbox === false
+      && confirmDialog.checkLabel.includes("no connected agent supports it")
+      && confirmDialog.hint.includes("just be confirmed"),
+    JSON.stringify({ checkbox: confirmDialog.checkbox, label: confirmDialog.checkLabel }));
   const featureClose = await page.evaluate(() => {
     const button = document.querySelector("#feature-dialog .dialog-close");
     return Boolean(button) && button.getAttribute("aria-label") === "Close";
@@ -1146,6 +1155,7 @@ const main = async () => {
   await page.hover(row);
   await page.click(`${row} [data-act="confirm"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
+  await page.click("#feature-dialog-check");
   await page.click('#feature-actions [data-action="confirm"]');
   let status = "";
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -1194,89 +1204,103 @@ const main = async () => {
       && confirmedBadge.light.border === "rgb(134, 239, 172)",
     JSON.stringify(confirmedBadge));
 
-  // Confirming queues a ship run; the rail says so before any agent picks it up.
-  const queuedShip = await page.evaluate((sessionId) => {
-    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.ship`);
+  // Confirming with the handoff checkbox queues it; the rail says so before an agent picks it up.
+  const queuedHandoff = await page.evaluate((sessionId) => {
+    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff`);
     return { text: badge?.textContent.trim() || "", className: badge?.className || "" };
   }, id);
-  check("a confirmed feature queues a ship run",
-    queuedShip.className.includes("requested") && queuedShip.text.includes("ship queued"),
-    JSON.stringify(queuedShip));
+  check("a confirmed feature queues a handoff",
+    queuedHandoff.className.includes("requested") && queuedHandoff.text.includes("handoff queued"),
+    JSON.stringify(queuedHandoff));
 
-  // The agent reports the PR through MCP; the rail must show the link and the merge.
-  const shipReport = await api("/mcp", {
+  // The integration reports a generic done result through MCP; the rail shows its label + link.
+  const handoffReport = await api("/mcp", {
     method: "POST",
     body: JSON.stringify({
       jsonrpc: "2.0", id: 1, method: "tools/call",
       params: {
-        name: "ship_status",
+        name: "handoff_status",
         arguments: {
           session_id: id,
-          state: "merged",
-          pr_url: "https://github.com/erikibolya/redline/pull/46",
-          pr_number: 46,
-          merge_commit: "456a2c5",
+          state: "done",
+          label: "merged",
+          url: "https://github.com/erikibolya/redline/pull/46",
+          message: "merge commit 456a2c5",
         },
       },
     }),
   });
-  const shipPayload = JSON.parse(shipReport.result.content[0].text);
-  check("ship_status records the PR and the merge",
-    shipPayload.ship.status === "merged" && shipPayload.ship.pr_number === 46,
-    JSON.stringify(shipPayload.ship));
+  const handoffPayload = JSON.parse(handoffReport.result.content[0].text);
+  check("handoff_status records the integration's result",
+    handoffPayload.handoff.status === "done" && handoffPayload.handoff.label === "merged",
+    JSON.stringify(handoffPayload.handoff));
   await page.reload();
-  await page.waitForFunction(() => window.redline?.meta?.ship?.status === "merged",
+  await page.waitForFunction(() => window.redline?.meta?.handoff?.status === "done",
     { timeout: 10000 });
-  const mergedShip = await page.evaluate((sessionId) => {
-    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.ship.merged`);
+  const mergedHandoff = await page.evaluate((sessionId) => {
+    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff.done`);
     return {
       text: badge?.textContent.trim() || "",
       href: badge?.getAttribute("href") || "",
       title: badge?.getAttribute("title") || "",
     };
   }, id);
-  check("the rail shows the PR as merged with a link",
-    mergedShip.text === "merged"
-      && mergedShip.href === "https://github.com/erikibolya/redline/pull/46"
-      && mergedShip.title.includes("#46"),
-    JSON.stringify(mergedShip));
+  check("the rail shows the integration's done label with its link",
+    mergedHandoff.text === "merged"
+      && mergedHandoff.href === "https://github.com/erikibolya/redline/pull/46"
+      && mergedHandoff.title.includes("merge commit 456a2c5"),
+    JSON.stringify(mergedHandoff));
 
-  // A failed shipment is a retry control, not a dead label.
+  // A failed handoff keeps its link and is a retry control, not a dead label.
   await api("/mcp", {
     method: "POST",
     body: JSON.stringify({
       jsonrpc: "2.0", id: 2, method: "tools/call",
       params: {
-        name: "ship_status",
-        arguments: { session_id: id, state: "failed", message: "browser e2e is red" },
+        name: "handoff_status",
+        arguments: {
+          session_id: id,
+          state: "failed",
+          label: "PR #46 open",
+          url: "https://github.com/erikibolya/redline/pull/46",
+          message: "browser e2e is red",
+        },
       },
     }),
   });
   await page.reload();
-  await page.waitForFunction(() => window.redline?.meta?.ship?.status === "failed",
+  await page.waitForFunction(() => window.redline?.meta?.handoff?.status === "failed",
     { timeout: 10000 });
-  const failedShip = await page.evaluate((sessionId) => {
-    const badge = document.querySelector(`.session[data-id="${sessionId}"] .badge.ship.failed`);
-    return { text: badge?.textContent.trim() || "", title: badge?.getAttribute("title") || "" };
+  const failedHandoff = await page.evaluate((sessionId) => {
+    const link = document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff.failed.handoff-link`);
+    const retry = document.querySelector(`.session[data-id="${sessionId}"] [data-act="handoff"]`);
+    return {
+      label: link?.textContent.trim() || "",
+      href: link?.getAttribute("href") || "",
+      retry: retry?.getAttribute("title") || "",
+    };
   }, id);
-  check("a failed ship is a retry control",
-    failedShip.text.includes("ship failed") && failedShip.title.includes("browser e2e is red"),
-    JSON.stringify(failedShip));
-  await page.click(`.session[data-id="${id}"] .badge.ship.failed`);
-  let retriedShip = {};
+  check("a failed handoff keeps its link and offers a retry",
+    failedHandoff.label === "PR #46 open"
+      && failedHandoff.href === "https://github.com/erikibolya/redline/pull/46"
+      && failedHandoff.retry === "Retry handoff",
+    JSON.stringify(failedHandoff));
+  await page.hover(`.session[data-id="${id}"]`);
+  await page.click(`.session[data-id="${id}"] [data-act="handoff"]`);
+  let retriedHandoff = {};
   for (let attempt = 0; attempt < 30; attempt += 1) {
     const meta = await api(`/api/sessions/${id}`);
-    retriedShip = meta.meta;
-    if (retriedShip.ship?.status === "requested") break;
+    retriedHandoff = meta.meta;
+    if (retriedHandoff.handoff?.status === "requested") break;
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-  check("retrying a failed ship queues it again",
-    retriedShip.ship?.status === "requested",
-    JSON.stringify(retriedShip.ship));
+  check("retrying a failed handoff queues it again",
+    retriedHandoff.handoff?.status === "requested",
+    JSON.stringify(retriedHandoff.handoff));
   // The retry action reloads the rail asynchronously. Waiting for the badge (not just the API)
   // keeps the later row clicks from hitting an element the reload has already detached.
   await page.waitForFunction((sessionId) => Boolean(
-    document.querySelector(`.session[data-id="${sessionId}"] .badge.ship.requested`)),
+    document.querySelector(`.session[data-id="${sessionId}"] .badge.handoff.requested`)),
     { timeout: 5000 }, id);
 
   // "All" is the only view that keeps a finished session alongside active work.

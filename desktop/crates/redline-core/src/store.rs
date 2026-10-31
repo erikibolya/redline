@@ -11,8 +11,8 @@ use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
 use crate::model::{
-    Annotation, AnnotationSet, FrameRef, ImageRef, MediaKind, MediaRef, Meta, Ship, ShipStatus,
-    Status, Submission,
+    Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind, MediaRef,
+    Meta, Status, Submission,
 };
 use crate::{MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_VIDEO_BYTES};
 
@@ -28,15 +28,15 @@ pub struct FrameUpload {
 /// The virtual project that holds sessions created without one (legacy flat folders).
 pub const INBOX: &str = "inbox";
 
-/// What an agent reports about a confirmed feature's ship run. Kept as an input shape so the
-/// store, not the MCP surface, owns the persisted fields.
+/// What an integration reports about a handoff. Kept as an input shape so the store, not the
+/// MCP surface, owns the persisted fields. `label`/`url`/`message` are integration vocabulary:
+/// "merged" + a PR URL, "deployed" + an environment URL, or anything else.
 #[derive(Debug, Clone)]
-pub struct ShipReport {
-    pub status: ShipStatus,
-    pub pr_url: Option<String>,
-    pub pr_number: Option<u64>,
-    pub merge_commit: Option<String>,
-    pub error: Option<String>,
+pub struct HandoffReport {
+    pub status: HandoffStatus,
+    pub label: Option<String>,
+    pub url: Option<String>,
+    pub message: Option<String>,
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -146,19 +146,16 @@ pub fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false)
 }
 
-/// A fresh requested ship, carrying the PR identity from a previous failed/opened attempt. The
-/// retry must not make the rail forget which PR the agent already opened.
-fn requested_ship(meta: &Meta, at: String) -> Ship {
-    let mut ship = Ship::requested(at);
-    if let Some(previous) = &meta.ship {
-        ship.pr_url = previous.pr_url.clone();
-        ship.pr_number = previous.pr_number;
-        ship.merge_commit = previous.merge_commit.clone();
-        // Keep the failing check in the retry prompt; the requested badge does not show it, but
-        // the agent should know what the last attempt hit.
-        ship.error = previous.error.clone();
+/// A fresh requested handoff, carrying the label/URL/message from a previous failed attempt. A
+/// retry must not make the rail — or the integration — forget which PR/deployment it was.
+fn requested_handoff(meta: &Meta, at: String) -> Handoff {
+    let mut handoff = Handoff::requested(at);
+    if let Some(previous) = &meta.handoff {
+        handoff.label = previous.label.clone();
+        handoff.url = previous.url.clone();
+        handoff.message = previous.message.clone();
     }
-    ship
+    handoff
 }
 
 /// Image extensions we are willing to write into a session folder. Anything else is stored as
@@ -992,7 +989,7 @@ impl Store {
             resolved_at: None,
             feature_confirmed_at: None,
             feature_cancelled_at: None,
-            ship: None,
+            handoff: None,
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
@@ -1087,7 +1084,7 @@ impl Store {
             resolved_at: None,
             feature_confirmed_at: None,
             feature_cancelled_at: None,
-            ship: None,
+            handoff: None,
             prompt: None,
             seen_by_agent_at: None,
             agent_state: None,
@@ -1395,7 +1392,7 @@ impl Store {
         // New work after a decision makes the feature pending again.
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
-        meta.ship = None;
+        meta.handoff = None;
         meta.agent_state = Some("replied".to_string());
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
 
@@ -1471,7 +1468,7 @@ impl Store {
         meta.agent_state = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
-        meta.ship = None;
+        meta.handoff = None;
         if let Some(prompt) = submission.note.as_deref() {
             let prompt = prompt.trim();
             if !prompt.is_empty() {
@@ -1537,16 +1534,16 @@ impl Store {
         meta.resolved_at = None;
         meta.feature_confirmed_at = None;
         meta.feature_cancelled_at = None;
-        meta.ship = None;
+        meta.handoff = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
 
-    /// The human says the feature is complete. RedLine records the decision and queues a ship
-    /// run: the agent bridge claims it and the agent opens/merges the PR. RedLine still never
-    /// touches git. Repeating the confirmation retries a failed or still-open ship; a merged
-    /// ship is left alone.
-    pub fn confirm_feature(&self, id: &str) -> Result<Meta> {
+    /// The human says the feature is complete. RedLine records the decision and, when the human
+    /// asked for one, queues a generic **handoff**. An integration claims it and does whatever
+    /// its workflow means (PR + merge, deploy, publish, …); RedLine never runs git itself.
+    /// Repeating the confirmation retries a failed handoff; a done handoff is left alone.
+    pub fn confirm_feature(&self, id: &str, handoff: bool) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         let stamp = now();
@@ -1554,94 +1551,99 @@ impl Store {
         meta.resolved_at.get_or_insert_with(|| stamp.clone());
         meta.feature_confirmed_at = Some(stamp.clone());
         meta.feature_cancelled_at = None;
-        if !meta.ship.as_ref().is_some_and(Ship::is_merged) {
-            let ship = requested_ship(&meta, stamp);
-            meta.ship = Some(ship);
+        if handoff {
+            if !meta.handoff.as_ref().is_some_and(Handoff::is_done) {
+                let next = requested_handoff(&meta, stamp);
+                meta.handoff = Some(next);
+            }
+        } else if !meta.handoff.as_ref().is_some_and(Handoff::is_done) {
+            // Confirming without a handoff clears a stale failed/queued one.
+            meta.handoff = None;
         }
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
 
-    /// Queue (or retry) a ship run for a confirmed feature. Used by the rail's retry action and
-    /// by callers that need to ship a feature confirmed before v0.23. A retry keeps the PR link
-    /// from the failed/opened attempt so the agent can reuse it and the rail does not forget it.
-    pub fn request_ship(&self, id: &str) -> Result<Meta> {
+    /// Queue (or retry) a handoff for a confirmed feature. Used by the rail's retry action and
+    /// by callers that need to hand off a feature confirmed before v0.23. A retry keeps the
+    /// label/URL/message from the failed attempt so the integration can reuse them.
+    pub fn request_handoff(&self, id: &str) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         if meta.feature_confirmed_at.is_none() {
             return Err(Error::BadRequest(
-                "confirm the feature before shipping it".to_string(),
+                "confirm the feature before handing it off".to_string(),
             ));
         }
-        if meta.ship.as_ref().is_some_and(Ship::is_merged) {
+        if meta.handoff.as_ref().is_some_and(Handoff::is_done) {
             return Ok(meta);
         }
-        let ship = requested_ship(&meta, now());
-        meta.ship = Some(ship);
+        let next = requested_handoff(&meta, now());
+        meta.handoff = Some(next);
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
 
-    /// The bridge claimed the ship. Idempotent: an already opened/merged/failed ship is left as
-    /// the agent reported it, so a duplicate claim cannot rewind the rail.
-    pub fn mark_ship_running(&self, id: &str) -> Result<Meta> {
+    /// The integration claimed the handoff. Idempotent: an already done/failed handoff is left
+    /// as reported, so a duplicate claim cannot rewind the rail.
+    pub fn mark_handoff_running(&self, id: &str) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
-        let Some(mut ship) = meta.ship.take() else {
-            return Err(Error::BadRequest("no ship is queued".to_string()));
+        let Some(mut handoff) = meta.handoff.take() else {
+            return Err(Error::BadRequest("no handoff is queued".to_string()));
         };
-        if !ship.status.claimable() {
-            meta.ship = Some(ship);
+        if !handoff.status.claimable() {
+            meta.handoff = Some(handoff);
             return Ok(meta);
         }
-        ship.status = ShipStatus::Running;
-        ship.started_at.get_or_insert_with(now);
-        meta.ship = Some(ship);
+        handoff.status = HandoffStatus::Running;
+        handoff.started_at.get_or_insert_with(now);
+        meta.handoff = Some(handoff);
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
 
-    /// Record what the agent's ship run did. `state` is terminal (`opened`, `merged`, `failed`,
-    /// `closed`); the MCP surface validates it. A report for a feature the human reopened or
-    /// cancelled in the meantime is refused rather than resurrecting a dead decision.
-    pub fn report_ship(&self, id: &str, report: ShipReport) -> Result<Meta> {
+    /// Record what the integration's handoff did. `done` and `failed` are terminal; the MCP
+    /// surface validates that. A report for a feature the human reopened or cancelled in the
+    /// meantime is refused rather than resurrecting a dead decision.
+    pub fn report_handoff(&self, id: &str, report: HandoffReport) -> Result<Meta> {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         if meta.feature_confirmed_at.is_none() {
             return Err(Error::BadRequest(
-                "the feature is not confirmed; ignoring the ship result".to_string(),
+                "the feature is not confirmed; ignoring the handoff result".to_string(),
             ));
         }
         let stamp = now();
-        let mut ship = meta
-            .ship
+        let mut handoff = meta
+            .handoff
             .take()
-            .unwrap_or_else(|| Ship::requested(stamp.clone()));
-        ship.status = report.status;
-        if let Some(url) = report.pr_url.filter(|url| !url.trim().is_empty()) {
-            ship.pr_url = Some(url.trim().to_string());
-        }
-        if let Some(number) = report.pr_number {
-            ship.pr_number = Some(number);
-        }
-        if let Some(commit) = report
-            .merge_commit
-            .filter(|commit| !commit.trim().is_empty())
-        {
-            ship.merge_commit = Some(commit.trim().to_string());
-        }
-        if report.status == ShipStatus::Failed {
-            ship.error = report
-                .error
-                .filter(|error| !error.trim().is_empty())
-                .or_else(|| Some("the agent could not ship the feature".to_string()));
+            .unwrap_or_else(|| Handoff::requested(stamp.clone()));
+        handoff.status = report.status;
+        let label = report.label.filter(|label| !label.trim().is_empty());
+        let message = report.message.filter(|message| !message.trim().is_empty());
+        if report.status == HandoffStatus::Done {
+            // "done" is the integration's new outcome; do not keep a previous "PR open" label
+            // or a failure message.
+            handoff.label = label.map(|label| label.trim().to_string());
+            handoff.message = message.map(|message| message.trim().to_string());
         } else {
-            ship.error = None;
+            if let Some(label) = label {
+                handoff.label = Some(label.trim().to_string());
+            }
+            handoff.message = Some(
+                message
+                    .map(|message| message.trim().to_string())
+                    .unwrap_or_else(|| "the integration reported a failed handoff".to_string()),
+            );
+        }
+        if let Some(url) = report.url.filter(|url| !url.trim().is_empty()) {
+            handoff.url = Some(url.trim().to_string());
         }
         if report.status.terminal() {
-            ship.finished_at = Some(stamp);
+            handoff.finished_at = Some(stamp);
         }
-        meta.ship = Some(ship);
+        meta.handoff = Some(handoff);
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }
@@ -1656,7 +1658,7 @@ impl Store {
         meta.resolved_at.get_or_insert_with(|| stamp.clone());
         meta.feature_cancelled_at = Some(stamp);
         meta.feature_confirmed_at = None;
-        meta.ship = None;
+        meta.handoff = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
     }

@@ -221,6 +221,7 @@ async fn repo_sync_reports_an_online_agent() {
     assert_eq!(body["online"], 1);
     assert_eq!(body["agents"][0]["agent_id"], "holly");
     assert_eq!(body["agents"][0]["online"], true);
+    assert_eq!(body["agents"][0]["jobs"], json!(["review"]));
 }
 
 #[tokio::test]
@@ -930,56 +931,80 @@ async fn features_can_be_confirmed_cancelled_and_reopened() {
 }
 
 #[tokio::test]
-async fn confirming_a_feature_queues_a_ship_job_and_reports_the_pr() {
+async fn confirming_a_feature_queues_a_handoff_and_reports_it() {
     let h = harness();
     let (_, _, created) = send(
         &h.app,
         authed(
             "POST",
             "/api/sessions",
-            json!({"title": "ship me", "image_base64": PNG_B64}),
+            json!({"title": "hand off", "image_base64": PNG_B64}),
         ),
     )
     .await;
     let id = created["meta"]["id"].as_str().unwrap().to_string();
 
-    // A pending review is not a shipment, even when the bridge advertises ship capability.
+    // A pending review is not a handoff, even when the bridge advertises the capability.
     let (_, _, before) = send(
         &h.app,
         authed(
             "POST",
             "/api/agent/next",
-            json!({"agent_id": "agent", "jobs": ["review", "ship"]}),
+            json!({"agent_id": "agent", "jobs": ["review", "handoff"]}),
         ),
     )
     .await;
     assert!(before["session"].is_null(), "{before}");
+
+    // Confirming without a handoff records only the human's decision.
+    let (status, _, plain) = send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{id}/confirm-feature"),
+            json!({"handoff": false}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{plain}");
+    assert!(plain["meta"]["handoff"].is_null(), "{plain}");
+    let (_, _, _) = send(
+        &h.app,
+        authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
+    )
+    .await;
 
     let (status, _, confirmed) = send(
         &h.app,
         authed(
             "POST",
             &format!("/api/sessions/{id}/confirm-feature"),
-            json!({}),
+            json!({"handoff": true}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{confirmed}");
-    assert_eq!(confirmed["meta"]["ship"]["status"], "requested");
+    assert_eq!(confirmed["meta"]["handoff"]["status"], "requested");
 
     let (status, _, next) = send(
         &h.app,
         authed(
             "POST",
             "/api/agent/next",
-            json!({"agent_id": "agent", "jobs": ["review", "ship"]}),
+            json!({"agent_id": "agent", "jobs": ["review", "handoff"]}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{next}");
-    assert_eq!(next["job"], "ship");
+    assert_eq!(next["job"], "handoff");
     assert_eq!(next["session"]["id"], id);
-    assert_eq!(next["session"]["ship"]["status"], "running");
+    assert_eq!(next["session"]["handoff"]["status"], "running");
+    let (_, _, presence) = send(&h.app, authed("GET", "/api/agent/status", json!({}))).await;
+    assert_eq!(
+        presence["agents"][0]["jobs"],
+        json!(["review", "handoff"]),
+        "the bridge's capability must be visible to the UI"
+    );
 
     // An old bridge that does not advertise the job must never receive it.
     let (status, _, _) = release_claim(&h, &id, "agent").await;
@@ -991,7 +1016,7 @@ async fn confirming_a_feature_queues_a_ship_job_and_reports_the_pr() {
     .await;
     assert!(old_bridge["session"].is_null(), "{old_bridge}");
 
-    // The ship run reports the PR through MCP.
+    // The integration reports a generic done result through MCP.
     let (status, _, reported) = send(
         &h.app,
         authed(
@@ -1002,13 +1027,13 @@ async fn confirming_a_feature_queues_a_ship_job_and_reports_the_pr() {
                 "id": 1,
                 "method": "tools/call",
                 "params": {
-                    "name": "ship_status",
+                    "name": "handoff_status",
                     "arguments": {
                         "session_id": id,
-                        "state": "merged",
-                        "pr_url": "https://github.com/erikibolya/redline/pull/46",
-                        "pr_number": 46,
-                        "merge_commit": "456a2c5"
+                        "state": "done",
+                        "label": "merged",
+                        "url": "https://github.com/erikibolya/redline/pull/46",
+                        "message": "merge commit 456a2c5"
                     }
                 }
             }),
@@ -1018,40 +1043,43 @@ async fn confirming_a_feature_queues_a_ship_job_and_reports_the_pr() {
     assert_eq!(status, StatusCode::OK, "{reported}");
     let text = reported["result"]["content"][0]["text"].as_str().unwrap();
     let result: Value = serde_json::from_str(text).unwrap();
-    assert_eq!(result["ship"]["status"], "merged");
-    assert_eq!(result["ship"]["pr_number"], 46);
-    assert_eq!(result["ship"]["merge_commit"], "456a2c5");
+    assert_eq!(result["handoff"]["status"], "done");
+    assert_eq!(result["handoff"]["label"], "merged");
+    assert_eq!(
+        result["handoff"]["url"],
+        "https://github.com/erikibolya/redline/pull/46"
+    );
 
     let (_, _, meta) = send(
         &h.app,
         authed("GET", &format!("/api/sessions/{id}"), json!({})),
     )
     .await;
-    assert_eq!(meta["meta"]["ship"]["status"], "merged");
+    assert_eq!(meta["meta"]["handoff"]["status"], "done");
     assert_eq!(
-        meta["meta"]["ship"]["pr_url"],
+        meta["meta"]["handoff"]["url"],
         "https://github.com/erikibolya/redline/pull/46"
     );
 
-    // A re-opened feature loses the shipment; shipping it again is refused until confirmed.
+    // A re-opened feature loses the handoff; handing it off again is refused until confirmed.
     let (_, _, reopened) = send(
         &h.app,
         authed("POST", &format!("/api/sessions/{id}/reopen"), json!({})),
     )
     .await;
-    assert!(reopened["meta"]["ship"].is_null());
+    assert!(reopened["meta"]["handoff"].is_null());
     let (status, _, refused) = send(
         &h.app,
-        authed("POST", &format!("/api/sessions/{id}/ship"), json!({})),
+        authed("POST", &format!("/api/sessions/{id}/handoff"), json!({})),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
 }
 
 #[tokio::test]
-async fn a_ship_job_reuses_the_legacy_branch_a_waiting_review_claim_owns() {
+async fn a_handoff_reuses_the_legacy_branch_a_waiting_review_claim_owns() {
     let h = harness();
-    let id = submitted_session(&h, "p1", "feat/ship-wait").await;
+    let id = submitted_session(&h, "p1", "feat/handoff-wait").await;
     let legacy = format!("session/{id}");
     let (status, _, claimed) = send(
         &h.app,
@@ -1079,7 +1107,7 @@ async fn a_ship_job_reuses_the_legacy_branch_a_waiting_review_claim_owns() {
         authed(
             "POST",
             &format!("/api/sessions/{id}/confirm-feature"),
-            json!({}),
+            json!({"handoff": true}),
         ),
     )
     .await;
@@ -1090,14 +1118,14 @@ async fn a_ship_job_reuses_the_legacy_branch_a_waiting_review_claim_owns() {
         authed(
             "POST",
             "/api/agent/next",
-            json!({"agent_id": "agent", "jobs": ["review", "ship"]}),
+            json!({"agent_id": "agent", "jobs": ["review", "handoff"]}),
         ),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{next}");
-    assert_eq!(next["job"], "ship");
+    assert_eq!(next["job"], "handoff");
     assert_eq!(next["claim"]["work_key"], legacy);
-    assert_eq!(next["session"]["ship"]["status"], "running");
+    assert_eq!(next["session"]["handoff"]["status"], "running");
 }
 
 #[tokio::test]

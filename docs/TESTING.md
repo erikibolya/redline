@@ -78,22 +78,28 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   creates a review through the dialog with the field left empty, and asserts the rail row and the
   loaded meta carry `feat/<title>-<tail>`.
 
-## Shipping a confirmed feature (v0.23)
+## Handoff after confirmation (v0.23)
 
-- Rust `tests/store.rs` / `tests/api.rs`: confirming queues `ship.status=requested`; a new round
-  or reopen clears it; `mark_ship_running` is idempotent; `report_ship` records the PR URL/number
-  and merge commit; `/api/agent/next` returns `job=ship` only to a bridge that advertises
-  `jobs:["review","ship"]` and never to an old bridge; a ship job's claim uses the branch the
-  review actually worked on (including a legacy `session/<id>`).
-- Rust `tests/mcp.rs`: `ship_status` is listed, refuses an unconfirmed feature, requires a PR URL
-  for `opened`, accepts a merged follow-up that reuses the opened URL, and persists the state.
+- Rust `tests/store.rs` / `tests/api.rs`: confirming with `handoff:true` queues
+  `handoff.status=requested`; confirming with `false` records only the decision; a new round or
+  reopen clears it; `mark_handoff_running` is idempotent; `report_handoff` records the
+  integration's `label`/`url`/`message`; `/api/agent/next` returns `job=handoff` only to a bridge
+  that advertises `jobs:["review","handoff"]` and never to an old bridge; a handoff job's claim
+  uses the branch the review actually worked on (including a legacy `session/<id>`).
+- Rust `tests/mcp.rs`: `handoff_status` is listed, refuses an unconfirmed feature, records a
+  generic done/failed result with label/url/message, and refuses a non-http URL.
+- Rust `tests/agent.rs`: a bridge advertises `jobs`, a later sync does not downgrade it, and an
+  old presence file defaults to review-only.
 - `redline-agent` tests: the review prompt explicitly forbids opening a PR/feature-ready/merging;
-  the ship prompt grants the PR/merge and includes the `ship_status` curl; a legacy session branch
-  with the commits wins over a `feat/...` name with none.
-- Browser e2e: confirm a feature → rail shows `confirmed` + `ship queued`; call MCP
-  `ship_status` merged → reload → rail shows `merged` with the PR link; report failed → rail shows
-  the `ship failed ↻` retry button; click it → `/ship` queues it again and the badge returns to
-  `ship queued`. The e2e also asserts the retry does not select or close the review.
+  the handoff prompt grants the PR/merge and includes the `handoff_status` curl with generic
+  label/url/message; a legacy session branch with the commits wins over a `feat/...` name with
+  none.
+- Browser e2e: the confirm dialog starts the handoff checkbox off for a review-only agent; tick
+  it → rail shows `confirmed` + `handoff queued`; call MCP `handoff_status` done with label
+  "merged" + URL → reload → rail shows the label and link; report failed with a URL + message →
+  rail shows the link and the row `↻` retry; hover and click it → `/handoff` queues it again and
+  the badge returns to `handoff queued`. The e2e also asserts the retry does not select or close
+  the review.
 
 ## Every UI control
 

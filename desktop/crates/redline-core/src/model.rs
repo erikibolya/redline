@@ -42,10 +42,12 @@ pub struct Meta {
     /// When the human cancelled the feature without shipping it (v0.21).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub feature_cancelled_at: Option<String>,
-    /// The confirmed feature's ship run (v0.23). `confirm_feature` queues it; the bridge claims
-    /// it and the agent reports the PR/merge through MCP `ship_status`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ship: Option<Ship>,
+    /// The confirmed feature's optional handoff (v0.23). `confirm_feature` queues it when the
+    /// human asks for one; an integration claims it and reports a generic label/URL/message via
+    /// MCP `handoff_status`. RedLine never runs git, deploys or publishes anything itself.
+    /// `ship` is accepted as a read alias for meta written by the pre-release v0.23 build.
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "ship")]
+    pub handoff: Option<Handoff>,
     /// The prompt the human wrote when submitting a round (v0.9).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
@@ -98,82 +100,76 @@ pub struct MediaRef {
     pub fps: Option<f64>,
 }
 
-/// What a confirmed feature's ship run is doing (v0.23). The server queues `requested` when the
-/// human confirms; the bridge claims it (`running`) and the agent reports the PR through MCP
-/// `ship_status` (`opened`, `merged`, `failed`, `closed`). This is additive state: RedLine still
-/// never touches git itself.
+/// What an optional post-confirmation handoff is doing (v0.23). The server queues `requested`
+/// when the human asks for a handoff; an integration claims it (`running`) and reports a generic
+/// result through MCP `handoff_status` (`done`, `failed`). The `label`/`url`/`message` are the
+/// integration's own vocabulary — "merged" + a PR URL for git, "deployed" + an environment URL
+/// for a deploy, or anything else. RedLine itself never runs git or deploys.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Ship {
-    pub status: ShipStatus,
+pub struct Handoff {
+    pub status: HandoffStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requested_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
+    /// Human-readable outcome chosen by the integration, e.g. "merged", "deployed", "PR #46".
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pr_url: Option<String>,
+    pub label: Option<String>,
+    /// Optional link: a pull request, a deployment, a published document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pr_number: Option<u64>,
+    pub url: Option<String>,
+    /// Detail or failure reason, shown in the rail's tooltip.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub merge_commit: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub enum ShipStatus {
+pub enum HandoffStatus {
     Requested,
     Running,
-    Opened,
-    Merged,
+    Done,
     Failed,
-    Closed,
 }
 
-impl ShipStatus {
+impl HandoffStatus {
     pub fn as_str(self) -> &'static str {
         match self {
-            ShipStatus::Requested => "requested",
-            ShipStatus::Running => "running",
-            ShipStatus::Opened => "opened",
-            ShipStatus::Merged => "merged",
-            ShipStatus::Failed => "failed",
-            ShipStatus::Closed => "closed",
+            HandoffStatus::Requested => "requested",
+            HandoffStatus::Running => "running",
+            HandoffStatus::Done => "done",
+            HandoffStatus::Failed => "failed",
         }
     }
 
-    /// The bridge may claim a ship that is queued or whose previous run went away.
+    /// The bridge may claim a handoff that is queued or whose previous run went away.
     pub fn claimable(self) -> bool {
-        matches!(self, ShipStatus::Requested | ShipStatus::Running)
+        matches!(self, HandoffStatus::Requested | HandoffStatus::Running)
     }
 
-    /// The agent has answered; the rail can stop saying "shipping".
+    /// The integration has answered; the rail can stop saying "handing off".
     pub fn terminal(self) -> bool {
-        matches!(
-            self,
-            ShipStatus::Opened | ShipStatus::Merged | ShipStatus::Failed | ShipStatus::Closed
-        )
+        matches!(self, HandoffStatus::Done | HandoffStatus::Failed)
     }
 }
 
-impl Ship {
+impl Handoff {
     pub fn requested(at: impl Into<String>) -> Self {
         Self {
-            status: ShipStatus::Requested,
+            status: HandoffStatus::Requested,
             requested_at: Some(at.into()),
             started_at: None,
             finished_at: None,
-            pr_url: None,
-            pr_number: None,
-            merge_commit: None,
-            error: None,
+            label: None,
+            url: None,
+            message: None,
         }
     }
 
-    pub fn is_merged(&self) -> bool {
-        self.status == ShipStatus::Merged
+    pub fn is_done(&self) -> bool {
+        self.status == HandoffStatus::Done
     }
 }
 

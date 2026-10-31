@@ -79,7 +79,7 @@ async fn initialize_and_tool_list_are_well_formed() {
     assert!(names.contains(&"get_feedback"));
     assert!(names.contains(&"list_reviews"));
     assert!(names.contains(&"resolve"));
-    assert!(names.contains(&"ship_status"));
+    assert!(names.contains(&"handoff_status"));
 
     // Notifications get no response at all.
     let notification = handle(
@@ -123,14 +123,14 @@ async fn review_screenshot_creates_a_session_the_human_can_open() {
 }
 
 #[tokio::test]
-async fn ship_status_records_the_pr_only_for_a_confirmed_feature() {
+async fn handoff_status_records_a_generic_result_only_for_a_confirmed_feature() {
     let (_dir, store) = setup();
     let created = payload(
         &call(
             &store,
             "review_screenshot",
             json!({
-                "title": "ship me",
+                "title": "hand off",
                 "image_base64": format!("data:image/png;base64,{PNG_B64}")
             }),
         )
@@ -140,11 +140,12 @@ async fn ship_status_records_the_pr_only_for_a_confirmed_feature() {
 
     let refused = call(
         &store,
-        "ship_status",
+        "handoff_status",
         json!({
             "session_id": id,
-            "state": "merged",
-            "pr_url": "https://github.com/o/r/pull/7"
+            "state": "done",
+            "label": "merged",
+            "url": "https://github.com/o/r/pull/7"
         }),
     )
     .await;
@@ -154,50 +155,58 @@ async fn ship_status_records_the_pr_only_for_a_confirmed_feature() {
         .unwrap()
         .contains("not confirmed"));
 
-    store.confirm_feature(&id).unwrap();
-    let opened = call(
+    store.confirm_feature(&id, true).unwrap();
+    let done = call(
         &store,
-        "ship_status",
+        "handoff_status",
         json!({
             "session_id": id,
-            "state": "opened",
-            "pr_url": "https://github.com/o/r/pull/7",
-            "pr_number": 7
+            "state": "done",
+            "label": "merged",
+            "url": "https://github.com/o/r/pull/7",
+            "message": "merge commit abc123"
         }),
     )
     .await;
-    assert_eq!(opened["isError"], false, "{opened}");
-    assert_eq!(payload(&opened)["ship"]["status"], "opened");
-
-    // A merged report keeps the PR and adds the merge commit.
-    let merged = call(
-        &store,
-        "ship_status",
-        json!({
-            "session_id": id,
-            "state": "merged",
-            "merge_commit": "abc123"
-        }),
-    )
-    .await;
-    assert_eq!(merged["isError"], false, "{merged}");
-    let ship = payload(&merged)["ship"].clone();
-    assert_eq!(ship["status"], "merged");
-    assert_eq!(ship["pr_number"], 7);
-    assert_eq!(ship["merge_commit"], "abc123");
+    assert_eq!(done["isError"], false, "{done}");
+    let handoff = payload(&done)["handoff"].clone();
+    assert_eq!(handoff["status"], "done");
+    assert_eq!(handoff["label"], "merged");
+    assert_eq!(handoff["url"], "https://github.com/o/r/pull/7");
+    assert_eq!(handoff["message"], "merge commit abc123");
     assert_eq!(
-        store.require(&id).unwrap().ship.unwrap().status,
-        redline_core::model::ShipStatus::Merged
+        store.require(&id).unwrap().handoff.unwrap().status,
+        redline_core::model::HandoffStatus::Done
     );
 
-    // The URL is required when the agent says the PR exists.
-    let no_url = call(
+    // A failed report keeps the link and carries the integration's reason. The rail offers a
+    // retry; the next attempt can reuse the URL.
+    let failed = call(
         &store,
-        "ship_status",
-        json!({"session_id": id, "state": "opened"}),
+        "handoff_status",
+        json!({
+            "session_id": id,
+            "state": "failed",
+            "label": "PR #7 open",
+            "url": "https://github.com/o/r/pull/7",
+            "message": "checks are red"
+        }),
     )
     .await;
-    assert_eq!(no_url["isError"], true, "{no_url}");
+    assert_eq!(failed["isError"], false, "{failed}");
+    let handoff = payload(&failed)["handoff"].clone();
+    assert_eq!(handoff["status"], "failed");
+    assert_eq!(handoff["label"], "PR #7 open");
+    assert_eq!(handoff["message"], "checks are red");
+
+    // A URL must be a real link; a malformed one is refused before it reaches the rail.
+    let bad_url = call(
+        &store,
+        "handoff_status",
+        json!({"session_id": id, "state": "done", "label": "merged", "url": "ftp://x"}),
+    )
+    .await;
+    assert_eq!(bad_url["isError"], true, "{bad_url}");
 }
 
 #[tokio::test]
@@ -393,7 +402,7 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
     );
 
     // The human's feature decision reaches the agent through the same payload.
-    store.confirm_feature(&id).unwrap();
+    store.confirm_feature(&id, false).unwrap();
     let confirmed = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
     assert_eq!(confirmed["status"], "resolved");
     assert_eq!(confirmed["feature_state"], "confirmed");

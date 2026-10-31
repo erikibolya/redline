@@ -88,21 +88,27 @@ code, and records the change. Never edit the human's annotation files.
 
 ## 6. Confirm the feature
 
-Each session is one feature (v0.21+). A review run is **not** a shipment: the agent may push the
-feature branch and post a round, but it must not open a pull request or merge. When the human is
-satisfied, they click the rail's **✓ Confirm feature** and accept the dialog. RedLine records
-`feature_confirmed_at`, sets `status=resolved`, closes the review and queues a ship run
-(`ship.status=requested`). It still never touches git.
+Each session is one feature (v0.21+). A review run is **not** a handoff: the agent may push the
+feature branch and post a round, but it must not open a pull request, merge or deploy. When the
+human is satisfied, they click the rail's **✓ Confirm feature** and choose whether to hand off.
+The checkbox defaults to on when an online bridge advertises the `handoff` capability. RedLine
+records `feature_confirmed_at`, sets `status=resolved`, closes the review and — only when the
+handoff is requested — queues `handoff.status=requested`. It still never touches git.
 
-The bridge advertises `["review","ship"]` on `POST /api/agent/next`; the confirmed feature comes
-back as a `ship` job. A separate agent run reads the decision, opens or reuses the PR into the
-integration branch (`dev` here), waits for the required checks and merges. It reports the result
-with MCP `ship_status` (`opened`, `merged`, `failed` or `closed`, plus the PR URL/number), which
-the rail shows as `PR #46`, `merged`, `ship failed ↻` or `ship queued`. The dev build is the
-testable result.
+The bridge advertises `["review","handoff"]` on `POST /api/agent/next`; the confirmed feature comes
+back as a `handoff` job. A separate agent run reads the decision and performs the integration's
+own action. In this repository's reference bridge that is: open or reuse the PR into `dev`, wait
+for the required checks and merge. It reports the result with MCP `handoff_status`, whose fields
+are deliberately generic: `state` (`done` or `failed`), `label` ("merged", "deployed", …), `url`
+and `message`. The rail shows `handoff queued`, `handing off`, the integration's label with its
+link, or `handoff failed ↻`.
+
+A non-git integration can use `feature_state=confirmed` and do nothing, or use the same handoff
+job for a deploy/publish and report its own label and URL. The server has no GitHub token and never
+runs git; the `redline-agent` bridge is the reference git implementation.
 
 The overnight failure this replaces: agents opened and merged PRs while the human was asleep,
-before any confirmation, so every review was already shipped by morning. The confirmation must
+before any confirmation, so every review was already touched by morning. The confirmation must
 be the permission, not a status label added after the fact.
 
 - **✕** opens a feature-actions dialog: **Cancel feature** closes the review without merging and

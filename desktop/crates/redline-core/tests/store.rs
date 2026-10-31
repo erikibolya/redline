@@ -1,5 +1,5 @@
-use redline_core::model::{Annotation, MediaKind, ShipStatus, Status, Submission};
-use redline_core::store::{default_branch, valid_id, ShipReport, Store};
+use redline_core::model::{Annotation, HandoffStatus, MediaKind, Status, Submission};
+use redline_core::store::{default_branch, valid_id, HandoffReport, Store};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -154,11 +154,11 @@ fn a_new_round_clears_the_feature_decision() {
     let meta = store
         .create_from_bytes(PNG, "shot.png", "Feature", "", "", None, None, None)
         .unwrap();
-    let confirmed = store.confirm_feature(&meta.id).unwrap();
+    let confirmed = store.confirm_feature(&meta.id, true).unwrap();
     assert_eq!(
-        confirmed.ship.as_ref().map(|ship| ship.status),
-        Some(ShipStatus::Requested),
-        "confirmation must queue a ship run"
+        confirmed.handoff.as_ref().map(|handoff| handoff.status),
+        Some(HandoffStatus::Requested),
+        "confirming with a handoff must queue one"
     );
 
     let submission = Submission {
@@ -171,79 +171,70 @@ fn a_new_round_clears_the_feature_decision() {
     let (meta, _) = store.submit(&meta.id, &submission).unwrap();
     assert_eq!(meta.status, Status::Submitted);
     assert_eq!(meta.feature_state(), "pending");
-    assert!(meta.ship.is_none(), "new work drops the old shipment");
+    assert!(meta.handoff.is_none(), "new work drops the old handoff");
 
-    store.confirm_feature(&meta.id).unwrap();
-    let running = store.mark_ship_running(&meta.id).unwrap();
+    // Confirming without a handoff records the decision only; a non-git integration can do this.
+    let confirmed = store.confirm_feature(&meta.id, false).unwrap();
+    assert!(confirmed.handoff.is_none());
+    store.reopen(&meta.id).unwrap();
+
+    store.confirm_feature(&meta.id, true).unwrap();
+    let running = store.mark_handoff_running(&meta.id).unwrap();
     assert_eq!(
-        running.ship.as_ref().map(|ship| ship.status),
-        Some(ShipStatus::Running)
+        running.handoff.as_ref().map(|handoff| handoff.status),
+        Some(HandoffStatus::Running)
     );
-    let opened = store
-        .report_ship(
-            &meta.id,
-            ShipReport {
-                status: ShipStatus::Opened,
-                pr_url: Some("https://github.com/o/r/pull/7".to_string()),
-                pr_number: Some(7),
-                merge_commit: None,
-                error: None,
-            },
-        )
-        .unwrap();
-    assert_eq!(
-        opened.ship.as_ref().map(|ship| ship.status),
-        Some(ShipStatus::Opened)
-    );
+
     let failed = store
-        .report_ship(
+        .report_handoff(
             &meta.id,
-            ShipReport {
-                status: ShipStatus::Failed,
-                pr_url: None,
-                pr_number: None,
-                merge_commit: None,
-                error: Some("checks are red".to_string()),
+            HandoffReport {
+                status: HandoffStatus::Failed,
+                label: Some("PR #7 open".to_string()),
+                url: Some("https://github.com/o/r/pull/7".to_string()),
+                message: Some("checks are red".to_string()),
             },
         )
         .unwrap();
     assert_eq!(
-        failed.ship.as_ref().and_then(|ship| ship.error.as_deref()),
+        failed
+            .handoff
+            .as_ref()
+            .and_then(|handoff| handoff.message.as_deref()),
         Some("checks are red")
     );
-    // A retry keeps the PR identity and the failing check; the agent can reuse the same PR and
-    // knows what the last attempt hit.
-    let retried = store.request_ship(&meta.id).unwrap();
-    let retried_ship = retried.ship.unwrap();
-    assert_eq!(retried_ship.status, ShipStatus::Requested);
-    assert_eq!(retried_ship.pr_number, Some(7));
+
+    // A retry keeps the label/URL/message from the failed attempt; the integration can reuse it.
+    let retried = store.request_handoff(&meta.id).unwrap();
+    let retried_handoff = retried.handoff.unwrap();
+    assert_eq!(retried_handoff.status, HandoffStatus::Requested);
+    assert_eq!(retried_handoff.label.as_deref(), Some("PR #7 open"));
     assert_eq!(
-        retried_ship.pr_url.as_deref(),
+        retried_handoff.url.as_deref(),
         Some("https://github.com/o/r/pull/7")
     );
-    assert_eq!(retried_ship.error.as_deref(), Some("checks are red"));
+    assert_eq!(retried_handoff.message.as_deref(), Some("checks are red"));
 
-    store.mark_ship_running(&meta.id).unwrap();
-    let merged = store
-        .report_ship(
+    store.mark_handoff_running(&meta.id).unwrap();
+    let done = store
+        .report_handoff(
             &meta.id,
-            ShipReport {
-                status: ShipStatus::Merged,
-                pr_url: None,
-                pr_number: Some(7),
-                merge_commit: Some("abc123".to_string()),
-                error: None,
+            HandoffReport {
+                status: HandoffStatus::Done,
+                label: Some("merged".to_string()),
+                url: Some("https://github.com/o/r/pull/7".to_string()),
+                message: Some("merge commit abc123".to_string()),
             },
         )
         .unwrap();
-    let ship = merged.ship.unwrap();
-    assert_eq!(ship.status, ShipStatus::Merged);
-    assert_eq!(ship.pr_number, Some(7));
+    let handoff = done.handoff.unwrap();
+    assert_eq!(handoff.status, HandoffStatus::Done);
+    assert_eq!(handoff.label.as_deref(), Some("merged"));
     assert_eq!(
-        ship.pr_url.as_deref(),
+        handoff.url.as_deref(),
         Some("https://github.com/o/r/pull/7")
     );
-    assert_eq!(ship.merge_commit.as_deref(), Some("abc123"));
+    assert_eq!(handoff.message.as_deref(), Some("merge commit abc123"));
 
     store.cancel_feature(&meta.id).unwrap();
     let meta = store
@@ -251,7 +242,10 @@ fn a_new_round_clears_the_feature_decision() {
         .unwrap();
     assert_eq!(meta.status, Status::Open);
     assert_eq!(meta.feature_state(), "pending");
-    assert!(meta.ship.is_none(), "a new round clears the shipped state");
+    assert!(
+        meta.handoff.is_none(),
+        "a new round clears the handoff state"
+    );
 }
 
 #[test]

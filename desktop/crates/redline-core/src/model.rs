@@ -23,6 +23,13 @@ pub struct Meta {
     pub image_width: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_height: Option<u32>,
+    /// Image or video metadata (v0.23). Missing means a legacy image session; `image` still names
+    /// the media file for older clients.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaRef>,
+    /// First-frame thumbnail for a video session (v0.23); served by `/sessions/<id>/image`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poster: Option<String>,
     /// Who asked for the review (agent name, "cli", "mcp"). Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -58,6 +65,32 @@ pub struct Meta {
     /// claim; the fallback is `session/<id>`. RedLine uses it as the branch-lock key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaKind {
+    Image,
+    Video,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaRef {
+    pub kind: MediaKind,
+    /// File name inside the session folder (`screenshot.png`, `video.mp4`).
+    pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// Nominal frames per second, when the producer knows it. Variable-frame-rate videos may
+    /// omit it; the UI steps by a nominal frame then.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fps: Option<f64>,
 }
 
 /// A conversation area: one agent + one piece of work, holding its sessions and history.
@@ -194,6 +227,16 @@ impl Annotation {
     pub fn is_text(&self) -> bool {
         self.kind == "text"
     }
+
+    /// Video timestamp in seconds, when this annotation belongs to a moment (v0.23).
+    pub fn at(&self) -> Option<f64> {
+        self.number("at")
+    }
+
+    /// End of a time-range annotation in seconds (v0.23). Absent means a point annotation.
+    pub fn until(&self) -> Option<f64> {
+        self.number("until")
+    }
 }
 
 /// `annotations.json` after a submission.
@@ -206,6 +249,9 @@ pub struct AnnotationSet {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image: Option<ImageRef>,
+    /// Image or video metadata for the round (v0.23).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaRef>,
     #[serde(default)]
     pub annotations: Vec<Annotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -257,6 +303,22 @@ pub struct NewSession {
     /// Absolute path on the machine running redline. Convenience for local agents.
     #[serde(default)]
     pub image_path: Option<String>,
+    /// Video upload (v0.23): base64 or an absolute path on the server; `media` becomes video.
+    #[serde(default)]
+    pub video_base64: Option<String>,
+    #[serde(default)]
+    pub video_path: Option<String>,
+    /// Optional first-frame thumbnail for a video (base64 PNG).
+    #[serde(default)]
+    pub poster_base64: Option<String>,
+    #[serde(default)]
+    pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub width: Option<u32>,
+    #[serde(default)]
+    pub height: Option<u32>,
+    #[serde(default)]
+    pub fps: Option<f64>,
     /// Project name or slug (v0.10). Created on first use; omitted means the Inbox.
     #[serde(default)]
     pub project: Option<String>,

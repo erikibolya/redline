@@ -1,4 +1,4 @@
-use redline_core::model::{Annotation, Status, Submission};
+use redline_core::model::{Annotation, MediaKind, Status, Submission};
 use redline_core::store::{default_branch, valid_id, Store};
 use serde_json::json;
 use tempfile::TempDir;
@@ -321,4 +321,62 @@ fn a_review_created_without_a_branch_already_has_its_feature_branch() {
     let branch = meta.branch.as_deref().unwrap_or_default();
     assert!(branch.starts_with("feat/checkbox-group-"), "{branch}");
     assert!(!branch.starts_with("session/"), "{branch}");
+}
+
+/// Minimal MP4 magic bytes; the store validates the container, not the codec payload.
+const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+
+#[test]
+fn video_sessions_keep_media_metadata_and_timecoded_annotations() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Checkout flow",
+            "http://localhost/checkout",
+            "watch the transition",
+            None,
+            None,
+            None,
+            Some(PNG),
+            Some(5_000),
+            Some(1280),
+            Some(720),
+            Some(30.0),
+        )
+        .expect("create video");
+    let media = meta.media.as_ref().expect("media metadata");
+    assert_eq!(media.kind, MediaKind::Video);
+    assert_eq!(media.file, "video.mp4");
+    assert_eq!(media.duration_ms, Some(5_000));
+    assert_eq!(meta.image, "video.mp4");
+    assert!(store.poster_path(&meta).unwrap().is_file());
+
+    let mut rect = Annotation::new("rect");
+    rect.fields
+        .insert("start".to_string(), json!({"x": 1, "y": 2}));
+    rect.fields
+        .insert("end".to_string(), json!({"x": 3, "y": 4}));
+    rect.fields.insert("at".to_string(), json!(1.25));
+    rect.fields.insert("until".to_string(), json!(2.5));
+    let submission = Submission {
+        note: None,
+        annotations: vec![rect],
+        png: None,
+        width: Some(1280),
+        height: Some(720),
+    };
+    let (_meta, set) = store.submit(&meta.id, &submission).expect("submit");
+    assert_eq!(set.media.as_ref().map(|m| m.kind), Some(MediaKind::Video));
+
+    let review = std::fs::read_to_string(store.dir(&meta.id).unwrap().join("review.md")).unwrap();
+    assert!(review.contains("Media: Video"), "{review}");
+    assert!(review.contains("@ 00:01.250–00:02.500"), "{review}");
+
+    let saved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(store.dir(&meta.id).unwrap().join("meta.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["media"]["kind"], "video");
+    assert_eq!(saved["media"]["duration_ms"], 5000);
 }

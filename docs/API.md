@@ -93,7 +93,41 @@ A new submission or agent round also clears both feature stamps, so more work ma
 
 ### `GET /sessions/<id>/image`
 
-Original screenshot bytes. Content type comes from the file extension.
+Original screenshot bytes. Content type comes from the file extension. For a video session this
+is the **poster** (`poster.png`), so the dashboard rail and gallery `<img>` cards keep working.
+
+### `GET /sessions/<id>/media`
+
+The video bytes for a video session (video sessions only). Supports HTTP `Range` and returns
+`206 Partial Content` with `Content-Range`, so `<video>` can seek without downloading the whole
+clip. `404` for image sessions or a missing file. Authenticated like every session route.
+
+### `POST /api/sessions` (video)
+
+Video sessions use the same endpoint with `video_base64` or `video_path` instead of the image
+fields; `poster_base64`, `duration_ms`, `width`, `height` and `fps` are optional. The response meta
+contains:
+
+```json
+{
+  "image": "video.mp4",
+  "media": {
+    "kind": "video",
+    "file": "video.mp4",
+    "mime": "video/mp4",
+    "width": 1280,
+    "height": 720,
+    "duration_ms": 5000,
+    "fps": 30
+  },
+  "poster": "poster.png"
+}
+```
+
+`image` still names the media file for older clients; `media.kind` is the authoritative switch.
+Annotations may carry `at` (seconds) and optional `until`; `review.md` prints `mm:ss.mmm` timecodes.
+MCP clients can use `review_video` instead of `review_screenshot`; `get_feedback` includes
+`media` and `video_url`.
 
 ### `GET /sessions/<id>/annotated.png`
 

@@ -74,6 +74,7 @@ async fn initialize_and_tool_list_are_well_formed() {
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
     assert!(names.contains(&"review_screenshot"));
+    assert!(names.contains(&"review_video"));
     assert!(names.contains(&"wait_for_feedback"));
     assert!(names.contains(&"get_feedback"));
     assert!(names.contains(&"list_reviews"));
@@ -118,6 +119,47 @@ async fn review_screenshot_creates_a_session_the_human_can_open() {
         store.image_path(&meta).unwrap().is_file(),
         "screenshot written"
     );
+}
+
+#[tokio::test]
+async fn review_video_creates_a_session_with_media_and_a_video_url() {
+    use base64::Engine as _;
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let (_dir, store) = setup();
+    let result = call(
+        &store,
+        "review_video",
+        json!({
+            "title": "Checkout flow",
+            "note": "watch the transition",
+            "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+            "poster_base64": PNG_B64,
+            "duration_ms": 5000,
+            "width": 1280,
+            "height": 720,
+        }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let created = payload(&result);
+    let id = created["session_id"].as_str().unwrap().to_string();
+    let meta = store.require(&id).unwrap();
+    assert_eq!(
+        meta.media.as_ref().map(|media| media.kind),
+        Some(redline_core::model::MediaKind::Video)
+    );
+    assert!(store.image_path(&meta).unwrap().is_file(), "video written");
+    assert!(
+        store.poster_path(&meta).unwrap().is_file(),
+        "poster written"
+    );
+
+    let feedback = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
+    assert_eq!(feedback["media"]["kind"], "video");
+    assert!(feedback["video_url"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/sessions/{id}/media?t={TOKEN}")));
 }
 
 #[tokio::test]

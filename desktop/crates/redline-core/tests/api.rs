@@ -224,6 +224,84 @@ async fn repo_sync_reports_an_online_agent() {
 }
 
 #[tokio::test]
+async fn video_sessions_are_created_and_served_with_range_requests() {
+    use base64::Engine as _;
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let payload = |with_poster: bool| {
+        let mut body = json!({
+            "title": "Checkout flow",
+            "video_base64": base64::engine::general_purpose::STANDARD.encode(MP4),
+            "duration_ms": 5000,
+            "width": 1280,
+            "height": 720,
+            "fps": 30,
+        });
+        if with_poster {
+            body["poster_base64"] = json!(PNG_B64);
+        }
+        body
+    };
+    let (status, _, created) = send(&h.app, authed("POST", "/api/sessions", payload(true))).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["meta"]["media"]["kind"], "video");
+    assert_eq!(created["meta"]["media"]["duration_ms"], 5000);
+    assert_eq!(created["meta"]["image"], "video.mp4");
+
+    let request = Request::builder()
+        .uri(format!("/api/sessions/{id}"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, session) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(session["meta"]["media"]["mime"], "video/mp4");
+
+    // The image route is the poster, so existing rail/gallery <img> cards keep working.
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/image"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers().get("content-type").unwrap(), "image/png");
+
+    // Range requests are what let the browser seek without downloading the whole clip.
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/media"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("range", "bytes=0-3")
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
+    assert_eq!(
+        response.headers().get("content-range").unwrap(),
+        &format!("bytes 0-3/{}", MP4.len())
+    );
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], &MP4[..4]);
+
+    let (status, _, _) = send(&h.app, authed("POST", "/api/sessions", payload(false))).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({
+                "title": "not a video",
+                "video_base64": base64::engine::general_purpose::STANDARD.encode(b"plain text"),
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}
+
+#[tokio::test]
 async fn create_submit_and_read_back_round_trip() {
     let h = harness();
 

@@ -1,6 +1,8 @@
 # Video reviews — design and delivery plan
 
-Status: **proposal**, waiting for product answers. Nothing in this document is implemented.
+Status: **phase 1 implemented in `feat/video-media-core`** (server media core: media model,
+agent `review_video` path/base64, poster, Range serving, timecoded annotations/review.md). The
+editor, human multipart upload and frames/contact sheet are phase 2–3.
 
 ## 0. Decisions from the product owner (2026-10-31)
 
@@ -220,13 +222,16 @@ session disk usage (warning at 2 GB) rather than silently deleting videos.
 
 ### 5.1 Upload
 
-The current `MAX_BODY_BYTES` is 60 MB and the JSON path base64-encodes everything. Video needs a
-streaming upload:
+The current `MAX_BODY_BYTES` is 60 MB and the JSON path base64-encodes everything. Phase 1 ships
+the agent path/base64 path; phase 2 adds the streaming browser upload:
 
-- `POST /api/sessions/{id}/media` with `multipart/form-data` (field `file`) streams to a temp file,
-  validates magic bytes/MIME/extension, moves it into the session, writes `media`/`poster`.
-- `POST /api/sessions` for a video creates the session with metadata and returns an upload URL
-  (two-step), or accepts a small `video_base64` for tiny clips (<= 10 MB) for compatibility.
+- `POST /api/sessions` with `video_base64`/`video_path` (phase 1) creates a video session;
+  `video_base64` is limited by the JSON body limit, `video_path` is for agents on the server.
+- `POST /api/sessions/{id}/media` with `multipart/form-data` (field `file`) streams to a temp file
+  (phase 2, browser): validates magic bytes/MIME/extension, moves it into the session, writes
+  `media`/`poster`.
+- `POST /api/sessions` for a video can return an upload URL (two-step) in phase 2; small
+  `video_base64` stays for compatibility.
 - MCP: `review_video` accepts a **path on the server** (`video_path`), a small `video_base64`, or
   a `url` fetched with a size/time limit; returns the session id and an upload URL if needed.
 - The browser New review dialog uploads the file with `FormData` after creating the session (or
@@ -408,11 +413,13 @@ timeline; the contact sheet tile; a full frame; the poster card.
 ## 12. Phased delivery (each phase = one branch/PR)
 
 0. **Plan/schema ADR** — this document + answers; add the fixture; no production code.
-1. **Server media core** — `media` model, upload/multipart, MIME/limits, poster, range serving,
-   store/history, API/MCP read paths; Rust tests. No UI.
-2. **Editor playback** — video load/draw/fit, video bar, basic controls, zoomable timeline with
-   overview strip and markers, ghost/fade annotation visibility, pause/draw, annotation
-   `at`/`until`, inspector timecodes; e2e with fixture.
+1. **Server media core** — `media` model, agent video path/base64 (`review_video`), MIME/limits,
+   poster, Range serving, timecoded annotations/`review.md`; Rust tests. No UI. *(implemented in
+   `feat/video-media-core`; browser multipart upload moves to phase 2)*
+2. **Editor and browser upload** — multipart streaming upload from the New review dialog, video
+   load/draw/fit, video bar, basic controls, zoomable timeline with overview strip and markers,
+   ghost/fade annotation visibility, pause/draw, annotation `at`/`until`, inspector timecodes;
+   e2e with fixture.
 3. **Submit and agent output** — contact sheet + full-resolution frames for unique annotation
    times, `review.md` timecodes, `annotated.png`, MCP `review_video`/`get_feedback` frames,
    history viewer, poster cards.

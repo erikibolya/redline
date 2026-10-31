@@ -10,7 +10,9 @@ use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 
 use crate::error::{Error, Result};
-use crate::model::{Annotation, AnnotationSet, ImageRef, Meta, Status, Submission};
+use crate::model::{
+    Annotation, AnnotationSet, ImageRef, MediaKind, MediaRef, Meta, Status, Submission,
+};
 
 /// Same rule as v0.1: one leading alphanumeric, then alphanumerics/`.`/`_`/`-`, max 121 chars.
 /// This is what stops `../` and friends from escaping the sessions directory.
@@ -143,6 +145,17 @@ fn image_extension(name: &str) -> &'static str {
     }
 }
 
+/// Video format by magic bytes, not by the uploaded name (which never reaches the filename).
+fn video_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 12 && &bytes[4..8] == b"ftyp" {
+        Some("mp4")
+    } else if bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) {
+        Some("webm")
+    } else {
+        None
+    }
+}
+
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let file_name = path
         .file_name()
@@ -176,6 +189,32 @@ fn num(value: f64) -> String {
     }
 }
 
+/// `mm:ss.mmm` (or `hh:mm:ss.mmm` for long clips) for video timecodes.
+fn timecode(seconds: f64) -> String {
+    let total = (seconds.max(0.0) * 1000.0).round() as u64;
+    let ms = total % 1000;
+    let total_seconds = total / 1000;
+    let s = total_seconds % 60;
+    let m = (total_seconds / 60) % 60;
+    let h = total_seconds / 3600;
+    if h > 0 {
+        format!("{h:02}:{m:02}:{s:02}.{ms:03}")
+    } else {
+        format!("{m:02}:{s:02}.{ms:03}")
+    }
+}
+
+/// The `@ mm:ss.mmm` (or `@ start–end`) prefix for a video annotation.
+fn annotation_time(annotation: &Annotation) -> String {
+    match (annotation.at(), annotation.until()) {
+        (Some(at), Some(until)) => {
+            format!(" @ {}–{}", timecode(at), timecode(until.max(at)))
+        }
+        (Some(at), None) => format!(" @ {}", timecode(at)),
+        _ => String::new(),
+    }
+}
+
 pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
     let mut lines = vec![format!("# Visual review: {}", meta.title), String::new()];
     if !meta.url.is_empty() {
@@ -186,6 +225,21 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
     }
     if let Some(prompt) = meta.prompt.as_deref().filter(|p| !p.trim().is_empty()) {
         lines.push(format!("- Prompt: {}", prompt));
+    }
+    if let Some(media) = &meta.media {
+        lines.push(format!(
+            "- Media: {:?}{}{}",
+            media.kind,
+            media
+                .duration_ms
+                .map(|duration| format!(", duration {}", timecode(duration as f64 / 1000.0)))
+                .unwrap_or_default(),
+            media
+                .width
+                .zip(media.height)
+                .map(|(w, h)| format!(", {w}×{h}"))
+                .unwrap_or_default(),
+        ));
     }
     lines.push(format!("- Status: {}", meta.status.as_str()));
     lines.push(format!(
@@ -205,9 +259,10 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
         lines.push(String::new());
         for note in &text_notes {
             lines.push(format!(
-                "- ({}, {}): {}",
+                "- ({}, {}){}: {}",
                 num(note.number("x").unwrap_or_default()),
                 num(note.number("y").unwrap_or_default()),
+                annotation_time(note),
                 note.text_of().unwrap_or_default()
             ));
         }
@@ -243,17 +298,37 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation]) -> String {
             } else {
                 format!(" — \u{201c}{note}\u{201d}")
             };
-            lines.push(format!("- {}. {}{}{}", index + 1, name, coords, note));
+            lines.push(format!(
+                "- {}. {}{}{}{}",
+                index + 1,
+                name,
+                coords,
+                annotation_time(item),
+                note
+            ));
         }
         lines.push(String::new());
     }
 
     lines.push("## For the agent".to_string());
     lines.push(String::new());
-    lines.push(
-        "Use `annotations.json` for coordinates and text; `annotated.png` is the visual reference."
-            .to_string(),
-    );
+    if meta
+        .media
+        .as_ref()
+        .is_some_and(|media| media.kind == MediaKind::Video)
+    {
+        lines.push(
+            "Use `annotations.json` for coordinates, text and `at`/`until` timecodes; \
+             `annotated.png` is a contact sheet of the annotated moments. The video itself is \
+             available at `/sessions/<id>/media`."
+                .to_string(),
+        );
+    } else {
+        lines.push(
+            "Use `annotations.json` for coordinates and text; `annotated.png` is the visual reference."
+                .to_string(),
+        );
+    }
     lines.push(String::new());
     lines.join("\n")
 }
@@ -321,9 +396,12 @@ fn archive_round(
         let bytes = fs::read(&png)?;
         write_atomic(&history.join(format!("{safe}.png")), &bytes)?;
     }
-    // The source screenshot lets the viewer re-render the round crisply and read-only.
+    // The source screenshot lets the viewer re-render the round crisply and read-only. Videos
+    // need a different source path/history contract (phase 3); never write video bytes into a
+    // `.png`, which would produce a broken viewer image.
+    let is_video = set.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video);
     let source_path = dir.join(source);
-    if source_path.is_file() {
+    if !is_video && source_path.is_file() {
         let bytes = fs::read(&source_path)?;
         write_atomic(&history.join(format!("{safe}-source.png")), &bytes)?;
     }
@@ -631,6 +709,7 @@ impl Store {
                 title: None,
                 url: None,
                 image: None,
+                media: None,
                 annotations: Vec::new(),
                 submitted_at: None,
             }))
@@ -757,6 +836,8 @@ impl Store {
             image: format!("screenshot{extension}"),
             image_width: None,
             image_height: None,
+            media: None,
+            poster: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
             feature_confirmed_at: None,
@@ -775,6 +856,147 @@ impl Store {
             &json!({ "session": sid, "annotations": [] }),
         )?;
         Ok(meta)
+    }
+
+    /// Create a video session from bytes already in memory (MCP uploads, HTTP `video_base64`).
+    /// The video is validated by magic bytes; the optional poster is served by the image route
+    /// so the existing gallery/rail cards keep working.
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_video_from_bytes(
+        &self,
+        video: &[u8],
+        title: &str,
+        url: &str,
+        note: &str,
+        id: Option<&str>,
+        agent: Option<&str>,
+        project: Option<&str>,
+        poster: Option<&[u8]>,
+        duration_ms: Option<u64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f64>,
+    ) -> Result<Meta> {
+        if video.is_empty() {
+            return Err(Error::BadRequest("empty video".to_string()));
+        }
+        let extension = video_extension(video).ok_or_else(|| {
+            Error::BadRequest("unsupported video format (MP4 or WebM)".to_string())
+        })?;
+        self.ensure()?;
+        let project = match project.map(str::trim).filter(|name| !name.is_empty()) {
+            Some(name) => Some(self.ensure_project(name)?),
+            None => None,
+        };
+        let parent = match &project {
+            Some(project) => self.projects_root().join(&project.slug),
+            None => self.root.clone(),
+        };
+        let sid = self.new_id(title, id)?;
+        let dir = parent.join(&sid);
+        fs::create_dir(&dir).map_err(|err| {
+            if err.kind() == std::io::ErrorKind::AlreadyExists {
+                Error::Exists(sid.clone())
+            } else {
+                Error::Io(err)
+            }
+        })?;
+
+        let file = format!("video.{extension}");
+        write_atomic(&dir.join(&file), video)?;
+        let has_poster = poster.is_some_and(|bytes| !bytes.is_empty());
+        if let Some(poster) = poster.filter(|bytes| !bytes.is_empty()) {
+            write_atomic(&dir.join("poster.png"), poster)?;
+        }
+
+        let title = if title.is_empty() {
+            sid.clone()
+        } else {
+            title.to_string()
+        };
+        let branch = default_branch(&title, &sid);
+        let media = MediaRef {
+            kind: MediaKind::Video,
+            file: file.clone(),
+            mime: Some(format!("video/{extension}")),
+            width,
+            height,
+            duration_ms,
+            fps,
+        };
+        let meta = Meta {
+            id: sid.clone(),
+            title,
+            url: url.to_string(),
+            note: note.to_string(),
+            status: Status::Open,
+            created_at: now(),
+            submitted_at: None,
+            image: file,
+            image_width: width,
+            image_height: height,
+            media: Some(media),
+            poster: has_poster.then(|| "poster.png".to_string()),
+            agent: agent.map(str::to_string),
+            resolved_at: None,
+            feature_confirmed_at: None,
+            feature_cancelled_at: None,
+            prompt: None,
+            seen_by_agent_at: None,
+            agent_state: None,
+            cancelled_at: None,
+            round_stamp: None,
+            project: project.as_ref().map(|project| project.slug.clone()),
+            branch: Some(branch),
+        };
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        write_json(
+            &dir.join("annotations.json"),
+            &json!({ "session": sid, "annotations": [] }),
+        )?;
+        Ok(meta)
+    }
+
+    /// Create a video session from a file on this machine (the CLI/MCP path).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_video_from_path(
+        &self,
+        video: &Path,
+        title: &str,
+        url: &str,
+        note: &str,
+        id: Option<&str>,
+        project: Option<&str>,
+        poster: Option<&Path>,
+        duration_ms: Option<u64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f64>,
+    ) -> Result<Meta> {
+        let bytes = fs::read(video)?;
+        let poster_bytes = match poster {
+            Some(path) => Some(fs::read(path)?),
+            None => None,
+        };
+        let title = if title.is_empty() {
+            video.file_stem().and_then(|s| s.to_str()).unwrap_or("")
+        } else {
+            title
+        };
+        self.create_video_from_bytes(
+            &bytes,
+            title,
+            url,
+            note,
+            id,
+            None,
+            project,
+            poster_bytes.as_deref(),
+            duration_ms,
+            width,
+            height,
+            fps,
+        )
     }
 
     /// Create a session from a file on this machine (the CLI path).
@@ -867,6 +1089,13 @@ impl Store {
         let mut meta = self.require(id)?;
         let stamp = now();
 
+        if image.is_some() && meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video)
+        {
+            return Err(Error::BadRequest(
+                "a video review cannot take a screenshot round; post the next video".to_string(),
+            ));
+        }
+
         let mut image_file = meta.image.clone();
         if let Some(bytes) = image {
             let extension = image_extension(image_name);
@@ -886,6 +1115,7 @@ impl Store {
                 width,
                 height,
             }),
+            media: meta.media.clone(),
             annotations: Vec::new(),
             submitted_at: None,
         };
@@ -947,6 +1177,7 @@ impl Store {
                 width: submission.width,
                 height: submission.height,
             }),
+            media: meta.media.clone(),
             annotations: submission.annotations.clone(),
             submitted_at: Some(submitted_at.clone()),
         };
@@ -1117,6 +1348,18 @@ impl Store {
 
     pub fn image_path(&self, meta: &Meta) -> Result<PathBuf> {
         Ok(self.dir(&meta.id)?.join(&meta.image))
+    }
+
+    /// The poster/thumbnail served by `/sessions/<id>/image`; falls back to the media file for
+    /// legacy image sessions (which have no separate poster).
+    pub fn poster_path(&self, meta: &Meta) -> Result<PathBuf> {
+        if meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video)
+            && meta.poster.is_none()
+        {
+            return Err(Error::NotFound(format!("{}/poster.png", meta.id)));
+        }
+        let name = meta.poster.as_deref().unwrap_or(&meta.image);
+        Ok(self.dir(&meta.id)?.join(name))
     }
 
     pub fn file_path(&self, id: &str, name: &str) -> Result<PathBuf> {

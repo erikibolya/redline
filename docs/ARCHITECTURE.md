@@ -44,8 +44,12 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
 ```
 
 - `open` (CLI) copies the screenshot and writes `meta.json` + an empty `annotations.json`.
+- A video session stores `video.mp4` (or `.webm`), `poster.png`, and `media` metadata in
+  `meta.json`; `GET /sessions/<id>/media` serves the clip with HTTP `Range`, while `/image` serves
+  the poster so the rail/gallery cards keep working.
 - The browser loads the session; annotations are kept only in the page until **Submit review**.
 - Submit writes `annotations.json`, `annotated.png`, `review.md` and flips `meta.status`.
+  Video annotations may carry `at`/`until` seconds; `review.md` prints timecodes.
 - `wait` polls `meta.status`; no push/websocket.
 
 ## Data flow
@@ -99,6 +103,7 @@ open ──▶ status=open ──(human submit)──▶ status=submitted ──
   "title": "…",
   "url": "…",
   "image": { "file": "screenshot.png", "width": 1440, "height": 900 },
+  "media": { "kind": "image", "file": "screenshot.png", "width": 1440, "height": 900 },
   "annotations": [],
   "submitted_at": "…"
 }

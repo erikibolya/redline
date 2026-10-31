@@ -13,6 +13,8 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tower::ServiceExt;
+use tower_http::services::ServeFile;
 
 use crate::agent::{AgentControl, AgentSettings, ClaimError, ClaimRequest, ClaimState};
 use crate::auth::{self, Auth};
@@ -133,6 +135,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{id}/history/{file}", get(history_file))
         .route("/api/capture", post(capture_session))
         .route("/sessions/{id}/image", get(image))
+        .route("/sessions/{id}/media", get(media))
         .route("/sessions/{id}/annotated.png", get(annotated))
         .route("/sessions/{id}/rounds/{name}", get(round_image))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
@@ -985,6 +988,58 @@ pub fn create_from_request(
 ) -> crate::Result<crate::model::Meta> {
     use base64::Engine as _;
 
+    let has_video = body.video_base64.is_some() || body.video_path.is_some();
+    if has_video {
+        let bytes = match (body.video_base64.as_deref(), body.video_path.as_deref()) {
+            (Some(encoded), _) => {
+                let raw = encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(encoded);
+                base64::engine::general_purpose::STANDARD
+                    .decode(raw.trim())
+                    .map_err(|err| Error::BadRequest(format!("invalid video_base64: {err}")))?
+            }
+            (None, Some(path)) => std::fs::read(path)?,
+            (None, None) => unreachable!(),
+        };
+        let poster = match body.poster_base64.as_deref() {
+            Some(encoded) => {
+                let raw = encoded
+                    .split_once(',')
+                    .map(|(_, data)| data)
+                    .unwrap_or(encoded);
+                Some(
+                    base64::engine::general_purpose::STANDARD
+                        .decode(raw.trim())
+                        .map_err(|err| {
+                            Error::BadRequest(format!("invalid poster_base64: {err}"))
+                        })?,
+                )
+            }
+            None => None,
+        };
+        let meta = state.store.create_video_from_bytes(
+            &bytes,
+            &body.title,
+            &body.url,
+            &body.note,
+            body.id.as_deref(),
+            body.agent.as_deref(),
+            body.project.as_deref(),
+            poster.as_deref(),
+            body.duration_ms,
+            body.width,
+            body.height,
+            body.fps,
+        )?;
+        return if let Some(branch) = body.branch.as_deref() {
+            state.store.set_branch(&meta.id, Some(branch))
+        } else {
+            Ok(meta)
+        };
+    }
+
     let (bytes, name) = match (body.image_base64.as_deref(), body.image_path.as_deref()) {
         (Some(encoded), _) => {
             let raw = encoded
@@ -1259,7 +1314,46 @@ async fn image(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Response, Error> {
     let meta = state.store.require(&id)?;
-    Ok(serve_file(&state.store.image_path(&meta)?, None))
+    let path =
+        if meta.media.as_ref().map(|media| media.kind) == Some(crate::model::MediaKind::Video) {
+            state.store.poster_path(&meta)?
+        } else {
+            state.store.image_path(&meta)?
+        };
+    Ok(serve_file(&path, None))
+}
+
+/// Stream the video with Range support so the browser can seek without downloading it all.
+/// `ServeFile` also sets `Accept-Ranges`, `Content-Type` and the 206 `Content-Range`.
+async fn media(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    request: Request,
+) -> Result<Response, Error> {
+    let meta = state.store.require(&id)?;
+    if meta.media.as_ref().map(|media| media.kind) != Some(crate::model::MediaKind::Video) {
+        return Err(Error::NotFound(format!("{id}/media")));
+    }
+    let path = state.store.image_path(&meta)?;
+    if !path.is_file() {
+        return Err(Error::NotFound(format!("{id}/media")));
+    }
+    let service = ServeFile::new(path);
+    let mut proxy = Request::builder()
+        .uri(request.uri())
+        .body(Body::empty())
+        .map_err(|err| Error::BadRequest(err.to_string()))?;
+    *proxy.headers_mut() = request.headers().clone();
+    let response = service
+        .oneshot(proxy)
+        .await
+        .expect("ServeFile is infallible");
+    let (parts, body) = response.into_parts();
+    let mut response = Response::from_parts(parts, Body::new(body));
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 async fn annotated(

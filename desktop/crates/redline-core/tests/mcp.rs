@@ -606,8 +606,9 @@ async fn a_failed_run_hands_the_round_back_and_says_so() {
             "reply",
             json!({
                 "session_id": id,
-                "message": "The agent run failed: opencode rejected the password",
+                "message": "opencode produced no output for 15m",
                 "state": "failed",
+                "code": "timeout_idle",
             }),
         )
         .await,
@@ -619,10 +620,21 @@ async fn a_failed_run_hands_the_round_back_and_says_so() {
         "the human must be able to edit again"
     );
     assert_eq!(meta.agent_state.as_deref(), Some("failed"));
+    let failure = meta.agent_failure.expect("a structured failure");
+    assert_eq!(failure.code, "timeout_idle");
+    assert!(failure.message.contains("no output"));
     let thread =
         std::fs::read_to_string(store.dir(&id).unwrap().join("agent-thread.jsonl")).unwrap();
-    assert!(thread.contains("rejected the password"));
+    assert!(thread.contains("no output"));
     assert!(thread.contains("\"state\":\"failed\""));
+
+    // Every MCP review client sees the reason and the focused-test guidance on the next read.
+    let feedback = payload(&call(&store, "get_feedback", json!({"session_id": id})).await);
+    assert_eq!(feedback["agent_failure"]["code"], "timeout_idle");
+    assert!(feedback["review_guidance"]
+        .as_str()
+        .unwrap()
+        .contains("focused checks"));
 
     // The default is still an ordinary reply: the run may keep going, so the round stays submitted.
     store
@@ -648,4 +660,8 @@ async fn a_failed_run_hands_the_round_back_and_says_so() {
     let meta = store.require(&id).unwrap();
     assert_eq!(meta.status.as_str(), "submitted");
     assert_eq!(meta.agent_state.as_deref(), Some("replied"));
+    assert!(
+        meta.agent_failure.is_none(),
+        "a new run/reply must clear the old failure reason"
+    );
 }

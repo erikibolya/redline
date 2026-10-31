@@ -30,7 +30,12 @@ redline-agent
 | `REDLINE_AGENT_MODEL` | `deepseek/deepseek-flash` | OpenCode model id |
 | `REDLINE_AGENT_OPENCODE_SERVER` | — | dispatch into an already running OpenCode instead of a private `--standalone` run |
 | `REDLINE_AGENT_POLL` | `10` | seconds between polls |
-| `REDLINE_AGENT_TIMEOUT` | `1800` | seconds per run |
+| `REDLINE_AGENT_TIMEOUT` | `21600` | hard cap in seconds per run (6 h) |
+| `REDLINE_AGENT_IDLE_TIMEOUT` | `900` | seconds without output before the run is killed (15 m) |
+
+The idle timeout is the primary guard: a long build that keeps printing progress survives, while a
+process that has gone silent is killed and reported as `timeout_idle`. The hard cap is only the
+backstop for a run that never stops producing output.
 | `OPENCODE_BIN` | `opencode` | OpenCode binary |
 
 Needs `opencode` with provider auth configured (`opencode auth list`).

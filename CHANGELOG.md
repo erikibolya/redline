@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **A run is killed for being silent, not for being long.** The bridge used a 30-minute wall-clock
+  cap and killed a run that was actively working/building, then labelled it a generic "agent
+  failed" (2026-10-31). It now tracks output activity: `REDLINE_AGENT_IDLE_TIMEOUT` (default 15 m)
+  kills a run with no output, while `REDLINE_AGENT_TIMEOUT` is only a 6 h hard backstop. A long
+  build that keeps printing survives; a hung process is stopped promptly.
+- **A timeout says it timed out.** `reply {state:"failed", code:"timeout_idle"}` stores
+  `meta.agent_failure { code, message, at }`; the rail badge reads **agent timed out** (or
+  **agent failed** for other codes) and the card/message keep the exact limit. `get_feedback`/
+  `wait_for_feedback` expose the same reason. A new run/reply clears the stored failure.
+- **A review run does not build the release.** The bridge prompt used to permit build/deploy; an
+  agent spent its whole run on a full image build. Review prompts now say to run focused checks
+  only and not to build/publish the release/browser image or run the release pipeline; the same
+  `review_guidance` is returned by MCP `get_feedback`/`wait_for_feedback` and in the tool
+  descriptions, so non-bridge agents receive it too.
 - **The agent's output is a popup, and the stage toast narrates a step instead of a command.** The
   bridge streams the agent's own terminal lines into the event log as `state: "log"`, and two
   places printed the newest event whatever it was: the stage toast read **Agent is working — $ cd

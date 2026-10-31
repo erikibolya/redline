@@ -349,6 +349,17 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   previous lesson: `agent_state` records who spoke last, not whether a process is alive, so the
   rail must take **working** from a live claim (lease + heartbeat, exposed as `agent_running`)
   as well — a mid-run reply must not erase the only sign of activity.
+- **A wall-clock cap is not a liveness check.** The bridge killed an agent that had been working
+  for 30 minutes because `started.elapsed() >= timeout` ignored output; a long build that was
+  printing progress looked identical to a hung process, and the human got a generic "agent failed"
+  (2026-10-31). Time out on **idle** output (`REDLINE_AGENT_IDLE_TIMEOUT`, 15 min) and keep only
+  a high hard backstop (`REDLINE_AGENT_TIMEOUT`, 6 h). Report a structured
+  `agent_failure {code,message,at}` (`timeout_idle`/`timeout_hard`) instead of only a thread line,
+  so the rail can say **agent timed out** without the human parsing a failure message.
+- **A review prompt is not a release pipeline.** The bridge prompt told the agent it "may build
+  and deploy"; it spent its whole run on a full image build. Say explicitly that a review runs
+  focused checks only and must not build/publish the release image or run the release pipeline;
+  put the same guidance in the MCP feedback (`review_guidance`) so non-bridge agents see it too.
 - **A live tail is not a conversation.** The agent's own lines are what the human asked for
   ("realtime output… like a regular opencode window"), but every line in the timeline buries the
   messages that need reading. Stream them into the same event log under `state: "log"` (throttled,

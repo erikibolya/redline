@@ -81,6 +81,12 @@ const agentWorking = (meta) => meta?.status === "submitted" &&
  *  it must not spin: it is a visible dead end the human can fix and resubmit. */
 const agentFailed = (meta) => meta?.agent_state === "failed";
 
+/** The structured reason a run failed (v0.25.1). Older meta has none; the UI then says the
+ *  generic "agent failed" as before. */
+const agentFailure = (meta) => meta?.agent_failure || null;
+const agentFailureIsTimeout = (meta) =>
+  String(agentFailure(meta)?.code || "").startsWith("timeout");
+
 /** The last line the agent actually narrated. Its own terminal output also lands in the event
  *  log (`state: "log"`) and is a shell transcript, not a step — the stage toast and the activity
  *  label must never print a command where a status belongs (2026-10-31). */
@@ -1083,6 +1089,8 @@ const railFingerprint = (sessions) => (sessions || []).map((session) => [
   session.annotation_count || 0,
   session.agent_state || "",
   session.agent_running ? 1 : 0,
+  session.agent_failure?.code || "",
+  session.agent_failure?.message || "",
   session.seen_by_agent_at ? 1 : 0,
   session.branch || "",
   featureState(session),
@@ -1359,6 +1367,11 @@ class Rail {
         const fresh = seen.isNew(session);
         const working = agentWorking(session);
         const failed = agentFailed(session);
+        const failure = agentFailure(session);
+        const failedTimeout = agentFailureIsTimeout(session);
+        const failureLabel = failedTimeout ? "agent timed out" : "agent failed";
+        const failureTitle = failure?.message
+          || "The agent could not run this round — it is yours again";
         const feature = featureState(session);
         const decided = feature !== "pending";
         // "How long did the last task run?" — a resolved row can answer it from the two stamps
@@ -1383,7 +1396,7 @@ class Rail {
               : failed
                 // The run could not happen and the round came back: the human must not read this
                 // as an agent still working on it, and must know why nothing is happening.
-                ? `<span class="badge failed" title="The agent could not run this round — it is yours again">agent failed</span>`
+                ? `<span class="badge failed" title="${escapeHtml(failureTitle)}">${failureLabel}</span>`
                 : queued && session.agent_state === "replied"
                   ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
                   : queued
@@ -1421,7 +1434,7 @@ class Rail {
                  decided ? `, feature ${feature}` : ""
                }${session.branch ? `, branch ${escapeHtml(session.branch)}` : ""}${
                  working ? ", working"
-                   : failed ? ", agent failed"
+                   : failed ? `, ${failureLabel}`
                      : queued ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
                }"
                aria-current="${session.id === this.selectedId}"
@@ -3991,12 +4004,16 @@ class Editor {
   runSummary() {
     const round = this.roundEvents();
     const failed = agentFailed(this.meta);
+    const failure = agentFailure(this.meta);
+    const failedTimeout = agentFailureIsTimeout(this.meta);
     if (!round.length) {
       // A run that died before logging anything is still a state the human must see.
       return failed
         ? `<div class="conv-run failed"><span class="conv-run-mark" aria-hidden="true"></span><div>`
-          + `<div class="conv-run-title">The agent could not run this round</div>`
-          + `<div class="conv-run-sub">The run never started.</div></div></div>`
+          + `<div class="conv-run-title">${
+            failedTimeout ? "The agent timed out" : "The agent could not run this round"
+          }</div>`
+          + `<div class="conv-run-sub">${escapeHtml(failure?.message || "The run never started.")}</div></div></div>`
         : "";
     }
 
@@ -4022,7 +4039,7 @@ class Editor {
       ? "Working"
       : failed
         // A dead end, not a slow run: the round is back in the human's hands.
-        ? "The agent could not run this round"
+        ? (failedTimeout ? "The agent timed out" : "The agent could not run this round")
         : replied && submitted
           ? "Agent replied — waiting for it to finish"
           : replied
@@ -4131,8 +4148,12 @@ class Editor {
     }
     if (agentFailed(this.meta)) {
       // The round came back from a run that never happened: say so, and say it is actionable.
-      status.push(`<div class="conv-wait failed"><b>The agent could not run this round.</b> `
-        + `It is yours again — fix the problem and submit to retry.</div>`);
+      const failure = agentFailure(this.meta);
+      const timedOut = agentFailureIsTimeout(this.meta);
+      status.push(`<div class="conv-wait failed"><b>${
+        timedOut ? "The agent timed out." : "The agent could not run this round."
+      }</b> ${failure?.message ? `${escapeHtml(failure.message)}. ` : ""}It is yours again — `
+        + `fix the problem and submit to retry.</div>`);
     }
     if (this.meta?.status === "submitted") {
       if (!this.meta.seen_by_agent_at) {

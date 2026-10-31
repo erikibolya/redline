@@ -72,8 +72,11 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
   project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
   tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours
-  again" notice with the bridge's message; the **output** toggle is off by default (no `log` line
-  in the conversation), shows the streamed line when clicked, survives a reload and closes again.
+  again" notice with the bridge's message; the **output** button opens the streamed `log` lines in
+  a popup centred in the viewport (asserted by geometry, and by the fact that nothing is injected
+  into `#conv-log`), a poll keeps feeding it while it is open, the stage toast prints the last
+  *step* and never a log line, and the popup closes from its button, `Esc` and not at all by
+  itself on a reload.
 
 ## Agent concurrency (v0.22)
 

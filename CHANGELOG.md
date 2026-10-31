@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.25.0 — 2026-10-31
 
 - **Errors no longer hide in Done.** The rail had five views (`All`, `Active`, `Open`,
   `Submitted`, `Done`), and `Active` meant "not resolved" — so a confirmed feature whose handoff

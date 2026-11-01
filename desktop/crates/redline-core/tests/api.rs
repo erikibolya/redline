@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use redline_core::api::{router, AppState};
 use redline_core::auth::Auth;
@@ -352,6 +352,57 @@ async fn video_sessions_accept_a_multipart_browser_upload() {
         .unwrap();
     let response = h.app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn video_uploads_accept_a_browser_trace_and_serve_it() {
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let trace = serde_json::json!({
+        "version": 1,
+        "kind": "browser-flow",
+        "started_at": "2026-11-01T14:00:00.000Z",
+        "duration_ms": 5000,
+        "redaction": {"headers": ["authorization"], "bodies": false},
+        "events": [
+            {"t": 100, "kind": "action", "action": "click", "selector": "#save"},
+            {"t": 200, "kind": "network", "method": "POST", "url": "https://app.test/api", "status": 500, "duration_ms": 120},
+            {"t": 300, "kind": "console", "level": "error", "text": "boom"}
+        ]
+    });
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nTraced flow\r\n",
+    );
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"duration_ms\"\r\n\r\n5000\r\n",
+    );
+    body.extend_from_slice(b"--BOUND\r\nContent-Disposition: form-data; name=\"video\"; filename=\"clip.mp4\"\r\nContent-Type: video/mp4\r\n\r\n");
+    body.extend_from_slice(MP4);
+    body.extend_from_slice(b"\r\n--BOUND\r\nContent-Disposition: form-data; name=\"trace\"; filename=\"trace.json\"\r\nContent-Type: application/json\r\n\r\n");
+    body.extend_from_slice(trace.to_string().as_bytes());
+    body.extend_from_slice(b"\r\n--BOUND--\r\n");
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/sessions/video")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "multipart/form-data; boundary=BOUND")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, created) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["meta"]["trace"]["kind"], "browser-flow");
+    assert_eq!(created["meta"]["trace"]["summary"]["console_errors"], 1);
+    assert_eq!(created["meta"]["trace"]["summary"]["network_failed"], 1);
+    let id = created["meta"]["id"].as_str().unwrap();
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/trace"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
 }
 
 #[tokio::test]
@@ -757,6 +808,50 @@ async fn cross_site_and_bad_payloads_are_rejected() {
         .header("content-type", "application/json")
         .header("sec-fetch-site", "cross-site")
         .body(Body::from(json!({"annotations": []}).to_string()))
+        .unwrap();
+    let (status, _, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // A browser extension is also cross-site, but it identifies itself with an extension Origin
+    // and still carries the token. It is allowed through and gets CORS only for that origin.
+    let extension_origin = "chrome-extension://abcdefghijklmnop";
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{id}/annotations"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "application/json")
+        .header("origin", extension_origin)
+        .header("sec-fetch-site", "cross-site")
+        .body(Body::from(json!({"annotations": []}).to_string()))
+        .unwrap();
+    let (status, headers, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        extension_origin
+    );
+
+    // A real preflight has no Authorization header; it is answered only for an extension origin.
+    let request = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/sessions/video")
+        .header("origin", extension_origin)
+        .header("access-control-request-method", "POST")
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        headers[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        extension_origin
+    );
+
+    let request = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/sessions/video")
+        .header("origin", "https://evil.example")
+        .header("access-control-request-method", "POST")
+        .body(Body::empty())
         .unwrap();
     let (status, _, _) = send(&h.app, request).await;
     assert_eq!(status, StatusCode::FORBIDDEN);

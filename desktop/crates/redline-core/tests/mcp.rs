@@ -665,3 +665,92 @@ async fn a_failed_run_hands_the_round_back_and_says_so() {
         "a new run/reply must clear the old failure reason"
     );
 }
+
+#[tokio::test]
+async fn feedback_and_resources_expose_a_browser_trace() {
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let (_dir, store) = setup();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Traced flow",
+            "https://app.test",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    let trace = json!({
+        "version": 1,
+        "kind": "browser-flow",
+        "started_at": "2026-11-01T14:00:00.000Z",
+        "duration_ms": 5000,
+        "redaction": {"headers": ["authorization"], "bodies": false},
+        "events": [
+            {"t": 100, "kind": "console", "level": "error", "text": "boom"},
+            {"t": 200, "kind": "network", "method": "GET", "url": "https://app.test/x", "status": 200}
+        ]
+    });
+    store
+        .attach_trace(&meta.id, trace.to_string().as_bytes())
+        .unwrap();
+    store
+        .submit_round(
+            &meta.id,
+            &Submission {
+                note: None,
+                annotations: Vec::new(),
+                png: None,
+                width: Some(1280),
+                height: Some(720),
+            },
+            None,
+            &[],
+        )
+        .unwrap();
+
+    let feedback = payload(&call(&store, "get_feedback", json!({"session_id": meta.id})).await);
+    assert_eq!(feedback["trace"]["summary"]["console_errors"], 1);
+    assert!(feedback["trace_url"]
+        .as_str()
+        .unwrap()
+        .contains(&format!("/sessions/{}/trace?t={TOKEN}", meta.id)));
+
+    let context = McpContext {
+        store: &store,
+        base_url: "http://127.0.0.1:8788",
+        token: TOKEN,
+    };
+    let listed = handle(
+        &context,
+        &json!({"jsonrpc": "2.0", "id": 3, "method": "resources/list"}),
+    )
+    .await
+    .unwrap();
+    let uris: Vec<String> = listed["result"]["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["uri"].as_str().unwrap().to_string())
+        .collect();
+    assert!(uris.contains(&format!("redline://session/{}/trace.json", meta.id)));
+    let read = handle(
+        &context,
+        &json!({
+            "jsonrpc": "2.0", "id": 4, "method": "resources/read",
+            "params": {"uri": format!("redline://session/{}/trace.json", meta.id)}
+        }),
+    )
+    .await
+    .unwrap();
+    assert!(read["result"]["contents"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("browser-flow"));
+}

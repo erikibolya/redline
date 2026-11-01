@@ -845,3 +845,117 @@ fn a_pre_release_ship_record_is_read_as_a_generic_handoff() {
         Some(HandoffStatus::Running)
     );
 }
+
+/// A browser trace is summarized by the server (never trusted from the client), carried into the
+/// submitted round and review.md, and archived with the previous video round.
+#[test]
+fn a_browser_trace_is_validated_summarized_and_archived() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Checkout",
+            "https://app.test/checkout",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            Some(1440),
+            Some(900),
+            Some(30.0),
+        )
+        .unwrap();
+    let trace = json!({
+        "version": 1,
+        "kind": "browser-flow",
+        "started_at": "2026-11-01T14:00:00.000Z",
+        "duration_ms": 5000,
+        "redaction": {"headers": ["authorization"], "bodies": false},
+        "events": [
+            {"t": 100, "kind": "action", "action": "click", "selector": "#save", "label": "Save"},
+            {"t": 200, "kind": "network", "method": "POST", "url": "https://app.test/api", "status": 500, "duration_ms": 120},
+            {"t": 300, "kind": "console", "level": "error", "text": "boom"},
+            {"t": 400, "kind": "marker", "label": "total did not update"}
+        ]
+    });
+    let meta = store
+        .attach_trace(&meta.id, trace.to_string().as_bytes())
+        .expect("trace attach");
+    let reference = meta.trace.as_ref().expect("trace ref");
+    assert_eq!(reference.events, 4);
+    assert_eq!(reference.summary.console, 1);
+    assert_eq!(reference.summary.console_errors, 1);
+    assert_eq!(reference.summary.network, 1);
+    assert_eq!(reference.summary.network_failed, 1);
+    assert_eq!(reference.summary.actions, 1);
+    assert_eq!(reference.summary.markers, 1);
+    assert_eq!(reference.highlights.len(), 2);
+
+    let submission = Submission {
+        note: None,
+        annotations: Vec::new(),
+        png: None,
+        width: Some(1440),
+        height: Some(900),
+    };
+    let (submitted, set) = store
+        .submit_round(&meta.id, &submission, None, &[])
+        .unwrap();
+    assert_eq!(set.trace.as_ref().map(|trace| trace.events), Some(4));
+    let review = std::fs::read_to_string(store.dir(&meta.id).unwrap().join("review.md")).unwrap();
+    assert!(review.contains("## Browser trace"), "{review}");
+    assert!(review.contains("boom"), "{review}");
+
+    let stamp = submitted.round_stamp.expect("round stamp");
+    let next = store
+        .new_video_round(&meta.id, WEBM, None, Some(2000), None, None, None)
+        .expect("new round");
+    assert!(next.trace.is_none(), "the new round has no old trace");
+    assert!(
+        store
+            .history_trace_path(&meta.id, &stamp)
+            .unwrap()
+            .is_file(),
+        "the old trace must move to history"
+    );
+}
+
+#[test]
+fn an_invalid_trace_is_refused_without_attaching_it() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Bad trace",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    for trace in [
+        json!({"version": 1, "kind": "browser-flow", "started_at": "x", "duration_ms": 0, "events": []}),
+        json!({"version": 1, "kind": "other", "started_at": "2026-11-01T00:00:00Z", "duration_ms": 1000, "events": []}),
+        json!({"version": 1, "kind": "browser-flow", "started_at": "2026-11-01T00:00:00Z", "duration_ms": 1000,
+               "events": [{"t": 6000, "kind": "console", "level": "error", "text": "late"}]}),
+    ] {
+        assert!(
+            store
+                .attach_trace(&meta.id, trace.to_string().as_bytes())
+                .is_err(),
+            "must reject {trace}"
+        );
+    }
+    assert!(
+        store.require(&meta.id).unwrap().trace.is_none(),
+        "a rejected trace must not update meta"
+    );
+}

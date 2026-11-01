@@ -7,6 +7,12 @@
   server reported the stable version (2026-11-01). `desktop/scripts/dev-version.mjs` now stamps
   the workspace, app and lockfile versions before both the Windows and container builds, and the
   Windows job asserts that `redline --version` reports the dev version.
+- **A browser-flow trace has a server home (extension Phase 1).** Video uploads accept an optional
+  `trace` file; the server validates it, derives the summary, writes `trace.json`, carries it into
+  `annotations.json`/`review.md`, exposes it to `get_feedback` and as the
+  `redline://session/<id>/trace.json` MCP resource, and archives it with a replaced video round.
+  Extension origins are allowed through the CSRF guard only with a valid token, and preflight is
+  answered only for `chrome-extension://`/`moz-extension://` origins.
 
 ## 0.26.1 — 2026-11-01
 

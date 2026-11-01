@@ -169,6 +169,16 @@ The video bytes for a video session (video sessions only). Supports HTTP `Range`
 `206 Partial Content` with `Content-Range`, so `<video>` can seek without downloading the whole
 clip. `404` for image sessions or a missing file. Authenticated like every session route.
 
+### `GET /sessions/<id>/trace`
+
+The raw `trace.json` for a browser-flow review (v0.27), served as `application/json`. The file is
+validated and summarized on upload; `meta.trace` carries the summary. `404` when the session has
+no trace. The event shape is documented in [`EXTENSION.md`](EXTENSION.md#6-trace-format-tracejson).
+
+### `GET /sessions/<id>/history/<stamp>/trace`
+
+The trace archived with a previous video round. `404` when that round had no trace.
+
 ### `POST /api/sessions` (video)
 
 Video sessions use the same endpoint with `video_base64` or `video_path` instead of the image
@@ -194,7 +204,8 @@ contains:
 `image` still names the media file for older clients; `media.kind` is the authoritative switch.
 Annotations may carry `at` (seconds) and optional `until`; `review.md` prints `mm:ss.mmm` timecodes.
 MCP clients can use `review_video` instead of `review_screenshot`; `get_feedback` includes
-`media` and `video_url`.
+`media`, `video_url`, and—when the capture sent one—`trace` plus `trace_url`. The raw trace is
+also available as the MCP resource `redline://session/<id>/trace.json`.
 
 ### `POST /api/sessions/video` (browser multipart)
 
@@ -204,6 +215,7 @@ The New review dialog uploads a video as `multipart/form-data`:
 |---|---|---|
 | `video` (or `file`) | yes | MP4/WebM bytes |
 | `poster` | no | first-frame PNG/JPEG for the rail/gallery card |
+| `trace` | no | `trace.json` from the browser capture extension (max 10 MB; see § Browser trace) |
 | `title`, `note`, `url`, `project`, `branch`, `agent` | no | same as `POST /api/sessions` |
 | `duration_ms`, `width`, `height`, `fps` | no | metadata read by the browser |
 
@@ -509,6 +521,9 @@ See `docs/ARCHITECTURE.md` § Storage schema. Fields:
 | `branch` | The feature branch the review runs on. Every review has one: `feat/<title-slug>-<id-tail>` when nobody named it, and the branch-lock key. v0.21's `session/<id>` fallback is read back as that `feat/…` name. |
 | `image` | Screenshot filename inside the session. |
 | `image_width` / `image_height` | Present after submission; canvas dimensions. |
+| `media` | Optional image/video metadata (`kind`, `file`, `mime`, dimensions, duration, fps). Missing means a legacy image. |
+| `poster` | Video first-frame thumbnail served by `/sessions/<id>/image`. |
+| `trace` | Optional browser-flow summary (v0.27): `file`, `kind`, `events`, `started_at`, `duration_ms`, `summary`, `redacted`, `truncated`, `highlights`. Raw events live in `trace.json`. |
 
 ## curl examples
 

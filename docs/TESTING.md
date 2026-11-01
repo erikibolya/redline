@@ -51,10 +51,15 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: open History, assert one row per round, that an unchanged resubmission adds no
   row, that a row opens read-only while *Current* returns to the live canvas, and that after STOP
   the round on the canvas is one *Round N (current)* row with no extra *Current*.
-- Round cost (2026-10-31): Rust `tests/api.rs` `every_round_reports_how_long_it_ran` — an older
-  round ends where the next submission begins, the newest submitted round has no end yet, and
-  `resolve` is the end of the round the agent had. The browser e2e asserts a History row prints
-  `· took …`. In the rail, a resolved review keeps a `done` badge plus `· took …`, and an open row
+- Round cost (2026-10-31): Rust `tests/api.rs` `every_round_reports_how_long_the_agent_ran` — an
+  older round ends where the next submission begins, the newest submitted round has no end yet,
+  and `resolve` is the end of the round the agent had. The duration starts at the agent's pickup
+  (`run_started_at`), not at the submission: the test moves a round's submission an hour back in
+  its archive and records the agent picking it up 45 minutes ago, then asserts the 15-minute queue
+  wait is not reported as run time. A round with no agent event has no duration at all (a
+  submission stamp is not proof that anyone worked), and `last_run` in `GET /api/sessions` /
+  `GET /api/sessions/<id>` reports the same number. The browser e2e asserts a History row prints
+  `· took …`. In the rail, a finished review keeps a `done` badge plus `· took …`, and an open row
   with nothing drawn on it says `open` instead of staying blank.
 
 ## Run state and agent output (2026-10-31)

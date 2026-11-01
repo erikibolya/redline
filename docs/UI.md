@@ -98,8 +98,9 @@ inside changes width (`?` is narrower than `☀`), the button must not.
   (tracked per session in `localStorage`) or the annotation count. No row is left without a word.
   The handoff badge shows the integration's label (`merged`, `handoff queued`,
   `airlock-worker-offline`) next to `confirmed`; a failed handoff keeps the row in `Active`.
-  A resolved row also says how long its last run took (`· took 4m 12s`), from the submission stamp
-  to `resolve`.
+  A row that is not submitted says how long its last run took (`· took 4m 12s`), measured from
+  the agent's pickup to the hand-back — queue time is not work. A submitted row has a run in
+  flight, so it does not print the previous round's cost.
 - Selected row is highlighted; clicking loads that session into the canvas without a page reload.
 - Groups by day (`Today`, `Yesterday`, older) when more than ~15 sessions.
 
@@ -371,9 +372,11 @@ do not move; it also clicks every close X.
   the live canvas is on screen. An unselected live row (while a round is previewed) is an ordinary
   card.
 - **Every round says what it cost**: the row subtitle prints `· took 4m 12s` from the server's
-  `duration_secs`, which is the submission stamp to the moment the round left the agent's hands
-  (its next picture, the next human submission, or `resolve`). The conversation's run summary
-  prints the same for the last run. A round the agent still holds has no duration yet.
+  `duration_secs`, which is the agent's pickup (`run_started_at`) to the moment the round left its
+  hands (its next picture, the next human submission, or `resolve`). The wait before anyone claims
+  a round is not counted — a review that sat in the queue for 34 minutes and ran for 8 reads `8m`,
+  not `42m` (2026-10-31). The rail and the conversation's run summary print the same `last_run`
+  object. A round the agent still holds, or one no agent ever touched, has no duration yet.
 - The ghost (`◫`), diff (`Δ`) and open-PNG (`↗`) buttons and the `Ghost · …` chip were removed;
   the diff endpoint remains for agents.
 - The conversation no longer renders the round screenshot (`.conv-img`); the canvas and History

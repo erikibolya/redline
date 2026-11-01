@@ -1,8 +1,7 @@
 # Browser capture extension — design and delivery plan
 
-Status: **Phase 1 (server trace foundation) implemented** on `feat/browser-extension`
-(2026-11-01). The capture extension itself is Phase 2+; the tool set and store decision are
-recorded below.
+Status: **Phases 1 and 2 implemented** on the extension branches (2026-11-01). The side panel
+now captures and annotates screenshots; recording/trace UI and store packaging are next.
 
 A Chromium extension that connects to a RedLine server, captures a screenshot or records a flow
 from the current tab, collects the console and network evidence, and lets the human annotate the
@@ -97,6 +96,11 @@ the media metadata. The session is created **open**; the side panel loads it for
 extension does **not** wake the agent until the human presses **Submit to RedLine**, which uses
 the same annotation API as the web editor. **Open in RedLine** is always available for advanced
 editing.
+
+The Phase 2 screenshot path is shorter: the popup creates the image session immediately with the
+tab title and the configured project, then opens the side panel where the note is edited. An
+editable title/project draft before creation is recording-phase polish; the side panel already
+lets the human discard the session.
 
 ### 3.4 Side-panel annotator
 
@@ -567,4 +571,17 @@ Phase 1 (server trace foundation) is on `feat/browser-extension`:
   cross-site guard; web cross-site stays `403`; extension preflight is `204`, web preflight `403`.
 - Tests: 125 Rust tests green (3 new trace tests + auth preflight coverage).
 
-Next: Phase 2 (options/popup, screenshot capture, side-panel image editor) on the same branch.
+Phase 2 (options/popup, screenshot capture, side-panel image editor) is implemented on
+`feat/extension-panel`:
+
+- MV3 options page with server/token/project/branch, origin-scoped host permission request and a
+  connection test; token in `chrome.storage.local` only.
+- Popup capture flow: visible-tab PNG, create an image session, open the side panel, fall back to
+  a normal review tab when the side panel is unavailable.
+- Side panel: select/move, rectangle, arrow, pen, text note, colour/width, undo/redo, delete,
+  clear, numbered list, per-session draft, annotated PNG composition and submit.
+- Submitted reviews open read-only; **Open in RedLine** remains available.
+- Eleven extension unit tests (`node --test`) for annotation geometry, the API request shape,
+  and URL/permission config, wired into the Linux + Windows CI test job.
+
+Next: Phase 3 (tab recording, `chrome.debugger` console/network/action trace, offscreen recorder).

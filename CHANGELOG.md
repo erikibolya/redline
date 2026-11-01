@@ -13,6 +13,12 @@
   `redline://session/<id>/trace.json` MCP resource, and archives it with a replaced video round.
   Extension origins are allowed through the CSRF guard only with a valid token, and preflight is
   answered only for `chrome-extension://`/`moz-extension://` origins.
+- **The browser extension can capture and annotate a screenshot (Phase 2).** The Chrome/Edge MV3
+  extension adds an options page (server/token/project/branch, origin-scoped permission), a popup
+  visible-tab capture, and a side-panel canvas editor with select/move, rectangle, arrow, pen,
+  text notes, undo/redo, per-session drafts and submit. The review lands in the normal RedLine
+  queue; the full editor stays one click away. Eleven extension unit tests run in CI on Linux and
+  Windows.
 
 ## 0.26.1 — 2026-11-01
 

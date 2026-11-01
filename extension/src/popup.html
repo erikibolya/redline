@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RedLine Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="mark">RL</div>
+      <div class="grow">
+        <strong>RedLine Capture</strong>
+        <div id="connection" class="muted">Checking…</div>
+      </div>
+      <button id="options" class="icon" type="button" title="Options" aria-label="Options">⚙</button>
+    </header>
+
+    <section class="page">
+      <div id="page-title" class="title">—</div>
+      <div id="page-url" class="url"></div>
+    </section>
+
+    <section id="not-configured" class="notice" hidden>
+      Connect your RedLine server before capturing.
+      <button id="configure" class="link" type="button">Open options</button>
+    </section>
+
+    <section class="actions">
+      <button id="capture" class="primary" type="button">Screenshot &amp; annotate</button>
+      <a id="dashboard" class="secondary" href="#" target="_blank" rel="noreferrer">Open RedLine</a>
+    </section>
+
+    <p id="status" class="status" role="status"></p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

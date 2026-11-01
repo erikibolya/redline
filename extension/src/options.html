@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RedLine Capture — options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <div class="mark">RL</div>
+        <div>
+          <h1>RedLine Capture</h1>
+          <p class="muted">Connect this browser to your RedLine server.</p>
+        </div>
+      </header>
+
+      <section class="card">
+        <label>
+          Server URL
+          <input id="server-url" type="url" placeholder="https://redline.ibolya.cz" autocomplete="url" />
+        </label>
+        <label>
+          Token
+          <input id="token" type="password" placeholder="paste the token from /setup" autocomplete="off" />
+        </label>
+        <p class="hint">
+          The token is stored only in this browser profile's local extension storage. It is sent
+          only to the server URL above.
+        </p>
+
+        <div class="row">
+          <label class="grow">
+            Project
+            <select id="project"><option value="">Inbox</option></select>
+          </label>
+          <label class="grow">
+            Branch <span class="muted">(optional)</span>
+            <input id="branch" type="text" placeholder="feat/my-feature" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="save" class="primary" type="button">Save &amp; request access</button>
+          <button id="test" type="button">Test connection</button>
+          <a id="open-redline" class="button-link" href="#" target="_blank" rel="noreferrer">Open RedLine</a>
+        </div>
+        <p id="status" class="status" role="status"></p>
+      </section>
+
+      <section class="card small">
+        <h2>Permissions</h2>
+        <p class="muted">
+          Chrome asks for access to the RedLine server origin when you save. The extension uses
+          <code>activeTab</code> only after you click Capture; it does not read pages in the
+          background.
+        </p>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

@@ -1,8 +1,7 @@
 # Browser capture extension — design and delivery plan
 
-Status: **Phases 1–3 implemented** on the extension branches (2026-11-01). Screenshots are
-annotated in the side panel; tab recording with console/network/action trace uploads to RedLine.
-The video annotator (Phase 4) and store packaging are next.
+Status: **Phases 1–4 implemented** on the extension branches (2026-11-01). Screenshots and
+recorded flows are annotated in the side panel; store packaging is next.
 
 A Chromium extension that connects to a RedLine server, captures a screenshot or records a flow
 from the current tab, collects the console and network evidence, and lets the human annotate the
@@ -586,7 +585,7 @@ Phase 2 (options/popup, screenshot capture, side-panel image editor) is implemen
 - Side panel: select/move, rectangle, arrow, pen, text note, colour/width, undo/redo, delete,
   clear, numbered list, per-session draft, annotated PNG composition and submit.
 - Submitted reviews open read-only; **Open in RedLine** remains available.
-- Sixteen extension unit tests (`node --test`) for annotation geometry, the API request shape,
+- Eighteen extension unit tests (`node --test`) for annotation geometry, the API request shape,
   URL/permission config, and trace redaction, wired into the Linux + Windows CI test job.
 
 Phase 3 (tab recording) is implemented on `feat/extension-recording`:
@@ -601,4 +600,16 @@ Phase 3 (tab recording) is implemented on `feat/extension-recording`:
   review. The phase-4 video annotator is still read-only in the panel; use RedLine for video
   annotations until it lands.
 
-Next: Phase 4 (video canvas/timeline and trace panel in the side panel).
+Phase 4 (video annotator and trace panel) is implemented on `feat/extension-video`:
+
+- The side panel draws the current video frame into the same canvas; drawing pauses playback and
+  tags the annotation with `at`.
+- Timeline playhead, frame step, annotation markers, trace markers, a Ghosts toggle and a
+  filterable console/network/action trace panel.
+- Submit captures one annotated frame per unique time (max 20), composes a labelled contact sheet
+  and posts the video multipart payload. A submitted round remains readable and seekable.
+- The side-panel annotator was smoke-tested in headless Chromium against a local RedLine server:
+  two timecoded rectangles, frames at 0.000/1.500 and a successful submit. Trace upload itself
+  still needs a dev server with Phase 1; the server tests cover its API.
+
+Next: Phase 5 (store packaging, extension e2e and release).

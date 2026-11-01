@@ -15,7 +15,8 @@ submits the annotated screenshot to a RedLine server.
    RedLine queue; the agent reads the annotations and the submitted note.
 5. To record a flow, use **Record flow** in the popup. Chrome shows a debugging bar; click through
    the app, use **Mark** for a moment, then **Stop & save**. The clip and trace upload together.
-   Video annotation currently happens in RedLine; the side-panel video editor is Phase 4.
+   The side panel opens the recorded flow with a video timeline, trace filters and timecoded
+   annotations.
 
 ## What is implemented
 
@@ -33,10 +34,12 @@ submits the annotated screenshot to a RedLine server.
   (no headers/bodies) and navigation. A content script records click/change/submit actions.
 - URLs and console text are redacted (Bearer tokens, `token/key/secret/password/code/session`
   query values). The trace is capped at 5,000 events and 10 MB; the video is capped by RedLine.
-- Stop builds the poster and uploads video + trace; the review enters the normal queue. The
-  phase-4 video annotator is not in the side panel yet, so video annotations use RedLine.
+- Stop builds the poster and uploads video + trace; the review enters the normal queue.
+- Video annotator: play/pause, frame step, timeline, annotation and trace markers, Ghosts,
+  timecoded point annotations, annotated frames/contact sheet and submit. Maximum 20 unique
+  annotated times per round.
 
-The trace UI, video annotator and store packaging are later phases. See
+The store packaging and extension e2e are later phases. See
 [`../docs/EXTENSION.md`](../docs/EXTENSION.md).
 
 ## Tests

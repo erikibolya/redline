@@ -108,3 +108,33 @@ test("video upload sends the clip, poster and trace as multipart", async () => {
     globalThis.fetch = original;
   }
 });
+
+test("video submit sends annotations, contact sheet and one file per moment", async () => {
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  try {
+    const api = new RedLineApi({ serverUrl: "https://redline.test", token: "tok" });
+    await api.submitVideo("v1", {
+      annotations: [{ type: "rect", at: 1.25 }],
+      width: 1280,
+      height: 720,
+      contactSheet: new Blob(["png"], { type: "image/png" }),
+      frames: [{ at: 1.25, blob: new Blob(["frame"], { type: "image/png" }) }],
+      note: "here",
+    });
+    const form = calls[0].init.body;
+    assert.ok(form instanceof FormData);
+    const annotations = JSON.parse(form.get("annotations"));
+    assert.equal(annotations.annotations[0].at, 1.25);
+    assert.equal(annotations.note, "here");
+    assert.ok(form.get("png") instanceof Blob);
+    assert.equal(form.getAll("frames").length, 1);
+    assert.equal(form.getAll("frames")[0].name, "1.250.png");
+  } finally {
+    globalThis.fetch = original;
+  }
+});

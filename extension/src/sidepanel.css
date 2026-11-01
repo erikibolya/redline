@@ -80,3 +80,43 @@ select { background: #0c1422; color: var(--text); border: 1px solid var(--line);
 .status { color: var(--muted); font-size: 11px; min-height: 16px; }
 .status.ok { color: #4ade80; }
 .status.err { color: #fb7185; }
+.video-bar {
+  display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+  padding: 6px 10px; border-bottom: 1px solid var(--line);
+}
+.video-bar button { min-width: 28px; padding: 4px 6px; }
+.video-time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11px; }
+.ghosts { display: flex; align-items: center; gap: 3px; color: var(--muted); font-size: 11px; }
+.ghosts input { width: auto; }
+.timeline-wrap { position: relative; flex: 1 1 100%; height: 22px; margin-top: 2px; }
+.timeline-wrap input[type="range"] {
+  position: absolute; left: 0; right: 0; top: 8px; width: 100%;
+  accent-color: var(--accent); height: 4px;
+}
+.markers { position: absolute; left: 0; right: 0; top: 0; height: 8px; pointer-events: none; }
+.markers span {
+  position: absolute; top: 0; width: 2px; height: 8px; margin-left: -1px;
+  background: var(--accent); border-radius: 1px;
+}
+.markers.trace { top: 17px; height: 4px; }
+.markers.trace span { height: 4px; background: #f59e0b; }
+.markers.trace span.console-error { background: #fb7185; }
+.markers.trace span.network-error { background: #fbbf24; }
+.trace-panel { border-bottom: 1px solid var(--line); }
+.trace-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 12px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
+}
+.trace-head select { font-size: 11px; padding: 2px 4px; }
+.trace-list { max-height: 110px; overflow: auto; padding: 0 8px 4px; }
+.trace-row {
+  display: flex; gap: 7px; align-items: baseline; width: 100%;
+  border: 0; border-radius: 5px; padding: 3px 4px; background: transparent;
+  color: var(--text); text-align: left; cursor: pointer; font: inherit;
+}
+.trace-row:hover { background: #1c2940; }
+.trace-row .t { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 10px; min-width: 52px; }
+.trace-row .k { color: var(--blue); font-size: 10px; min-width: 44px; text-transform: uppercase; }
+.trace-row .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trace-row.error .m { color: #fb7185; }
+@media (max-width: 420px) { .trace-row .k { display: none; } }

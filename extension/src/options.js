@@ -112,4 +112,10 @@ serverInput.addEventListener("change", () => {
     // keep the previous href; validation reports it on save/test
   }
 });
-init();
+init()
+  .catch((error) => setStatus(error.message || String(error), "err"))
+  .finally(() => {
+    // Lets the extension e2e (and a human on a slow profile) know the stored config is loaded;
+    // filling the form before this point could be overwritten by init().
+    document.body.dataset.ready = "1";
+  });

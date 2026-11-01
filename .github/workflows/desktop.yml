@@ -69,6 +69,28 @@ jobs:
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8788/health && break; sleep 1; done
           sleep 3
           node desktop/scripts/e2e.mjs
+      - name: Prepare the host-permitted extension copy
+        run: |
+          mkdir -p "$RUNNER_TEMP/extension"
+          cp -a extension/manifest.json extension/src extension/icons "$RUNNER_TEMP/extension/"
+          python3 extension/scripts/test-manifest.py "$RUNNER_TEMP/extension/manifest.json" "http://127.0.0.1:8788/*"
+      - name: Capture and annotate in the extension
+        env:
+          REDLINE_BASE: http://127.0.0.1:8788
+          REDLINE_TOKEN: e2e-token
+          CHROME_URL: http://127.0.0.1:9223
+        run: |
+          nohup "${{ steps.chrome.outputs.chrome-path }}" --headless=new --no-sandbox --disable-gpu \
+            --disable-dev-shm-usage --remote-debugging-port=9223 \
+            --user-data-dir="$RUNNER_TEMP/chrome-ext" \
+            --disable-extensions-except="$RUNNER_TEMP/extension" \
+            --load-extension="$RUNNER_TEMP/extension" about:blank > /tmp/chrome-ext.log 2>&1 &
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9223/json/version && break; sleep 1; done
+          sleep 3
+          node extension/scripts/e2e.mjs
+      - name: Show extension logs on failure
+        if: failure()
+        run: tail -100 /tmp/chrome-ext.log || true
 
   shell:
     name: tauri shell (windows)

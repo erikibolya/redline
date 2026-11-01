@@ -19,3 +19,6 @@ desktop/app/tauri.dev.conf.json
 
 # Store/package artifacts
 dist/
+
+# Extension test driver
+extension/node_modules/

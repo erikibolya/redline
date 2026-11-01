@@ -42,7 +42,11 @@ submits the annotated screenshot to a RedLine server.
 The store package is built by `python3 extension/scripts/package.py` (output:
 `dist/redline-extension-<version>.zip`). See [`../docs/STORE-EXTENSION.md`](../docs/STORE-EXTENSION.md)
 for the listing/permission copy and [`../docs/PRIVACY-EXTENSION.md`](../docs/PRIVACY-EXTENSION.md)
-for the privacy policy. Extension e2e is the remaining engineering item.
+for the privacy policy.
+
+The extension e2e (`extension/scripts/e2e.mjs`) runs in CI against a temporary host-permitted
+copy; it needs a running RedLine server, Chromium with the extension loaded, and
+`REDLINE_BASE`/`REDLINE_TOKEN`/`CHROME_URL`.
 
 ## Tests
 

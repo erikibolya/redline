@@ -35,7 +35,9 @@
   builds a dependency-free ZIP of `manifest.json`, `src/` and `icons/`; the release workflow
   attaches it to every GitHub release. `docs/PRIVACY-EXTENSION.md` and `docs/STORE-EXTENSION.md`
   document the data flow, permission justifications and the Chrome ($5 one-time) / Edge (free)
-  submission path. Store accounts and publishing remain owner actions.
+  submission path. Store accounts and publishing remain owner actions. The browser e2e CI job now
+  also loads the unpacked extension in headless Chromium, submits an image annotation and a
+  video+trace annotation, and verifies the server payload.
 
 ## 0.26.1 — 2026-11-01
 

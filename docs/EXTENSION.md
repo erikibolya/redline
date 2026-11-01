@@ -1,7 +1,8 @@
 # Browser capture extension — design and delivery plan
 
-Status: **Phases 1–4 implemented** on the extension branches (2026-11-01). Screenshots and
-recorded flows are annotated in the side panel; store packaging is next.
+Status: **Phases 1–4 implemented; store package prepared** (2026-11-01). Screenshots and recorded
+flows are annotated in the side panel. The ZIP, privacy policy and listing copy are ready; store
+accounts and publish are pending.
 
 A Chromium extension that connects to a RedLine server, captures a screenshot or records a flow
 from the current tab, collects the console and network evidence, and lets the human annotate the
@@ -612,4 +613,12 @@ Phase 4 (video annotator and trace panel) is implemented on `feat/extension-vide
   two timecoded rectangles, frames at 0.000/1.500 and a successful submit. Trace upload itself
   still needs a dev server with Phase 1; the server tests cover its API.
 
-Next: Phase 5 (store packaging, extension e2e and release).
+Phase 5 preparation is in this branch:
+
+- `extension/scripts/package.py` builds `dist/redline-extension-<version>.zip` with only
+  `manifest.json`, `src/` and `icons/` (no external zip dependency).
+- `docs/PRIVACY-EXTENSION.md` and `docs/STORE-EXTENSION.md` cover the privacy disclosure,
+  permission justifications and listing copy.
+- The release workflow attaches the ZIP to every GitHub release.
+- The store accounts are not created (Chrome: $5 one-time; Edge: free), so publishing is still
+  the owner's explicit action. Extension e2e remains the last engineering item.

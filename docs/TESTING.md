@@ -51,10 +51,15 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: open History, assert one row per round, that an unchanged resubmission adds no
   row, that a row opens read-only while *Current* returns to the live canvas, and that after STOP
   the round on the canvas is one *Round N (current)* row with no extra *Current*.
-- Round cost (2026-10-31): Rust `tests/api.rs` `every_round_reports_how_long_it_ran` — an older
-  round ends where the next submission begins, the newest submitted round has no end yet, and
-  `resolve` is the end of the round the agent had. The browser e2e asserts a History row prints
-  `· took …`. In the rail, a resolved review keeps a `done` badge plus `· took …`, and an open row
+- Round cost (2026-10-31): Rust `tests/api.rs` `every_round_reports_how_long_the_agent_ran` — an
+  older round ends where the next submission begins, the newest submitted round has no end yet,
+  and `resolve` is the end of the round the agent had. The duration starts at the agent's pickup
+  (`run_started_at`), not at the submission: the test moves a round's submission an hour back in
+  its archive and records the agent picking it up 45 minutes ago, then asserts the 15-minute queue
+  wait is not reported as run time. A round with no agent event has no duration at all (a
+  submission stamp is not proof that anyone worked), and `last_run` in `GET /api/sessions` /
+  `GET /api/sessions/<id>` reports the same number. The browser e2e asserts a History row prints
+  `· took …`. In the rail, a finished review keeps a `done` badge plus `· took …`, and an open row
   with nothing drawn on it says `open` instead of staying blank.
 
 ## Run state and agent output (2026-10-31)
@@ -72,10 +77,11 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - `redline-agent` tests: `log_line` strips terminal colours, drops blank lines and bounds the
   length; `a_run_is_killed_when_it_goes_silent_or_exceeds_the_hard_cap` runs a fake OpenCode that
   goes silent (must fail with `timeout_idle`), one that keeps printing (must survive the idle
-  window), and one that hits the hard cap (`timeout_hard`); the handoff prompt test asserts the
-  draft-PR-first flow, the `REDLINE_BIN` preflight and the failed-result report; the two-worktree
-  bridge integration test asserts the fake agent's own stdout line arrives in the review as a
-  `state="log"` event.
+  window), and one that hits the hard cap (`timeout_hard`); the idle case also spawns a background
+  grandchild and asserts the process-group kill reaps it (no orphaned builds); the handoff prompt
+  test asserts the draft-PR-first flow, the `REDLINE_BIN` preflight and the failed-result report;
+  the two-worktree bridge integration test asserts the fake agent's own stdout line arrives in the
+  review as a `state="log"` event.
 - Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
   project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
   tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours

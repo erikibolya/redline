@@ -83,6 +83,8 @@ redline-agent
 build that keeps printing progress survives. `REDLINE_AGENT_TIMEOUT` is only the hard cap
 (default 6 h) for a run that never stops producing output. A timeout is reported as
 `agent_failure.code=timeout_idle` or `timeout_hard` and the UI says **agent timed out**.
+A stopped or timed-out run kills its whole process group (on Unix), so shell commands and
+`docker build` children cannot outlive the bridge and hold the Docker builder.
 
 ```bash
 docker run -d --name redline-agent \

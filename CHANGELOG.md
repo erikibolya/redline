@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.26.1 — 2026-11-01
+
+- **A stopped or timed-out run now kills its process tree, not just `opencode`.** A killed agent
+  could leave a `docker build` grandchild running for hours; one orphaned `redline:logo-merge`
+  build blocked Docker's legacy builder and made every later build hang at `COPY` (2026-11-01).
+  The child is spawned as its own process group and the timeout/STOP path sends `SIGKILL` to the
+  group, so shell commands and Docker builds die with the run. The Unix test proves a fake
+  `opencode`'s background `sleep` does not survive the idle timeout.
+- **A round's duration starts when an agent picks it up, not when the human submitted it.** The
+  History row and the rail measured `submitted_at` → hand-back, so a review that waited 34 minutes
+  in the queue reported 42 minutes on a run that took 8 (2026-10-31). A run now starts at the
+  agent's first non-log event in `agent-events.jsonl` (`run_started_at`); a round no agent touched
+  has no duration rather than the queue time as a stand-in. The same `last_run` reaches the rail
+  and the conversation, computed once in `Store::history`.
+
 ## 0.26.0 — 2026-10-31
 
 - **A handoff result can always be reported.** The human can confirm a feature while the agent is

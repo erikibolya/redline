@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.26.0.** Live in production on holly:
+**Current release: v0.26.1.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -365,6 +365,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   Derive staleness from the live claim (`handoff_stale`), show **handoff stale** with the retry
   action, and make the bridge report failed when a handoff stops while the feature is still
   confirmed. A status label is only evidence when something owns the work.
+- **A killed agent is not a killed process tree.** Killing `opencode` left its shell command and
+  `docker build` grandchildren running; one orphaned `redline:logo-merge` build blocked the Docker
+  legacy builder for four hours and made every later build hang at `COPY` (2026-11-01). Spawn the
+  run in its own process group and `SIGKILL` the group on timeout/STOP, and test a background
+  grandchild as well as the direct child. A build process survives its parent kill unless the
+  parent owns the group.
 - **A local preflight should not rebuild the release image.** The handoff agent spent its budget
   on a full browser image build before pushing. Push a **draft PR** first and let GitHub CI run
   the full suite; locally mount a fresh server binary into the published browser image
@@ -479,6 +485,15 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `finished_at`/`duration_secs` in `Store::history` (submit → next picture, next submit, or
   resolve) and render it; do not guess a duration from two clock times the UI happens to keep.
   Fast rounds can end in the same second as they started — compare with `>=`, not `>`.
+- **A submission stamp is not the start of a run.** The first duration measured `submitted_at` →
+  hand-back, which is *queue time plus work*: a review that waited 34 minutes for pickup reported
+  42 minutes on a run that took 8 (2026-10-31, the human spotted it). A run starts at the agent's
+  own first event in `agent-events.jsonl` (`run_started_at`), not at the human's click; `log`
+  output is not evidence (a trailing build line outlives the hand-back), and a round with no agent
+  event has no duration at all rather than the wait as a stand-in. Compute it once in
+  `Store::history`, expose the same `last_run` to the rail and the conversation, and never let the
+  three disagree. If the human says "that took too long", check *what* the clock measures before
+  checking the work.
 - **A wordmark beside a title is a second title.** The shell header printed the icon *and*
   `RedLine`, so the app name competed with the session title it sat next to, and the 22 px tile
   stood half a head above the 13 px text (2026-10-31). The header now carries the icon alone, sized

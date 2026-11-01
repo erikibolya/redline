@@ -36,7 +36,12 @@ Editor page (HTML). The page reads the id from the path and calls the JSON API b
       "branch": "feat/button-hover",
       "created_at": "2026-10-28T11:11:13+00:00",
       "submitted_at": null,
-      "image": "screenshot.png"
+      "image": "screenshot.png",
+      "last_run": {
+        "started_at": "2026-10-28T11:24:10+00:00",
+        "finished_at": "2026-10-28T11:32:19+00:00",
+        "duration_secs": 489
+      }
     }
   ]
 }
@@ -55,6 +60,14 @@ claim on the session whose lease has not expired. It is the evidence that a run 
 claim (branch held, run slot free) is not a run and reads `false`; so does a claim whose lease
 expired because the bridge died. The rail shows **working** for either a running claim or
 `agent_state=working` on a still-submitted round, and the spinner disappears with the claim.
+
+Every row also carries `last_run` (2026-10-31): the timing of the newest round that actually
+finished, or `null` while none has — the same measure the History rows print, so the rail and the
+conversation never disagree with them. `started_at` is when an agent **picked the round up** (its
+first event in `agent-events.jsonl`), not the human's submission stamp: a review can wait in the
+queue for a long time and that wait is not work. `finished_at` is the hand-back, and
+`duration_secs` is `finished_at - started_at`. A round no agent touched has no `last_run` rather
+than a fabricated duration. `GET /api/sessions/<id>` puts the same object inside `meta`.
 
 `agent_state` is `received`, `working`, `replied` or `failed`. **`failed`** means the run could not
 happen: the server has already handed the round back (`status=open`, annotations intact) so the
@@ -278,18 +291,23 @@ Response `200`:
       "source": true,
       "frames": 0,
       "started_at": "2026-10-31T17:56:35+00:00",
+      "run_started_at": "2026-10-31T18:00:07+00:00",
       "finished_at": "2026-10-31T18:04:12+00:00",
-      "duration_secs": 457
+      "duration_secs": 245
     }
   ]
 }
 ```
 
-Newest first; `round` numbers oldest = 1. `started_at` is the submission stamp and `finished_at`
+Newest first; `round` numbers oldest = 1. `started_at` is the human's submission stamp, `finished_at`
 the moment the round left the agent's hands — the agent's next picture (`post_round`), the next
-human submission, or `resolve` — so `duration_secs` is what the round actually cost. Both are
-omitted while a round is still being worked on, and for v0.1 archives that carry no
-`submitted_at`. The fields are additive: older clients ignore them.
+human submission, or `resolve`. `run_started_at` is when an agent actually picked the round up
+(the first event in `agent-events.jsonl`), and `duration_secs` is `run_started_at` →
+`finished_at`: what the run **cost**, not how long the round sat in the queue (2026-10-31). A
+round that waited 34 minutes for pickup used to report 42 minutes; it now reports the 8 it ran.
+All four stamps are omitted while a round is still being worked on, and for v0.1 archives with no
+`submitted_at`; a round no agent ever touched has no `run_started_at`/`duration_secs` rather than
+the queue time as a stand-in. The fields are additive: older clients ignore them.
 
 Errors:
 

@@ -31,6 +31,19 @@
       <a id="dashboard" class="secondary" href="#" target="_blank" rel="noreferrer">Open RedLine</a>
     </section>
 
+    <section class="record">
+      <div class="record-row">
+        <button id="record" class="record-button" type="button">Record flow</button>
+        <button id="stop" class="stop-button" type="button" hidden>Stop &amp; save</button>
+        <button id="mark" class="mark-button" type="button" hidden>Mark</button>
+        <span id="timer" class="timer"></span>
+      </div>
+      <p class="hint">
+        Recording reads this tab's console and network. Chrome shows a debugging bar while it
+        records; nothing is sent until you press Stop &amp; save.
+      </p>
+    </section>
+
     <p id="status" class="status" role="status"></p>
     <script type="module" src="popup.js"></script>
   </body>

@@ -261,6 +261,18 @@ same path a human does: upload, play, draw, range, zoom, submit.
 - Auth: extension `Origin` + token is accepted (CORS echoed only to that origin); a web
   `cross-site` request is still `403`; extension preflight is `204`, web preflight is `403`.
 
+## Browser recording (extension Phase 3, 2026-11-01)
+
+- Start a recording from the popup on a local test page; the debugger bar appears and the badge
+  says REC. Click, change, submit, let the page log an error and fail a fetch, then stop.
+- The uploaded session has a WebM clip, a poster and `meta.trace`; `GET /sessions/<id>/trace`
+  contains action/console/network events with redacted URLs and no headers/bodies.
+- `review.md` has the Browser trace summary and `get_feedback` returns `trace`/`trace_url`.
+- A 5-minute recording is bounded by the existing video limit; 5,000 events/10 MB mark the trace
+  truncated instead of failing the upload.
+- The manual smoke test lives in `extension/README.md`; extension unit tests cover geometry, API
+  request shape, URL/permission config and redaction.
+
 ## Release gate
 
 - [ ] `cargo test --workspace` green

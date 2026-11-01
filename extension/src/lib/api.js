@@ -79,6 +79,55 @@ export class RedLineApi {
     });
   }
 
+  async uploadVideo({
+    video,
+    poster,
+    trace,
+    title,
+    url,
+    note = "",
+    project,
+    branch,
+    durationMs,
+    width,
+    height,
+    fps,
+  }) {
+    const form = new FormData();
+    form.append("video", video, "flow.webm");
+    if (poster) form.append("poster", poster, "poster.png");
+    if (trace) {
+      form.append("trace", new Blob([JSON.stringify(trace)], { type: "application/json" }), "trace.json");
+    }
+    form.append("title", title || "Browser flow");
+    form.append("url", url || "");
+    form.append("note", note || "");
+    if (project) form.append("project", project);
+    if (branch) form.append("branch", branch);
+    if (durationMs) form.append("duration_ms", String(Math.round(durationMs)));
+    if (width) form.append("width", String(width));
+    if (height) form.append("height", String(height));
+    if (fps) form.append("fps", String(fps));
+    const response = await fetch(`${this.serverUrl}/api/sessions/video`, {
+      method: "POST",
+      headers: this.headers(),
+      body: form,
+    });
+    const text = await response.text();
+    let data = text;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      // keep raw text
+    }
+    if (!response.ok) {
+      const message =
+        (data && data.error) || (typeof data === "string" ? data : "") || response.statusText;
+      throw new ApiError(response.status, message, data);
+    }
+    return data;
+  }
+
   async deleteSession(id) {
     return this.request(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
   }

@@ -69,8 +69,6 @@ jobs:
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8788/health && break; sleep 1; done
           sleep 3
           node desktop/scripts/e2e.mjs
-      - name: Install Xvfb for the extension UI
-        run: sudo apt-get update && sudo apt-get install -y xvfb
       - name: Prepare the host-permitted extension copy
         run: |
           mkdir -p "$RUNNER_TEMP/extension"
@@ -82,9 +80,9 @@ jobs:
           REDLINE_TOKEN: e2e-token
           CHROME_URL: http://127.0.0.1:9223
         run: |
-          nohup xvfb-run -a --server-args="-screen 0 1280x800x24" \
-            "${{ steps.chrome.outputs.chrome-path }}" --no-sandbox --disable-gpu \
-            --remote-debugging-port=9223 --user-data-dir="$RUNNER_TEMP/chrome-ext" \
+          nohup "${{ steps.chrome.outputs.chrome-path }}" --headless=new --no-sandbox --disable-gpu \
+            --disable-dev-shm-usage --remote-debugging-port=9223 \
+            --user-data-dir="$RUNNER_TEMP/chrome-ext" \
             --disable-extensions-except="$RUNNER_TEMP/extension" \
             --load-extension="$RUNNER_TEMP/extension" about:blank > /tmp/chrome-ext.log 2>&1 &
           for i in $(seq 1 30); do curl -fsS http://127.0.0.1:9223/json/version && break; sleep 1; done

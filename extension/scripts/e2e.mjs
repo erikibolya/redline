@@ -33,27 +33,10 @@ async function json(pathname, init = {}) {
   return data;
 }
 
-async function serviceWorker(browser) {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    const targets = await (await fetch(`${CHROME}/json/list`)).json();
-    const worker = targets.find(
-      (target) => target.type === "service_worker" && target.url.includes("background.js"),
-    );
-    if (worker) return worker;
-    if (attempt === 4) {
-      const page = await browser.newPage();
-      await page.goto("chrome://extensions/");
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      await page.close();
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error("extension service worker not found");
-}
-
-async function extensionId(browser) {
-  return new URL((await serviceWorker(browser)).url).host;
-}
+const EXTENSION_NAME = "RedLine Capture";
+// Chrome ships built-in background service workers (both named background.js). Matching the exact
+// path from this manifest is the difference between testing the extension and testing Chrome.
+const WORKER_PATH = "/src/background.js";
 
 async function evaluateInWorker(worker, expression) {
   const ws = new WebSocket(worker.webSocketDebuggerUrl);
@@ -62,7 +45,7 @@ async function evaluateInWorker(worker, expression) {
     ws.addEventListener("error", reject, { once: true });
   });
   try {
-    await new Promise((resolve, reject) => {
+    return await new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error("service worker evaluate timed out")), 5000);
       ws.addEventListener("message", (event) => {
         const message = JSON.parse(event.data);
@@ -82,6 +65,44 @@ async function evaluateInWorker(worker, expression) {
   } finally {
     ws.close();
   }
+}
+
+function isExtensionWorker(target) {
+  if (target.type !== "service_worker") return false;
+  try {
+    return new URL(target.url).pathname === WORKER_PATH;
+  } catch {
+    return false;
+  }
+}
+
+async function serviceWorker(browser) {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const targets = await (await fetch(`${CHROME}/json/list`)).json();
+    const worker = targets.find(isExtensionWorker);
+    if (worker) {
+      // The worker URL identifies the right file; the manifest name proves the right extension.
+      const name = await evaluateInWorker(worker, "chrome.runtime.getManifest().name");
+      if (name?.result?.value !== EXTENSION_NAME) {
+        throw new Error(
+          `${WORKER_PATH} belongs to "${name?.result?.value}", not ${EXTENSION_NAME}`,
+        );
+      }
+      return worker;
+    }
+    if (attempt === 4) {
+      const page = await browser.newPage();
+      await page.goto("chrome://extensions/");
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await page.close();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("RedLine Capture service worker not found");
+}
+
+async function extensionId(browser) {
+  return new URL((await serviceWorker(browser)).url).host;
 }
 
 // Chrome 159 headless (and some headful builds) refuses a page.goto() from a normal tab into a
@@ -105,7 +126,7 @@ async function openExtensionPage(browser, pathname) {
 
 async function configure(browser, id) {
   const page = await openExtensionPage(browser, "src/options.html");
-  await page.waitForFunction(() => document.querySelector("#server-url"));
+  await page.waitForFunction(() => document.body.dataset.ready === "1");
   await page.evaluate(({ base, token }) => {
     document.querySelector("#server-url").value = base;
     document.querySelector("#token").value = token;

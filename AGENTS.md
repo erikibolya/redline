@@ -236,6 +236,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   counts. Validate the `trace.json` size/kinds/timestamps on the server, derive the summary and
   highlights there, and never inline the raw trace into `get_feedback`; expose it as a bounded
   resource/URL.
+- **A `background.js` service worker is not your extension.** Chrome ships built-in extension
+  workers named `background.js`; the e2e picked the first one, created
+  `chrome-extension://admcc…/src/options.html` on a built-in origin, got `ERR_FILE_NOT_FOUND`, and
+  every later `waitForFunction` timed out while the extension itself was fine (2026-11-01). Match
+  the manifest's exact worker path (`/src/background.js`) and verify
+  `chrome.runtime.getManifest().name` before using the worker. Then wait for the options page to
+  finish reading stored config (`data-ready`) before filling the form: its async `init()` overwrote
+  the test's server/token with defaults and the failure surfaced as "Token is required".
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).

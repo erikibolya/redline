@@ -49,3 +49,11 @@ button:disabled { opacity: .55; cursor: progress; }
 .link { border: 0; background: transparent; color: #fecdd3; padding: 0; text-decoration: underline; }
 .status { min-height: 18px; margin: 0 14px 12px; color: var(--muted); font-size: 12px; }
 .status.err { color: #fb7185; }
+.record { padding: 0 14px 4px; }
+.record-row { display: flex; gap: 8px; align-items: center; }
+.record-button, .stop-button, .mark-button { flex: 1; }
+.record-button { background: #1c2940; }
+.stop-button { background: var(--accent); border-color: var(--accent); font-weight: 700; }
+.mark-button { flex: 0 0 auto; }
+.timer { font-variant-numeric: tabular-nums; color: #fecdd3; min-width: 46px; text-align: right; }
+.hint { color: var(--muted); font-size: 11px; margin: 6px 0 10px; }

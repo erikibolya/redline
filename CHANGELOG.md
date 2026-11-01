@@ -19,6 +19,13 @@
   text notes, undo/redo, per-session drafts and submit. The review lands in the normal RedLine
   queue; the full editor stays one click away. Eleven extension unit tests run in CI on Linux and
   Windows.
+- **A tab flow can be recorded with console, network and action evidence (Phase 3).** The
+  extension records the active tab through `tabCapture` + MediaRecorder in an offscreen document,
+  attaches `chrome.debugger` only for the duration of the recording, redacts URLs/tokens and
+  streams console, network and interaction events into a bounded `trace.json`. Stop builds the
+  poster and uploads video + trace to RedLine; the review opens in the normal agent queue. The
+  side panel still needs the Phase 4 video annotator; the recorded review can be annotated in the
+  full editor. Sixteen extension unit tests run in CI on Linux and Windows.
 
 ## 0.26.1 — 2026-11-01
 

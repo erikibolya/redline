@@ -58,6 +58,7 @@ function setBusy(busy) {
 function showEmpty(message = "") {
   $("workspace").hidden = true;
   $("empty").hidden = false;
+  $("open-capture").hidden = true;
   $("title").textContent = "RedLine Capture";
   $("subtitle").textContent = "No capture yet";
   if (message) setStatus(message, "err");
@@ -377,7 +378,16 @@ async function loadCapture(capture) {
     const payload = await api.session(capture.sessionId);
     const meta = payload.meta;
     if (meta.media?.kind === "video") {
-      throw new Error("Video captures are not available in this build yet.");
+      state.config = config;
+      state.capture = capture;
+      state.api = api;
+      state.meta = meta;
+      state.bitmap = null;
+      state.annotations = [];
+      showEmpty();
+      $("open-capture").hidden = false;
+      setStatus("Flow recorded and submitted. Open it in RedLine to annotate; the video annotator lands in Phase 4.", "ok");
+      return;
     }
     const blob = await api.imageBlob(capture.sessionId);
     const bitmap = await createImageBitmap(blob);
@@ -509,6 +519,7 @@ function openRedLine() {
 }
 
 $("capture").addEventListener("click", captureCurrent);
+$("open-capture").addEventListener("click", openRedLine);
 $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("submit").addEventListener("click", submit);

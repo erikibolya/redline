@@ -1,7 +1,8 @@
 # Browser capture extension — design and delivery plan
 
-Status: **Phases 1 and 2 implemented** on the extension branches (2026-11-01). The side panel
-now captures and annotates screenshots; recording/trace UI and store packaging are next.
+Status: **Phases 1–3 implemented** on the extension branches (2026-11-01). Screenshots are
+annotated in the side panel; tab recording with console/network/action trace uploads to RedLine.
+The video annotator (Phase 4) and store packaging are next.
 
 A Chromium extension that connects to a RedLine server, captures a screenshot or records a flow
 from the current tab, collects the console and network evidence, and lets the human annotate the
@@ -101,6 +102,10 @@ The Phase 2 screenshot path is shorter: the popup creates the image session imme
 tab title and the configured project, then opens the side panel where the note is edited. An
 editable title/project draft before creation is recording-phase polish; the side panel already
 lets the human discard the session.
+
+The Phase 3 recording path also uses the tab title and configured project; the note is edited in
+RedLine until the phase-4 video panel lands. The draft form above is the target UX, not a claim
+that every field is editable today.
 
 ### 3.4 Side-panel annotator
 
@@ -581,7 +586,19 @@ Phase 2 (options/popup, screenshot capture, side-panel image editor) is implemen
 - Side panel: select/move, rectangle, arrow, pen, text note, colour/width, undo/redo, delete,
   clear, numbered list, per-session draft, annotated PNG composition and submit.
 - Submitted reviews open read-only; **Open in RedLine** remains available.
-- Eleven extension unit tests (`node --test`) for annotation geometry, the API request shape,
-  and URL/permission config, wired into the Linux + Windows CI test job.
+- Sixteen extension unit tests (`node --test`) for annotation geometry, the API request shape,
+  URL/permission config, and trace redaction, wired into the Linux + Windows CI test job.
 
-Next: Phase 3 (tab recording, `chrome.debugger` console/network/action trace, offscreen recorder).
+Phase 3 (tab recording) is implemented on `feat/extension-recording`:
+
+- `tabCapture` + MediaRecorder in an offscreen document; the video Blob never crosses the
+  extension message channel.
+- `chrome.debugger` attaches only while recording and collects console/exceptions, network
+  metadata and navigation; a content script (`all_frames`) records click/change/submit actions.
+- URL/text redaction, a 5,000-event cap and `chrome.storage.session` persistence for a
+  service-worker restart.
+- Stop builds the poster, uploads multipart video + trace, stores the active capture and opens the
+  review. The phase-4 video annotator is still read-only in the panel; use RedLine for video
+  annotations until it lands.
+
+Next: Phase 4 (video canvas/timeline and trace panel in the side panel).

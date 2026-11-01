@@ -73,3 +73,38 @@ test("API errors keep the status and server message", async () => {
     globalThis.fetch = original;
   }
 });
+
+test("video upload sends the clip, poster and trace as multipart", async () => {
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({ meta: { id: "v1" }, review_url: "http://x/s/v1" }), {
+      status: 200,
+    });
+  };
+  try {
+    const api = new RedLineApi({ serverUrl: "https://redline.test", token: "tok" });
+    const trace = { version: 1, kind: "browser-flow", events: [] };
+    await api.uploadVideo({
+      video: new Blob(["webm"], { type: "video/webm" }),
+      poster: new Blob(["png"], { type: "image/png" }),
+      trace,
+      title: "Flow",
+      url: "https://app.test",
+      project: "daneek",
+      durationMs: 1200,
+      width: 1280,
+      height: 720,
+    });
+    assert.equal(calls[0].url, "https://redline.test/api/sessions/video");
+    const form = calls[0].init.body;
+    assert.ok(form instanceof FormData);
+    assert.equal(form.get("title"), "Flow");
+    assert.equal(form.get("duration_ms"), "1200");
+    assert.ok(form.get("video") instanceof Blob);
+    assert.equal(await form.get("trace").text(), JSON.stringify(trace));
+  } finally {
+    globalThis.fetch = original;
+  }
+});

@@ -35,7 +35,7 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace
       - name: extension unit tests
-        run: node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs
+        run: node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/trace.test.mjs
 
   e2e:
     name: browser e2e

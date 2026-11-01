@@ -23,9 +23,14 @@
   extension records the active tab through `tabCapture` + MediaRecorder in an offscreen document,
   attaches `chrome.debugger` only for the duration of the recording, redacts URLs/tokens and
   streams console, network and interaction events into a bounded `trace.json`. Stop builds the
-  poster and uploads video + trace to RedLine; the review opens in the normal agent queue. The
-  side panel still needs the Phase 4 video annotator; the recorded review can be annotated in the
-  full editor. Sixteen extension unit tests run in CI on Linux and Windows.
+  poster and uploads video + trace to RedLine; the review opens in the normal agent queue. At
+  that point video annotation used the full editor; Phase 4 below brings it into the panel.
+  Eighteen extension unit tests run in CI on Linux and Windows.
+- **A recorded flow is annotated in the side panel (Phase 4).** The side panel draws the video
+  into the same canvas, adds timecoded point annotations at the current playhead, a timeline with
+  annotation/trace markers, a filterable console/network/action trace and a Ghosts toggle.
+  Submit captures the annotated frames and a labelled contact sheet and posts the existing video
+  multipart payload. Read-only submitted rounds stay navigable.
 
 ## 0.26.1 — 2026-11-01
 

@@ -142,4 +142,48 @@ export class RedLineApi {
     }
     return response.blob();
   }
+
+  async videoBlob(id) {
+    const response = await fetch(
+      `${this.serverUrl}/sessions/${encodeURIComponent(id)}/media`,
+      { headers: this.headers() },
+    );
+    if (!response.ok) {
+      throw new ApiError(response.status, `cannot load video (${response.status})`);
+    }
+    return response.blob();
+  }
+
+  async trace(id) {
+    return this.request(`/sessions/${encodeURIComponent(id)}/trace`);
+  }
+
+  async submitVideo(id, { annotations, width, height, contactSheet, frames, note = "" }) {
+    const form = new FormData();
+    form.append(
+      "annotations",
+      JSON.stringify({ annotations, width, height, note }),
+    );
+    if (contactSheet) form.append("png", contactSheet, "contact-sheet.png");
+    for (const frame of frames) {
+      form.append("frames", frame.blob, `${frame.at.toFixed(3)}.png`);
+    }
+    const response = await fetch(
+      `${this.serverUrl}/api/sessions/${encodeURIComponent(id)}/annotations`,
+      { method: "POST", headers: this.headers(), body: form },
+    );
+    const text = await response.text();
+    let data = text;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      // keep raw text
+    }
+    if (!response.ok) {
+      const message =
+        (data && data.error) || (typeof data === "string" ? data : "") || response.statusText;
+      throw new ApiError(response.status, message, data);
+    }
+    return data;
+  }
 }

@@ -24,8 +24,37 @@
 
     <section id="workspace" hidden>
       <div id="stage" class="stage">
+        <video id="video" hidden playsinline muted></video>
         <canvas id="canvas"></canvas>
         <textarea id="text-editor" class="text-editor" hidden placeholder="Note"></textarea>
+      </div>
+
+      <div id="video-bar" class="video-bar" hidden>
+        <button id="play" type="button" title="Play/pause (K)">▶</button>
+        <span id="video-time" class="video-time">00:00.000 / 00:00.000</span>
+        <button id="prev-frame" type="button" title="Previous frame">◀</button>
+        <button id="next-frame" type="button" title="Next frame">▶</button>
+        <label class="ghosts"><input id="ghosts" type="checkbox" /> Ghosts</label>
+        <div class="timeline-wrap">
+          <input id="timeline" type="range" min="0" max="1" step="0.001" value="0" />
+          <div id="ann-markers" class="markers"></div>
+          <div id="trace-markers" class="markers trace"></div>
+        </div>
+      </div>
+
+      <div id="trace-panel" class="trace-panel" hidden>
+        <div class="trace-head">
+          <span>Browser trace</span>
+          <select id="trace-filter" aria-label="Trace filter">
+            <option value="errors">Errors</option>
+            <option value="all">All</option>
+            <option value="console">Console</option>
+            <option value="network">Network</option>
+            <option value="actions">Actions</option>
+            <option value="markers">Markers</option>
+          </select>
+        </div>
+        <div id="trace-list" class="trace-list"></div>
       </div>
 
       <div class="toolbar" role="toolbar" aria-label="Annotation tools">

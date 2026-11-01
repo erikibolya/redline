@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 125 Rust tests, 16 extension unit tests, 265-check browser E2E in CI on Linux + Windows |
+| Tests | 125 Rust tests, 18 extension unit tests, 265-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -81,8 +81,9 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 ## Next (ordered)
 
 0. **Browser capture extension** — `docs/EXTENSION.md`: server trace foundation (Phase 1),
-   screenshot + side-panel image editor (Phase 2), and tab recording with console/network/action
-   trace (Phase 3) are implemented; the video annotator (Phase 4) and store packaging are next.
+   screenshot + side-panel image editor (Phase 2), tab recording with console/network/action trace
+   (Phase 3) and the side-panel video annotator/trace panel (Phase 4) are implemented; store
+   packaging is next.
 1. **Video reviews** — phases 1–3 are in (`docs/VIDEO.md`): media core, browser upload, canvas
    playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full
    frames, new video rounds, history playback and `post_round` video. Phase 4 is the release
@@ -121,7 +122,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
   helpers, video media/limits/frames/rounds/timecodes, browser trace validation/summary/history/feedback/resource, CLI end-to-end.
-- `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/trace.test.mjs` — 16 extension
+- `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/trace.test.mjs` — 18 extension
   unit tests: annotation geometry/hit-testing/moving and server URL/permission config.
 - `desktop/scripts/e2e.sh` — 265 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the

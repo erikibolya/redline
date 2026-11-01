@@ -208,7 +208,19 @@ export function drawAnnotation(ctx, annotation, number, selected = false) {
   ctx.restore();
 }
 
-export function drawScene(canvas, bitmap, annotations, selectedId = null, preview = null) {
+export function annotationVisibleAt(annotation, at) {
+  if (at == null) return true;
+  return Math.abs((Number(annotation.at) || 0) - at) <= 0.06;
+}
+
+export function drawAnnotations(ctx, annotations, at = null) {
+  annotations.forEach((annotation, index) => {
+    if (!annotationVisibleAt(annotation, at)) return;
+    drawAnnotation(ctx, annotation, index + 1, false);
+  });
+}
+
+export function drawScene(canvas, bitmap, annotations, selectedId = null, preview = null, at = null) {
   if (!bitmap) return;
   canvas.width = bitmap.width;
   canvas.height = bitmap.height;
@@ -216,6 +228,7 @@ export function drawScene(canvas, bitmap, annotations, selectedId = null, previe
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bitmap, 0, 0);
   annotations.forEach((annotation, index) => {
+    if (!annotationVisibleAt(annotation, at)) return;
     drawAnnotation(ctx, annotation, index + 1, annotation.id === selectedId);
   });
   if (preview) drawAnnotation(ctx, preview, annotations.length + 1, false);
@@ -227,6 +240,6 @@ export function composePng(bitmap, annotations) {
   canvas.height = bitmap.height;
   const ctx = canvas.getContext("2d");
   ctx.drawImage(bitmap, 0, 0);
-  annotations.forEach((annotation, index) => drawAnnotation(ctx, annotation, index + 1, false));
+  drawAnnotations(ctx, annotations);
   return canvas.toDataURL("image/png");
 }

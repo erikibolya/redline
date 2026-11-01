@@ -4,6 +4,7 @@ import {
   annotationBounds,
   createAnnotation,
   finishAnnotation,
+  annotationVisibleAt,
   hitTest,
   moveAnnotation,
   TOOLS,
@@ -50,4 +51,13 @@ test("a text note has a usable bounds rectangle", () => {
   assert.equal(bounds.x, 100);
   assert.ok(bounds.width > 60);
   assert.equal(hitTest([text], { x: 110, y: 95 })?.id, text.id);
+});
+
+test("video annotations are visible only at their moment", () => {
+  const annotation = createAnnotation("rect", { x: 0, y: 0 });
+  annotation.at = 2.34;
+  assert.equal(annotationVisibleAt(annotation, 2.34), true);
+  assert.equal(annotationVisibleAt(annotation, 2.39), true);
+  assert.equal(annotationVisibleAt(annotation, 2.5), false);
+  assert.equal(annotationVisibleAt(annotation, null), true);
 });

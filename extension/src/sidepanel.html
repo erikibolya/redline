@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RedLine Capture</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header>
+      <div class="grow">
+        <div id="title" class="title">RedLine Capture</div>
+        <div id="subtitle" class="subtitle">No capture yet</div>
+      </div>
+      <button id="settings" class="icon" type="button" title="Options" aria-label="Options">⚙</button>
+    </header>
+
+    <section id="empty" class="empty">
+      <p>Capture the current tab, then annotate it here.</p>
+      <button id="capture" class="primary" type="button">Capture current tab</button>
+      <button id="open-options" class="link" type="button">Connect RedLine</button>
+    </section>
+
+    <section id="workspace" hidden>
+      <div id="stage" class="stage">
+        <canvas id="canvas"></canvas>
+        <textarea id="text-editor" class="text-editor" hidden placeholder="Note"></textarea>
+      </div>
+
+      <div class="toolbar" role="toolbar" aria-label="Annotation tools">
+        <button class="tool" data-tool="select" title="Select (V)" type="button">V</button>
+        <button class="tool" data-tool="rect" title="Rectangle (R)" type="button">▭</button>
+        <button class="tool" data-tool="arrow" title="Arrow (A)" type="button">↗</button>
+        <button class="tool" data-tool="pen" title="Pen (P)" type="button">✎</button>
+        <button class="tool" data-tool="text" title="Text note (T)" type="button">T</button>
+        <span class="sep"></span>
+        <input id="color" type="color" value="#e11d48" title="Colour" aria-label="Colour" />
+        <select id="width" title="Line width" aria-label="Line width">
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+          <option value="5">5</option>
+          <option value="8">8</option>
+        </select>
+        <button id="undo" title="Undo (Ctrl+Z)" type="button">↶</button>
+        <button id="redo" title="Redo (Ctrl+Shift+Z)" type="button">↷</button>
+        <button id="delete" title="Delete selected" type="button">⌫</button>
+      </div>
+
+      <div class="list-head">
+        <span>Annotations <span id="count">0</span></span>
+        <button id="clear" class="link" type="button">Clear all</button>
+      </div>
+      <div id="list" class="list"></div>
+
+      <label class="note-label">
+        Note for the agent
+        <textarea id="note" rows="3" placeholder="What should the agent look at?"></textarea>
+      </label>
+
+      <div class="footer">
+        <button id="submit" class="primary" type="button">Submit to RedLine</button>
+        <button id="discard" class="danger" type="button">Discard</button>
+      </div>
+      <div class="footer secondary-row">
+        <button id="open-redline" class="link" type="button">Open in RedLine</button>
+        <span id="status" class="status" role="status"></span>
+      </div>
+    </section>
+
+    <script type="module" src="sidepanel.js"></script>
+  </body>
+</html>

@@ -23,6 +23,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -31,6 +34,8 @@ jobs:
       - name: cargo test
         working-directory: desktop
         run: cargo test --workspace
+      - name: extension unit tests
+        run: node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs
 
   e2e:
     name: browser e2e

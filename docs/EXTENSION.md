@@ -565,6 +565,6 @@ Phase 1 (server trace foundation) is on `feat/browser-extension`:
   `redline://session/<id>/trace.json`.
 - Extension-origin auth/CORS: token + extension Origin (or `X-RedLine-Client`) bypasses the
   cross-site guard; web cross-site stays `403`; extension preflight is `204`, web preflight `403`.
-- Tests: 124 Rust tests green (3 new trace tests + auth preflight coverage).
+- Tests: 125 Rust tests green (3 new trace tests + auth preflight coverage).
 
 Next: Phase 2 (options/popup, screenshot capture, side-panel image editor) on the same branch.

@@ -69,8 +69,12 @@ pub fn validate_trace(bytes: &[u8], video_duration_ms: Option<u64>) -> Result<Tr
             upload.kind
         )));
     }
-    if upload.started_at.trim().is_empty() {
-        return Err(Error::BadRequest("trace.started_at is empty".to_string()));
+    if upload.started_at.trim().is_empty()
+        || chrono::DateTime::parse_from_rfc3339(&upload.started_at).is_err()
+    {
+        return Err(Error::BadRequest(
+            "trace.started_at must be an RFC 3339 timestamp".to_string(),
+        ));
     }
     if upload.duration_ms == 0 {
         return Err(Error::BadRequest(

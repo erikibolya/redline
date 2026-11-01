@@ -943,9 +943,9 @@ fn an_invalid_trace_is_refused_without_attaching_it() {
         .unwrap();
     for trace in [
         json!({"version": 1, "kind": "browser-flow", "started_at": "x", "duration_ms": 0, "events": []}),
-        json!({"version": 1, "kind": "other", "started_at": "x", "duration_ms": 1000, "events": []}),
-        json!({"version": 1, "kind": "browser-flow", "started_at": "x", "duration_ms": 1000,
-               "events": [{"t": 2000, "kind": "console", "level": "error", "text": "late"}]}),
+        json!({"version": 1, "kind": "other", "started_at": "2026-11-01T00:00:00Z", "duration_ms": 1000, "events": []}),
+        json!({"version": 1, "kind": "browser-flow", "started_at": "2026-11-01T00:00:00Z", "duration_ms": 1000,
+               "events": [{"t": 6000, "kind": "console", "level": "error", "text": "late"}]}),
     ] {
         assert!(
             store

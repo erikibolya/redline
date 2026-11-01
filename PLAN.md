@@ -82,8 +82,8 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 0. **Browser capture extension** — `docs/EXTENSION.md`: server trace foundation (Phase 1),
    screenshot + side-panel image editor (Phase 2), tab recording with console/network/action trace
-   (Phase 3) and the side-panel video annotator/trace panel (Phase 4) are implemented; store
-   packaging is next.
+   (Phase 3), the side-panel video annotator/trace panel (Phase 4) and the store package/privacy
+   copy (Phase 5 preparation) are done; extension e2e and store publishing remain.
 1. **Video reviews** — phases 1–3 are in (`docs/VIDEO.md`): media core, browser upload, canvas
    playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full
    frames, new video rounds, history playback and `post_round` video. Phase 4 is the release

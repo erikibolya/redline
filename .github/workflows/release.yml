@@ -91,6 +91,9 @@ jobs:
             `redline-agent.exe` (below) is the unattended agent bridge — see
             `docs/LOCAL-AGENT.md`. The app starts it from the tray (*Start local agent*).
 
+            `redline-extension-*.zip` is the Chrome/Edge capture extension (screenshots and tab
+            flows); load it unpacked until the store listing is published.
+
             Redline the screenshot, the agent writes the fix.
 
       - name: Attach the CLI and the agent
@@ -129,6 +132,14 @@ jobs:
           cp desktop/target/x86_64-unknown-linux-musl/release/redline-agent redline-agent-linux-x86_64
           gh release upload "${{ github.event.inputs.tag || github.ref_name }}" \
             redline-linux-x86_64 redline-agent-linux-x86_64 --clobber
+      - name: Package the browser extension
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 extension/scripts/package.py
+          version=$(python3 -c 'import json; print(json.load(open("extension/manifest.json"))["version"])')
+          gh release upload "${{ github.event.inputs.tag || github.ref_name }}" \
+            "dist/redline-extension-${version}.zip" --clobber
 
   image:
     name: container image (ghcr.io)

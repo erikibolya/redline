@@ -39,8 +39,10 @@ submits the annotated screenshot to a RedLine server.
   timecoded point annotations, annotated frames/contact sheet and submit. Maximum 20 unique
   annotated times per round.
 
-The store packaging and extension e2e are later phases. See
-[`../docs/EXTENSION.md`](../docs/EXTENSION.md).
+The store package is built by `python3 extension/scripts/package.py` (output:
+`dist/redline-extension-<version>.zip`). See [`../docs/STORE-EXTENSION.md`](../docs/STORE-EXTENSION.md)
+for the listing/permission copy and [`../docs/PRIVACY-EXTENSION.md`](../docs/PRIVACY-EXTENSION.md)
+for the privacy policy. Extension e2e is the remaining engineering item.
 
 ## Tests
 

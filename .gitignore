@@ -16,3 +16,6 @@ desktop/app/tauri.dev.conf.json
 # Local visual-proof screenshots (never commit review content)
 .shots/
 .e2e-shot.png
+
+# Store/package artifacts
+dist/

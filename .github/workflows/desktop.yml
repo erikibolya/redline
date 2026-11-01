@@ -36,6 +36,8 @@ jobs:
         run: cargo test --workspace
       - name: extension unit tests
         run: node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/trace.test.mjs
+      - name: package extension
+        run: python3 extension/scripts/package.py
 
   e2e:
     name: browser e2e

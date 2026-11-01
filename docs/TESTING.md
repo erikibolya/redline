@@ -277,7 +277,7 @@ same path a human does: upload, play, draw, range, zoom, submit.
 ## Extension e2e (Phase 5, 2026-11-01)
 
 - The browser e2e job also builds a temporary extension copy with host
-  permission for `127.0.0.1:8788`, launches headless Chromium with `--load-extension`, configures
+  permission for `127.0.0.1:8788`, launches headful Chromium under Xvfb with `--load-extension`, configures
   the options page, submits an image rectangle, then a video + trace rectangle at `0.5 s`.
 - It asserts the server payload: image annotation width 3; video `meta.trace.kind=browser-flow`,
   `annotations[0].at=0.5`, and at least one annotated frame.

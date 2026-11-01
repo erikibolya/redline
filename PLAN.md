@@ -6,7 +6,7 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.26.0` on holly — `https://redline.ibolya.cz`, container
+**Shipped and in production:** `v0.26.1` on holly — `https://redline.ibolya.cz`, container
 `ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
 
 ## What exists today
@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 121 Rust tests, 264-check browser E2E in CI on Linux + Windows |
+| Tests | 121 Rust tests, 265-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -118,7 +118,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
   helpers, video media/limits/frames/rounds/timecodes, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 264 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 265 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

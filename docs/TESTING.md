@@ -14,7 +14,8 @@ optional: a green suite that never drew a freehand stroke is not a green suite.
 | Rust unit/integration | `docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm cargo test --workspace` | store layout, HTTP/API, MCP, auth, history, feature decisions, path/config helpers, CLI |
 | Browser e2e | `docker build -q -f desktop/Dockerfile.browser -t redline:local .` then `REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh` (or `REDLINE_BIN=/path/to/redline REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser` to mount a fresh binary without rebuilding the image) | real Chromium: pointer drags, clicks, dialogs, DOM/geometry/canvas pixels, server round-trip |
 | GitHub CI | required checks on `dev` and `main` | Linux + Windows, Tauri compile, browser e2e, container/image build |
-| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs` | side-panel annotation geometry/hit-testing/moving and server URL/permission config |
+| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/trace.test.mjs` | side-panel annotation geometry/hit-testing/moving, API request shape, URL/permission config and trace redaction |
+| Extension e2e | browser e2e job / `extension/scripts/e2e.mjs` | loads the unpacked extension in Chromium, configures a local server, submits an image annotation and a video+trace annotation, and checks the server payload |
 | Dev build | `.github/workflows/dev.yml` | `desktop/scripts/dev-version.mjs` stamps the workspace, app and lockfile versions; the Windows job asserts `redline --version`; the `browser-dev` image is built from the same stamped tree |
 | Release smoke | the checklist below against the exact tag/image | the thing users install, not just the source tree |
 
@@ -272,6 +273,16 @@ same path a human does: upload, play, draw, range, zoom, submit.
   truncated instead of failing the upload.
 - The manual smoke test lives in `extension/README.md`; extension unit tests cover geometry, API
   request shape, URL/permission config and redaction.
+
+## Extension e2e (Phase 5, 2026-11-01)
+
+- The browser e2e job also builds a temporary extension copy with host
+  permission for `127.0.0.1:8788`, launches headless Chromium with `--load-extension`, configures
+  the options page, submits an image rectangle, then a video + trace rectangle at `0.5 s`.
+- It asserts the server payload: image annotation width 3; video `meta.trace.kind=browser-flow`,
+  `annotations[0].at=0.5`, and at least one annotated frame.
+- Run locally with a loaded test extension and `REDLINE_BASE`, `REDLINE_TOKEN`, `CHROME_URL`
+  (see `extension/scripts/e2e.mjs`).
 
 ## Release gate
 

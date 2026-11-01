@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "kind": "browser-flow",
+  "started_at": "2026-11-01T20:00:00.000Z",
+  "duration_ms": 1500,
+  "page": {"url": "https://app.test/checkout", "title": "Checkout"},
+  "redaction": {"headers": ["authorization"], "bodies": false},
+  "events": [
+    {"t": 100, "kind": "action", "action": "click", "selector": "#save", "tag": "button", "label": "Save"},
+    {"t": 200, "kind": "network", "method": "POST", "url": "https://app.test/api", "status": 500, "duration_ms": 120, "resource": "fetch"},
+    {"t": 300, "kind": "console", "level": "error", "text": "boom"},
+    {"t": 400, "kind": "marker", "label": "total did not update"}
+  ]
+}

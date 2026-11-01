@@ -1,8 +1,8 @@
 # Browser capture extension — design and delivery plan
 
-Status: **Phases 1–4 implemented; store package prepared** (2026-11-01). Screenshots and recorded
-flows are annotated in the side panel. The ZIP, privacy policy and listing copy are ready; store
-accounts and publish are pending.
+Status: **Phases 1–5 implemented** (2026-11-01). Screenshots and recorded flows are annotated in
+the side panel; the store ZIP, privacy policy, listing copy and an extension e2e CI job are ready.
+Store accounts and publishing are the only remaining owner actions.
 
 A Chromium extension that connects to a RedLine server, captures a screenshot or records a flow
 from the current tab, collects the console and network evidence, and lets the human annotate the
@@ -621,4 +621,7 @@ Phase 5 preparation is in this branch:
   permission justifications and listing copy.
 - The release workflow attaches the ZIP to every GitHub release.
 - The store accounts are not created (Chrome: $5 one-time; Edge: free), so publishing is still
-  the owner's explicit action. Extension e2e remains the last engineering item.
+  the owner's explicit action.
+- `extension e2e` runs in CI: it loads a temporary host-permitted extension in headless Chromium,
+  configures a local RedLine, submits an image annotation, then a video + trace annotation at
+  0.5 s, and checks the server payload.

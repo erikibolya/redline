@@ -79,9 +79,9 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   goes silent (must fail with `timeout_idle`), one that keeps printing (must survive the idle
   window), and one that hits the hard cap (`timeout_hard`); the idle case also spawns a background
   grandchild and asserts the process-group kill reaps it (no orphaned builds); the handoff prompt
-  test asserts the draft-PR-first flow, the `REDLINE_BIN` preflight and the failed-result report;
-  the two-worktree bridge integration test asserts the fake agent's own stdout line arrives in the
-  review as a `state="log"` event.
+  test asserts it stays forge-agnostic (the repo's AGENTS.md owns the concrete commands) and
+  reports the result; the two-worktree bridge integration test asserts the fake agent's own stdout
+  line arrives in the review as a `state="log"` event.
 - Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
   project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
   tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours
@@ -135,9 +135,10 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Rust `tests/agent.rs`: a bridge advertises `jobs`, a later sync does not downgrade it, and an
   old presence file defaults to review-only.
 - `redline-agent` tests: the review prompt explicitly forbids opening a PR/feature-ready/merging;
-  the handoff prompt grants the PR/merge and includes the `handoff_status` curl with generic
-  label/url/message; a legacy session branch with the commits wins over a `feat/...` name with
-  none.
+  the handoff prompt is forge-agnostic (it points at the repository's AGENTS.md and does not
+  hardcode `gh`/`feature-ready`/GitHub Actions) and includes the `handoff_status` curl with
+  generic label/url/message; a legacy session branch with the commits wins over a `feat/...`
+  name with none.
 - Browser e2e: the confirm dialog starts the handoff checkbox off for a review-only agent; tick
   it → rail shows `confirmed` + `handoff queued`; a queued/failed/running handoff keeps the review
   in **Active**, not **Done** (asserted right after the confirmation and after the retry); call

@@ -221,6 +221,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `0.23.0-dev.N` while stable was already `0.23.0`, so the updater correctly refused to install
   one; "Install latest dev build…" looked broken. `DEV_BASE_VERSION` must be the *next* minor
   (now 0.27.0); the dev workflow now fails if the base does not sort above the latest stable.
+- **An image label is not a binary version.** The dev container job labeled its image
+  `0.27.0-dev.N` but built the binary from `Cargo.toml`, which still said `0.26.1`, so the dev
+  server reported the stable version (2026-11-01). Stamp the workspace, app and lockfile versions
+  before both dev builds (`desktop/scripts/dev-version.mjs`) and assert `redline --version` in CI;
+  a label is metadata, not something inside the artifact.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).

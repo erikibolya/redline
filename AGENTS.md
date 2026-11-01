@@ -226,6 +226,16 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   server reported the stable version (2026-11-01). Stamp the workspace, app and lockfile versions
   before both dev builds (`desktop/scripts/dev-version.mjs`) and assert `redline --version` in CI;
   a label is metadata, not something inside the artifact.
+- **An extension origin is not a web page.** The CSRF guard refused every `Sec-Fetch-Site:
+  cross-site` request, which also blocked the browser capture extension. Allow it only when the
+  request has a valid Bearer token and an extension Origin (or the explicit
+  `X-RedLine-Client: browser-extension` header), echo CORS only to that origin, and keep a web
+  page cross-site request `403`; a custom header needs a preflight a web page does not get. Test
+  both the allowed extension and the refused web origin.
+- **A client trace summary is not evidence.** The capture extension sends events, not trusted
+  counts. Validate the `trace.json` size/kinds/timestamps on the server, derive the summary and
+  highlights there, and never inline the raw trace into `get_feedback`; expose it as a bounded
+  resource/URL.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).

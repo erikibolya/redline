@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::extract::{DefaultBodyLimit, FromRequest, Multipart, Path as RoutePath, Request, State};
-use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{delete, get, post, put};
@@ -22,7 +22,7 @@ use crate::error::Error;
 use crate::mcp::{self, McpContext};
 use crate::model::{HandoffStatus, NewSession, Status, Submission};
 use crate::store::{FrameUpload, Store};
-use crate::{MAX_BODY_BYTES, MAX_SUBMIT_BYTES, MAX_VIDEO_BYTES};
+use crate::{MAX_BODY_BYTES, MAX_SUBMIT_BYTES, MAX_TRACE_BYTES, MAX_VIDEO_BYTES};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -107,11 +107,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route(
             "/api/sessions/video",
-            post(create_video_session).layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES + 1024 * 1024)),
+            post(create_video_session).layer(DefaultBodyLimit::max(
+                MAX_VIDEO_BYTES + MAX_TRACE_BYTES + 1024 * 1024,
+            )),
         )
         .route(
             "/api/sessions/{id}/video",
-            post(replace_video).layer(DefaultBodyLimit::max(MAX_VIDEO_BYTES + 1024 * 1024)),
+            post(replace_video).layer(DefaultBodyLimit::max(
+                MAX_VIDEO_BYTES + MAX_TRACE_BYTES + 1024 * 1024,
+            )),
         )
         .route("/api/projects", get(list_projects).post(create_project))
         .route("/api/agent/repos", post(sync_agent_repos))
@@ -153,9 +157,11 @@ pub fn router(state: AppState) -> Router {
             "/sessions/{id}/history/{stamp}/frames/{file}",
             get(history_frame),
         )
+        .route("/sessions/{id}/history/{stamp}/trace", get(history_trace))
         .route("/api/capture", post(capture_session))
         .route("/sessions/{id}/image", get(image))
         .route("/sessions/{id}/media", get(media))
+        .route("/sessions/{id}/trace", get(trace_file))
         .route("/sessions/{id}/frames/{file}", get(frame))
         .route("/sessions/{id}/annotated.png", get(annotated))
         .route("/sessions/{id}/rounds/{name}", get(round_image))
@@ -164,7 +170,10 @@ pub fn router(state: AppState) -> Router {
         .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
         // The rail polls `/api/sessions`; a browser must never answer a decision with yesterday's
         // list. API/session responses are live data, not documents, so no-store is correct.
-        .layer(middleware::from_fn(no_store));
+        .layer(middleware::from_fn(no_store))
+        // Extension preflight has no Authorization header by design; answer it before the token
+        // guard, but only for an extension origin and only with CORS for that origin.
+        .layer(middleware::from_fn(extension_preflight));
 
     Router::new()
         .route("/health", get(health))
@@ -181,10 +190,22 @@ pub fn router(state: AppState) -> Router {
 // ---------------------------------------------------------------- auth middleware
 
 async fn require_token(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let extension_origin = extension_origin(request.headers());
+    let extension_client = extension_origin.is_some()
+        || request
+            .headers()
+            .get("x-redline-client")
+            .and_then(|value| value.to_str().ok())
+            == Some("browser-extension");
+
     // Reject drive-by requests from a web page the human happens to have open. Browsers send this
-    // header; non-browser agents do not, so absence is not treated as failure.
+    // header; non-browser agents do not, so absence is not treated as failure. A browser extension
+    // is a different origin and cannot be told apart from `cross-site` by this header alone, so it
+    // must identify itself with an extension Origin or the explicit client header. A web page
+    // cannot forge either (Origin is browser-controlled; the custom header requires a preflight
+    // this server does not grant to web origins).
     if let Some(site) = request.headers().get("sec-fetch-site") {
-        if site.as_bytes() == b"cross-site" {
+        if site.as_bytes() == b"cross-site" && !extension_client {
             return (
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "cross-site request"})),
@@ -210,13 +231,65 @@ async fn require_token(State(state): State<AppState>, request: Request, next: Ne
 
     let credential = auth::credential_from(request.headers(), request.uri().query());
     match credential {
-        Some(token) if state.auth.verify(&token) => next.run(request).await,
+        Some(token) if state.auth.verify(&token) => {
+            let mut response = next.run(request).await;
+            if let Some(origin) = extension_origin {
+                add_extension_cors(&mut response, &origin);
+            }
+            response
+        }
         _ => (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "unauthorized", "hint": "Authorization: Bearer <token>" })),
         )
             .into_response(),
     }
+}
+
+/// `chrome-extension://…` / `moz-extension://…` origins are the only cross-site callers allowed
+/// through the CSRF guard. The token is still required; this only distinguishes an extension from
+/// a web page. CORS is echoed only to that origin, never `*`.
+fn extension_origin(headers: &HeaderMap) -> Option<String> {
+    let origin = headers.get(header::ORIGIN)?.to_str().ok()?;
+    if origin.starts_with("chrome-extension://") || origin.starts_with("moz-extension://") {
+        Some(origin.to_string())
+    } else {
+        None
+    }
+}
+
+fn add_extension_cors(response: &mut Response, origin: &str) {
+    let headers = response.headers_mut();
+    if let Ok(origin) = HeaderValue::from_str(origin) {
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+    }
+    headers.insert(header::VARY, HeaderValue::from_static("Origin"));
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_HEADERS,
+        HeaderValue::from_static("authorization, content-type, x-redline-client"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_ALLOW_METHODS,
+        HeaderValue::from_static("GET, POST, PUT, DELETE, OPTIONS"),
+    );
+    headers.insert(
+        header::ACCESS_CONTROL_MAX_AGE,
+        HeaderValue::from_static("600"),
+    );
+}
+
+/// Browser-extension CORS preflight. Chrome with host permissions usually sends the real request
+/// directly; Firefox and some enterprise policies use a preflight. A web page gets no CORS at all.
+async fn extension_preflight(request: Request, next: Next) -> Response {
+    if request.method() == Method::OPTIONS {
+        if let Some(origin) = extension_origin(request.headers()) {
+            let mut response = StatusCode::NO_CONTENT.into_response();
+            add_extension_cors(&mut response, &origin);
+            return response;
+        }
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    next.run(request).await
 }
 
 /// Protected data (API JSON, images, history) is produced from mutable state and must not be
@@ -1138,6 +1211,7 @@ async fn create_session(
 struct VideoForm {
     video: Vec<u8>,
     poster: Option<Vec<u8>>,
+    trace: Option<Vec<u8>>,
     fields: BTreeMap<String, String>,
 }
 
@@ -1155,6 +1229,7 @@ async fn read_video_form(mut multipart: Multipart) -> Result<VideoForm, Error> {
     let mut fields = BTreeMap::<String, String>::new();
     let mut video: Option<Vec<u8>> = None;
     let mut poster: Option<Vec<u8>> = None;
+    let mut trace: Option<Vec<u8>> = None;
     while let Some(field) = multipart
         .next_field()
         .await
@@ -1185,6 +1260,18 @@ async fn read_video_form(mut multipart: Multipart) -> Result<VideoForm, Error> {
                 )));
             }
             poster = Some(bytes.to_vec());
+        } else if name == "trace" {
+            let bytes = field
+                .bytes()
+                .await
+                .map_err(|err| Error::BadRequest(format!("cannot read trace field: {err}")))?;
+            if bytes.len() > MAX_TRACE_BYTES {
+                return Err(Error::BadRequest(format!(
+                    "trace is larger than {} MB",
+                    MAX_TRACE_BYTES / (1024 * 1024)
+                )));
+            }
+            trace = Some(bytes.to_vec());
         } else {
             let value = field
                 .text()
@@ -1196,6 +1283,7 @@ async fn read_video_form(mut multipart: Multipart) -> Result<VideoForm, Error> {
     Ok(VideoForm {
         video: video.ok_or_else(|| Error::BadRequest("provide a video file".to_string()))?,
         poster,
+        trace,
         fields,
     })
 }
@@ -1209,6 +1297,13 @@ async fn create_video_session(
 ) -> Result<Json<Value>, Error> {
     let form = read_video_form(multipart).await?;
     let title = form.field("title").unwrap_or("Video review");
+    let duration_ms = form
+        .field("duration_ms")
+        .and_then(|value| value.parse::<u64>().ok());
+    // Validate the trace before creating a folder: a bad trace must not leave an orphan session.
+    if let Some(trace) = form.trace.as_deref() {
+        crate::store::validate_trace(trace, duration_ms)?;
+    }
     let meta = state.store.create_video_from_bytes(
         &form.video,
         title,
@@ -1218,8 +1313,7 @@ async fn create_video_session(
         form.field("agent"),
         form.field("project"),
         form.poster.as_deref(),
-        form.field("duration_ms")
-            .and_then(|value| value.parse::<u64>().ok()),
+        duration_ms,
         form.field("width")
             .and_then(|value| value.parse::<u32>().ok()),
         form.field("height")
@@ -1227,6 +1321,16 @@ async fn create_video_session(
         form.field("fps")
             .and_then(|value| value.parse::<f64>().ok()),
     )?;
+    let meta = match form.trace.as_deref() {
+        Some(trace) => match state.store.attach_trace(&meta.id, trace) {
+            Ok(meta) => meta,
+            Err(err) => {
+                let _ = state.store.remove(&meta.id);
+                return Err(err);
+            }
+        },
+        None => meta,
+    };
     let meta = if let Some(branch) = form.field("branch") {
         state.store.set_branch(&meta.id, Some(branch))?
     } else {
@@ -1248,12 +1352,17 @@ async fn replace_video(
     multipart: Multipart,
 ) -> Result<Json<Value>, Error> {
     let form = read_video_form(multipart).await?;
+    let duration_ms = form
+        .field("duration_ms")
+        .and_then(|value| value.parse::<u64>().ok());
+    if let Some(trace) = form.trace.as_deref() {
+        crate::store::validate_trace(trace, duration_ms)?;
+    }
     let meta = state.store.new_video_round(
         &id,
         &form.video,
         form.poster.as_deref(),
-        form.field("duration_ms")
-            .and_then(|value| value.parse::<u64>().ok()),
+        duration_ms,
         form.field("width")
             .and_then(|value| value.parse::<u32>().ok()),
         form.field("height")
@@ -1261,6 +1370,10 @@ async fn replace_video(
         form.field("fps")
             .and_then(|value| value.parse::<f64>().ok()),
     )?;
+    let meta = match form.trace.as_deref() {
+        Some(trace) => state.store.attach_trace(&meta.id, trace)?,
+        None => meta,
+    };
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({
         "meta": meta,
@@ -1768,6 +1881,15 @@ async fn media(
     serve_range(path, request).await
 }
 
+/// The raw browser-flow trace attached to the current round.
+async fn trace_file(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Response, Error> {
+    let path = state.store.trace_path(&id)?;
+    Ok(serve_file(&path, Some("application/json")))
+}
+
 /// A video with `Accept-Ranges` and 206 responses, for the live clip and an archived round.
 async fn serve_range(path: PathBuf, request: Request) -> Result<Response, Error> {
     let service = ServeFile::new(path);
@@ -1810,6 +1932,15 @@ async fn history_frame(
         )));
     }
     Ok(serve_file(&path, None))
+}
+
+/// The trace archived with a video round.
+async fn history_trace(
+    State(state): State<AppState>,
+    RoutePath((id, stamp)): RoutePath<(String, String)>,
+) -> Result<Response, Error> {
+    let path = state.store.history_trace_path(&id, &stamp)?;
+    Ok(serve_file(&path, Some("application/json")))
 }
 
 async fn annotated(

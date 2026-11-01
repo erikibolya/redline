@@ -955,6 +955,7 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         url: None,
         image: None,
         media: None,
+        trace: None,
         frames: Vec::new(),
         annotations: Vec::new(),
         submitted_at: None,
@@ -982,6 +983,13 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         "agent_failure": meta.agent_failure,
         "submitted_at": meta.submitted_at,
         "media": meta.media,
+        "trace": meta.trace,
+        "trace_url": meta.trace.as_ref().map(|_| format!(
+            "{}/sessions/{}/trace?t={}",
+            ctx.base_url.trim_end_matches('/'),
+            meta.id,
+            ctx.token
+        )),
         "video_url": meta.media.as_ref()
             .filter(|media| media.kind == crate::model::MediaKind::Video)
             .map(|_| format!(
@@ -1032,6 +1040,13 @@ fn resources_list(ctx: &McpContext<'_>) -> Result<Value, Value> {
             "name": format!("{} — review summary", meta.title),
             "mimeType": "text/markdown",
         }));
+        if meta.trace.is_some() {
+            resources.push(json!({
+                "uri": format!("{base}/trace.json"),
+                "name": format!("{} — browser trace", meta.title),
+                "mimeType": "application/json",
+            }));
+        }
     }
     Ok(json!({ "resources": resources }))
 }

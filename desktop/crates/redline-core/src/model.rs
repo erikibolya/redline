@@ -30,6 +30,10 @@ pub struct Meta {
     /// First-frame thumbnail for a video session (v0.23); served by `/sessions/<id>/image`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub poster: Option<String>,
+    /// Optional browser-flow trace (v0.27). The raw `trace.json` lives beside the media; this is
+    /// the summary the rail, the editor and the agent can read without parsing the whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<TraceRef>,
     /// Who asked for the review (agent name, "cli", "mcp"). Additive.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent: Option<String>,
@@ -112,6 +116,59 @@ pub struct MediaRef {
     /// omit it; the UI steps by a nominal frame then.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<f64>,
+}
+
+/// A browser-flow trace attached to a review (v0.27). `trace.json` holds the raw events; this
+/// reference is the small, stable summary stored in `meta.json`, `annotations.json`, the rail
+/// and `get_feedback`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TraceRef {
+    /// File name inside the session folder (`trace.json`).
+    pub file: String,
+    /// `browser-flow` for a recorded tab; future kinds are additive.
+    pub kind: String,
+    /// Number of events in the raw trace.
+    pub events: usize,
+    pub started_at: String,
+    pub duration_ms: u64,
+    pub summary: TraceSummary,
+    /// True when the extension applied its header/query/body redaction.
+    #[serde(default)]
+    pub redacted: bool,
+    /// True when an event/size cap stopped collection before the recording ended.
+    #[serde(default)]
+    pub truncated: bool,
+    /// A bounded set of the most useful moments (console errors, failed requests). The full
+    /// events stay in `trace.json`; this keeps `review.md` readable without dumping the file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub highlights: Vec<TraceHighlight>,
+}
+
+/// Counts derived by the server from `trace.json`; never trust a client-supplied summary.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceSummary {
+    #[serde(default)]
+    pub console: usize,
+    #[serde(default)]
+    pub console_errors: usize,
+    #[serde(default)]
+    pub network: usize,
+    #[serde(default)]
+    pub network_failed: usize,
+    #[serde(default)]
+    pub actions: usize,
+    #[serde(default)]
+    pub markers: usize,
+}
+
+/// One human-readable moment from the trace, shown in `review.md` and the trace panel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TraceHighlight {
+    /// Milliseconds from the recording start.
+    pub t: u64,
+    /// `console`, `exception` or `network`.
+    pub kind: String,
+    pub text: String,
 }
 
 /// What an optional post-confirmation handoff is doing (v0.23). The server queues `requested`
@@ -354,6 +411,9 @@ pub struct AnnotationSet {
     /// Image or video metadata for the round (v0.23).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<MediaRef>,
+    /// Browser-flow trace for this round (v0.27), when the capture included one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trace: Option<TraceRef>,
     /// Full-resolution frames captured at the unique annotation times (v0.23). The contact sheet
     /// stays `annotated.png`; these are the individual frames the agent can zoom into.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

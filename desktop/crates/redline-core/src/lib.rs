@@ -40,6 +40,13 @@ pub const MAX_FRAME_COUNT: usize = 20;
 pub const MAX_FRAMES_BYTES: usize = 60 * 1024 * 1024;
 /// Multipart submit body: the contact sheet plus the frames, with room for MIME overhead.
 pub const MAX_SUBMIT_BYTES: usize = 80 * 1024 * 1024;
+/// Browser-flow trace cap. The JSON is metadata, not a second video; 10 MB is generous for
+/// 5,000 events and keeps the multipart body bounded.
+pub const MAX_TRACE_BYTES: usize = 10 * 1024 * 1024;
+/// Maximum events accepted from a browser trace. The extension stops at the same number.
+pub const MAX_TRACE_EVENTS: usize = 5_000;
+/// Maximum length of one trace text/url/selector string, to keep a trace from becoming a body.
+pub const MAX_TRACE_TEXT: usize = 4_096;
 
 /// Protocol version reported to MCP clients.
 pub const MCP_PROTOCOL_VERSION: &str = "2025-06-18";

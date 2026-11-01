@@ -12,15 +12,231 @@ use serde_json::{json, Value};
 use crate::error::{Error, Result};
 use crate::model::{
     AgentFailure, Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind,
-    MediaRef, Meta, Status, Submission,
+    MediaRef, Meta, Status, Submission, TraceHighlight, TraceRef, TraceSummary,
 };
-use crate::{MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_VIDEO_BYTES};
+use crate::{
+    MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_TRACE_BYTES, MAX_TRACE_EVENTS, MAX_TRACE_TEXT,
+    MAX_VIDEO_BYTES,
+};
 
 /// A frame from the browser, captured at an annotation time. `at` is seconds into the video.
 #[derive(Debug, Clone)]
 pub struct FrameUpload {
     pub at: f64,
     pub bytes: Vec<u8>,
+}
+
+/// The raw browser trace as uploaded. Only the fields needed for validation/summary are typed;
+/// page/browser/redaction metadata is preserved in the file but not interpreted by the server.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TraceUpload {
+    version: u32,
+    kind: String,
+    started_at: String,
+    duration_ms: u64,
+    #[serde(default)]
+    redaction: Option<Value>,
+    #[serde(default)]
+    truncated: bool,
+    #[serde(default)]
+    events: Vec<Value>,
+}
+
+/// Validate and summarize a browser trace before it touches the session folder. The server never
+/// trusts a client-provided summary; counts and highlights are derived here. The raw JSON is
+/// stored unchanged so new event fields remain readable by later clients.
+pub fn validate_trace(bytes: &[u8], video_duration_ms: Option<u64>) -> Result<TraceRef> {
+    if bytes.is_empty() {
+        return Err(Error::BadRequest("trace is empty".to_string()));
+    }
+    if bytes.len() > MAX_TRACE_BYTES {
+        return Err(Error::BadRequest(format!(
+            "trace is larger than {} MB",
+            MAX_TRACE_BYTES / (1024 * 1024)
+        )));
+    }
+    let upload: TraceUpload = serde_json::from_slice(bytes)
+        .map_err(|err| Error::BadRequest(format!("invalid trace JSON: {err}")))?;
+    if upload.version != 1 {
+        return Err(Error::BadRequest(format!(
+            "unsupported trace version {}",
+            upload.version
+        )));
+    }
+    if upload.kind != "browser-flow" {
+        return Err(Error::BadRequest(format!(
+            "unsupported trace kind {}",
+            upload.kind
+        )));
+    }
+    if upload.started_at.trim().is_empty() {
+        return Err(Error::BadRequest("trace.started_at is empty".to_string()));
+    }
+    if upload.duration_ms == 0 {
+        return Err(Error::BadRequest(
+            "trace.duration_ms must be positive".to_string(),
+        ));
+    }
+    if upload.duration_ms > crate::MAX_VIDEO_DURATION_MS + 5_000 {
+        return Err(Error::BadRequest(
+            "trace is longer than the video limit".to_string(),
+        ));
+    }
+    if let Some(video) = video_duration_ms {
+        if upload.duration_ms > video.saturating_add(5_000) {
+            return Err(Error::BadRequest(
+                "trace is longer than the attached video".to_string(),
+            ));
+        }
+    }
+    if upload.events.len() > MAX_TRACE_EVENTS {
+        return Err(Error::BadRequest(format!(
+            "trace has more than {MAX_TRACE_EVENTS} events"
+        )));
+    }
+
+    let mut summary = TraceSummary::default();
+    let mut highlights = Vec::new();
+    for (index, event) in upload.events.iter().enumerate() {
+        let object = event
+            .as_object()
+            .ok_or_else(|| Error::BadRequest(format!("trace event {index} is not an object")))?;
+        let t = object
+            .get("t")
+            .and_then(Value::as_f64)
+            .filter(|t| t.is_finite() && *t >= 0.0)
+            .map(|t| t.round() as u64)
+            .ok_or_else(|| Error::BadRequest(format!("trace event {index} has no t")))?;
+        if t > upload.duration_ms + 2_000 {
+            return Err(Error::BadRequest(format!(
+                "trace event {index} is after the recording"
+            )));
+        }
+        let kind = object
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::BadRequest(format!("trace event {index} has no kind")))?;
+        match kind {
+            "console" => {
+                let _level = trace_string(object, "level", 32, index)?;
+                let text = trace_string(object, "text", MAX_TRACE_TEXT, index)?;
+                summary.console += 1;
+                if _level == "error" {
+                    summary.console_errors += 1;
+                    push_highlight(&mut highlights, t, "console", &text);
+                }
+            }
+            "exception" => {
+                let text = trace_string(object, "text", MAX_TRACE_TEXT, index)?;
+                summary.console += 1;
+                summary.console_errors += 1;
+                push_highlight(&mut highlights, t, "exception", &text);
+            }
+            "network" => {
+                let method = trace_string(object, "method", 16, index)?;
+                let url = trace_string(object, "url", MAX_TRACE_TEXT, index)?;
+                if ![
+                    "http://", "https://", "ws://", "wss://", "data:", "blob:", "file:", "about:",
+                ]
+                .iter()
+                .any(|prefix| url.starts_with(prefix))
+                {
+                    return Err(Error::BadRequest(format!(
+                        "trace event {index} has an unsupported url"
+                    )));
+                }
+                let status = object
+                    .get("status")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let failed = object
+                    .get("failed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    || status >= 400;
+                summary.network += 1;
+                if failed {
+                    summary.network_failed += 1;
+                    push_highlight(
+                        &mut highlights,
+                        t,
+                        "network",
+                        &format!(
+                            "{method} {url} → {}",
+                            if status == 0 {
+                                "failed".to_string()
+                            } else {
+                                status.to_string()
+                            }
+                        ),
+                    );
+                }
+            }
+            "action" => {
+                let _action = trace_string(object, "action", 64, index)?;
+                let _selector = trace_string(object, "selector", MAX_TRACE_TEXT, index)?;
+                summary.actions += 1;
+            }
+            "navigation" => {
+                let _url = trace_string(object, "url", MAX_TRACE_TEXT, index)?;
+            }
+            "marker" => {
+                let _label = trace_string(object, "label", MAX_TRACE_TEXT, index)?;
+                summary.markers += 1;
+            }
+            other => {
+                return Err(Error::BadRequest(format!(
+                    "trace event {index} has unknown kind {other}"
+                )))
+            }
+        }
+    }
+
+    Ok(TraceRef {
+        file: "trace.json".to_string(),
+        kind: upload.kind,
+        events: upload.events.len(),
+        started_at: upload.started_at,
+        duration_ms: upload.duration_ms,
+        summary,
+        redacted: upload.redaction.is_some(),
+        truncated: upload.truncated,
+        highlights,
+    })
+}
+
+fn trace_string(
+    event: &serde_json::Map<String, Value>,
+    key: &str,
+    max: usize,
+    index: usize,
+) -> Result<String> {
+    let value = event
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::BadRequest(format!("trace event {index} has no {key}")))?;
+    if value.len() > max {
+        return Err(Error::BadRequest(format!(
+            "trace event {index} {key} is too long"
+        )));
+    }
+    Ok(value.to_string())
+}
+
+fn push_highlight(highlights: &mut Vec<TraceHighlight>, t: u64, kind: &str, text: &str) {
+    if highlights.len() >= 8 {
+        return;
+    }
+    let text = if text.chars().count() > 240 {
+        text.chars().take(239).collect::<String>() + "…"
+    } else {
+        text.to_string()
+    };
+    highlights.push(TraceHighlight {
+        t,
+        kind: kind.to_string(),
+        text,
+    });
 }
 
 /// Same rule as v0.1: one leading alphanumeric, then alphanumerics/`.`/`_`/`-`, max 121 chars.
@@ -326,6 +542,35 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation], frames: &[FrameR
         meta.submitted_at.as_deref().unwrap_or("-")
     ));
     lines.push(String::new());
+    if let Some(trace) = &meta.trace {
+        lines.push("## Browser trace".to_string());
+        lines.push(String::new());
+        lines.push(format!(
+            "- {} · {} actions · {} requests ({} failed) · {} console messages ({} errors) · {} markers{}",
+            timecode(trace.duration_ms as f64 / 1000.0),
+            trace.summary.actions,
+            trace.summary.network,
+            trace.summary.network_failed,
+            trace.summary.console,
+            trace.summary.console_errors,
+            trace.summary.markers,
+            if trace.truncated { " · truncated" } else { "" },
+        ));
+        if !trace.highlights.is_empty() {
+            lines.push(String::new());
+            lines.push("### Trace highlights".to_string());
+            lines.push(String::new());
+            for highlight in &trace.highlights {
+                lines.push(format!(
+                    "- @ {} {} — {}",
+                    timecode(highlight.t as f64 / 1000.0),
+                    highlight.kind,
+                    highlight.text
+                ));
+            }
+        }
+        lines.push(String::new());
+    }
     lines.push("## Annotations".to_string());
     lines.push(String::new());
 
@@ -925,6 +1170,7 @@ impl Store {
                 url: None,
                 image: None,
                 media: None,
+                trace: None,
                 frames: Vec::new(),
                 annotations: Vec::new(),
                 submitted_at: None,
@@ -1081,6 +1327,7 @@ impl Store {
             image_height: None,
             media: None,
             poster: None,
+            trace: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
             feature_confirmed_at: None,
@@ -1177,6 +1424,7 @@ impl Store {
             image_height: height,
             media: Some(media),
             poster: has_poster.then(|| "poster.png".to_string()),
+            trace: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
             feature_confirmed_at: None,
@@ -1277,7 +1525,8 @@ impl Store {
         let has_round = meta.status == Status::Submitted
             || !set.annotations.is_empty()
             || dir.join("annotated.png").is_file()
-            || !set.frames.is_empty();
+            || !set.frames.is_empty()
+            || meta.trace.is_some();
         let stamp = if has_round {
             let stamp = meta
                 .round_stamp
@@ -1296,6 +1545,13 @@ impl Store {
 
         if let Some(stamp) = &stamp {
             let media_dir = dir.join("history").join(safe_stamp(stamp));
+            if meta.trace.is_some() {
+                fs::create_dir_all(&media_dir)?;
+                let trace = dir.join("trace.json");
+                if trace.is_file() {
+                    fs::rename(&trace, media_dir.join("trace.json"))?;
+                }
+            }
             if meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video) {
                 fs::create_dir_all(&media_dir)?;
                 let source = dir.join(&meta.image);
@@ -1347,6 +1603,7 @@ impl Store {
             fps,
         });
         meta.poster = has_poster.then(|| "poster.png".to_string());
+        meta.trace = None;
         meta.status = Status::Open;
         meta.submitted_at = None;
         meta.round_stamp = None;
@@ -1457,6 +1714,10 @@ impl Store {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         let stamp = now();
+        // A new agent round is new evidence; a trace from the previous round no longer matches.
+        if meta.trace.take().is_some() {
+            let _ = fs::remove_file(dir.join("trace.json"));
+        }
 
         if image.is_some() && meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video)
         {
@@ -1485,6 +1746,7 @@ impl Store {
                 height,
             }),
             media: meta.media.clone(),
+            trace: None,
             frames: Vec::new(),
             annotations: Vec::new(),
             submitted_at: None,
@@ -1603,6 +1865,7 @@ impl Store {
                 height: submission.height,
             }),
             media: meta.media.clone(),
+            trace: meta.trace.clone(),
             frames: frame_refs,
             annotations: submission.annotations.clone(),
             submitted_at: Some(submitted_at.clone()),
@@ -2084,6 +2347,46 @@ impl Store {
             return Err(Error::BadRequest("invalid file name".to_string()));
         }
         Ok(self.dir(id)?.join(name))
+    }
+
+    /// Validate and store `trace.json` for an existing session, then point `meta.trace` at it.
+    /// The caller usually validates first (to fail before creating a session); this repeats the
+    /// validation so a direct store call cannot write an unchecked trace.
+    pub fn attach_trace(&self, id: &str, bytes: &[u8]) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let trace = validate_trace(
+            bytes,
+            meta.media.as_ref().and_then(|media| media.duration_ms),
+        )?;
+        write_atomic(&dir.join("trace.json"), bytes)?;
+        meta.trace = Some(trace);
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The current `trace.json`, if this session has one.
+    pub fn trace_path(&self, id: &str) -> Result<PathBuf> {
+        let path = self.dir(id)?.join("trace.json");
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(Error::NotFound(format!("{id}/trace")))
+        }
+    }
+
+    /// The trace archived with a video round.
+    pub fn history_trace_path(&self, id: &str, stamp: &str) -> Result<PathBuf> {
+        let path = self
+            .dir(id)?
+            .join("history")
+            .join(safe_stamp(stamp))
+            .join("trace.json");
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(Error::NotFound(format!("{id}/history/{stamp}/trace")))
+        }
     }
 
     /// A full-resolution still captured at an annotation time (`frames/<at>.<png|jpg>`).

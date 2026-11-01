@@ -1,6 +1,8 @@
 # Browser capture extension — design and delivery plan
 
-Status: **draft for approval** (2026-11-01). No code is written yet.
+Status: **Phase 1 (server trace foundation) implemented** on `feat/browser-extension`
+(2026-11-01). The capture extension itself is Phase 2+; the tool set and store decision are
+recorded below.
 
 A Chromium extension that connects to a RedLine server, captures a screenshot or records a flow
 from the current tab, collects the console and network evidence, and lets the human annotate the
@@ -324,7 +326,8 @@ session folder; a new video round moves it to `history/<stamp>/trace.json` with 
   `GET /sessions/<id>/history/<stamp>/trace`.
 - `GET /api/sessions` and `GET /api/sessions/<id>` include the `trace` summary.
 - Validation: known `kind` values, event count/size caps, all `t <= duration_ms + 2 s`, URL
-  schemes `http(s)`, no unknown top-level event fields that could smuggle binary data.
+  schemes `http(s)`, `ws(s)`, `data:`, `blob:` and `file:`, no unknown top-level event fields
+  that could smuggle binary data.
 - An invalid trace rejects the upload with `400`; the video is not stored.
 - A trace can also be attached to an image session later via `POST /api/sessions/<id>/trace`;
   v1 only uses it with video.
@@ -458,6 +461,11 @@ The `debugger` permission is the most scrutinised one; the store listing must ex
 only attached after an explicit Record action and is used solely to read console/network events
 for the review the user is creating.
 
+Store cost (2026-11-01): the Chrome Web Store charges a **one-time $5** developer registration
+fee; Microsoft Edge Add-ons registration is **free**. Both require an owner account and identity
+verification; Edge review can take up to seven business days. The owner does not have the accounts
+yet, so packaging/listing is prepared first and publishing is a later, explicit step.
+
 Manifest permissions (proposed): `activeTab`, `scripting`, `tabs`, `storage`, `debugger`,
 `tabCapture`, `offscreen`, `sidePanel`, `alarms`; optional host permission for the configured
 RedLine server; `activeTab` grants the recorded page. `debugger` shows a browser warning; the
@@ -529,14 +537,34 @@ Taken (2026-11-01):
 | Recording limit | 5 min / 250 MB |
 | Distribution | Chrome Web Store + Edge Add-ons |
 
+Taken after the review:
+
+| Decision | Choice |
+|---|---|
+| Annotator tools | v1 core: select/move, rectangle, arrow, pen, text note, timecoded point annotations, undo/redo, draft, submit; advanced tools stay in RedLine |
+| Project/branch | choose a project in the popup; leave branch empty so the server derives it; allow an override |
+
 Still open:
 
-1. **Annotator tool set.** Default for v1: select/move, rectangle, arrow, pen, text note,
-   timecoded point annotations, undo/redo, draft and submit. Ellipse, ranges (`until`), groups,
-   align/distribute and the diff overlay stay in the RedLine tab. Say if any of those is required
-   in the panel from day one.
-2. **Store accounts.** Publishing needs the owner's Chrome Web Store and Edge Partner Center
-   accounts, identity verification and a privacy-policy URL. We can prepare the package, listing
-   text, screenshots and `docs/PRIVACY-EXTENSION.md`; the final publish is the owner's action.
-3. **Project/branch defaults.** Default: choose a project in the popup; leave branch empty so the
-   server derives `feat/<title-slug>-<id-tail>`; allow an override in the draft form.
+1. **Store accounts.** The owner has no Chrome Web Store or Edge Partner Center account yet
+   (Chrome: one-time $5; Edge: free). Prepare the package, listing text, screenshots and
+   `docs/PRIVACY-EXTENSION.md`; publishing happens only after an explicit owner action.
+
+## 14. Implementation status
+
+Phase 1 (server trace foundation) is on `feat/browser-extension`:
+
+- `Meta.trace` / `AnnotationSet.trace` (`TraceRef`, `TraceSummary`, `TraceHighlight`).
+- `validate_trace`: 10 MB / 5,000-event / text / timestamp / kind validation; the server derives
+  the summary and highlights instead of trusting the client.
+- Multipart `trace` on `POST /api/sessions/video` and `POST /api/sessions/<id>/video`; invalid
+  traces fail before a session is created.
+- `GET /sessions/<id>/trace` and `/history/<stamp>/trace`; the trace moves with the archived
+  video round.
+- `review.md` Browser trace section; `get_feedback` `trace`/`trace_url`; MCP
+  `redline://session/<id>/trace.json`.
+- Extension-origin auth/CORS: token + extension Origin (or `X-RedLine-Client`) bypasses the
+  cross-site guard; web cross-site stays `403`; extension preflight is `204`, web preflight `403`.
+- Tests: 124 Rust tests green (3 new trace tests + auth preflight coverage).
+
+Next: Phase 2 (options/popup, screenshot capture, side-panel image editor) on the same branch.

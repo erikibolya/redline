@@ -248,6 +248,18 @@ same path a human does: upload, play, draw, range, zoom, submit.
 6. Run Rust tests and the browser e2e locally; CI runs both on the PR.
 7. Release only from a green tag; rerun the e2e against the release image.
 
+## Browser trace (extension Phase 1, 2026-11-01)
+
+- Rust: `validate_trace` rejects an empty/invalid kind, a zero or overlong duration, an event after
+  the recording, an unknown event kind and a bad URL; it derives the summary/highlights itself.
+- Rust: a trace is attached to a video session, carried into `annotations.json` and `review.md`,
+  exposed by `get_feedback`/the MCP `trace.json` resource, and moved to
+  `history/<stamp>/trace.json` when a new clip replaces the round.
+- HTTP: `POST /api/sessions/video` accepts the optional multipart `trace`; `GET
+  /sessions/<id>/trace` returns `application/json`; a bad trace does not create an orphan session.
+- Auth: extension `Origin` + token is accepted (CORS echoed only to that origin); a web
+  `cross-site` request is still `403`; extension preflight is `204`, web preflight is `403`.
+
 ## Release gate
 
 - [ ] `cargo test --workspace` green

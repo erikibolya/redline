@@ -591,9 +591,10 @@ interpretation and say what you assumed in the reply."#,
 }
 
 /// The second run a feature gets: the human already confirmed it, so the agent may perform the
-/// integration's handoff (here: open the PR and merge). This is deliberately separate from
-/// `prompt_for`: the review run is forbidden to hand off, and only this prompt grants that
-/// permission.
+/// integration's handoff (open the PR/MR and let the repository's merge flow finish). The
+/// concrete forge commands live in the repository's AGENTS.md; RedLine only owns the
+/// confirmation and the status report. This is deliberately separate from `prompt_for`: the
+/// review run is forbidden to hand off, and only this prompt grants that permission.
 fn handoff_prompt_for(session: &Value, repo: &Path, branch: &str) -> String {
     let id = session["id"].as_str().unwrap_or_default();
     let project = session["project"].as_str().unwrap_or("Inbox");
@@ -629,35 +630,31 @@ The original request was: {prompt}
 
 The human confirmed this feature. Nobody is watching; do not ask questions.
 
-Your job (the reference git handoff):
-1. Read the repository's AGENTS.md and follow its shipping rules. Work only in this worktree
-   and on this branch.
+Your job:
+1. Read the repository's AGENTS.md and follow its shipping rules. It is the source of truth for
+   the concrete flow: the remote, the base branch, how to open the PR/MR, which checks are
+   required, and how the repository merges. Work only in this worktree and on this branch.
 2. Make sure the branch is pushed. If the review left uncommitted changes, commit them on this
    branch first. Never rewrite published git history.
-3. Open the pull request as a **draft** first and let GitHub Actions run the full suite there.
-   Do not mark it ready and do not enable auto-merge until the required checks are green. If a
-   PR already exists, reuse it. On this repository, `gh pr create --draft --base dev` is the
-   first step; `feature-ready "<summary>"` marks the existing PR ready and enables auto-merge
-   after CI. Never open a second PR for this branch.
-4. Local preflight should be focused: build the server binary (shared target cache) and run the
-   affected tests. Use `REDLINE_BIN=<binary> REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser
-   desktop/scripts/e2e.sh` to run the browser e2e without rebuilding the ~768 MB browser image;
-   a full `Dockerfile.browser` build is only needed when the image or system dependencies
-   changed. The full suite runs on GitHub for the draft PR.
+3. Open the pull request/merge request using the repository's documented flow. If a PR/MR for
+   this branch already exists, reuse it; never open a second one. Do not mark it ready or enable
+   auto-merge before the required checks are green. Do not merge locally.
+4. Run the local preflight the repository asks for (build and affected tests); the full suite
+   runs in CI. Do not replace it with a smoke test.
 5. Wait for the required checks. Do not merge on red. Fix failures caused by this branch, push,
    and wait again. Do not merge into main when the repository integrates through dev.
 6. Report the result through RedLine's MCP endpoint:
    curl -s -H "Authorization: Bearer $REDLINE_TOKEN" -H 'content-type: application/json' \
-     -d '{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"handoff_status","arguments":{{"session_id":"{id}","state":"done","label":"merged","url":"https://github.com/OWNER/REPO/pull/N","message":"merge commit ..."}}}}}}' \
+     -d '{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"handoff_status","arguments":{{"session_id":"{id}","state":"done","label":"merged","url":"https://<forge-host>/OWNER/REPO/pull/N","message":"merge commit ..."}}}}}}' \
      "$REDLINE_URL/mcp"
-   - `done` + label "merged" only when GitHub says the PR is merged.
-   - `failed` with a short label and message when checks fail, the PR is still open, or you
-     cannot merge. Include the PR URL in `url` so the human can click it.
+   - `done` + label "merged" only when the forge reports the PR/MR as merged.
+   - `failed` with a short label and message when checks fail, the PR/MR is still open, or you
+     cannot merge. Include the PR/MR URL in `url` so the human can click it.
 7. Do not create a RedLine review or post a round for this handoff. Do not send a reply; the
    human sees the handoff state in the rail.
 
-If the branch is already merged, report the existing PR as done/merged. If there is nothing to
-ship, report failed with the reason."#,
+If the branch is already merged, report the existing PR/MR as done/merged. If there is nothing
+to ship, report failed with the reason."#,
         id = id,
         project = project,
         branch = branch,
@@ -1610,7 +1607,7 @@ mod tests {
     }
 
     #[test]
-    fn a_handoff_prompt_grants_the_pr_and_reports_through_mcp() {
+    fn a_handoff_prompt_is_forge_agnostic_and_reports_through_mcp() {
         let session = json!({
             "id": "20260101-120000-handoff",
             "project": "RedLine UI",
@@ -1625,15 +1622,21 @@ mod tests {
         assert!(prompt.contains("already confirmed"));
         assert!(prompt.contains("feat/handoff-test"));
         assert!(prompt.contains("/tmp/repo"));
-        assert!(prompt.contains("feature-ready"));
-        assert!(prompt.contains("as a **draft** first"));
-        assert!(prompt.contains("REDLINE_BIN"));
-        assert!(prompt.contains("without rebuilding the ~768 MB browser image"));
+        assert!(prompt.contains("Read the repository's AGENTS.md"));
+        assert!(prompt.contains("documented flow"));
+        assert!(prompt.contains("never open a second one"));
+        assert!(prompt.contains("Do not merge on red"));
         assert!(prompt.contains("handoff_status"));
         assert!(prompt.contains("\"state\":\"done\""));
         assert!(prompt.contains("\"label\":\"merged\""));
         assert!(prompt.contains("checks are red"));
         assert!(prompt.contains("https://github.com/o/r/pull/7"));
+        // The prompt must not prescribe a forge; the repository's AGENTS.md owns the commands.
+        assert!(!prompt.contains("feature-ready"));
+        assert!(!prompt.contains("gh pr create"));
+        assert!(!prompt.contains("REDLINE_BIN"));
+        assert!(!prompt.contains("as a **draft** first"));
+        assert!(!prompt.contains("GitHub Actions"));
     }
 
     #[test]

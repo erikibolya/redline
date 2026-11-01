@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **A dev image label is not a binary version.** The browser dev job labeled its image
+  `0.27.0-dev.N` but built the binary from `Cargo.toml`, which still said `0.26.1`, so the dev
+  server reported the stable version (2026-11-01). `desktop/scripts/dev-version.mjs` now stamps
+  the workspace, app and lockfile versions before both the Windows and container builds, and the
+  Windows job asserts that `redline --version` reports the dev version.
+
 ## 0.26.1 — 2026-11-01
 
 - **A stopped or timed-out run now kills its process tree, not just `opencode`.** A killed agent

@@ -33,13 +33,13 @@ async function json(pathname, init = {}) {
   return data;
 }
 
-async function extensionId(browser) {
+async function serviceWorker(browser) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const targets = await (await fetch(`${CHROME}/json/list`)).json();
     const worker = targets.find(
       (target) => target.type === "service_worker" && target.url.includes("background.js"),
     );
-    if (worker) return new URL(worker.url).host;
+    if (worker) return worker;
     if (attempt === 4) {
       const page = await browser.newPage();
       await page.goto("chrome://extensions/");
@@ -51,9 +51,61 @@ async function extensionId(browser) {
   throw new Error("extension service worker not found");
 }
 
+async function extensionId(browser) {
+  return new URL((await serviceWorker(browser)).url).host;
+}
+
+async function evaluateInWorker(worker, expression) {
+  const ws = new WebSocket(worker.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener("open", resolve, { once: true });
+    ws.addEventListener("error", reject, { once: true });
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("service worker evaluate timed out")), 5000);
+      ws.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data);
+        if (message.id !== 1) return;
+        clearTimeout(timer);
+        if (message.error) reject(new Error(JSON.stringify(message.error)));
+        else resolve(message.result);
+      });
+      ws.send(
+        JSON.stringify({
+          id: 1,
+          method: "Runtime.evaluate",
+          params: { expression, awaitPromise: true, returnByValue: true },
+        }),
+      );
+    });
+  } finally {
+    ws.close();
+  }
+}
+
+// Chrome 159 headless (and some headful builds) refuses a page.goto() from a normal tab into a
+// chrome-extension:// URL. Let the extension's own service worker create the tab instead, then
+// attach to the page target.
+async function openExtensionPage(browser, pathname) {
+  const worker = await serviceWorker(browser);
+  const url = `${pathname}?e2e=${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  await evaluateInWorker(
+    worker,
+    `chrome.tabs.create({url: chrome.runtime.getURL(${JSON.stringify(url)})})`,
+  );
+  const target = await browser.waitForTarget(
+    (candidate) => candidate.type() === "page" && candidate.url().endsWith(url),
+    { timeout: 10000 },
+  );
+  const page = await target.page();
+  if (!page) throw new Error(`cannot attach to extension page ${pathname}`);
+  return page;
+}
+
 async function configure(browser, id) {
-  const page = await browser.newPage();
-  await page.goto(`chrome-extension://${id}/src/options.html`, { waitUntil: "domcontentloaded" });
+  const page = await openExtensionPage(browser, "src/options.html");
+  await page.waitForFunction(() => document.querySelector("#server-url"));
   await page.evaluate(({ base, token }) => {
     document.querySelector("#server-url").value = base;
     document.querySelector("#token").value = token;
@@ -96,8 +148,8 @@ async function createVideoSession() {
 }
 
 async function openCapture(browser, id, sessionId, kind) {
-  const page = await browser.newPage();
-  await page.goto(`chrome-extension://${id}/src/sidepanel.html`, { waitUntil: "domcontentloaded" });
+  const page = await openExtensionPage(browser, "src/sidepanel.html");
+  await page.waitForFunction(() => document.querySelector("#workspace"));
   await page.evaluate(
     async ({ sessionId, base, kind }) => {
       await chrome.storage.session.set({

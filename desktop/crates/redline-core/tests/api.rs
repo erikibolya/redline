@@ -1858,10 +1858,12 @@ async fn the_round_on_the_canvas_is_not_listed_as_a_second_current() {
 }
 
 #[tokio::test]
-async fn every_round_reports_how_long_it_ran() {
-    // A round's cost is submit → hand-back: the next human submission, the agent's next
-    // picture, or `resolve`. History rows carried only a stamp, so a human could not tell what
-    // each version cost (2026-10-31).
+async fn every_round_reports_how_long_the_agent_ran() {
+    // A round's cost is a *run*, not a queue wait: it starts when an agent picks the round up
+    // (`agent-events.jsonl`) and ends when it hands the round back — the next human submission,
+    // its next picture, or `resolve`. The submission stamp only says when the round entered the
+    // queue: a review that waited 34 minutes for pickup reported 42 minutes of "work"
+    // (2026-10-31).
     let h = harness();
     let (_, _, created) = send(
         &h.app,
@@ -1921,8 +1923,95 @@ async fn every_round_reports_how_long_it_ran() {
         rounds[1]["finished_at"], rounds[0]["started_at"],
         "the previous round ended when this one was submitted: {rounds:?}"
     );
-    assert!(rounds[1]["duration_secs"].is_u64(), "{rounds:?}");
+    // Nobody ever picked this one up (no agent event): there is no run to time, so the row must
+    // not print the queue wait as if it were work.
+    assert!(
+        rounds[1].get("run_started_at").is_none() && rounds[1].get("duration_secs").is_none(),
+        "a round no agent touched has no run cost: {rounds:?}"
+    );
 
+    // A submission can sit in the queue for a long time. Move the archived submission back an
+    // hour and record the agent picking it up 45 minutes ago, so "queue → hand-back" and
+    // "run → hand-back" are different numbers and only the second one may be reported.
+    let stamp = rounds[1]["stamp"].as_str().unwrap();
+    let archive_path = h
+        .store
+        .dir(&id)
+        .unwrap()
+        .join("history")
+        .join(format!("{stamp}.json"));
+    let now = chrono::Utc::now();
+    let queued_at =
+        (now - chrono::Duration::minutes(60)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let picked_up_at =
+        (now - chrono::Duration::minutes(45)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut archive: Value =
+        serde_json::from_str(&std::fs::read_to_string(&archive_path).unwrap()).unwrap();
+    archive["submitted_at"] = json!(queued_at);
+    std::fs::write(&archive_path, serde_json::to_string(&archive).unwrap()).unwrap();
+    h.store
+        .append_agent_event(
+            &id,
+            &json!({"at": picked_up_at, "message": "Picked up", "state": "thinking"}),
+        )
+        .unwrap();
+
+    let secs = |from: &str, to: &str| -> i64 {
+        (chrono::DateTime::parse_from_rfc3339(to).unwrap()
+            - chrono::DateTime::parse_from_rfc3339(from).unwrap())
+        .num_seconds()
+    };
+    let rounds = history(&h).await;
+    let finished = rounds[1]["finished_at"].as_str().unwrap();
+    assert_eq!(rounds[1]["started_at"], queued_at, "{rounds:?}");
+    assert_eq!(
+        rounds[1]["run_started_at"], picked_up_at,
+        "the run starts when the agent picked the round up: {rounds:?}"
+    );
+    let ran = rounds[1]["duration_secs"]
+        .as_u64()
+        .expect("the run is timed") as i64;
+    assert_eq!(ran, secs(&picked_up_at, finished), "{rounds:?}");
+    assert_eq!(
+        secs(&queued_at, finished) - ran,
+        15 * 60,
+        "the 15 minutes the round waited in the queue are not run time: {rounds:?}"
+    );
+
+    let read = |uri: String| {
+        Request::builder()
+            .uri(uri)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let list_row = |h: &Harness, id: &str| {
+        let request = read("/api/sessions".to_string());
+        let app = h.app.clone();
+        let id = id.to_string();
+        async move {
+            let (_, _, body) = send(&app, request).await;
+            body["sessions"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|session| session["id"] == json!(id))
+                .expect("the session is listed")
+        }
+    };
+    // The newest round is still in the agent's hands: the rail must not report the *previous*
+    // round's cost there — a run in flight has no duration yet.
+    let row = list_row(&h, &id).await;
+    assert!(row["last_run"].is_null(), "{row:?}");
+
+    // `resolve` is the end of the round the agent had; that run needs its own pickup event.
+    h.store
+        .append_agent_event(
+            &id,
+            &json!({"at": rounds[0]["started_at"], "message": "Picked up", "state": "thinking"}),
+        )
+        .unwrap();
     let (status, _, resolved) = send(
         &h.app,
         authed("POST", &format!("/api/sessions/{id}/resolve"), json!({})),
@@ -1935,6 +2024,91 @@ async fn every_round_reports_how_long_it_ran() {
         "resolve is the end of the round the agent had: {rounds:?}"
     );
     assert!(rounds[0]["duration_secs"].is_u64(), "{rounds:?}");
+
+    // The rail and the conversation summary print the same measure History does. Prove it on a
+    // second session whose run and its queue wait are clearly different numbers.
+    let (_, _, ticketed) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({"title": "rail duration", "image_base64": PNG_B64}),
+        ),
+    )
+    .await;
+    let ticketed_id = ticketed["meta"]["id"].as_str().unwrap().to_string();
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{ticketed_id}/annotations"),
+            json!({
+                "annotations": [{"type": "rect", "start": {"x": 0, "y": 0}, "end": {"x": 7, "y": 7}}],
+                "png": format!("data:image/png;base64,{PNG_B64}"),
+            }),
+        ),
+    )
+    .await;
+    send(
+        &h.app,
+        authed(
+            "POST",
+            &format!("/api/sessions/{ticketed_id}/resolve"),
+            json!({}),
+        ),
+    )
+    .await;
+    let ticketed_row = list_row(&h, &ticketed_id).await;
+    assert!(ticketed_row["last_run"].is_null(), "{ticketed_row:?}");
+    // Move this round's submission back ten minutes and the agent's pickup back seven, so the
+    // queue wait (10 m) and the run (7 m) differ; the rail must print the run.
+    let ticketed_stamp = {
+        let request = read(format!("/api/sessions/{ticketed_id}/history"));
+        let (_, _, body) = send(&h.app, request).await;
+        body["submissions"][0]["stamp"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let ticketed_archive = h
+        .store
+        .dir(&ticketed_id)
+        .unwrap()
+        .join("history")
+        .join(format!("{ticketed_stamp}.json"));
+    let ticketed_queued =
+        (now - chrono::Duration::minutes(10)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let ticketed_picked =
+        (now - chrono::Duration::minutes(7)).to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
+    let mut archive: Value =
+        serde_json::from_str(&std::fs::read_to_string(&ticketed_archive).unwrap()).unwrap();
+    archive["submitted_at"] = json!(ticketed_queued);
+    std::fs::write(&ticketed_archive, serde_json::to_string(&archive).unwrap()).unwrap();
+    h.store
+        .append_agent_event(
+            &ticketed_id,
+            &json!({"at": ticketed_picked, "message": "Picked up", "state": "thinking"}),
+        )
+        .unwrap();
+    let row = list_row(&h, &ticketed_id).await;
+    assert_eq!(row["last_run"]["started_at"], ticketed_picked, "{row:?}");
+    let ticketed_finished = row["last_run"]["finished_at"].as_str().unwrap();
+    let ticketed_ran = row["last_run"]["duration_secs"].as_u64().unwrap() as i64;
+    assert_eq!(
+        ticketed_ran,
+        secs(&ticketed_picked, ticketed_finished),
+        "{row:?}"
+    );
+    assert_eq!(
+        secs(&ticketed_queued, ticketed_finished) - ticketed_ran,
+        3 * 60,
+        "the rail prints the run, not the minutes it waited in the queue: {row:?}"
+    );
+    let (_, _, live) = send(&h.app, read(format!("/api/sessions/{ticketed_id}"))).await;
+    assert_eq!(
+        live["meta"]["last_run"], row["last_run"],
+        "the editor and the rail must agree: {live:?}"
+    );
 }
 
 #[tokio::test]

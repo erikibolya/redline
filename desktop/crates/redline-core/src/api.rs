@@ -459,6 +459,13 @@ async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Err
                     "agent_running".to_string(),
                     json!(running.contains(&meta.id)),
                 );
+                // "took …" is the agent's run, measured from its pickup — not from the submission
+                // stamp, which may have waited in the queue for an hour (2026-10-31).
+                object.insert(
+                    "last_run".to_string(),
+                    serde_json::to_value(state.store.last_run(&meta.id).ok().flatten())
+                        .unwrap_or(Value::Null),
+                );
                 // A handoff reports `running` until the integration says done/failed. If the
                 // bridge claim is gone (stopped, crashed or expired), the row would otherwise say
                 // "handing off" forever; expose that as stale so the UI can offer a retry.
@@ -1063,6 +1070,13 @@ async fn get_session(
     let meta = state.store.require(&id)?;
     let annotations = state.store.annotations(&id)?;
     let disk_bytes = state.store.session_size(&id).unwrap_or(0);
+    // The editor prints the same run cost History does, measured from the agent's pickup
+    // (2026-10-31). It travels inside `meta` so the live view keeps it across polls.
+    let last_run = state.store.last_run(&id).ok().flatten();
+    let mut meta = serde_json::to_value(&meta)?;
+    if let Some(object) = meta.as_object_mut() {
+        object.insert("last_run".to_string(), json!(last_run));
+    }
     Ok(Json(
         json!({ "meta": meta, "annotations": annotations, "disk_bytes": disk_bytes }),
     ))

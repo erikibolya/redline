@@ -141,15 +141,6 @@ function durationLabel(seconds) {
   return `${hours}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
-/** Seconds between two stamps the server wrote, or null when either is missing. */
-function ranFor(startedAt, finishedAt) {
-  if (!startedAt || !finishedAt) return null;
-  const start = new Date(startedAt).getTime();
-  const end = new Date(finishedAt).getTime();
-  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return null;
-  return Math.round((end - start) / 1000);
-}
-
 /** Wall-clock time in the viewer's timezone: the API sends UTC, people read their own clock. */
 function clockTime(at) {
   if (!at) return "";
@@ -1134,6 +1125,9 @@ const railFingerprint = (sessions) => (sessions || []).map((session) => [
   session.handoff?.url || "",
   session.handoff?.message || "",
   session.handoff_stale ? 1 : 0,
+  // A finished run adds "· took …" to the row; without it here a row that never went "working"
+  // (a hand-resolved review) would keep a stale subline until a reload (2026-10-31).
+  session.last_run?.duration_secs ?? "",
 ].join("\u0001")).join("\n");
 
 // Three views are enough: work that is not finished, work that is, and everything. "Active" is
@@ -1440,11 +1434,13 @@ class Rail {
           || "The agent could not run this round — it is yours again";
         const feature = featureState(session);
         const decided = feature !== "pending";
-        // "How long did the last task run?" — a resolved row can answer it from the two stamps
-        // the server wrote; a round the agent still holds has no cost yet (2026-10-31).
-        const ran = session.status === "resolved"
-          ? ranFor(session.submitted_at, session.resolved_at)
-          : null;
+        // "How long did the last task run?" — the server measures the run from the agent's
+        // pickup, so a review that waited in the queue is not counted as work (2026-10-31). A
+        // submitted row has a run in flight: reporting the *previous* round's cost there would
+        // describe work that is not the one the human is waiting for.
+        const ran = session.status === "submitted"
+          ? null
+          : (session.last_run?.duration_secs ?? null);
         // A submitted round belongs to the agent, so its badge says who has the ball: a round
         // nobody has picked up yet used to read "new" (unread by the human), which is a lie
         // about the state. Only a review that is back in the human's hands can be "new".
@@ -4134,10 +4130,10 @@ class Editor {
     // How long ago the last step was is the honest answer to "is it still working?": a spinner
     // must never be the only evidence.
     const age = relativeTime(last.at);
-    // "How long did the last task run?" — the round left the agent's hands at `resolve`, so the
-    // gap between the submission and that stamp is the run's cost. A round still submitted has
-    // no cost yet, and History carries every earlier round's own (2026-10-31).
-    const ran = submitted ? null : ranFor(this.meta?.submitted_at, this.meta?.resolved_at);
+    // "How long did the last task run?" — the server measures it from the agent's pickup, not
+    // from the submission, which may have waited in the queue for a long time (2026-10-31). A
+    // round still submitted has no cost yet, and History carries every earlier round's own.
+    const ran = submitted ? null : (this.meta?.last_run?.duration_secs ?? null);
     const sub = `${used}${(working || replied) && age ? ` · last step ${escapeHtml(age)}` : ""}${
       ran !== null ? ` · took ${durationLabel(ran)}` : ""
     }`;

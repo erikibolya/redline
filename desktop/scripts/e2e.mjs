@@ -2331,6 +2331,17 @@ const main = async () => {
       annotations: [{ id: "f1", type: "rect", start: { x: 4, y: 4 }, end: { x: 40, y: 40 } }],
     }),
   });
+  // A run is the agent's own activity, not the human's submission stamp (2026-10-31): without a
+  // pickup event there is no run to time, so the row would (correctly) say nothing.
+  await api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0", id: 11, method: "tools/call",
+      params: { name: "progress", arguments: {
+        session_id: finishedId, message: "Working on the finished review", state: "tool",
+      } },
+    }),
+  });
   await api(`/api/sessions/${finishedId}/resolve`, { method: "POST" });
   // The rail's unread marker outranks every other badge; mark the rows looked-at so this test
   // asserts the labels they keep *after* the human has seen them (the reported case).
@@ -2361,6 +2372,10 @@ const main = async () => {
     JSON.stringify(labels[0]));
   check("the rail says how long the last run took",
     /took \d+[smh]/.test(labels[0].sub), labels[0].sub);
+  // No run means no cost: a duration must come from the agent's own activity, never from the
+  // human's stamps alone (2026-10-31 — the queue wait was reported as run time).
+  check("a row no agent ran has no made-up duration",
+    !labels[1].sub.includes("took"), labels[1].sub);
   check("a row with nothing drawn on it still says whose turn it is",
     labels[1].badge === "open" && labels[1].className.includes("open"),
     JSON.stringify(labels[1]));

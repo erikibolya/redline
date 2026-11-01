@@ -445,14 +445,28 @@ pub struct HistoryEntry {
     /// When the human submitted this round. Missing on v0.1 archives.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<String>,
+    /// When an agent actually picked this round up: its first event after the submission. The
+    /// submission stamp only says when the round entered the queue, which can be long before
+    /// anyone claimed it (2026-10-31). Missing when no agent event falls inside the round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_started_at: Option<String>,
     /// When the round left the agent's hands: its next picture, the next human submission, or
     /// `resolve`. Missing while this is still the round being worked on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub finished_at: Option<String>,
-    /// How long the agent had this round, in seconds (2026-10-31: every version should say how
-    /// long it ran). Derived, never stored — the archive keeps the stamps it is built from.
+    /// How long the agent *ran* this round, in seconds (2026-10-31): from `run_started_at`, not
+    /// from the submission, so time spent waiting in the queue is not counted as work. Derived,
+    /// never stored — the archive and `agent-events.jsonl` keep the stamps it is built from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_secs: Option<u64>,
+}
+
+/// The newest round's own timing, for the rail and the conversation summary.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct LastRun {
+    pub started_at: String,
+    pub finished_at: String,
+    pub duration_secs: u64,
 }
 
 /// Seconds between two stamps from this server's own clock. A stamp it cannot parse (a
@@ -461,6 +475,42 @@ fn seconds_between(start: &str, end: &str) -> Option<u64> {
     let start = chrono::DateTime::parse_from_rfc3339(start).ok()?;
     let end = chrono::DateTime::parse_from_rfc3339(end).ok()?;
     (end - start).num_seconds().try_into().ok()
+}
+
+/// When a round left the agent's hands: its next picture (`post_round`), the human's next
+/// submission, or `resolve`. Only the live round can have been resolved, so callers pass
+/// `resolved_at` for the newest one. Shared by [`Store::history`] and [`Store::last_run`] so the
+/// two can never disagree about the end of a run.
+fn round_finished(
+    started: &str,
+    next_submit: Option<&str>,
+    handed_back: &[String],
+    resolved_at: Option<&str>,
+) -> Option<String> {
+    let mut ends: Vec<String> = Vec::new();
+    // `>=`: a submit and a hand-back in the same second is a real (zero-second) round.
+    if let Some(at) = handed_back
+        .iter()
+        .find(|at| at.as_str() >= started && next_submit.map_or(true, |next| at.as_str() <= next))
+    {
+        ends.push(at.clone());
+    }
+    if let Some(next) = next_submit {
+        ends.push(next.to_string());
+    }
+    if let Some(resolved) = resolved_at.filter(|at| *at >= started) {
+        ends.push(resolved.to_string());
+    }
+    ends.into_iter().min()
+}
+
+/// The first thing an agent said inside a round: the run's honest start. `None` when nobody
+/// demonstrably ran it.
+fn run_start(run_times: &[String], started: &str, finished: &str) -> Option<String> {
+    run_times
+        .iter()
+        .find(|at| at.as_str() >= started && at.as_str() <= finished)
+        .cloned()
 }
 
 fn safe_stamp(stamp: &str) -> String {
@@ -1786,6 +1836,7 @@ impl Store {
                     round: 0,
                     current: false,
                     started_at,
+                    run_started_at: None,
                     finished_at: None,
                     duration_secs: None,
                 },
@@ -1814,15 +1865,18 @@ impl Store {
             (*marks == live_marks && *picture == Some(meta.image.clone()))
                 .then(|| entry.stamp.clone())
         });
-        // How long each round ran. A round starts when the human submitted it and ends when the
-        // agent handed it back: the agent's own next picture (`post_round`), the human's next
-        // submission, or `resolve`. Older rounds have no `resolved_at` of their own, so the next
-        // submission is their only end.
+        // How long each round ran. A run starts when an agent *picked the round up*, not when the
+        // human submitted it: a review can sit in the queue for an hour before anyone claims it,
+        // and counting that wait made an 8-minute run read as 42 minutes (2026-10-31). The honest
+        // start is the agent's own first event; the end is when it handed the round back — its
+        // next picture (`post_round`), the human's next submission, or `resolve`. Older rounds
+        // have no `resolved_at` of their own, so the next submission is their only end.
         let starts: Vec<Option<String>> = entries
             .iter()
             .map(|(entry, _, _)| entry.started_at.clone())
             .collect();
         let handed_back = self.agent_picture_times(id)?;
+        let run_times = self.agent_run_times(id)?;
         let resolved_at = meta.resolved_at.clone();
         for (index, (entry, _, _)) in entries.iter_mut().enumerate() {
             // Newest first, but numbered oldest = 1.
@@ -1832,24 +1886,17 @@ impl Store {
                 continue;
             };
             let next_submit = index.checked_sub(1).and_then(|newer| starts[newer].clone());
-            let mut ends: Vec<String> = Vec::new();
-            // `>=`: a submit and a hand-back in the same second is a real (zero-second) round.
-            if let Some(at) = handed_back.iter().find(|at| {
-                **at >= started && next_submit.as_ref().map_or(true, |next| **at <= *next)
-            }) {
-                ends.push(at.clone());
-            }
-            if let Some(next) = next_submit {
-                ends.push(next);
-            }
             // Only the newest round can have been resolved: `resolve` acts on the live round.
-            if index == 0 {
-                if let Some(resolved) = resolved_at.clone().filter(|at| *at >= started) {
-                    ends.push(resolved);
+            let resolved = (index == 0).then_some(resolved_at.as_deref()).flatten();
+            if let Some(finished) =
+                round_finished(&started, next_submit.as_deref(), &handed_back, resolved)
+            {
+                // No agent event inside the round means nobody demonstrably ran it (a round
+                // resolved by hand, a v0.1 archive): say nothing rather than print the queue time.
+                entry.run_started_at = run_start(&run_times, &started, &finished);
+                if let Some(start) = entry.run_started_at.clone() {
+                    entry.duration_secs = seconds_between(&start, &finished);
                 }
-            }
-            if let Some(finished) = ends.into_iter().min() {
-                entry.duration_secs = seconds_between(&started, &finished);
                 entry.finished_at = Some(finished);
             }
         }
@@ -1877,6 +1924,86 @@ impl Store {
             }
         }
         Ok(times)
+    }
+
+    /// Timestamps of the agent's own activity, oldest first. This is where a run really starts:
+    /// the submission only says when the round entered the queue (2026-10-31). Raw output
+    /// (`state: "log"`) is not evidence — a trailing build line can land after the agent already
+    /// handed the round back — so only its reported steps count.
+    fn agent_run_times(&self, id: &str) -> Result<Vec<String>> {
+        Ok(self
+            .agent_events(id)?
+            .into_iter()
+            .filter(|event| {
+                event
+                    .get("state")
+                    .and_then(|state| state.as_str())
+                    .map_or(true, |state| state != "log")
+            })
+            .filter_map(|event| {
+                event
+                    .get("at")
+                    .and_then(|at| at.as_str())
+                    .map(str::to_string)
+            })
+            .collect())
+    }
+
+    /// The newest round's own timing, for the rail and the conversation summary. `None` while
+    /// that round is still in the agent's hands — a run in flight has no cost, and the previous
+    /// round's cost is not what the human is looking at. It is the same measure History prints
+    /// (from the agent's pickup, not the submission — 2026-10-31), but read without `history`'s
+    /// picture comparisons: the rail asks for it on every poll, and re-reading every archived PNG
+    /// per session would turn an 8 s refresh into a stall.
+    pub fn last_run(&self, id: &str) -> Result<Option<LastRun>> {
+        let history = self.dir(id)?.join("history");
+        if !history.is_dir() {
+            return Ok(None);
+        }
+        // Only the newest submission matters: it is the round the human is looking at, and a
+        // round still in the agent's hands has no cost yet (the UI hides it while submitted).
+        let mut stamps: Vec<String> = fs::read_dir(&history)?
+            .filter_map(|entry| entry.ok())
+            .filter_map(|entry| {
+                let path = entry.path();
+                (path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+                    .then(|| {
+                        path.file_stem()
+                            .and_then(|stem| stem.to_str())
+                            .map(str::to_string)
+                    })
+                    .flatten()
+            })
+            .collect();
+        stamps.sort_by(|a, b| b.cmp(a));
+        let meta = self.require(id)?;
+        let Some(stamp) = stamps.first() else {
+            return Ok(None);
+        };
+        let Some(started) = fs::read_to_string(history.join(format!("{stamp}.json")))
+            .ok()
+            .and_then(|text| serde_json::from_str::<AnnotationSet>(&text).ok())
+            .and_then(|set| set.submitted_at)
+        else {
+            return Ok(None);
+        };
+        let handed_back = self.agent_picture_times(id)?;
+        let run_times = self.agent_run_times(id)?;
+        let Some(finished) =
+            round_finished(&started, None, &handed_back, meta.resolved_at.as_deref())
+        else {
+            return Ok(None);
+        };
+        Ok(
+            run_start(&run_times, &started, &finished).and_then(|start| {
+                let duration_secs = seconds_between(&start, &finished)?;
+                Some(LastRun {
+                    started_at: start,
+                    finished_at: finished,
+                    duration_secs,
+                })
+            }),
+        )
     }
 
     /// Total bytes of a session folder (screenshots, videos, history). Used to warn before the

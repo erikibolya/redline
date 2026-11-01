@@ -3,23 +3,28 @@
 Status: **draft for approval** (2026-11-01). No code is written yet.
 
 A Chromium extension that connects to a RedLine server, captures a screenshot or records a flow
-from the current tab, collects the console and network evidence, and hands the result to RedLine
-as a normal review. The human annotates in the existing RedLine editor; the agent reads the
+from the current tab, collects the console and network evidence, and lets the human annotate the
+capture in a side panel before submitting it to RedLine as a normal review. The agent reads the
 annotations plus a structured trace.
+
+Decisions from the product owner (2026-11-01): **Chrome + Edge first**, annotation **in the
+extension side panel**, active-tab capture, console/network **metadata + actions**, 5 min / 250 MB,
+and distribution through the **Chrome Web Store / Edge Add-ons**.
 
 ## 1. Goals
 
 - **One click from the page to a RedLine review.** The extension knows the current tab, the
   RedLine server and the project; the human does not paste URLs or files.
-- **Screenshot review.** Capture the visible tab (and later full page), create an image session,
-  open the RedLine editor for annotation.
+- **Screenshot review.** Capture the visible tab (and later full page), open it in the side-panel
+  editor, annotate, and submit.
 - **Flow review.** Record the tab as WebM while collecting:
   - console messages, uncaught exceptions and browser log entries;
   - network requests and responses (method, URL, status, timing, resource type, failure);
   - user actions (click, input/change, submit, navigation) with stable-ish selectors;
   - manual markers the human drops while recording.
-- **Annotate the recording in RedLine.** The existing video timeline gets a trace lane and a
-  filterable event panel; clicking an event seeks the video to that moment.
+- **Annotate in the side panel.** A compact canvas editor over the screenshot or video frame,
+  with a timeline and the trace events, then **Submit to RedLine** (the same API the web editor
+  uses). The full RedLine editor remains one click away for advanced work.
 - **Agent-ready evidence.** `review.md` gets a compact trace summary; `get_feedback` exposes the
   trace metadata and URL; the raw `trace.json` is available as an MCP resource.
 - **Local and private.** The token, video and trace stay on the user's RedLine server. No third
@@ -28,9 +33,11 @@ annotations plus a structured trace.
 ## 2. Non-goals for v1
 
 - Whole-desktop or multi-tab recording (one tab per recording; screen capture is a later mode).
-- Firefox/Safari support (Chromium MV3 first; a Firefox port is a separate plan).
+- Firefox/Safari support (Chromium MV3 only in v1; a Firefox port is a separate plan).
 - Editing/trimming the video in the extension.
-- A second annotation editor inside the extension. Annotation stays in RedLine.
+- Full RedLine editor parity in the side panel: groups, z-order, align/distribute, diff overlay,
+  ranges (`until`) and history browsing stay in the RedLine tab for v1. The panel ships the core
+  drawing tools, notes, timecoded point annotations, timeline and submit.
 - Automatic replay, DOM diffing or "fix this for me".
 - Capturing requests made before the user presses Record.
 - Full request/response bodies and headers by default.
@@ -56,12 +63,12 @@ hint. The token is never rendered unmasked after saving; **Replace** and **Forge
 
 The toolbar popup shows the current tab's title/URL and four actions:
 
-- **Screenshot & annotate** — visible-tab capture; creates an image review and opens its RedLine
-  URL in a new tab.
-- **Record flow** — asks for the capture options (console, network, actions, bodies), shows a
-  countdown, then records. While recording the popup shows elapsed time and a **Mark** button.
+- **Screenshot & annotate** — visible-tab capture; creates an image review and opens it in the
+  **side-panel editor**.
+- **Record flow** — asks for the capture options (console, network, actions), shows a countdown,
+  then records. While recording the popup shows elapsed time and a **Mark** button.
 - **Stop & review** — stops recording, shows the draft form (title, note, project, branch,
-  capture counts, redaction summary), then **Send to RedLine**.
+  capture counts, redaction summary), then opens the side-panel editor on the video.
 - **Open RedLine** — the server dashboard.
 
 The popup may be closed while recording; the toolbar badge shows `REC` and the elapsed minute.
@@ -80,19 +87,56 @@ Redaction: authorization, cookie, set-cookie; bodies off
 Title [Checkout fails after coupon]
 Note  [The total stays stale]
 Project [ActiUnit / Au.Net]  Branch [feat/checkout-coupon]
-[Send to RedLine] [Discard]
+[Continue to annotator] [Discard]
 ```
 
 The upload uses `POST /api/sessions/video` with `video`, `poster`, `trace`, the form fields and
-the media metadata. On success the extension opens `review_url`; the human draws timecoded
-annotations and submits the review. Creating the review does **not** wake the agent; only Submit
-does, exactly like today.
+the media metadata. The session is created **open**; the side panel loads it for annotation. The
+extension does **not** wake the agent until the human presses **Submit to RedLine**, which uses
+the same annotation API as the web editor. **Open in RedLine** is always available for advanced
+editing.
+
+### 3.4 Side-panel annotator
+
+A compact editor, not a copy of the full RedLine shell:
+
+```
+┌──────────────────────────────────────────────┐
+│ Checkout — 00:42          [Open in RedLine]  │
+│ ┌──────────────────────────────────────────┐ │
+│ │            canvas (image/frame)          │ │
+│ │                                          │ │
+│ └──────────────────────────────────────────┘ │
+│ [V] [▭] [↗] [✎] [T]   color  width  [undo]  │
+│ [▶] 00:02.340 / 00:42.000  [◀ frame] [▶]    │
+│ [trace: errors ▾]  ● 00:01.700 console error │
+│ ──────────────────────────────────────────── │
+│ Annotations (3)   ● 00:00.000  ● 00:02.340   │
+│ Note for the agent: [.....................]  │
+│ [Submit to RedLine]        [Open in RedLine] │
+└──────────────────────────────────────────────┘
+```
+
+- Tools: select/move, rectangle, arrow, pen, text note. Colour/width; undo/redo; delete.
+  Ellipse, groups, align/distribute and ranges (`until`) stay in the RedLine tab for v1.
+- Screenshot canvas: natural pixel coordinates, zoom/pan, fit; compose the annotated PNG on
+  submit.
+- Video: draw the current frame into the canvas; drawing pauses playback; each annotation gets
+  `at` (point-in-time); the clip seeks by clicking a marker or an annotation row. Capture one
+  frame per unique annotated time and a contact sheet for the submit, using the browser canvas.
+- Trace strip: console errors, failed requests and actions; clicking seeks. The full trace panel
+  is a list under the stage, filterable by kind.
+- Submit: image sessions use the existing JSON endpoint with `png`; video sessions use the
+  multipart submit with `annotations`, `png` (contact sheet) and `frames`. After a successful
+  submit, the panel says the review is queued for the agent and offers **Open in RedLine**.
+- Drafts: keep an unsent annotation set in `chrome.storage.session` keyed by session id, so a
+  service-worker restart or panel close does not lose it. Clear on submit/discard.
 
 ## 4. Architecture
 
 ```
 ┌────────────────────────────── Chrome / Edge ──────────────────────────────┐
-│ popup / options (plain HTML+JS)                                            │
+│ popup / options / side-panel annotator (plain HTML+JS)                    │
 │        │ chrome.runtime messages                                           │
 │ background service worker ── chrome.debugger ── CDP: Network, Runtime, Log  │
 │        │                         │                                         │
@@ -104,17 +148,18 @@ does, exactly like today.
                                     │ HTTPS + Bearer
                                     ▼
                          RedLine server (Rust/axum)
-                    POST /api/sessions/video  (video + trace)
-                    GET  /sessions/<id>/trace
-                    GET  /api/sessions/<id>   (meta.trace)
+             POST /api/sessions              POST /api/sessions/video
+             POST /api/sessions/<id>/annotations (image/video submit)
+             GET  /sessions/<id>/trace       GET /api/sessions/<id> (meta.trace)
                                     │
                                     ▼
-                    RedLine editor: video timeline + trace panel
+                    RedLine rail/gallery/history + full editor
                     Agent: review.md + get_feedback + MCP resource
 ```
 
-The extension is deliberately a **capture client**, not a second review application. RedLine
-owns sessions, annotation, status and the agent queue.
+The extension is a **capture client plus a compact annotator**. RedLine remains the source of
+truth: it owns the session store, the full editor, the review status and the agent queue. The
+side panel is a focused editing surface; advanced work is one click away in the RedLine tab.
 
 ## 5. Capture pipeline
 
@@ -124,7 +169,8 @@ owns sessions, annotation, status and the agent queue.
 2. Optional full page (`Page.captureScreenshot` with `captureBeyondViewport`) behind a
    `debugger` attach; a full-page screenshot can be much larger, so cap dimensions/bytes.
 3. `POST /api/sessions` with `image_base64`, title, URL, note, project and branch.
-4. Open the returned `review_url`; annotation and submission stay in RedLine.
+4. Open the session in the side-panel annotator; submit from there or open the full RedLine
+   editor.
 
 ### 5.2 Recording
 
@@ -140,7 +186,7 @@ owns sessions, annotation, status and the agent queue.
    recording. The offscreen document reports the actual recorder start time so video and trace
    share a clock.
 6. Stop: stop MediaRecorder, detach the debugger, stop the content script, build the poster,
-   read the elapsed duration, and open the draft.
+   read the elapsed duration, and open the side-panel annotator.
 7. The extension uploads the video, poster and `trace.json`; it does not upload while the
    debugger is attached, so the upload itself is not part of the trace.
 
@@ -321,36 +367,65 @@ An extension fetch is cross-origin. `require_token` currently refuses every
 Tests: web cross-site → `403`; extension origin + token → `200`; extension origin without token
 → `401`; web origin preflight → `403`; extension preflight → `204`.
 
-## 8. RedLine editor UI
+## 8. Side-panel annotator and RedLine UI
 
-- **Timeline trace lane**: a thin lane below annotation markers; console errors red, failed
-  requests amber, actions blue, manual markers purple. Hover shows a tooltip; click seeks.
-- **Trace toggle** in the video bar: `Off / Errors / All` (default `Errors`). It is remembered per
-  browser like Ghosts.
-- **Inspector Trace section**: tabs/chips `All`, `Console`, `Network`, `Actions`, `Markers`;
-  rows show timecode, kind and a compact label. Clicking a row seeks; expanding shows details
-  (status/duration/url, console text, selector). Empty state explains that the clip has no trace.
-- **History**: a historical round loads its archived trace when present; the same lane/panel is
-  read-only.
-- **Rail/gallery**: a small `flow` chip with duration/error count; not a new card layout.
-- **Image sessions**: no timeline; if a trace exists later, a simple panel without seeking.
+### 8.1 Side-panel annotator (primary)
 
-The UI must remain dependency-free (`app.js` + `app.css`), served from the binary. Trace markers
-must not compete with annotation markers: the lane is separate and can be toggled off.
+- **Stage**: a canvas at the screenshot/video's natural pixel size; zoom/pan/fit. For a video,
+  the current frame is drawn into the canvas; drawing pauses playback.
+- **Tools**: select/move, rectangle, arrow, pen, text note; colour/width; delete; undo/redo.
+  Ellipse, groups, align/distribute and ranges stay in the RedLine tab for v1.
+- **Coordinates**: RedLine annotation schema, canvas pixels relative to the natural media size
+  (the same model as `docs/API.md` § Annotation schema). The extension reuses the existing
+  `{type,start,end,points,color,width,at}` fields; no new annotation format.
+- **Video bar**: play/pause, current/total time, frame step, scrubber, annotation markers and
+  trace markers. Clicking an annotation or trace row seeks. Drawing captures `at`.
+- **Trace strip**: under the stage, filter `Errors / All / Console / Network / Actions /
+  Markers`; each row shows timecode + compact label; click seeks; expanding shows details. The
+  default is errors + failed requests, so the panel is useful without noise.
+- **Annotation list**: compact rows with timecode (for video) and note; click seeks/selects.
+- **Note**: one note per selected shape (the RedLine `note` field) plus an overall review note
+  (the submission `note`). The full editor's per-shape inspector is still available via **Open in
+  RedLine**.
+- **Submit**: image → JSON `POST /annotations` with composed `png`; video → multipart submit with
+  annotations, contact sheet and one frame per unique annotated time. The panel shows upload
+  progress and a success state with `Open in RedLine`.
+- **Drafts**: per-session annotation draft in `chrome.storage.session`; flush on panel hide and
+  clear on submit/discard. A changed media fingerprint invalidates the draft.
+- **Accessibility**: keyboard tool shortcuts, focus rings, aria labels; at minimum the panel is
+  usable without a mouse for submit/cancel.
+
+### 8.2 RedLine UI (v1 minimal)
+
+- The rail/gallery card gets a `flow` chip with duration/error count (additive metadata).
+- The full editor shows a read-only **Flow trace** summary in the inspector when `meta.trace`
+  exists: counts, console errors, failed requests, and a link to open the trace JSON.
+- The interactive trace timeline in the full editor is **phase 2**; v1 keeps the full trace in
+  the extension panel and on disk for the agent. This avoids duplicating the timeline UI before
+  the annotator is proven.
+- History rows keep their existing shape; archived traces are available on disk/API but no new
+  history trace UI in v1.
+
+The RedLine UI remains dependency-free (`app.js` + `app.css`), served from the binary. The
+extension editor is a separate vanilla JS file; it must share the annotation JSON schema but not
+the shell.
 
 ## 9. Extension structure
 
 ```
 extension/
-  manifest.json            MV3, Chrome/Edge first
+  manifest.json            MV3, Chrome/Edge, side panel
   src/
     background.js          service worker: state, debugger, upload orchestration
     offscreen.html/.js     tabCapture + MediaRecorder + poster
     content.js             action events (all frames), overlay, Mark
+    sidepanel.html/.js     annotator shell, tools, timeline, trace, submit
     popup.html/.js         connect status, screenshot, record, draft
     options.html/.js       server/token/project/redaction
     lib/
-      api.js               auth fetch, multipart, project list
+      api.js               auth fetch, multipart, project list, submit
+      editor.js            canvas engine, tools, annotations, undo
+      media.js             video frame drawing, frames, contact sheet, poster
       trace.js             normalize, redact, cap, summary
       selectors.js         stable selector + label
       format.js
@@ -359,31 +434,49 @@ extension/
     trace.test.mjs
     redact.test.mjs
     selectors.test.mjs
+    editor.test.mjs
 ```
 
-No build step: ES modules in the service worker, plain HTML/JS pages. The extension is packaged as
-a zip in the GitHub release (`redline-extension-<version>.zip`) and loaded unpacked for
-development; a store listing is a separate decision.
+No build step: ES modules in the service worker, plain HTML/JS pages. Development uses an
+unpacked extension; the release target is the **Chrome Web Store and Edge Add-ons**. The same
+zip is also attached to the GitHub release for internal/testing installs.
+
+Store requirements we must prepare:
+
+- a single, clear purpose: "capture a page or tab flow and submit it to your own RedLine server";
+- a privacy policy URL (the repo can host `docs/PRIVACY-EXTENSION.md` via GitHub Pages) stating
+  that captures go only to the user's configured RedLine server, what is stored locally, and the
+  redaction defaults;
+- permission justifications for `debugger`, `tabCapture`, `activeTab`, `scripting`, `storage`,
+  `sidePanel` and the optional host permission for the configured server;
+- screenshots, 128/48/16 px icons, a short and long description, and support URL;
+- a Chrome Web Store developer account and an Edge Partner Center account (one-time fees and
+  identity verification are the owner's steps);
+- a review build with no remote code, no analytics and no third-party endpoints.
+
+The `debugger` permission is the most scrutinised one; the store listing must explain that it is
+only attached after an explicit Record action and is used solely to read console/network events
+for the review the user is creating.
 
 Manifest permissions (proposed): `activeTab`, `scripting`, `tabs`, `storage`, `debugger`,
-`tabCapture`, `offscreen`, `alarms`; host permissions for the configured RedLine server plus
-optional `activeTab` grants for the recorded page. `debugger` shows a browser warning; the
+`tabCapture`, `offscreen`, `sidePanel`, `alarms`; optional host permission for the configured
+RedLine server; `activeTab` grants the recorded page. `debugger` shows a browser warning; the
 extension only attaches after an explicit Record click and explains why.
 
 ## 10. Delivery phases
 
 | Phase | Work | Exit |
 |---|---|---|
-| 0. Spike | MV3 skeleton, extension-origin auth, tabCapture + MediaRecorder in Chromium, debugger console/network events | A throwaway recording uploads to a local RedLine and plays |
+| 0. Spike | MV3 skeleton, extension-origin auth, side panel, tabCapture + MediaRecorder, debugger console/network events | A throwaway recording uploads to a local RedLine and plays in the panel |
 | 1. Server trace | `TraceRef`/`Meta.trace`, storage, multipart `trace`, routes, validation, `review.md` summary, MCP feedback/resource, auth/CORS | Rust tests green; a curl upload creates a trace session |
-| 2. Screenshot | options/popup, token/project config, visible-tab capture, create image session, open editor | Screenshot → annotate → submit works from the extension |
-| 3. Recording | offscreen recorder, debugger collectors, content actions, redaction, draft/upload, poster/duration | A real flow records, uploads and plays with trace |
-| 4. UI | trace lane, toggle, inspector panel, history trace, rail chip | E2E asserts markers, filters, seek and history |
-| 5. Hardening | caps, tab-close/detach handling, error states, extension e2e, docs, release zip | Release checklist and CI green |
+| 2. Screenshot + image editor | options/popup, token/project config, visible-tab capture, side-panel canvas editor, image submit, draft | Screenshot → annotate → submit works entirely in the panel |
+| 3. Recording + trace | offscreen recorder, debugger collectors, content actions, redaction, draft/upload, poster/duration | A real flow records, uploads and plays with trace |
+| 4. Video annotator + trace UI | video canvas/timeline, timecoded annotations, trace strip/filters, frames/contact sheet, submit | A recorded flow is annotated and submitted from the panel |
+| 5. Hardening + store | caps, tab-close/detach handling, error states, extension e2e, privacy policy, store assets/listing | Release checklist green and store submission ready |
 
-Rough effort: 2–3 days for the spike, 3 for server trace, 2 for screenshot, 5 for recording,
-4 for UI/e2e, 2–3 for hardening. About three working weeks, assuming one browser and no store
-review.
+Rough effort: 2–3 days for the spike, 3 for server trace, 4 for screenshot + image editor, 5 for
+recording, 5 for video annotator/trace, 3 for hardening/store. About four working weeks, excluding
+store review time.
 
 ## 11. Testing
 
@@ -391,17 +484,18 @@ review.
   summary; `get_feedback` and resource; extension-origin auth/preflight; web cross-site still
   denied; existing video tests remain green.
 - **Extension unit (`node --test`)**: trace normalization, redaction (headers/query/body),
-  selector generation, cap/truncation, duration formatting.
-- **Browser e2e**: seed a session with a small trace; assert the trace lane, toggle, inspector
-  rows/filters, click-to-seek, history trace, and that `get_feedback` includes `trace`.
+  selector generation, cap/truncation, duration formatting, canvas annotation serialization,
+  undo/redo and draft invalidation.
+- **Browser e2e (RedLine)**: seed a session with a small trace; assert the rail `flow` chip,
+  the read-only trace summary, and that `get_feedback` includes `trace`; no extension needed.
 - **Extension e2e**: load the unpacked extension in headful Chromium (Xvfb in the e2e image or a
   separate job), open a local page with a console error and a failing fetch, record 2–3 s, upload
-  to the test server, assert the session has video + trace + expected events. If browser
-  automation of `tabCapture` proves unreliable, keep the unit tests and a documented manual
-  checklist as the gate, and add the automation as a follow-up — do not claim coverage that does
-  not run.
-- **Manual**: load unpacked in Chrome and Edge; capture a real app flow; verify console/network
-  redaction; verify the agent sees the trace.
+  to the test server, open the side panel, draw a rectangle, submit, and assert the session has
+  video + trace + annotation + the expected `get_feedback` fields. If browser automation of
+  `tabCapture` proves unreliable, keep the unit tests and a documented manual checklist as the
+  gate, and add the automation as a follow-up — do not claim coverage that does not run.
+- **Manual**: install the store build in Chrome and Edge; capture a real app flow; verify
+  console/network redaction; annotate and submit; verify the agent sees the trace.
 
 ## 12. Risks and mitigations
 
@@ -422,18 +516,27 @@ review.
   permissions are the fragile parts; keep state in `chrome.storage.session` and test a 60 s
   recording with the popup closed.
 
-## 13. Decisions needed before coding
+## 13. Decisions and open items
 
-1. **Browser target**: Chrome/Edge (Chromium) first, or Firefox in the first release?
-2. **Annotation**: reuse the RedLine editor tab (recommended), or build an annotation overlay in
-   the extension side panel?
-3. **Capture scope**: the active tab only (recommended), or whole screen/window (needed when the
-   flow opens new tabs/popups)?
-4. **Trace depth**: console + network metadata + actions (recommended), or also request/response
-   bodies and headers with explicit redaction?
-5. **Recording limit**: keep the existing 5 min / 250 MB (recommended for v1), or extend to
-   15 min / 500 MB (needs a server streaming/upload change)?
-6. **Distribution**: GitHub release zip + load unpacked (recommended for the first version), or a
-   Chrome Web Store / Edge Add-ons listing?
-7. **Project/branch defaults**: select a project in the popup and let the server derive the
-   branch, or require the human to type a branch for every flow review?
+Taken (2026-11-01):
+
+| Decision | Choice |
+|---|---|
+| Browsers | Chrome + Edge (Chromium MV3) |
+| Annotation | Extension side panel |
+| Capture scope | Active tab |
+| Trace depth | Console/network metadata + actions; bodies off |
+| Recording limit | 5 min / 250 MB |
+| Distribution | Chrome Web Store + Edge Add-ons |
+
+Still open:
+
+1. **Annotator tool set.** Default for v1: select/move, rectangle, arrow, pen, text note,
+   timecoded point annotations, undo/redo, draft and submit. Ellipse, ranges (`until`), groups,
+   align/distribute and the diff overlay stay in the RedLine tab. Say if any of those is required
+   in the panel from day one.
+2. **Store accounts.** Publishing needs the owner's Chrome Web Store and Edge Partner Center
+   accounts, identity verification and a privacy-policy URL. We can prepare the package, listing
+   text, screenshots and `docs/PRIVACY-EXTENSION.md`; the final publish is the owner's action.
+3. **Project/branch defaults.** Default: choose a project in the popup; leave branch empty so the
+   server derives `feat/<title-slug>-<id-tail>`; allow an override in the draft form.

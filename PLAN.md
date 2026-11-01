@@ -80,10 +80,10 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Next (ordered)
 
-0. **Browser capture extension** — draft in `docs/EXTENSION.md`: a Chromium MV3 extension that
-   creates screenshot reviews and records a tab flow (video + console/network/action trace) into
-   the existing RedLine editor, with the trace on the timeline and in `review.md`/`get_feedback`.
-   Design approval is pending the decisions in §13; implementation follows the phases in §10.
+0. **Browser capture extension** — draft in `docs/EXTENSION.md`: a Chrome/Edge MV3 extension that
+   creates screenshot reviews and records a tab flow (video + console/network/action trace),
+   annotates in a side-panel editor and submits to RedLine; the trace lands in
+   `review.md`/`get_feedback`. Decisions are recorded in §13; implementation follows §10.
 1. **Video reviews** — phases 1–3 are in (`docs/VIDEO.md`): media core, browser upload, canvas
    playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full
    frames, new video rounds, history playback and `post_round` video. Phase 4 is the release

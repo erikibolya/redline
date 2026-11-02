@@ -38,6 +38,15 @@
   submission path. Store accounts and publishing remain owner actions. The browser e2e CI job now
   also loads the unpacked extension in headless Chromium, submits an image annotation and a
   video+trace annotation, and verifies the server payload.
+- **An image review no longer shows a video timeline.** `.video-bar` set `display: flex`, which
+  outranked the UA `[hidden] { display: none }` rule, so every image review showed an empty
+  timeline and pushed Submit below the side panel (2026-11-02, found while generating store
+  screenshots). The bar is hidden explicitly and the browser e2e asserts the computed display for
+  both image and video reviews.
+- **Store screenshots are ready.** Three 1280×800 PNGs in `extension/store/screenshots/` show the
+  options page, a screenshot review (rectangle, arrow, text note) and a recorded flow (timeline,
+  trace errors, timecoded annotation). `docs/STORE-EXTENSION.md` marks the Chrome account as
+  created and points the privacy policy at the live `dev` blob until the next release.
 
 ## 0.26.1 — 2026-11-01
 

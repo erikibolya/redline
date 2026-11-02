@@ -620,8 +620,10 @@ Phase 5 preparation is in this branch:
 - `docs/PRIVACY-EXTENSION.md` and `docs/STORE-EXTENSION.md` cover the privacy disclosure,
   permission justifications and listing copy.
 - The release workflow attaches the ZIP to every GitHub release.
-- The store accounts are not created (Chrome: $5 one-time; Edge: free), so publishing is still
-  the owner's explicit action.
+- The Chrome Web Store developer account is created; Edge is pending. Publishing is the owner's
+  explicit action.
 - `extension e2e` runs in CI: it loads a temporary host-permitted extension in headless Chromium,
   configures a local RedLine, submits an image annotation, then a video + trace annotation at
   0.5 s, and checks the server payload.
+- Store screenshots are in `extension/store/screenshots/` (1280×800): options, screenshot review,
+  video + trace.

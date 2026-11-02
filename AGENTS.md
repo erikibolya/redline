@@ -244,6 +244,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `chrome.runtime.getManifest().name` before using the worker. Then wait for the options page to
   finish reading stored config (`data-ready`) before filling the form: its async `init()` overwrote
   the test's server/token with defaults and the failure surfaced as "Token is required".
+- **`hidden` is a user-agent style, not an author guarantee.** `.video-bar { display: flex }`
+  outranked `[hidden] { display: none }`, so every image review showed a zero-length video
+  timeline and the Submit button fell below the side panel (2026-11-02, found while generating
+  store screenshots). When a class sets `display`, add `[hidden] { display: none }` for it and
+  assert `getComputedStyle(el).display`, not just `el.hidden`; a screenshot pass is a real UI test.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).

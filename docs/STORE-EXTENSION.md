@@ -47,8 +47,8 @@ creates a Product ID on its first submission. Store APIs cannot create the first
 
 **Homepage / support:** <https://github.com/erikibolya/redline>
 
-**Privacy policy:** <https://github.com/erikibolya/redline/blob/main/docs/PRIVACY-EXTENSION.md>
-(use the final public URL once the repository is public/pages is enabled).
+**Privacy policy:** <https://github.com/erikibolya/redline/blob/dev/docs/PRIVACY-EXTENSION.md>
+(the `dev` blob is live now; switch the listing to the `main` blob after the next release).
 
 ## Permission justifications
 
@@ -81,17 +81,19 @@ Copy these into the Chrome Web Store / Partner Center fields:
 ## Assets checklist
 
 - [x] 128×128 extension icon (`extension/icons/128.png`; also 16/32/48).
-- [ ] 3–5 screenshots at **1280×800** or **640×400** (Chrome) / **1280×800** or **640×480**
-      (Edge): options, screenshot annotation, video + trace panel, trace filter/errors.
+- [x] 3 screenshots at **1280×800** in `extension/store/screenshots/`:
+  - `01-options.png` — server/token/project setup, token masked;
+  - `02-screenshot-review.png` — screenshot review with rectangle, arrow and text note;
+  - `03-video-trace.png` — recorded flow with timeline, trace errors and a timecoded annotation.
 - [ ] Small promo tile 440×280 (optional).
-- [ ] Final privacy-policy URL (public HTML; GitHub blob is acceptable but a Pages page is nicer).
-- [ ] Store developer accounts and identity verification.
-- [ ] Version/package zip from `bash extension/scripts/package.sh`.
+- [ ] Final privacy-policy URL (use the `dev` blob now; switch to `main` after the next release).
+- [x] Chrome Web Store developer account and verification (created 2026-11-02); Edge account pending.
+- [x] Store ZIP from `python3 extension/scripts/package.py` (`dist/redline-extension-0.2.0.zip`; rebuild after changes).
 
 ## Submission steps
 
-1. Create the Chrome Web Store developer account ($5) and Edge Partner Center account (free).
-2. Run `bash extension/scripts/package.sh`; upload `dist/redline-extension-<version>.zip`.
+1. Chrome Web Store developer account ($5) exists; create the Edge Partner Center account (free) when publishing there.
+2. Run `python3 extension/scripts/package.py`; upload `dist/redline-extension-<version>.zip`.
 3. Fill the listing, privacy form and permission justifications from this file.
-4. Upload screenshots; submit for review.
+4. Upload the three screenshots from `extension/store/screenshots/`; submit for review.
 5. After approval, add the store links to `extension/README.md` and the GitHub release notes.

@@ -217,6 +217,11 @@ try {
 
   const imageId = await createImageSession();
   const imagePage = await openCapture(browser, id, imageId, "image");
+  assert.equal(
+    await imagePage.$eval("#video-bar", (element) => getComputedStyle(element).display),
+    "none",
+    "an image review must not show the video timeline",
+  );
   await drawRect(imagePage);
   await submit(imagePage);
   await imagePage.close();
@@ -227,6 +232,11 @@ try {
 
   const videoId = await createVideoSession();
   const videoPage = await openCapture(browser, id, videoId, "video");
+  assert.notEqual(
+    await videoPage.$eval("#video-bar", (element) => getComputedStyle(element).display),
+    "none",
+    "a video review must show the video timeline",
+  );
   await videoPage.waitForSelector("#trace-panel:not([hidden])", { timeout: 10000 });
   const traceRows = await videoPage.$$eval("#trace-list .trace-row", (rows) => rows.length);
   assert.ok(traceRows >= 2, `expected trace error rows, got ${traceRows}`);

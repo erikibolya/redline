@@ -84,6 +84,9 @@ select { background: #0c1422; color: var(--text); border: 1px solid var(--line);
   display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
   padding: 6px 10px; border-bottom: 1px solid var(--line);
 }
+/* An author `display` rule outranks the UA [hidden] rule; without this the image editor shows a
+   zero-length video timeline (caught by the store screenshots, 2026-11-02). */
+.video-bar[hidden] { display: none; }
 .video-bar button { min-width: 28px; padding: 4px 6px; }
 .video-time { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 11px; }
 .ghosts { display: flex; align-items: center; gap: 3px; color: var(--muted); font-size: 11px; }

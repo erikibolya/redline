@@ -614,6 +614,114 @@ function askBranch(current, submitted = false) {
   });
 }
 
+/**
+ * Pick a project for an existing review. Returns the chosen slug, or `null` when the human
+ * cancelled, kept the current project, or the move is blocked. The project is not just a label:
+ * the agent resolves its repository from it, so the dialog shows the repo (or says there is none).
+ */
+function askProject(current, projects, blockedReason = "") {
+  return new Promise((resolve) => {
+    let dialog = $("#project-dialog");
+    if (!dialog) {
+      document.body.insertAdjacentHTML("beforeend", `
+        <dialog class="feature-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
+          <form method="dialog" class="feature-card dialog-frame">
+            <div class="dialog-head">
+              <div><h2 id="project-dialog-title">Move to project</h2></div>
+              <button type="submit" value="keep" class="btn icon dialog-close" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            <div class="dialog-body stack">
+              <p id="project-dialog-body"></p>
+              <select id="project-select" aria-label="Project"></select>
+              <p class="project-dialog-hint" id="project-dialog-hint"></p>
+            </div>
+            <div class="dialog-foot feature-actions" id="project-actions"></div>
+          </form>
+        </dialog>`);
+      dialog = $("#project-dialog");
+    }
+    if (dialog.open) {
+      resolve(null);
+      return;
+    }
+    const items = [...(projects || [])];
+    if (!items.some((project) => project.slug === "inbox")) {
+      items.push({ slug: "inbox", name: "Inbox", repo: null });
+    }
+    if (!items.some((project) => project.slug === current)) {
+      items.push({ slug: current, name: current, repo: null });
+    }
+    const repos = items.filter((project) => project.slug !== "inbox" && project.repo);
+    const others = items.filter((project) => project.slug === "inbox" || !project.repo);
+    const option = (project) => {
+      const label = project.repo && project.repo !== project.name
+        ? `${project.name} — ${project.repo}`
+        : project.name;
+      return `<option value="${escapeHtml(project.slug)}">${escapeHtml(label)}</option>`;
+    };
+    const select = $("#project-select");
+    const options = [];
+    if (repos.length) {
+      options.push('<optgroup label="Repositories">');
+      for (const project of repos) options.push(option(project));
+      options.push("</optgroup>");
+    }
+    if (others.length) {
+      options.push('<optgroup label="Other projects">');
+      for (const project of others) options.push(option(project));
+      options.push("</optgroup>");
+    }
+    select.innerHTML = options.join("");
+    select.value = current;
+    const blocked = Boolean(blockedReason);
+    select.hidden = blocked;
+    select.disabled = blocked;
+    $("#project-dialog-body").textContent = blocked
+      ? blockedReason
+      : "The project decides which repository the next review or handoff run uses.";
+    const hint = $("#project-dialog-hint");
+    const syncHint = () => {
+      const project = items.find((item) => item.slug === select.value);
+      if (!project) {
+        hint.textContent = "";
+      } else if (project.repo) {
+        hint.textContent = `Agent repository: ${project.repo}`;
+      } else if (project.slug === "inbox") {
+        hint.textContent = "Inbox has no repository; the agent falls back to its default repo.";
+      } else {
+        hint.textContent = "This project has no repository; the agent falls back to its default repo.";
+      }
+    };
+    syncHint();
+    select.onchange = syncHint;
+    const actions = $("#project-actions");
+    actions.innerHTML = "";
+    const buttons = blocked
+      ? [{ value: "keep", label: "Close" }]
+      : [
+          { value: "keep", label: "Cancel" },
+          { value: "save", label: "Move review", kind: "primary" },
+        ];
+    for (const action of buttons) {
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.value = action.value;
+      button.className = `btn${action.kind ? ` ${action.kind}` : ""}`;
+      button.textContent = action.label;
+      actions.appendChild(button);
+    }
+    dialog.returnValue = "keep";
+    dialog.onclose = () => {
+      const value = select.value;
+      resolve(dialog.returnValue === "save" && value && value !== current ? value : null);
+    };
+    dialog.showModal();
+    if (!blocked) select.focus();
+  });
+}
+
 /** True when an online bridge advertised the post-confirmation handoff capability. */
 const handoffCapableAgent = () => Boolean(
   AgentStatus.data?.agents?.some((agent) =>
@@ -2252,6 +2360,18 @@ class Editor {
       ? `${this.meta.image_width}×${this.meta.image_height}` : null,
       this.meta.url || null].filter(Boolean);
     $("#session-sub").textContent = bits.join(" · ");
+    const projectChip = $("#project-edit");
+    if (projectChip) {
+      const slug = this.meta.project || "inbox";
+      const project = (this.rail?.projects || []).find((item) => item.slug === slug);
+      const label = project?.name || (slug === "inbox" ? "Inbox" : slug);
+      projectChip.hidden = false;
+      projectChip.textContent = label;
+      projectChip.dataset.project = slug;
+      projectChip.title = project?.repo
+        ? `Project: ${label} — ${project.repo}. Click to change.`
+        : `Project: ${label}. Click to change.`;
+    }
     const branch = $("#branch-edit");
     if (branch) {
       branch.hidden = !this.meta.branch;
@@ -2480,6 +2600,41 @@ class Editor {
         this.rail.load();
       } catch (error) {
         alert(`Could not set the branch: ${error.message}`);
+      }
+    });
+    $("#project-edit")?.addEventListener("click", async () => {
+      const current = this.meta.project || "inbox";
+      let projects = this.rail?.projects || [];
+      try {
+        const body = await api("/api/projects");
+        projects = body.projects || projects;
+      } catch { /* keep the rail's cached projects */ }
+      const handoffRunning = ["requested", "running"].includes(this.meta.handoff?.status);
+      const reason = this.meta.status === "submitted"
+        ? "Stop the review before changing its project. The agent may already have a worktree for the old one."
+        : handoffRunning
+          ? "The handoff is queued or running. Wait for it to finish, then move the review."
+          : "";
+      const chosen = await askProject(current, projects, reason);
+      if (!chosen || chosen === current) return;
+      try {
+        const body = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/project`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ project: chosen === "inbox" ? null : chosen }),
+        });
+        this.meta = body.meta;
+        lastProject.remember(chosen);
+        // Show the row where it moved: a collapsed target group would hide the review the human
+        // just filed there, which reads as a deletion.
+        if (this.rail) {
+          this.rail.collapsed.delete(chosen);
+          prefs.set("collapsedProjects", [...this.rail.collapsed]);
+        }
+        this.renderHeader();
+        await this.rail.load();
+      } catch (error) {
+        alert(`Could not change the project: ${error.message}`);
       }
     });
     addEventListener("resize", () => this.resize());

@@ -452,6 +452,15 @@ The rail lists projects (conversation areas), not a flat stream of requests.
 - Sessions created without a project live flat and are shown as **Inbox** — there is no migration,
   the label is added on read. **Inbox** and legacy label-only projects still work; the agent uses
   its default `REDLINE_AGENT_REPO` for them.
+- **An existing review can change project (v0.27).** The editor header shows the project as a chip
+  next to the session id and the branch. Clicking it opens **Move to project** with the same
+  **Repositories** / **Other projects** groups and a hint that names the repository (or explains
+  that Inbox/label-only projects make the agent fall back to its default). Saving moves the session
+  folder and `meta.project`, regroups the rail immediately and expands the target group, so the
+  review does not seem to vanish. The move is refused while the round is `submitted`, an agent
+  holds a claim, or a handoff is queued/running; a terminally failed handoff is movable so its
+  retry resolves the right repository. The next review/handoff run uses the new project's repo;
+  the branch and any existing worktree are not moved.
 - Each project header shows its name and the total number of sessions — one count, not a waiting
   count beside the total (the per-row badge says which rounds are waiting). Click to collapse; the
   state persists per browser.

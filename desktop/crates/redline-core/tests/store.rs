@@ -515,6 +515,59 @@ fn repo_projects_are_idempotent_and_survive_agent_resync() {
 }
 
 #[test]
+fn an_existing_review_moves_its_folder_and_project_label() {
+    let (_dir, store) = store();
+    let project = store.ensure_project("Au.Net").unwrap();
+    let meta = store
+        .create_from_bytes(PNG, "a.png", "Move me", "", "", None, None, None)
+        .unwrap();
+    assert!(meta.project.is_none());
+    let inbox_dir = store.dir(&meta.id).unwrap();
+    assert_eq!(inbox_dir.parent(), Some(store.root()));
+
+    let moved = store.set_project(&meta.id, Some("Au.Net")).unwrap();
+    assert_eq!(moved.project.as_deref(), Some(project.slug.as_str()));
+    let project_dir = store.dir(&meta.id).unwrap();
+    assert_eq!(
+        project_dir,
+        store.projects_root().join(&project.slug).join(&meta.id)
+    );
+    assert!(project_dir.join("meta.json").is_file());
+    assert!(!inbox_dir.exists(), "the flat Inbox folder must be gone");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(project_dir.join("meta.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["project"].as_str(), Some(project.slug.as_str()));
+    let listed = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|session| session.id == meta.id)
+        .unwrap();
+    assert_eq!(listed.project.as_deref(), Some(project.slug.as_str()));
+
+    // Moving back to Inbox flattens the folder and clears the stored label.
+    let back = store.set_project(&meta.id, Some("inbox")).unwrap();
+    assert!(back.project.is_none());
+    assert_eq!(store.dir(&meta.id).unwrap(), store.root().join(&meta.id));
+    let listed = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|session| session.id == meta.id)
+        .unwrap();
+    assert_eq!(listed.project.as_deref(), Some("inbox"));
+
+    // An unknown project is an error and must not move the review.
+    let before = store.dir(&meta.id).unwrap();
+    assert!(matches!(
+        store.set_project(&meta.id, Some("nope")),
+        Err(redline_core::Error::NotFound(_))
+    ));
+    assert_eq!(store.dir(&meta.id).unwrap(), before);
+}
+
+#[test]
 fn a_default_branch_names_the_feature_not_the_session() {
     // The title is what the human typed; the tail keeps two features of the same name apart.
     assert_eq!(

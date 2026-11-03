@@ -134,6 +134,7 @@ pub fn router(state: AppState) -> Router {
             get(get_session).delete(delete_session),
         )
         .route("/api/sessions/{id}/branch", put(set_session_branch))
+        .route("/api/sessions/{id}/project", put(set_session_project))
         .route(
             "/api/sessions/{id}/annotations",
             post(submit).layer(DefaultBodyLimit::max(MAX_SUBMIT_BYTES)),
@@ -1189,6 +1190,61 @@ async fn set_session_branch(
         .filter(|value| !value.is_empty());
     Ok(Json(json!({
         "meta": state.store.set_branch(&id, branch)?,
+    })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ProjectBody {
+    #[serde(default)]
+    project: Option<String>,
+}
+
+/// Move an existing review to another project, or back to the Inbox (`null`/`"inbox"`).
+///
+/// The project routes the next agent run: it decides which repository the bridge resolves. A
+/// review created in the Inbox has no repository, so moving it is the recovery path after it was
+/// filed in the wrong place. Refuse while the round is submitted, while an agent holds a claim,
+/// or while a handoff is queued/running — the worktree for the old project already exists. A
+/// terminally failed handoff is explicitly movable so the retry can use the right repository.
+async fn set_session_project(
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    Json(body): Json<ProjectBody>,
+) -> Result<Json<Value>, Error> {
+    let meta = state.store.require(&id)?;
+    if meta.status == Status::Submitted {
+        return Err(Error::Conflict(
+            "stop the review before changing its project".to_string(),
+        ));
+    }
+    if meta.handoff.as_ref().is_some_and(|handoff| {
+        matches!(
+            handoff.status,
+            HandoffStatus::Requested | HandoffStatus::Running
+        )
+    }) {
+        return Err(Error::Conflict(
+            "the handoff is queued or running; wait for it to finish before changing the project"
+                .to_string(),
+        ));
+    }
+    let live = state
+        .agent
+        .lock()
+        .map(|mut agent| agent.claims().iter().any(|claim| claim.session_id == id))
+        .unwrap_or(false);
+    if live {
+        return Err(Error::Conflict(
+            "the agent is working on this review; stop it before changing the project".to_string(),
+        ));
+    }
+    let project = body
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    Ok(Json(json!({
+        "meta": state.store.set_project(&id, project)?,
     })))
 }
 

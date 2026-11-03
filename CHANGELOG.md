@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A project is not a permanent label.** An existing review can now be moved to another project,
+  or back to the Inbox, from the editor header. The session folder and `meta.project` move
+  together, so the next agent run resolves the new project's repository instead of silently
+  falling back to the default one. Refused while the round is submitted, claimed or handing off;
+  a failed handoff is movable so its retry can use the right repo (2026-11-03).
 - **A hint is not a label row.** The extension options page rendered “(optional)” as its own flex
   item, so the hint wrapped to a second line and pushed the Branch input below the Project select
   (2026-11-03). It now shares the Branch line and both fields align; the extension e2e measures the

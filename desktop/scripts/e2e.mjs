@@ -99,6 +99,21 @@ async function drag(page, from, to, steps = 12) {
   await page.mouse.up();
 }
 
+/** Hover a session row, retrying when the rail's 8 s poll replaces the node mid-action. */
+async function hoverRow(page, selector) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await page.hover(selector);
+      return;
+    } catch (error) {
+      if (!/detached/i.test(error.message)) throw error;
+      await page.waitForSelector(selector, { timeout: 1000 });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw new Error(`row kept re-rendering: ${selector}`);
+}
+
 const main = async () => {
   // A real screenshot size, so the fitted zoom is not 1:1 — coordinate mapping must survive it.
   // Submitting locks the canvas now; tests that keep drawing must stop first. Ask the "agent"
@@ -1258,7 +1273,7 @@ const main = async () => {
     chip?.click();
   }, label);
 
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.click(`${row} [data-act="confirm"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   const confirmDialog = await page.evaluate(() => {
@@ -1300,7 +1315,7 @@ const main = async () => {
   check("closing the feature dialog leaves the feature pending",
     !afterFeatureClose.meta.feature_confirmed_at,
     String(afterFeatureClose.meta.feature_confirmed_at || "none"));
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.click(`${row} [data-act="confirm"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   await page.click("#feature-dialog-check");
@@ -1478,7 +1493,7 @@ const main = async () => {
       && failedHandoff.href === "https://github.com/erikibolya/redline/pull/46"
       && failedHandoff.retry === "Retry handoff",
     JSON.stringify(failedHandoff));
-  await page.hover(`.session[data-id="${id}"]`);
+  await hoverRow(page, `.session[data-id="${id}"]`);
   await page.click(`.session[data-id="${id}"] [data-act="handoff"]`);
   let retriedHandoff = {};
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -1529,7 +1544,7 @@ const main = async () => {
       && staleHandoff.title.includes("stopped without reporting")
       && staleHandoff.retry === "Retry handoff",
     JSON.stringify(staleHandoff));
-  await page.hover(`.session[data-id="${id}"]`);
+  await hoverRow(page, `.session[data-id="${id}"]`);
   await page.click(`.session[data-id="${id}"] [data-act="handoff"]`);
   let retriedStale = {};
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -1566,7 +1581,7 @@ const main = async () => {
   }), id);
   check("a confirmed feature shows a badge and a reopen action",
     confirmedRow.badge.includes("confirmed") && confirmedRow.row, JSON.stringify(confirmedRow));
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.click(`${row} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   const decidedMenu = await page.evaluate(() => {
@@ -1581,7 +1596,7 @@ const main = async () => {
     decidedMenu.actions.join("|") === "Keep working|Reopen|Delete files…"
       && decidedMenu.deleteDanger, JSON.stringify(decidedMenu));
   await page.click('#feature-actions [data-action="keep"]');
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   let reopened = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -1597,7 +1612,7 @@ const main = async () => {
 
   await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.click(`${row} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   const featureMenu = await page.evaluate(() => {
@@ -1682,7 +1697,7 @@ const main = async () => {
       && cancelledBadge.light.color === "rgb(159, 18, 57)"
       && cancelledBadge.light.border === "rgb(253, 164, 175)",
     JSON.stringify(cancelledBadge));
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   let reopenedCancel = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -2273,7 +2288,7 @@ const main = async () => {
   const doomedRow = `.session[data-id="${doomedId}"]`;
   await page.evaluate(() => window.redline.rail.load());
   await page.waitForSelector(doomedRow, { timeout: 5000 });
-  await page.hover(doomedRow);
+  await hoverRow(page, doomedRow);
   await page.click(`${doomedRow} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   await page.click('#feature-actions [data-action="delete"]');
@@ -3461,13 +3476,20 @@ const main = async () => {
   await page.goto(`${BASE}/s/${openDeleteId}`, { waitUntil: "networkidle2" });
   await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
   const openDeleteRow = `.session[data-id="${openDeleteId}"]`;
-  await page.hover(openDeleteRow);
+  await hoverRow(page, openDeleteRow);
   await page.click(`${openDeleteRow} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   page.once("dialog", (dialog) => dialog.accept());
   await page.click('#feature-actions [data-action="delete"]');
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
   await page.waitForSelector("#gallery", { timeout: 10000 });
+  // The dashboard hydrates the rail/gallery from the tab's cached list before `/api/sessions`
+  // answers; poll for the deleted card to leave instead of reading the first paint.
+  await page.waitForFunction(
+    (sessionId) => !document.querySelector(`#gallery .card[data-session="${sessionId}"]`),
+    { timeout: 10000 },
+    openDeleteId,
+  );
   const deletedOpen = await fetch(`${BASE}/api/sessions/${openDeleteId}`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
@@ -3726,6 +3748,119 @@ const main = async () => {
     method: "POST",
     body: JSON.stringify({ agent_id: "e2e" }),
   });
+
+  // ---- an existing review moves to another project, and the move survives a reload (v0.27).
+  // The project is not just a rail label: the bridge resolves the agent's repository from it.
+  const movable = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "project move e2e",
+      image_base64: makePng(),
+      branch: "feat/project-move-e2e",
+    }),
+  });
+  const moveId = movable.meta.id;
+  check("a review created without a project starts in Inbox",
+    !movable.meta.project, String(movable.meta.project));
+  await page.goto(`${BASE}/s/${moveId}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  const inboxChip = await page.$eval("#project-edit", (el) => ({
+    text: el.textContent.trim(),
+    project: el.dataset.project,
+    hidden: el.hidden,
+    title: el.title,
+  }));
+  check("the editor header shows the review's project",
+    !inboxChip.hidden && inboxChip.text === "Inbox" && inboxChip.project === "inbox",
+    JSON.stringify(inboxChip));
+
+  await page.click("#project-edit");
+  await page.waitForSelector("#project-dialog[open]", { timeout: 5000 });
+  const projectPicker = await page.evaluate(() => {
+    const select = document.querySelector("#project-select");
+    return {
+      current: select?.value,
+      values: [...(select?.options || [])].map((option) => option.value),
+      hint: document.querySelector("#project-dialog-hint")?.textContent.trim() || "",
+    };
+  });
+  check("the project dialog lists the projects and selects the current one",
+    projectPicker.current === "inbox" && projectPicker.values.includes("inbox")
+      && projectPicker.values.includes("e2e-repo") && projectPicker.hint.includes("no repository"),
+    JSON.stringify(projectPicker));
+  await page.select("#project-select", "e2e-repo");
+  const repoHint = await page.$eval("#project-dialog-hint", (el) => el.textContent.trim());
+  check("choosing a repo project explains which repository the agent will use",
+    repoHint.includes("e2e-repo"), repoHint);
+  await page.click('#project-actions button[value="save"]');
+  await page.waitForFunction(
+    () => document.querySelector("#project-edit")?.dataset.project === "e2e-repo",
+    { timeout: 5000 },
+  );
+  const movedChip = await page.$eval("#project-edit", (el) => ({
+    text: el.textContent.trim(),
+    project: el.dataset.project,
+    title: el.title,
+  }));
+  check("the header chip follows the new project",
+    movedChip.project === "e2e-repo" && movedChip.text === "E2E Repo",
+    JSON.stringify(movedChip));
+  const persistedMove = await api(`/api/sessions/${moveId}`);
+  check("the project move is persisted on the server",
+    persistedMove.meta.project === "e2e-repo", String(persistedMove.meta.project));
+  // The rail refreshes from `/api/sessions` after the move; the chip is already correct. Poll for
+  // the row under its new group instead of reading the pre-refresh DOM.
+  await page.waitForFunction((id) => {
+    const header = document.querySelector('.rail-project[data-project="e2e-repo"]');
+    if (!header) return false;
+    let node = header.nextElementSibling;
+    while (node && !node.classList.contains("rail-project")) {
+      if (node.classList.contains("session") && node.dataset.id === id) return true;
+      node = node.nextElementSibling;
+    }
+    return false;
+  }, { timeout: 5000 }, moveId);
+  const movedGrouped = await page.evaluate((id) => {
+    const header = document.querySelector('.rail-project[data-project="e2e-repo"]');
+    if (!header) return { header: false, found: false, inbox: false };
+    let node = header.nextElementSibling;
+    let found = false;
+    while (node && !node.classList.contains("rail-project")) {
+      if (node.classList.contains("session") && node.dataset.id === id) found = true;
+      node = node.nextElementSibling;
+    }
+    const inbox = document.querySelector('.rail-project[data-project="inbox"]');
+    let inInbox = false;
+    if (inbox) {
+      let row = inbox.nextElementSibling;
+      while (row && !row.classList.contains("rail-project")) {
+        if (row.classList.contains("session") && row.dataset.id === id) inInbox = true;
+        row = row.nextElementSibling;
+      }
+    }
+    return { header: true, found, inbox: inInbox };
+  }, moveId);
+  check("the rail regroups the review under the new project",
+    movedGrouped.header && movedGrouped.found && !movedGrouped.inbox,
+    JSON.stringify(movedGrouped));
+
+  await page.reload({ waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  const reloadedProject = await page.$eval("#project-edit", (el) => el.dataset.project);
+  check("the project move survives a reload",
+    reloadedProject === "e2e-repo", reloadedProject);
+
+  await page.click("#project-edit");
+  await page.waitForSelector("#project-dialog[open]", { timeout: 5000 });
+  await page.select("#project-select", "inbox");
+  await page.click('#project-actions button[value="save"]');
+  await page.waitForFunction(
+    () => document.querySelector("#project-edit")?.dataset.project === "inbox",
+    { timeout: 5000 },
+  );
+  const movedBack = await api(`/api/sessions/${moveId}`);
+  check("moving a review back to Inbox persists too",
+    !movedBack.meta.project, String(movedBack.meta.project));
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

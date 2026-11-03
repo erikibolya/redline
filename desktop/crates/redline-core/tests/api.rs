@@ -3,7 +3,8 @@ use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use redline_core::api::{router, AppState};
 use redline_core::auth::Auth;
-use redline_core::store::Store;
+use redline_core::model::HandoffStatus;
+use redline_core::store::{HandoffReport, Store};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -3301,4 +3302,173 @@ async fn switching_servers_keeps_every_profile_and_token() {
     assert_eq!(saved["servers"].as_array().unwrap().len(), 2);
     assert_eq!(saved["servers"][0]["token"], "p");
     assert_eq!(saved["servers"][1]["token"], "d");
+}
+
+#[tokio::test]
+async fn an_existing_review_moves_between_projects_and_back_to_inbox() {
+    let h = harness();
+    let (status, _, project) = send(
+        &h.app,
+        authed("POST", "/api/projects", json!({ "name": "Au.Net" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap().to_string();
+
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "move me", "image_base64": PNG_B64 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert!(created["meta"].get("project").is_none(), "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let flat = h.store.dir(&id).unwrap();
+    assert_eq!(flat.parent(), Some(h.store.root()));
+
+    let (status, _, moved) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "Au.Net" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved["meta"]["project"], slug);
+    let project_dir = h.store.dir(&id).unwrap();
+    assert_eq!(project_dir, h.store.projects_root().join(&slug).join(&id));
+    assert!(!flat.exists(), "the flat Inbox folder must be gone");
+    assert!(project_dir.join("meta.json").is_file());
+
+    let (status, _, one) = send(
+        &h.app,
+        authed("GET", &format!("/api/sessions/{id}"), json!(null)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(one["meta"]["project"], slug);
+    let (_, _, list) = send(&h.app, authed("GET", "/api/sessions", json!(null))).await;
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == id)
+        .unwrap();
+    assert_eq!(row["project"], slug);
+
+    let (status, _, back) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "inbox" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{back}");
+    assert!(back["meta"].get("project").is_none());
+    assert_eq!(h.store.dir(&id).unwrap(), h.store.root().join(&id));
+    let (_, _, list) = send(&h.app, authed("GET", "/api/sessions", json!(null))).await;
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == id)
+        .unwrap();
+    assert_eq!(row["project"], "inbox");
+
+    let (status, _, error) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "does-not-exist" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+}
+
+#[tokio::test]
+async fn a_submitted_review_cannot_change_its_project() {
+    let h = harness();
+    let id = submitted_session(&h, "E2E", "feat/held").await;
+    let before = h.store.dir(&id).unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "inbox" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        h.store.require(&id).unwrap().project.as_deref(),
+        Some("e2e")
+    );
+    assert_eq!(h.store.dir(&id).unwrap(), before);
+}
+
+#[tokio::test]
+async fn a_running_handoff_blocks_a_move_but_a_failed_handoff_can_move() {
+    let h = harness();
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "handoff move", "image_base64": PNG_B64, "project": "E2E" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    h.store.confirm_feature(&id, true).unwrap();
+    h.store.mark_handoff_running(&id).unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "inbox" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        h.store.require(&id).unwrap().project.as_deref(),
+        Some("e2e")
+    );
+
+    h.store
+        .report_handoff(
+            &id,
+            HandoffReport {
+                status: HandoffStatus::Failed,
+                label: Some("failed".to_string()),
+                url: None,
+                message: Some("the PR is still open".to_string()),
+            },
+        )
+        .unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "inbox" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["meta"].get("project").is_none());
 }

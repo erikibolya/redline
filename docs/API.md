@@ -8,6 +8,177 @@ session images are served with the original content type. Authenticated data (ev
 `/api/*` plus session images/history) is sent with `Cache-Control: no-store`: a rail poll or a
 dashboard load must never replay a list from before a feature was confirmed, cancelled or deleted.
 
+## Human authentication (v0.28 auth foundation)
+
+The legacy token (`REDLINE_TOKEN` / `/data/token`) still works as an owner credential and as the
+agent credential. Named humans use a server-side session:
+
+- `GET /api/auth/status` — public; `{ "setup_required": true|false }`.
+- `POST /api/auth/bootstrap` — legacy token or owner session; first run only; body
+  `{ "username", "display_name", "password" }`; creates the single owner and signs it in.
+- `POST /api/auth/login` — public; `{ "username", "password" }`; sets the `redline_session`
+  `HttpOnly` cookie and the readable `redline_csrf` cookie.
+- `GET /api/auth/me` — current user, `{ "user", "is_owner", "legacy", "projects" }`.
+- `POST /api/auth/logout` — revokes the session and clears the cookies.
+- `POST /api/auth/password` — `{ "current_password", "new_password" }`; revokes the old sessions
+  and returns a new one.
+- `GET /api/users` / `POST /api/users` — owner only; list/create named users
+  (`{ "username", "display_name", "password" }`).
+- `POST /api/admin/transfer-owner` — owner only; `{ "user_id", "password" }`; atomically moves the
+  single owner bit; the old owner becomes a member.
+
+Session-authenticated state-changing requests must send `X-CSRF-Token` matching the
+`redline_csrf` cookie. Bearer credentials (legacy token, PAT or agent token) are not cookie-based
+and do not need CSRF. Login is rate-limited (5 failures per username/IP per 15 minutes).
+
+### Personal access tokens and agent tokens (v0.28)
+
+A **PAT** is a human Bearer credential for the extension, CLI or a script. It inherits the user's
+account status and project roles, optionally narrowed to a project allowlist and/or `read_only`.
+An **agent token** is a service identity: it is accepted only by `/api/agent/*` and `/mcp`, has
+its own project allowlist and `review`/`handoff` jobs, and never acts as a human. Raw values
+(`rl_pat_…`, `rl_agt_…`) are shown once; only a SHA-256 hash and a display prefix are stored in
+`tokens.json` (`0600`).
+
+- `GET /api/me/tokens` — the caller's PATs (metadata only, no hash/raw).
+- `POST /api/me/tokens` — `{ "name", "projects"?: ["slug"], "read_only"?: bool,
+  "expires_days"?: 1–3650 }`; returns `{ "token": "rl_pat_…", "personal_token": {…} }`.
+  Omitted `projects` means every project the user can already access.
+- `DELETE /api/me/tokens/{id}` — revoke the caller's PAT immediately.
+- `GET/POST /api/admin/agent-tokens` — owner only; body `{ "agent", "name", "projects"?,
+  "jobs"?: ["review"|"handoff"], "expires_days"? }`; returns `{ "token": "rl_agt_…",
+  "agent_token": {…} }`. Jobs default to `review`.
+- `DELETE /api/admin/agent-tokens/{id}` — owner only.
+
+A project outside a token's allowlist answers `404` (never `403`, which would confirm that the
+task exists). A read-only PAT gets `403` on mutations. An agent token on a human route gets `403`;
+a human session or owner on `/api/agent/*` is still accepted for administration, and the legacy
+server token remains a full owner + agent credential. `/api/agent/next` only hands an agent a
+task in its allowlist and only a `handoff` job when the token has that job.
+
+### Invite and reset links (v0.28)
+
+There is no SMTP in MVP. The owner creates an account as `invited` (no password) or generates a
+reset link, copies the one-time URL to the person, and the link lets them choose a password:
+
+- `POST /api/users` — add `"invite": true` instead of `password`; returns
+  `{ "user": {status:"invited"}, "invite_url": "…/invite/rl_inv_…", "expires_at": … }`.
+  Invite links live **7 days**.
+- `POST /api/users/{id}/reset` — owner only; returns
+  `{ "reset_url": "…/reset/rl_rst_…", "expires_at": … }`; reset links live **24 hours** and
+  revoke the user's other sessions when consumed. The owner's own account is changed through
+  `POST /api/auth/password`, not a reset link (`400`).
+- `GET /api/auth/invite/{token}` / `GET /api/auth/reset/{token}` — public status
+  `{ "valid", "kind", "username", "display_name", "expires_at" }`; a used/expired token answers
+  `{ "valid": false }`.
+- `POST /api/auth/invite/{token}` / `POST /api/auth/reset/{token}` — public
+  `{ "password": "…" }` (12–200 chars); activates the account, consumes the link, revokes the
+  user's old sessions, signs the browser in and returns the same `{user, csrf_token}` shape as
+  login. A second use is `404`.
+
+Raw invite/reset tokens are stored only as SHA-256 hashes in `invites.json` (`0600`); issuing a
+new link of the same kind invalidates the previous unused one. Accepting an invite or reset writes
+`auth.invite_accept` / `auth.reset_accept` to the audit log, and issuing them writes
+`user.invite` / `user.reset`.
+
+> **Current slice:** data routes are **project-scoped**. `GET /api/projects` and
+> `GET /api/sessions` return only the member's projects (the owner sees all); Inbox is owner-only.
+> `GET /api/sessions/{id}` and every media/history route return `404` for a task outside the
+> member's projects. `GET /api/sessions/{id}` carries `meta.my_role` (`owner|developer|tester|
+> viewer`). A tester may create and annotate their own open tasks, but `POST /annotations`,
+> `POST /cancel`, confirm/cancel-feature and handoff return `403`. A tester hands work to a
+> developer with `POST /api/sessions/{id}/request-agent`; the task stays `open` until the
+> developer calls `POST /annotations`.
+>
+> `GET/PUT /api/projects/{slug}/members` is owner-only; `PUT` replaces the project's member list
+> (`{"members":[{"user_id","role"}]}` with role `viewer|tester|developer`). The agent routes and
+> `/mcp` accept a scoped agent token (or the legacy owner token); a human session on those routes
+> is accepted only for the owner administering the bridge.
+
+### `POST /api/sessions/<id>/request-agent`
+
+Tester → developer handoff. The body is the same `Submission`/multipart payload as
+`POST /api/sessions/<id>/annotations` (annotations, optional contact sheet, frames, note).
+
+```json
+{ "annotations": [], "width": 1440, "height": 900, "note": "Please send this to the agent" }
+```
+
+Returns `{ "ok": true, "meta", "annotations" }`. `meta.status` stays `open`; the task gets
+`agent_requested_at`/`agent_requested_by` and never appears in `/api/agent/next` until a developer
+submits. `DELETE` on the same path cancels the request. A tester may request only a task they
+created (`meta.created_by`) and only while it is `open`; a developer/owner may request any open
+task in their project.
+
+### `GET/PUT /api/projects/<slug>/members`
+
+Owner only. `GET` returns the member list with `user_id`, `username`, `display_name` and `role`.
+`PUT` replaces it:
+
+```json
+{ "members": [
+  { "user_id": "usr_…", "role": "developer" },
+  { "user_id": "usr_…", "role": "tester" }
+] }
+```
+
+Roles are `viewer`, `tester` and `developer`; the owner is global and is not stored as a member.
+The owner can assign a user to several projects with different roles.
+
+### `GET/POST /api/sessions/<id>/comments`
+
+Human discussion, stored in `sessions/<id>/comments.jsonl` and kept separate from the agent's
+`agent-thread.jsonl`. Any member who can read the task can read and add comments:
+
+```json
+{ "body": "Please check the hover state.", "mentions": ["usr_…"] }
+```
+
+Returns `{ "comment": { "id", "author", "author_name", "at", "body", "mentions",
+"resolved_at", "resolved_by" } }`. A mention must be an active member of the task's project (the
+owner is always allowed) or the request is `400`. Typing `@username` in the body is also resolved
+server-side; an unknown handle stays plain text. Max 4000 characters.
+
+### `PATCH/DELETE /api/sessions/<id>/comments/<comment>`
+
+`PATCH` accepts `{ "body": "edited text" }` (author only) and/or `{ "resolved": true|false }`
+(author, developer in the project, or owner). `DELETE` is allowed for the author or a
+developer/owner. A task outside the caller's projects is `404` for every comment route.
+
+### `GET /api/notifications` / `POST /api/notifications/read`
+
+Per-user in-app notifications: `{ "notifications": [ … ], "unread": 2 }`, newest first. Each item
+has `id`, `at`, `kind`, optional `project`/`session`/`actor`/`actor_name`, `text`, `url` and
+`read_at`. Kinds include `review.ready`, `review.submitted`, `comment.mention`, `comment.reply`
+and the handoff/ownership events. Only members of the task's project (or the owner) are notified,
+so a notification never names a project or task the reader cannot open.
+
+`POST` with `{ "ids": ["ntf_…"] }` marks those read; `{}` marks all. Notifications are pruned
+after **90 days** by default; set `REDLINE_NOTIFICATION_RETENTION_DAYS` to override.
+
+### `GET /api/audit`
+
+Owner only. Returns `{ "events": [ … ], "count": n }`, newest first. Each event has `at`,
+`actor_type` (`user|legacy|system`), optional `actor_id`, `actor_name`, `action`, optional
+`project`/`session`/`target`/`ip`/`user_agent`, and `details`.
+
+Filters: `limit` (1–1000, default 100), `project`, `session`, `actor` (user id), `action` (exact
+or prefix, e.g. `review.`) and `since` (RFC 3339). Examples:
+
+```
+GET /api/audit?action=review.&limit=50
+GET /api/audit?project=actiunit-au-net&since=2026-11-01T00:00:00Z
+```
+
+Actions include `auth.login`, `auth.logout`, `auth.failed`, `auth.password`, `owner.bootstrap`,
+`owner.transfer`, `user.create`, `project.create`, `membership.update`, `settings.update`,
+`review.create`, `review.request_agent`, `review.submit`, `review.stop`, `review.reopen`,
+`review.branch`, `review.move_project`, `review.delete`, `review.confirm`,
+`review.cancel_feature`, `review.handoff`, `review.resolve`, `comment.create`,
+`comment.update`, `comment.resolve`, `comment.delete` and `notification.read`. Events are retained
+for **one year** by default (`REDLINE_AUDIT_RETENTION_DAYS` overrides) and stored in
+`audit.jsonl` with `0600` permissions.
+
 ## Endpoints
 
 ### `GET /`
@@ -95,6 +266,9 @@ non-zero run). The UI says "agent timed out" for the two timeout codes and "agen
 
 `annotations` is the last submitted payload (or `{session, annotations: []}` before submission).
 The `meta` object carries `feature_confirmed_at` / `feature_cancelled_at` when the human decided.
+Both `meta.revision` and `annotations.revision` start at `0`; every submit, tester request, agent
+`post_round` and new video round increments both, with `updated_by` / `updated_by_name` /
+`updated_at` describing the writer.
 
 ### `PUT /api/sessions/<id>/branch`
 
@@ -109,6 +283,24 @@ default. `409` while the session is `submitted` (the agent's worktree was create
 name) or has a handoff record (the link points at the handed-off branch). A review created without
 a name already has a branch — `feat/<title-slug>-<id-tail>` — so `session/<id>` is no longer
 produced; sessions that v0.21 claimed under that fallback are read back under their `feat/…` name.
+
+### `PUT /api/sessions/<id>/project`
+
+Move an existing review to another project, or back to the Inbox.
+
+```json
+{ "project": "actiunit-au-net" }
+```
+
+`project` accepts a slug or a display name. `null`, an empty string or `"inbox"` moves the review
+to the Inbox. Returns `{ "meta": { … } }`; an unknown project is `404`.
+
+The project decides the repository the bridge resolves for the next review or handoff run, so the
+session folder moves with it (`sessions/projects/<slug>/<id>` for a project, `sessions/<id>` for
+the Inbox) and `meta.project` is updated. `409` while the round is `submitted`, while an agent
+holds a claim, or while a handoff is `requested`/`running`: the worktree for the old project
+already exists. A terminally `failed` handoff is movable — that is the recovery path when a review
+was filed under the wrong project and its retry needs the right repository.
 
 ### `POST /api/sessions/<id>/confirm-feature`
 
@@ -169,6 +361,16 @@ The video bytes for a video session (video sessions only). Supports HTTP `Range`
 `206 Partial Content` with `Content-Range`, so `<video>` can seek without downloading the whole
 clip. `404` for image sessions or a missing file. Authenticated like every session route.
 
+### `GET /sessions/<id>/trace`
+
+The raw `trace.json` for a browser-flow review (v0.27), served as `application/json`. The file is
+validated and summarized on upload; `meta.trace` carries the summary. `404` when the session has
+no trace. The event shape is documented in [`EXTENSION.md`](EXTENSION.md#6-trace-format-tracejson).
+
+### `GET /sessions/<id>/history/<stamp>/trace`
+
+The trace archived with a previous video round. `404` when that round had no trace.
+
 ### `POST /api/sessions` (video)
 
 Video sessions use the same endpoint with `video_base64` or `video_path` instead of the image
@@ -194,7 +396,8 @@ contains:
 `image` still names the media file for older clients; `media.kind` is the authoritative switch.
 Annotations may carry `at` (seconds) and optional `until`; `review.md` prints `mm:ss.mmm` timecodes.
 MCP clients can use `review_video` instead of `review_screenshot`; `get_feedback` includes
-`media` and `video_url`.
+`media`, `video_url`, and—when the capture sent one—`trace` plus `trace_url`. The raw trace is
+also available as the MCP resource `redline://session/<id>/trace.json`.
 
 ### `POST /api/sessions/video` (browser multipart)
 
@@ -204,6 +407,7 @@ The New review dialog uploads a video as `multipart/form-data`:
 |---|---|---|
 | `video` (or `file`) | yes | MP4/WebM bytes |
 | `poster` | no | first-frame PNG/JPEG for the rail/gallery card |
+| `trace` | no | `trace.json` from the browser capture extension (max 10 MB; see § Browser trace) |
 | `title`, `note`, `url`, `project`, `branch`, `agent` | no | same as `POST /api/sessions` |
 | `duration_ms`, `width`, `height`, `fps` | no | metadata read by the browser |
 
@@ -244,13 +448,30 @@ Request:
   "annotations": [ … ],
   "width": 1440,
   "height": 900,
-  "png": "data:image/png;base64,…"
+  "png": "data:image/png;base64,…",
+  "base_revision": 4
 }
 ```
 
 - `annotations`: array; may be empty.
 - `width`/`height`: canvas dimensions; stored in meta + payload.
 - `png`: optional; when present, decoded and written to `annotated.png`.
+- `base_revision`: the `revision` the canvas was loaded from (v0.28). The server accepts only a
+  match and bumps the revision; a stale value is `409`:
+
+```json
+{
+  "error": "this task changed since you loaded it",
+  "current_revision": 5,
+  "updated_by": "usr_…",
+  "updated_by_name": "Jana",
+  "updated_at": "2026-11-03T18:20:00+00:00"
+}
+```
+
+  A missing `base_revision` is treated as a pre-v0.28 client and accepted (the new revision is
+  still stamped). The UI always sends it. `request-agent` and a video round accept it too
+  (`base_revision` form field for multipart).
 
 For a video submit use `multipart/form-data` instead of JSON:
 
@@ -269,8 +490,8 @@ Response `200`:
 ```json
 {
   "ok": true,
-  "meta": { "…": "status=submitted, submitted_at=…" },
-  "annotations": { "…": "stored payload" }
+  "meta": { "…": "status=submitted, submitted_at=…, revision=5, updated_by=…" },
+  "annotations": { "…": "stored payload with the same revision" }
 }
 ```
 
@@ -509,6 +730,9 @@ See `docs/ARCHITECTURE.md` § Storage schema. Fields:
 | `branch` | The feature branch the review runs on. Every review has one: `feat/<title-slug>-<id-tail>` when nobody named it, and the branch-lock key. v0.21's `session/<id>` fallback is read back as that `feat/…` name. |
 | `image` | Screenshot filename inside the session. |
 | `image_width` / `image_height` | Present after submission; canvas dimensions. |
+| `media` | Optional image/video metadata (`kind`, `file`, `mime`, dimensions, duration, fps). Missing means a legacy image. |
+| `poster` | Video first-frame thumbnail served by `/sessions/<id>/image`. |
+| `trace` | Optional browser-flow summary (v0.27): `file`, `kind`, `events`, `started_at`, `duration_ms`, `summary`, `redacted`, `truncated`, `highlights`. Raw events live in `trace.json`. |
 
 ## curl examples
 

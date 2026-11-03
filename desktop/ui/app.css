@@ -153,10 +153,62 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
 }
 .branch-chip:hover, .branch-chip:focus-visible { border-color: var(--accent); }
+/* The project routes the next agent run, so it is visible next to the branch rather than hidden
+   in the rail grouping. Neutral, because it is context, not the work's name. */
+.project-chip {
+  flex: none; max-width: 34%; padding: 1px 6px; border-radius: 5px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  font: 500 10.5px var(--font); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: pointer;
+}
+.project-chip:hover, .project-chip:focus-visible {
+  border-color: var(--accent); color: var(--text);
+}
+.feature-card select {
+  width: 100%; padding: 8px 10px; border-radius: var(--radius);
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  cursor: pointer;
+}
+.project-dialog-hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .header-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 /* A hairline between the app tools and the two panel toggles: they act on the layout, not the
    review, and used to read as one row of mystery glyphs. */
 .header-sep { width: 1px; height: 20px; margin: 0 4px; background: var(--border); }
+.notification-bell { position: relative; }
+.notification-count {
+  position: absolute; top: 1px; right: 1px; min-width: 14px; height: 14px; padding: 0 3px;
+  border-radius: 999px; background: var(--danger); color: #fff; font-size: 9px; font-weight: 700;
+  line-height: 14px; text-align: center; pointer-events: none;
+}
+.notification-panel {
+  position: fixed; top: var(--header); right: 14px; z-index: 50;
+  width: min(380px, calc(100vw - 28px)); max-height: min(60vh, 520px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+}
+.notification-panel[hidden] { display: none; }
+.notification-head {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 8px;
+  padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--border-soft);
+  font-size: 12px;
+}
+.notification-head button {
+  margin-left: auto; border: 0; background: transparent; color: var(--accent);
+  font-size: 10.5px; cursor: pointer; padding: 2px 0;
+}
+.notification-row {
+  padding: 10px 12px; border-top: 1px solid var(--border-soft); cursor: pointer;
+}
+.notification-row:first-child { border-top: 0; }
+.notification-row.unread { background: rgba(47, 129, 247, .09); }
+.notification-row .text { font-size: 12px; line-height: 1.4; color: var(--text); }
+.notification-row .meta { margin-top: 3px; color: var(--muted); font-size: 10.5px; }
+.notification-empty { padding: 14px 12px; color: var(--muted); font-size: 12px; }
+.notification-foot {
+  padding: 9px 12px; border-top: 1px solid var(--border-soft); font-size: 11px;
+}
+.notification-foot a { color: var(--muted); text-decoration: none; }
+.notification-foot a:hover { color: var(--accent); }
 /* Presence is words plus a dot, never colour alone: "No agent connected" must be readable. */
 .agent-chip {
   display: inline-flex; align-items: center; gap: 7px;
@@ -190,6 +242,28 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .viewing-bar:hover { background: #241a3d; }
 [data-theme="light"] .viewing-bar { background: #f5f3ff; border-color: #c4b5fd; color: #5b21b6; }
 [data-theme="light"] .viewing-bar:hover { background: #ede9fe; }
+
+/* Optimistic concurrency: the canvas is stale, so the human decides before anything is
+   overwritten. `[hidden]` must be explicit because the class sets `display`. */
+.revision-banner {
+  position: absolute; top: 96px; left: 50%; transform: translateX(-50%); z-index: 8;
+  display: flex; align-items: center; gap: 14px; width: min(620px, calc(100% - 28px));
+  padding: 10px 12px 10px 14px; border-radius: 10px;
+  background: #231a08; border: 1px solid #92400e; color: #fcd34d;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, .42);
+}
+.revision-banner[hidden] { display: none; }
+.revision-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.revision-copy b { font-size: 12px; color: #fde68a; }
+.revision-copy span { font-size: 11px; line-height: 1.45; color: #d6c7a1; }
+.revision-actions { display: flex; gap: 6px; margin-left: auto; flex: none; }
+[data-theme="light"] .revision-banner { background: #fffbeb; border-color: #f59e0b; color: #92400e; }
+[data-theme="light"] .revision-copy b { color: #78350f; }
+[data-theme="light"] .revision-copy span { color: #92400e; }
+@media (max-width: 720px) {
+  .revision-banner { flex-direction: column; align-items: stretch; gap: 8px; }
+  .revision-actions { margin-left: 0; }
+}
 
 /* A feature decision is consequential, so it gets a real dialog instead of a native confirm. */
 .feature-dialog {
@@ -511,6 +585,14 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   background: #231a08; border-color: #78350f; color: #fbbf24;
 }
 [data-theme="light"] .session .badge.replied {
+  background: #fef3c7; border-color: #fde68a; color: #92400e;
+}
+/* A tester saved a round and is waiting for a developer to send it. */
+.session .badge.ready {
+  padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+  background: #231a08; border-color: #78350f; color: #fcd34d;
+}
+[data-theme="light"] .session .badge.ready {
   background: #fef3c7; border-color: #fde68a; color: #92400e;
 }
 /* The agent could not run the round at all: red, not amber (nothing is running) and not a count. */
@@ -1011,6 +1093,31 @@ body.touch .ann-row, body.touch .history-row { padding: 12px 10px; }
   padding: 10px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap; color: #b8c4d2; max-height: 220px; overflow: auto;
 }
+/* Human discussion is separate from the agent conversation. */
+.comments-empty { padding: 4px 0 10px; color: var(--muted); font-size: 11px; }
+.comment-row {
+  padding: 8px 0; border-top: 1px solid var(--border-soft); color: var(--text);
+}
+.comment-row:first-child { border-top: 0; }
+.comment-row.resolved { opacity: .62; }
+.comment-head {
+  display: flex; align-items: baseline; gap: 7px; color: var(--muted); font-size: 10.5px;
+}
+.comment-head b { color: var(--text); font-weight: 600; }
+.comment-head .resolved-mark { margin-left: auto; color: var(--ok); font-size: 10px; }
+.comment-body { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.45; }
+.comment-actions { display: flex; gap: 6px; margin-top: 5px; }
+.comment-actions button {
+  border: 0; background: transparent; color: var(--muted); padding: 1px 0; font-size: 10.5px; cursor: pointer;
+}
+.comment-actions button:hover { color: var(--accent); }
+.comment-compose { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+.comment-compose textarea {
+  width: 100%; min-height: 48px; resize: vertical; padding: 7px 9px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit;
+}
+.comment-compose textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.comment-compose .btn { align-self: flex-end; }
 
 /* ---------------------------------------------------------------- status bar */
 .status {

@@ -20,6 +20,9 @@ try {
     <div class="title">
       <b id="session-title">Loading…</b>
       <div class="subline">
+        <button class="project-chip" id="project-edit" type="button" hidden
+                aria-haspopup="dialog"
+                title="Change the project this review belongs to"></button>
         <span id="session-sub"></span>
         <button class="branch-chip" id="branch-edit" type="button" hidden
                 title="Change the feature branch this review runs on"></button>
@@ -29,6 +32,13 @@ try {
       <button class="agent-chip unknown" id="agent-status" type="button" aria-live="polite" title="Agent status">
         <span class="agent-dot" aria-hidden="true"></span>
         <span class="agent-label">Checking agent…</span>
+      </button>
+      <button class="btn icon notification-bell" id="notifications-link" title="Notifications" aria-label="Notifications" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 10-12 0c0 5-2 6-2 6h16s-2-1-2-6"/><path d="M10 20a2 2 0 004 0"/></svg>
+        <span class="notification-count" id="notification-count" hidden></span>
+      </button>
+      <button class="btn icon" id="people-link" title="People &amp; access" aria-label="People and access" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2"/><path d="M15.5 20c.2-2.2 2-4 4.2-4 .8 0 1.5.2 2.1.6"/></svg>
       </button>
       <button class="btn icon" data-agent-settings title="Agent settings" aria-label="Agent settings">
         <svg class="fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
@@ -78,6 +88,16 @@ try {
     <div class="stage-dim" id="stage-dim" hidden></div>
     <div class="stage-status" id="stage-status" hidden></div>
     <div class="viewing-bar" id="viewing-bar" hidden></div>
+    <div class="revision-banner" id="revision-banner" hidden role="alert">
+      <div class="revision-copy">
+        <b>This task changed while you were working.</b>
+        <span id="revision-banner-text"></span>
+      </div>
+      <div class="revision-actions">
+        <button class="btn small" id="revision-reload" type="button">Reload theirs</button>
+        <button class="btn small primary" id="revision-keep" type="button">Keep mine</button>
+      </div>
+    </div>
 
     <div class="video-bar" id="video-bar" hidden>
       <div class="video-controls">
@@ -199,10 +219,22 @@ try {
                   placeholder="What should change? Sent with the annotations…"></textarea>
         <div class="composer-row">
           <span class="composer-hint">Ctrl + Enter</span>
-          <button class="btn primary" id="submit">Submit review</button>
+          <button class="btn" id="cancel-request" type="button" hidden>Cancel request</button>
+          <button class="btn primary" id="submit">Send to agent</button>
         </div>
       </div>
     </section>
+
+    <details class="disclosure" id="comments-block">
+      <summary>Discussion <span class="count" id="comments-count">0</span></summary>
+      <div class="content">
+        <div id="comments-list" class="comments-empty">No comments yet.</div>
+        <div class="comment-compose">
+          <textarea id="comment-text" rows="2" placeholder="Comment for the team…"></textarea>
+          <button class="btn" id="comment-submit" type="button">Comment</button>
+        </div>
+      </div>
+    </details>
 
     <details class="disclosure" id="history-block">
       <summary>History <span class="count" id="history-count">0</span><span class="session-size" id="session-size"></span></summary>
@@ -320,6 +352,12 @@ try {
     <pre class="conv-output-body output-body" id="output-body">No output from this run yet.</pre>
   </div>
 </dialog>
+
+<div class="notification-panel" id="notification-panel" role="dialog" aria-label="Notifications" hidden>
+  <div class="notification-head"><b>Notifications</b><button type="button" id="notifications-read">Mark all read</button></div>
+  <div class="notification-list" id="notification-list"></div>
+  <div class="notification-foot"><a href="/tokens">Personal &amp; agent tokens</a></div>
+</div>
 
 </body>
 </html>

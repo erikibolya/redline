@@ -1,5 +1,126 @@
 # Changelog
 
+## 0.28.0 — 2026-11-03
+
+- **A password in chat is not an onboarding flow.** Owners can create a user as **invited** and
+  hand over a one-time invite link (7 days), or generate a reset link (24 hours) from the People
+  matrix; both are stored as SHA-256 hashes in `invites.json`, work once, and are audited. The
+  invitee chooses a password on a public page and lands signed in; accepting a reset revokes the
+  account's older sessions. The People page also gained an owner transfer form (current password
+  + confirmation), and the new owner receives an `owner.transfer` notification. No SMTP is
+  involved in MVP. Tested with 65 API tests, 43 core unit tests, 26 store tests and 304 browser
+  checks (2026-11-03).
+- **The server token is not every token.** Humans can now mint personal access tokens
+  (`rl_pat_…`) for the extension, CLI or a script; each PAT inherits the user's project roles and
+  can be narrowed to a project allowlist, marked read-only, given an expiry and revoked
+  immediately. Agent/service tokens (`rl_agt_…`) are owner-managed identities accepted only by
+  `/api/agent/*` and `/mcp`, with their own project allowlist and `review`/`handoff` jobs; the
+  bridge's `next` and MCP reads/rounds are scoped to them. Only SHA-256 hashes are stored, raw
+  values are shown once, and the new `/tokens` page (linked from the notification panel and from
+  People & access for the owner) creates and revokes both. The legacy token remains a full
+  owner + agent credential for migration. Tested with 64 API tests, 38 core unit tests, 26 store
+  tests and 300 browser checks (2026-11-03).
+- **A last writer is not a merge.** Every task now carries a monotonic `revision` on both
+  `meta.json` and `annotations.json`; submit, tester request, agent `post_round` and a new video
+  round increment it with `updated_by`/`updated_by_name`/`updated_at`. The editor sends the
+  revision it loaded as `base_revision` and the server refuses a stale canvas with `409` and the
+  current writer instead of silently overwriting another person's work. The in-stage conflict
+  banner offers **Reload theirs** (discarding this browser's draft) or **Keep mine** (adopt the
+  current revision and submit deliberately). Pre-v0.28 clients without `base_revision` remain
+  accepted, but still advance the revision. Tested with 63 API tests, 34 core unit tests, 26 store
+  tests and 296 browser checks (2026-11-03).
+- **A log nobody can read is not an audit trail.** `audit.jsonl` now records authentication
+  (success, failure, logout, password), owner bootstrap/transfer, user creation, membership
+  changes, project creation, agent settings, review create/submit/stop/reopen/branch/move/delete/
+  confirm/cancel-feature/handoff/resolve, comments and notification reads. The owner-only
+  **Audit log** page (`/audit`, linked from People & access) filters by action prefix, project,
+  task and actor; times are localised in the browser. Events are retained for one year
+  (`REDLINE_AUDIT_RETENTION_DAYS`) with `0600` permissions and serialized appends. Tested with
+  62 API tests, 34 core unit tests and 291 browser checks (2026-11-03).
+- **A comment is not a review round.** Tasks now have a human **Discussion** panel separate from
+  the agent conversation: any project member can comment, @mention a teammate, resolve a thread
+  (author/developer/owner) and delete (author/developer/owner); comments never create a history
+  round or alter annotations. Notifications are per-user, in-app (header bell, unread badge,
+  mark-all-read) and only ever name a project/task the reader can open; they cover tester
+  requests, developer submits, mentions and replies, and are retained for 90 days
+  (`REDLINE_NOTIFICATION_RETENTION_DAYS` overrides). Tested with 61 API tests, 30 core unit tests
+  and 291 browser checks (2026-11-03).
+- **A token is not a role (project ACL).** Projects now have owner-managed memberships
+  (`viewer` / `tester` / `developer`); the owner-only **People & access** page sets them in a
+  user × project matrix. Data, media, history and traces are scoped to the member's projects;
+  Inbox stays owner-only. A tester creates and annotates their own tasks but cannot submit,
+  STOP, confirm or hand off; **Request agent review** saves the round and a developer sends it
+  with **Send to agent**. The rail shows **ready for agent** and hides feature actions from
+  testers/viewers. Tested with 60 Rust API tests and 285 browser checks (2026-11-03).
+- **A token is not a user (auth foundation).** RedLine now has named accounts, Argon2id
+  passwords, server-side sessions with CSRF cookies, a login page, a first-run owner bootstrap,
+  owner-only user management and a single-owner transfer. The legacy token still authenticates
+  the agent bridge and an unmigrated owner. Data routes remain owner-only until the project ACL
+  lands; a named member can sign in but gets 403, not a silently empty queue (2026-11-03).
+- **A project is not a permanent label.** An existing review can now be moved to another project,
+  or back to the Inbox, from the editor header. The session folder and `meta.project` move
+  together, so the next agent run resolves the new project's repository instead of silently
+  falling back to the default one. Refused while the round is submitted, claimed or handing off;
+  a failed handoff is movable so its retry can use the right repo (2026-11-03).
+- **A hint is not a label row.** The extension options page rendered “(optional)” as its own flex
+  item, so the hint wrapped to a second line and pushed the Branch input below the Project select
+  (2026-11-03). It now shares the Branch line and both fields align; the extension e2e measures the
+  field tops and the hint's line.
+- **A dev image label is not a binary version.** The browser dev job labeled its image
+  `0.27.0-dev.N` but built the binary from `Cargo.toml`, which still said `0.26.1`, so the dev
+  server reported the stable version (2026-11-01). `desktop/scripts/dev-version.mjs` now stamps
+  the workspace, app and lockfile versions before both the Windows and container builds, and the
+  Windows job asserts that `redline --version` reports the dev version.
+- **A browser-flow trace has a server home (extension Phase 1).** Video uploads accept an optional
+  `trace` file; the server validates it, derives the summary, writes `trace.json`, carries it into
+  `annotations.json`/`review.md`, exposes it to `get_feedback` and as the
+  `redline://session/<id>/trace.json` MCP resource, and archives it with a replaced video round.
+  Extension origins are allowed through the CSRF guard only with a valid token, and preflight is
+  answered only for `chrome-extension://`/`moz-extension://` origins.
+- **The browser extension can capture and annotate a screenshot (Phase 2).** The Chrome/Edge MV3
+  extension adds an options page (server/token/project/branch, origin-scoped permission), a popup
+  visible-tab capture, and a side-panel canvas editor with select/move, rectangle, arrow, pen,
+  text notes, undo/redo, per-session drafts and submit. The review lands in the normal RedLine
+  queue; the full editor stays one click away. Eleven extension unit tests run in CI on Linux and
+  Windows.
+- **A tab flow can be recorded with console, network and action evidence (Phase 3).** The
+  extension records the active tab through `tabCapture` + MediaRecorder in an offscreen document,
+  attaches `chrome.debugger` only for the duration of the recording, redacts URLs/tokens and
+  streams console, network and interaction events into a bounded `trace.json`. Stop builds the
+  poster and uploads video + trace to RedLine; the review opens in the normal agent queue. At
+  that point video annotation used the full editor; Phase 4 below brings it into the panel.
+  Eighteen extension unit tests run in CI on Linux and Windows.
+- **A recorded flow is annotated in the side panel (Phase 4).** The side panel draws the video
+  into the same canvas, adds timecoded point annotations at the current playhead, a timeline with
+  annotation/trace markers, a filterable console/network/action trace and a Ghosts toggle.
+  Submit captures the annotated frames and a labelled contact sheet and posts the existing video
+  multipart payload. Read-only submitted rounds stay navigable.
+- **The browser extension has a store package and a privacy contract.** `extension/scripts/package.py`
+  builds a dependency-free ZIP of `manifest.json`, `src/` and `icons/`; the release workflow
+  attaches it to every GitHub release. `docs/PRIVACY-EXTENSION.md` and `docs/STORE-EXTENSION.md`
+  document the data flow, permission justifications and the Chrome ($5 one-time) / Edge (free)
+  submission path. Store accounts and publishing remain owner actions. The browser e2e CI job now
+  also loads the unpacked extension in headless Chromium, submits an image annotation and a
+  video+trace annotation, and verifies the server payload.
+- **An image review no longer shows a video timeline.** `.video-bar` set `display: flex`, which
+  outranked the UA `[hidden] { display: none }` rule, so every image review showed an empty
+  timeline and pushed Submit below the side panel (2026-11-02, found while generating store
+  screenshots). The bar is hidden explicitly and the browser e2e asserts the computed display for
+  both image and video reviews.
+- **Store screenshots are ready.** Three 1280×800 PNGs in `extension/store/screenshots/` show the
+  options page, a screenshot review (rectangle, arrow, text note) and a recorded flow (timeline,
+  trace errors, timecoded annotation). `docs/STORE-EXTENSION.md` marks the Chrome account as
+  created and points the privacy policy at the live `dev` blob until the next release.
+
+- **The browser extension can export a review offline (0.3.0).** The popup now has
+  **Screenshot offline** and **Record offline**; neither needs a RedLine server, token or project.
+  Captures live in IndexedDB, and the side panel's **Export review** writes a folder (File System
+  Access API) or downloads a store-only ZIP. The package contains `review.md`, `annotations.json`,
+  `AI-PROMPT.md`, `annotated.png` (image) or `video.webm` + `poster.png` + `frames/` +
+  `contact-sheet.png` (video), and `trace.json` for a recording. The extension e2e exports both an
+  image and a video+trace package with a mocked folder picker; 22 extension unit tests cover the
+  package Markdown/JSON/ZIP. Store reviewers can test the extension without a server.
+
 ## 0.26.1 — 2026-11-01
 
 - **A stopped or timed-out run now kills its process tree, not just `opencode`.** A killed agent

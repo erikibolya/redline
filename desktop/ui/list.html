@@ -26,6 +26,13 @@ try {
         <span class="agent-dot" aria-hidden="true"></span>
         <span class="agent-label">Checking agent…</span>
       </button>
+      <button class="btn icon notification-bell" id="notifications-link" title="Notifications" aria-label="Notifications" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 10-12 0c0 5-2 6-2 6h16s-2-1-2-6"/><path d="M10 20a2 2 0 004 0"/></svg>
+        <span class="notification-count" id="notification-count" hidden></span>
+      </button>
+      <button class="btn icon" id="people-link" title="People &amp; access" aria-label="People and access" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2"/><path d="M15.5 20c.2-2.2 2-4 4.2-4 .8 0 1.5.2 2.1.6"/></svg>
+      </button>
       <button class="btn icon" data-agent-settings title="Agent settings" aria-label="Agent settings">
         <svg class="fill" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
       </button>
@@ -174,6 +181,12 @@ Ctrl+Enter submit · [ toggle sessions · ] toggle inspector</div>
       <button type="button" class="btn" data-help-close>Close</button>
     </div>
   </div>
+</div>
+
+<div class="notification-panel" id="notification-panel" role="dialog" aria-label="Notifications" hidden>
+  <div class="notification-head"><b>Notifications</b><button type="button" id="notifications-read">Mark all read</button></div>
+  <div class="notification-list" id="notification-list"></div>
+  <div class="notification-foot"><a href="/tokens">Personal &amp; agent tokens</a></div>
 </div>
 
 </body>

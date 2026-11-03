@@ -20,6 +20,11 @@ use redline_core::store::Store;
 const UI_FILES: &[(&str, &str)] = &[
     ("index.html", include_str!("../../../ui/index.html")),
     ("list.html", include_str!("../../../ui/list.html")),
+    ("login.html", include_str!("../../../ui/login.html")),
+    ("people.html", include_str!("../../../ui/people.html")),
+    ("audit.html", include_str!("../../../ui/audit.html")),
+    ("tokens.html", include_str!("../../../ui/tokens.html")),
+    ("invite.html", include_str!("../../../ui/invite.html")),
     ("setup.html", include_str!("../../../ui/setup.html")),
     ("servers.html", include_str!("../../../ui/servers.html")),
     ("app.css", include_str!("../../../ui/app.css")),

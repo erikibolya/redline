@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>RedLine Capture</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <div class="mark">RL</div>
+      <div class="grow">
+        <strong>RedLine Capture</strong>
+        <div id="connection" class="muted">Checking…</div>
+      </div>
+      <button id="options" class="icon" type="button" title="Options" aria-label="Options">⚙</button>
+    </header>
+
+    <section class="page">
+      <div id="page-title" class="title">—</div>
+      <div id="page-url" class="url"></div>
+    </section>
+
+    <section id="not-configured" class="notice" hidden>
+      Connect RedLine for server mode, or use the offline buttons below.
+      <button id="configure" class="link" type="button">Open options</button>
+    </section>
+
+    <section class="actions">
+      <button id="capture" class="primary" type="button">Screenshot &amp; annotate</button>
+      <a id="dashboard" class="secondary" href="#" target="_blank" rel="noreferrer">Open RedLine</a>
+    </section>
+
+    <section class="record">
+      <div class="record-row">
+        <button id="record" class="record-button" type="button">Record flow</button>
+        <button id="stop" class="stop-button" type="button" hidden>Stop &amp; save</button>
+        <button id="mark" class="mark-button" type="button" hidden>Mark</button>
+        <span id="timer" class="timer"></span>
+      </div>
+      <p class="hint">
+        Recording reads this tab's console and network. Chrome shows a debugging bar while it
+        records; nothing is sent until you press Stop &amp; save.
+      </p>
+    </section>
+
+    <section class="offline">
+      <div class="offline-head">Offline · no RedLine server</div>
+      <div class="record-row">
+        <button id="capture-offline" class="record-button" type="button">Screenshot offline</button>
+        <button id="record-offline" class="record-button" type="button">Record offline</button>
+      </div>
+      <p class="hint">
+        Saves an annotated review folder (or ZIP) for your AI. No token or server needed.
+      </p>
+    </section>
+
+    <p id="status" class="status" role="status"></p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

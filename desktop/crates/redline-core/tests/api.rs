@@ -1,9 +1,10 @@
 use axum::body::Body;
-use axum::http::{Request, StatusCode};
+use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
 use redline_core::api::{router, AppState};
 use redline_core::auth::Auth;
-use redline_core::store::Store;
+use redline_core::model::HandoffStatus;
+use redline_core::store::{HandoffReport, Store};
 use serde_json::{json, Value};
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -63,6 +64,82 @@ fn authed(method: &str, uri: &str, body: Value) -> Request<Body> {
         .header("content-type", "application/json")
         .body(Body::from(body.to_string()))
         .unwrap()
+}
+
+fn public(method: &str, uri: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn with_session(method: &str, uri: &str, body: Value, session: &str, csrf: &str) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(uri).header(
+        "cookie",
+        format!("redline_session={session}; redline_csrf={csrf}"),
+    );
+    if method != "GET" && method != "HEAD" {
+        builder = builder.header("x-csrf-token", csrf);
+    }
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        builder = builder.header("content-type", "application/json");
+        Body::from(body.to_string())
+    };
+    builder.body(body).unwrap()
+}
+
+fn with_bearer(method: &str, uri: &str, body: Value, token: &str) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"));
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        builder = builder.header("content-type", "application/json");
+        Body::from(body.to_string())
+    };
+    builder.body(body).unwrap()
+}
+
+fn set_cookie(headers: &axum::http::HeaderMap, name: &str) -> String {
+    headers
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|value| {
+            value
+                .split(';')
+                .next()
+                .and_then(|pair| pair.strip_prefix(&format!("{name}=")))
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+async fn bootstrap_owner(h: &Harness) -> (String, String) {
+    let (status, headers, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/auth/bootstrap",
+            json!({
+                "username": "anna",
+                "display_name": "Anna",
+                "password": "correct horse battery staple",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    (
+        set_cookie(&headers, "redline_session"),
+        set_cookie(&headers, "redline_csrf"),
+    )
 }
 
 async fn submitted_session(h: &Harness, project: &str, branch: &str) -> String {
@@ -352,6 +429,57 @@ async fn video_sessions_accept_a_multipart_browser_upload() {
         .unwrap();
     let response = h.app.clone().oneshot(request).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn video_uploads_accept_a_browser_trace_and_serve_it() {
+    let h = harness();
+    const MP4: &[u8] = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom";
+    let trace = serde_json::json!({
+        "version": 1,
+        "kind": "browser-flow",
+        "started_at": "2026-11-01T14:00:00.000Z",
+        "duration_ms": 5000,
+        "redaction": {"headers": ["authorization"], "bodies": false},
+        "events": [
+            {"t": 100, "kind": "action", "action": "click", "selector": "#save"},
+            {"t": 200, "kind": "network", "method": "POST", "url": "https://app.test/api", "status": 500, "duration_ms": 120},
+            {"t": 300, "kind": "console", "level": "error", "text": "boom"}
+        ]
+    });
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nTraced flow\r\n",
+    );
+    body.extend_from_slice(
+        b"--BOUND\r\nContent-Disposition: form-data; name=\"duration_ms\"\r\n\r\n5000\r\n",
+    );
+    body.extend_from_slice(b"--BOUND\r\nContent-Disposition: form-data; name=\"video\"; filename=\"clip.mp4\"\r\nContent-Type: video/mp4\r\n\r\n");
+    body.extend_from_slice(MP4);
+    body.extend_from_slice(b"\r\n--BOUND\r\nContent-Disposition: form-data; name=\"trace\"; filename=\"trace.json\"\r\nContent-Type: application/json\r\n\r\n");
+    body.extend_from_slice(trace.to_string().as_bytes());
+    body.extend_from_slice(b"\r\n--BOUND--\r\n");
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/sessions/video")
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "multipart/form-data; boundary=BOUND")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, created) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert_eq!(created["meta"]["trace"]["kind"], "browser-flow");
+    assert_eq!(created["meta"]["trace"]["summary"]["console_errors"], 1);
+    assert_eq!(created["meta"]["trace"]["summary"]["network_failed"], 1);
+    let id = created["meta"]["id"].as_str().unwrap();
+    let request = Request::builder()
+        .uri(format!("/sessions/{id}/trace"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
 }
 
 #[tokio::test]
@@ -757,6 +885,50 @@ async fn cross_site_and_bad_payloads_are_rejected() {
         .header("content-type", "application/json")
         .header("sec-fetch-site", "cross-site")
         .body(Body::from(json!({"annotations": []}).to_string()))
+        .unwrap();
+    let (status, _, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // A browser extension is also cross-site, but it identifies itself with an extension Origin
+    // and still carries the token. It is allowed through and gets CORS only for that origin.
+    let extension_origin = "chrome-extension://abcdefghijklmnop";
+    let request = Request::builder()
+        .method("POST")
+        .uri(format!("/api/sessions/{id}/annotations"))
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "application/json")
+        .header("origin", extension_origin)
+        .header("sec-fetch-site", "cross-site")
+        .body(Body::from(json!({"annotations": []}).to_string()))
+        .unwrap();
+    let (status, headers, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        extension_origin
+    );
+
+    // A real preflight has no Authorization header; it is answered only for an extension origin.
+    let request = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/sessions/video")
+        .header("origin", extension_origin)
+        .header("access-control-request-method", "POST")
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, _) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        headers[header::ACCESS_CONTROL_ALLOW_ORIGIN],
+        extension_origin
+    );
+
+    let request = Request::builder()
+        .method("OPTIONS")
+        .uri("/api/sessions/video")
+        .header("origin", "https://evil.example")
+        .header("access-control-request-method", "POST")
+        .body(Body::empty())
         .unwrap();
     let (status, _, _) = send(&h.app, request).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
@@ -3206,4 +3378,2215 @@ async fn switching_servers_keeps_every_profile_and_token() {
     assert_eq!(saved["servers"].as_array().unwrap().len(), 2);
     assert_eq!(saved["servers"][0]["token"], "p");
     assert_eq!(saved["servers"][1]["token"], "d");
+}
+
+#[tokio::test]
+async fn an_existing_review_moves_between_projects_and_back_to_inbox() {
+    let h = harness();
+    let (status, _, project) = send(
+        &h.app,
+        authed("POST", "/api/projects", json!({ "name": "Au.Net" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap().to_string();
+
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "move me", "image_base64": PNG_B64 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    assert!(created["meta"].get("project").is_none(), "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let flat = h.store.dir(&id).unwrap();
+    assert_eq!(flat.parent(), Some(h.store.root()));
+
+    let (status, _, moved) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "Au.Net" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    assert_eq!(moved["meta"]["project"], slug);
+    let project_dir = h.store.dir(&id).unwrap();
+    assert_eq!(project_dir, h.store.projects_root().join(&slug).join(&id));
+    assert!(!flat.exists(), "the flat Inbox folder must be gone");
+    assert!(project_dir.join("meta.json").is_file());
+
+    let (status, _, one) = send(
+        &h.app,
+        authed("GET", &format!("/api/sessions/{id}"), json!(null)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(one["meta"]["project"], slug);
+    let (_, _, list) = send(&h.app, authed("GET", "/api/sessions", json!(null))).await;
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == id)
+        .unwrap();
+    assert_eq!(row["project"], slug);
+
+    let (status, _, back) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "inbox" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{back}");
+    assert!(back["meta"].get("project").is_none());
+    assert_eq!(h.store.dir(&id).unwrap(), h.store.root().join(&id));
+    let (_, _, list) = send(&h.app, authed("GET", "/api/sessions", json!(null))).await;
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == id)
+        .unwrap();
+    assert_eq!(row["project"], "inbox");
+
+    let (status, _, error) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "does-not-exist" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{error}");
+}
+
+#[tokio::test]
+async fn a_submitted_review_cannot_change_its_project() {
+    let h = harness();
+    let id = submitted_session(&h, "E2E", "feat/held").await;
+    let before = h.store.dir(&id).unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "inbox" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        h.store.require(&id).unwrap().project.as_deref(),
+        Some("e2e")
+    );
+    assert_eq!(h.store.dir(&id).unwrap(), before);
+}
+
+#[tokio::test]
+async fn a_running_handoff_blocks_a_move_but_a_failed_handoff_can_move() {
+    let h = harness();
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "handoff move", "image_base64": PNG_B64, "project": "E2E" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    h.store.confirm_feature(&id, true).unwrap();
+    h.store.mark_handoff_running(&id).unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "inbox" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(
+        h.store.require(&id).unwrap().project.as_deref(),
+        Some("e2e")
+    );
+
+    h.store
+        .report_handoff(
+            &id,
+            HandoffReport {
+                status: HandoffStatus::Failed,
+                label: Some("failed".to_string()),
+                url: None,
+                message: Some("the PR is still open".to_string()),
+            },
+        )
+        .unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "PUT",
+            &format!("/api/sessions/{id}/project"),
+            json!({ "project": "inbox" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(body["meta"].get("project").is_none());
+}
+
+#[tokio::test]
+async fn auth_status_bootstrap_and_session_owner_path_work() {
+    let h = harness();
+    let (status, _, body) = send(&h.app, get("/api/auth/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["setup_required"], true);
+
+    let (session, csrf) = bootstrap_owner(&h).await;
+    assert!(!session.is_empty(), "bootstrap must set a session cookie");
+    assert!(!csrf.is_empty(), "bootstrap must set a CSRF cookie");
+
+    let (status, _, info) = send(&h.app, get("/api/auth/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["setup_required"], false);
+
+    let (status, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["username"], "anna");
+    assert_eq!(me["is_owner"], true);
+
+    let (status, _, sessions) = send(
+        &h.app,
+        with_session("GET", "/api/sessions", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "owner session reads data: {sessions}"
+    );
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/auth/bootstrap",
+            json!({
+                "username": "second",
+                "display_name": "Second",
+                "password": "correct horse battery staple",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn login_and_logout_use_the_session_cookie() {
+    let h = harness();
+    let (_session, _csrf) = bootstrap_owner(&h).await;
+
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "anna", "password": "wrong password" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "anna", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let session = set_cookie(&headers, "redline_session");
+    let csrf = set_cookie(&headers, "redline_csrf");
+    assert!(!session.is_empty());
+    assert!(!csrf.is_empty());
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session("POST", "/api/auth/logout", json!({}), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "logout revokes the session"
+    );
+}
+
+#[tokio::test]
+async fn a_member_can_sign_in_but_cannot_read_owner_data() {
+    let h = harness();
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "owner task", "image_base64": PNG_B64 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let owner_task = created["meta"]["id"].as_str().unwrap().to_string();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "petr",
+                "display_name": "Petr",
+                "password": "correct horse battery staple",
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "petr", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let member_session = set_cookie(&headers, "redline_session");
+    let member_csrf = set_cookie(&headers, "redline_csrf");
+
+    let (status, _, me) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/auth/me",
+            json!(null),
+            &member_session,
+            &member_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["is_owner"], false);
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/sessions",
+            json!(null),
+            &member_session,
+            &member_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["sessions"].as_array().unwrap().is_empty(),
+        "a member with no projects sees an empty queue, not the Inbox: {body}"
+    );
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{owner_task}"),
+            json!(null),
+            &member_session,
+            &member_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/sessions/{owner_task}/image"),
+            json!(null),
+            &member_session,
+            &member_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "media must not leak either");
+}
+
+#[tokio::test]
+async fn csrf_is_required_for_session_mutations() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let body = json!({
+        "username": "petr",
+        "display_name": "Petr",
+        "password": "correct horse battery staple",
+    });
+    let without_csrf = Request::builder()
+        .method("POST")
+        .uri("/api/users")
+        .header("cookie", format!("redline_session={session}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, _, response) = send(&h.app, without_csrf).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{response}");
+
+    let (status, _, response) = send(
+        &h.app,
+        with_session("POST", "/api/users", body, &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+}
+
+#[tokio::test]
+async fn transfer_ownership_moves_the_single_owner_bit() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "owner task", "image_base64": PNG_B64 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let owner_task = created["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, user) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "petr",
+                "display_name": "Petr",
+                "password": "correct horse battery staple",
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{user}");
+    let petr_id = user["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/admin/transfer-owner",
+            json!({ "user_id": petr_id, "password": "wrong" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/admin/transfer-owner",
+            json!({ "user_id": petr_id, "password": "correct horse battery staple" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["user"]["username"], "petr");
+    assert_eq!(body["user"]["role"], "owner");
+
+    let (status, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["is_owner"], false);
+    let (status, _, body) = send(
+        &h.app,
+        with_session("GET", "/api/sessions", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["sessions"].as_array().unwrap().is_empty(),
+        "the old owner is now a member with no projects: {body}"
+    );
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{owner_task}"),
+            json!(null),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "petr", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let new_session = set_cookie(&headers, "redline_session");
+    let new_csrf = set_cookie(&headers, "redline_csrf");
+    let (status, _, users) = send(
+        &h.app,
+        with_session("GET", "/api/users", json!(null), &new_session, &new_csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    let (status, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &new_session, &new_csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["username"], "petr");
+    assert_eq!(me["is_owner"], true);
+    let (status, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &new_session,
+            &new_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{notes}");
+    assert!(notes["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|note| note["kind"] == "owner.transfer"));
+}
+
+#[tokio::test]
+async fn password_change_revokes_old_sessions_and_returns_a_new_one() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, headers, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/auth/password",
+            json!({
+                "current_password": "correct horse battery staple",
+                "new_password": "a different correct horse battery",
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let new_session = set_cookie(&headers, "redline_session");
+    assert!(!new_session.is_empty());
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the old session is revoked"
+    );
+
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "anna", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "anna", "password": "a different correct horse battery" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn failed_logins_are_throttled() {
+    let h = harness();
+    for _ in 0..5 {
+        let (status, _, _) = send(
+            &h.app,
+            public(
+                "POST",
+                "/api/auth/login",
+                json!({ "username": "nobody", "password": "wrong password" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "nobody", "password": "wrong password" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+}
+
+#[tokio::test]
+async fn project_membership_and_tester_to_developer_flow() {
+    let h = harness();
+    let (owner_session, owner_csrf) = bootstrap_owner(&h).await;
+
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Au.Net" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap().to_string();
+
+    let (status, _, tester) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "tester",
+                "display_name": "Tester",
+                "password": "correct horse battery staple",
+            }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tester}");
+    let tester_id = tester["user"]["id"].as_str().unwrap().to_string();
+    let (status, _, developer) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "developer",
+                "display_name": "Developer",
+                "password": "correct horse battery staple",
+            }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{developer}");
+    let developer_id = developer["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, members) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [
+                { "user_id": tester_id, "role": "tester" },
+                { "user_id": developer_id, "role": "developer" },
+            ] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+    assert_eq!(members["members"].as_array().unwrap().len(), 2);
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "tester", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let tester_session = set_cookie(&headers, "redline_session");
+    let tester_csrf = set_cookie(&headers, "redline_csrf");
+
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "tester task", "image_base64": PNG_B64, "project": "Au.Net" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["meta"]["created_by"], tester_id);
+    assert_eq!(created["meta"]["project"], slug);
+
+    let (status, _, list) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/sessions",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .expect("tester sees the task in the assigned project");
+    assert_eq!(row["my_role"], "tester");
+
+    let (status, _, one) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{id}"),
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    assert_eq!(one["meta"]["my_role"], "tester");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/sessions/{id}/image"),
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a project member may read the media"
+    );
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "note": "this must be refused" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "tester submit: {body}");
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/cancel"),
+            json!({}),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "tester STOP: {body}");
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/confirm-feature"),
+            json!({ "handoff": false }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "tester confirm: {body}");
+
+    let (status, _, requested) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/request-agent"),
+            json!({ "annotations": [], "note": "please send this to the agent" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{requested}");
+    assert_eq!(requested["meta"]["status"], "open");
+    assert!(requested["meta"]["agent_requested_at"].is_string());
+    assert_eq!(requested["meta"]["agent_requested_by"], tester_id);
+
+    let (status, _, list) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/sessions",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let row = list["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert!(row["agent_requested_at"].is_string());
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "developer", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let developer_session = set_cookie(&headers, "redline_session");
+    let developer_csrf = set_cookie(&headers, "redline_csrf");
+    let (status, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{notes}");
+    assert!(
+        notes["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["kind"] == "review.ready" && note["session"] == id),
+        "the developer gets the tester request: {notes}"
+    );
+
+    let (status, _, submitted) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "note": "sent by the developer" }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    assert_eq!(submitted["meta"]["status"], "submitted");
+    assert!(submitted["meta"]["agent_requested_at"].is_null());
+
+    let (status, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{notes}");
+    assert!(
+        notes["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["kind"] == "review.submitted" && note["session"] == id),
+        "the task creator gets the developer submit: {notes}"
+    );
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/cancel"),
+            json!({}),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "developer STOP");
+}
+
+#[tokio::test]
+async fn a_tester_cannot_request_a_developer_task_and_members_are_owner_managed() {
+    let h = harness();
+    let (owner_session, owner_csrf) = bootstrap_owner(&h).await;
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Shared" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap();
+    let (status, _, tester) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({ "username": "tester", "display_name": "Tester", "password": "correct horse battery staple" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tester}");
+    let tester_id = tester["user"]["id"].as_str().unwrap();
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [{ "user_id": tester_id, "role": "tester" }] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The owner creates a task in the same project; the tester may read it but not request it.
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "owner task", "image_base64": PNG_B64, "project": "Shared" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "tester", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let tester_session = set_cookie(&headers, "redline_session");
+    let tester_csrf = set_cookie(&headers, "redline_csrf");
+    let (status, _, one) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{id}"),
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "a tester reads the whole project: {one}"
+    );
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/request-agent"),
+            json!({ "annotations": [], "note": "not mine" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    // Only the owner can replace the members list.
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [] }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn comments_notifications_and_moderation_are_project_scoped() {
+    let h = harness();
+    let (owner_session, owner_csrf) = bootstrap_owner(&h).await;
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Chat" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap().to_string();
+    let (status, _, tester) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({ "username": "tester", "display_name": "Tester", "password": "correct horse battery staple" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tester}");
+    let tester_id = tester["user"]["id"].as_str().unwrap().to_string();
+    let (status, _, developer) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({ "username": "developer", "display_name": "Developer", "password": "correct horse battery staple" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{developer}");
+    let developer_id = developer["user"]["id"].as_str().unwrap().to_string();
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [
+                { "user_id": tester_id, "role": "tester" },
+                { "user_id": developer_id, "role": "developer" },
+            ] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let login = |username: &'static str| {
+        let app = h.app.clone();
+        async move {
+            let (status, headers, body) = send(
+                &app,
+                public(
+                    "POST",
+                    "/api/auth/login",
+                    json!({ "username": username, "password": "correct horse battery staple" }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            (
+                set_cookie(&headers, "redline_session"),
+                set_cookie(&headers, "redline_csrf"),
+            )
+        }
+    };
+    let (tester_session, tester_csrf) = login("tester").await;
+    let (developer_session, developer_csrf) = login("developer").await;
+
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "chat task", "image_base64": PNG_B64, "project": "Chat" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, comment) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "Please check this", "mentions": [tester_id] }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{comment}");
+    assert_eq!(comment["comment"]["author"], developer_id);
+    let comment_id = comment["comment"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{notes}");
+    let mention_note = notes["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|note| note["kind"] == "comment.mention" && note["session"] == id)
+        .expect("the mentioned tester gets a comment notification")
+        .clone();
+    let note_id = mention_note["id"].as_str().unwrap().to_string();
+    let (status, _, marked) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/notifications/read",
+            json!({ "ids": [note_id] }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{marked}");
+    assert_eq!(marked["marked"], 1);
+    let (_, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(notes["unread"], 0);
+
+    let (status, _, list) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{id}/comments"),
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["comments"].as_array().unwrap().len(), 1);
+
+    // A tester cannot edit or delete a developer's comment, but can write and edit their own.
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PATCH",
+            &format!("/api/sessions/{id}/comments/{comment_id}"),
+            json!({ "body": "hijack" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _, own) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "Thanks, checking now" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    let own_id = own["comment"]["id"].as_str().unwrap().to_string();
+    let (status, _, edited) = send(
+        &h.app,
+        with_session(
+            "PATCH",
+            &format!("/api/sessions/{id}/comments/{own_id}"),
+            json!({ "body": "Thanks, checking now!" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["comment"]["body"], "Thanks, checking now!");
+    let (status, _, resolved) = send(
+        &h.app,
+        with_session(
+            "PATCH",
+            &format!("/api/sessions/{id}/comments/{own_id}"),
+            json!({ "resolved": true }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert!(resolved["comment"]["resolved_at"].is_string());
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/sessions/{id}/comments/{comment_id}"),
+            json!({}),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/sessions/{id}/comments/{comment_id}"),
+            json!({}),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "who?", "mentions": ["usr_missing"] }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // `@username` in the body is a mention without an id list.
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "Please look, @tester" }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert!(
+        notes["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["kind"] == "comment.mention"
+                && note["session"] == id
+                && note["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("Developer")),
+        "an @handle produces a mention notification: {notes}"
+    );
+
+    // Removing someone from the project must stop new notifications from naming the task.
+    let before = notes["notifications"].as_array().unwrap().len();
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "after removal" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(
+        notes["notifications"].as_array().unwrap().len(),
+        before,
+        "a removed member must not receive a task notification: {notes}"
+    );
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{id}"),
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "removed member loses the task: {body}"
+    );
+}
+
+#[tokio::test]
+async fn audit_log_records_actions_and_is_owner_only() {
+    let h = harness();
+    let (owner_session, owner_csrf) = bootstrap_owner(&h).await;
+
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Audited" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap().to_string();
+
+    let (status, _, worker) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "worker",
+                "display_name": "Worker",
+                "password": "correct horse battery staple",
+            }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{worker}");
+    let worker_id = worker["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, members) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [{ "user_id": worker_id, "role": "developer" }] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+
+    // A failed sign-in is audited without revealing whether the user exists.
+    let (status, _, _) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "worker", "password": "nope" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "worker", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let worker_session = set_cookie(&headers, "redline_session");
+    let worker_csrf = set_cookie(&headers, "redline_csrf");
+
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "audited task", "image_base64": PNG_B64, "project": "Audited" }),
+            &worker_session,
+            &worker_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, submitted) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "note": "audit me" }),
+            &worker_session,
+            &worker_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "audited comment" }),
+            &worker_session,
+            &worker_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, audit) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit",
+            json!(null),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{audit}");
+    let events = audit["events"].as_array().unwrap();
+    for action in [
+        "owner.bootstrap",
+        "project.create",
+        "user.create",
+        "membership.update",
+        "auth.failed",
+        "auth.login",
+        "review.create",
+        "review.submit",
+        "comment.create",
+    ] {
+        assert!(
+            events.iter().any(|event| event["action"] == action),
+            "audit must contain {action}: {audit}"
+        );
+    }
+    assert!(events.iter().any(|event| event["session"] == id
+        && event["project"] == slug
+        && event["actor_id"] == worker_id));
+
+    let (status, _, filtered) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit?action=review.",
+            json!(null),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{filtered}");
+    assert!(filtered["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|event| event["action"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("review.")));
+
+    let (status, _, filtered) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/audit?project={slug}&limit=2"),
+            json!(null),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{filtered}");
+    assert_eq!(filtered["events"].as_array().unwrap().len(), 2);
+    assert!(filtered["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|event| event["project"] == slug));
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit?since=not-a-date",
+            json!(null),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A developer can do the work but cannot read the server audit trail.
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit",
+            json!(null),
+            &worker_session,
+            &worker_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn stale_revisions_are_refused_with_a_structured_conflict() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let owner_id = me["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "revision task", "image_base64": PNG_B64 }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["meta"]["revision"], 0);
+
+    let (status, _, first) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "base_revision": 0 }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["meta"]["revision"], 1);
+    assert_eq!(first["annotations"]["revision"], 1);
+    assert_eq!(first["meta"]["updated_by"], owner_id);
+    assert_eq!(first["meta"]["updated_by_name"], "Anna");
+
+    let (status, _, conflict) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "base_revision": 0 }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    assert_eq!(conflict["current_revision"], 1);
+    assert_eq!(conflict["updated_by"], owner_id);
+    assert_eq!(conflict["updated_by_name"], "Anna");
+    assert!(conflict["updated_at"].is_string());
+
+    let (status, _, second) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "base_revision": 1 }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["meta"]["revision"], 2);
+    assert_eq!(second["annotations"]["revision"], 2);
+
+    // A pre-v0.28 client sends no base_revision; it is accepted and the next reader still gets
+    // the bumped revision (backward compatibility without pretending there was no write).
+    let (status, _, legacy) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [] }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["meta"]["revision"], 3);
+
+    let (status, _, one) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{id}"),
+            json!(null),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    assert_eq!(one["meta"]["revision"], 3);
+    assert_eq!(one["annotations"]["revision"], 3);
+}
+
+#[tokio::test]
+async fn personal_and_agent_tokens_are_scoped_hashed_and_revocable() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Redline" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let (status, _, other) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Other" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other}");
+
+    let (status, _, redline_task) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "redline task", "image_base64": PNG_B64, "project": "Redline" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{redline_task}");
+    let redline_id = redline_task["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, other_task) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "other task", "image_base64": PNG_B64, "project": "Other" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other_task}");
+    let other_id = other_task["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, pat) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/me/tokens",
+            json!({
+                "name": "Extension",
+                "projects": ["redline"],
+                "read_only": true,
+                "expires_days": 30,
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pat}");
+    let raw_pat = pat["token"].as_str().unwrap().to_string();
+    let pat_id = pat["personal_token"]["id"].as_str().unwrap().to_string();
+    assert!(raw_pat.starts_with("rl_pat_"));
+    assert!(pat["personal_token"].get("hash").is_none());
+    assert!(pat["personal_token"].get("token").is_none());
+
+    let (status, _, me) = send(
+        &h.app,
+        with_bearer("GET", "/api/auth/me", json!(null), &raw_pat),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["username"], "anna");
+
+    let (status, _, list) = send(
+        &h.app,
+        with_bearer("GET", "/api/sessions", json!(null), &raw_pat),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let sessions = list["sessions"].as_array().unwrap();
+    assert!(sessions.iter().any(|row| row["id"] == redline_id));
+    assert!(!sessions.iter().any(|row| row["id"] == other_id));
+
+    let (status, _, body) = send(
+        &h.app,
+        with_bearer(
+            "GET",
+            &format!("/api/sessions/{other_id}"),
+            json!(null),
+            &raw_pat,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, _, body) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            &format!("/api/sessions/{redline_id}/annotations"),
+            json!({ "annotations": [], "base_revision": 0 }),
+            &raw_pat,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "read-only PAT: {body}");
+
+    let (status, _, agent_token) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/admin/agent-tokens",
+            json!({
+                "agent": "e2e-bot",
+                "name": "E2E bridge",
+                "projects": ["redline"],
+                "jobs": ["review"],
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{agent_token}");
+    let raw_agent = agent_token["token"].as_str().unwrap().to_string();
+    let agent_id = agent_token["agent_token"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(raw_agent.starts_with("rl_agt_"));
+    assert!(agent_token["agent_token"].get("hash").is_none());
+
+    let (status, _, repos) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/api/agent/repos",
+            json!({
+                "agent_id": "e2e-bot",
+                "repos": [
+                    { "key": "redline", "name": "Redline" },
+                    { "key": "other", "name": "Other" }
+                ]
+            }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{repos}");
+    assert!(repos["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|project| project["slug"] == "redline"));
+
+    let (status, _, body) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/api/agent/repos",
+            json!({ "agent_id": "someone-else", "repos": [] }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "token/agent mismatch: {body}"
+    );
+
+    let (status, _, next) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/api/agent/next",
+            json!({ "agent_id": "e2e-bot", "jobs": ["review", "handoff"] }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert!(next["session"].is_null());
+
+    let (status, _, mcp) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": "list_reviews", "arguments": {} }
+            }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{mcp}");
+    let text = mcp["result"]["content"][0]["text"].as_str().unwrap();
+    let reviews: Value = serde_json::from_str(text).unwrap();
+    let rows = reviews["sessions"].as_array().unwrap();
+    assert!(rows.iter().any(|row| row["session_id"] == redline_id));
+    assert!(!rows.iter().any(|row| row["session_id"] == other_id));
+
+    let (status, _, body) = send(
+        &h.app,
+        with_bearer("GET", "/api/sessions", json!(null), &raw_agent),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "agent on human route: {body}"
+    );
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/admin/agent-tokens/{agent_id}"),
+            json!({}),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/api/agent/repos",
+            json!({ "agent_id": "e2e-bot", "repos": [] }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/me/tokens/{pat_id}"),
+            json!({}),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &h.app,
+        with_bearer("GET", "/api/auth/me", json!(null), &raw_pat),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _, audit) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit?action=token.",
+            json!(null),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{audit}");
+    let actions: Vec<&str> = audit["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["action"].as_str())
+        .collect();
+    assert!(actions.contains(&"token.create"));
+    assert!(actions.contains(&"token.revoke"));
+}
+
+#[tokio::test]
+async fn invite_and_reset_links_are_one_time_and_audited() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({ "username": "jana", "display_name": "Jana", "invite": true }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let jana_id = created["user"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["user"]["status"], "invited");
+    let invite_url = created["invite_url"].as_str().unwrap().to_string();
+    assert!(invite_url.contains("/invite/rl_inv_"));
+    let token = invite_url.rsplit('/').next().unwrap().to_string();
+
+    let (status, _, info) = send(
+        &h.app,
+        public("GET", &format!("/api/auth/invite/{token}"), json!(null)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["valid"], true);
+    assert_eq!(info["username"], "jana");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            &format!("/api/auth/invite/{token}"),
+            json!({ "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["user"]["username"], "jana");
+    assert_eq!(body["user"]["status"], "active");
+    let invite_session = set_cookie(&headers, "redline_session");
+    let invite_csrf = set_cookie(&headers, "redline_csrf");
+    let (status, _, me) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/auth/me",
+            json!(null),
+            &invite_session,
+            &invite_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+
+    let (status, _, _) = send(
+        &h.app,
+        public(
+            "POST",
+            &format!("/api/auth/invite/{token}"),
+            json!({ "password": "another correct horse battery" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "an invite is one-time");
+
+    let (status, _, reset) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/users/{jana_id}/reset"),
+            json!({}),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reset}");
+    let reset_url = reset["reset_url"].as_str().unwrap().to_string();
+    assert!(reset_url.contains("/reset/rl_rst_"));
+    let reset_token = reset_url.rsplit('/').next().unwrap().to_string();
+    let (status, _, info) = send(
+        &h.app,
+        public(
+            "GET",
+            &format!("/api/auth/reset/{reset_token}"),
+            json!(null),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["valid"], true);
+    assert_eq!(info["kind"], "reset");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            &format!("/api/auth/reset/{reset_token}"),
+            json!({ "password": "a different correct horse" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let reset_session = set_cookie(&headers, "redline_session");
+    let reset_csrf = set_cookie(&headers, "redline_csrf");
+    assert!(!reset_session.is_empty());
+
+    // The pre-reset session and the old password are both gone.
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/auth/me",
+            json!(null),
+            &invite_session,
+            &invite_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _, _) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "jana", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "jana", "password": "a different correct horse" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/auth/me",
+            json!(null),
+            &reset_session,
+            &reset_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The owner cannot be reset through the admin link path.
+    let (_, _, owner_me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    let owner_id = owner_me["user"]["id"].as_str().unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/users/{owner_id}/reset"),
+            json!({}),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, _, audit) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit?action=user.",
+            json!(null),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{audit}");
+    let actions: Vec<&str> = audit["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["action"].as_str())
+        .collect();
+    assert!(actions.contains(&"user.invite"));
+    assert!(actions.contains(&"user.reset"));
 }

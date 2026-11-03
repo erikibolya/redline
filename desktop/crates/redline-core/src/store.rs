@@ -9,18 +9,239 @@ use std::path::{Path, PathBuf};
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 
+use crate::comments::Comment;
 use crate::error::{Error, Result};
 use crate::model::{
     AgentFailure, Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind,
-    MediaRef, Meta, Status, Submission,
+    MediaRef, Meta, Status, Submission, TraceHighlight, TraceRef, TraceSummary, UpdateActor,
 };
-use crate::{MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_VIDEO_BYTES};
+use crate::{
+    MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_TRACE_BYTES, MAX_TRACE_EVENTS, MAX_TRACE_TEXT,
+    MAX_VIDEO_BYTES,
+};
 
 /// A frame from the browser, captured at an annotation time. `at` is seconds into the video.
 #[derive(Debug, Clone)]
 pub struct FrameUpload {
     pub at: f64,
     pub bytes: Vec<u8>,
+}
+
+/// The raw browser trace as uploaded. Only the fields needed for validation/summary are typed;
+/// page/browser/redaction metadata is preserved in the file but not interpreted by the server.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct TraceUpload {
+    version: u32,
+    kind: String,
+    started_at: String,
+    duration_ms: u64,
+    #[serde(default)]
+    redaction: Option<Value>,
+    #[serde(default)]
+    truncated: bool,
+    #[serde(default)]
+    events: Vec<Value>,
+}
+
+/// Validate and summarize a browser trace before it touches the session folder. The server never
+/// trusts a client-provided summary; counts and highlights are derived here. The raw JSON is
+/// stored unchanged so new event fields remain readable by later clients.
+pub fn validate_trace(bytes: &[u8], video_duration_ms: Option<u64>) -> Result<TraceRef> {
+    if bytes.is_empty() {
+        return Err(Error::BadRequest("trace is empty".to_string()));
+    }
+    if bytes.len() > MAX_TRACE_BYTES {
+        return Err(Error::BadRequest(format!(
+            "trace is larger than {} MB",
+            MAX_TRACE_BYTES / (1024 * 1024)
+        )));
+    }
+    let upload: TraceUpload = serde_json::from_slice(bytes)
+        .map_err(|err| Error::BadRequest(format!("invalid trace JSON: {err}")))?;
+    if upload.version != 1 {
+        return Err(Error::BadRequest(format!(
+            "unsupported trace version {}",
+            upload.version
+        )));
+    }
+    if upload.kind != "browser-flow" {
+        return Err(Error::BadRequest(format!(
+            "unsupported trace kind {}",
+            upload.kind
+        )));
+    }
+    if upload.started_at.trim().is_empty()
+        || chrono::DateTime::parse_from_rfc3339(&upload.started_at).is_err()
+    {
+        return Err(Error::BadRequest(
+            "trace.started_at must be an RFC 3339 timestamp".to_string(),
+        ));
+    }
+    if upload.duration_ms == 0 {
+        return Err(Error::BadRequest(
+            "trace.duration_ms must be positive".to_string(),
+        ));
+    }
+    if upload.duration_ms > crate::MAX_VIDEO_DURATION_MS + 5_000 {
+        return Err(Error::BadRequest(
+            "trace is longer than the video limit".to_string(),
+        ));
+    }
+    if let Some(video) = video_duration_ms {
+        if upload.duration_ms > video.saturating_add(5_000) {
+            return Err(Error::BadRequest(
+                "trace is longer than the attached video".to_string(),
+            ));
+        }
+    }
+    if upload.events.len() > MAX_TRACE_EVENTS {
+        return Err(Error::BadRequest(format!(
+            "trace has more than {MAX_TRACE_EVENTS} events"
+        )));
+    }
+
+    let mut summary = TraceSummary::default();
+    let mut highlights = Vec::new();
+    for (index, event) in upload.events.iter().enumerate() {
+        let object = event
+            .as_object()
+            .ok_or_else(|| Error::BadRequest(format!("trace event {index} is not an object")))?;
+        let t = object
+            .get("t")
+            .and_then(Value::as_f64)
+            .filter(|t| t.is_finite() && *t >= 0.0)
+            .map(|t| t.round() as u64)
+            .ok_or_else(|| Error::BadRequest(format!("trace event {index} has no t")))?;
+        if t > upload.duration_ms + 2_000 {
+            return Err(Error::BadRequest(format!(
+                "trace event {index} is after the recording"
+            )));
+        }
+        let kind = object
+            .get("kind")
+            .and_then(Value::as_str)
+            .ok_or_else(|| Error::BadRequest(format!("trace event {index} has no kind")))?;
+        match kind {
+            "console" => {
+                let _level = trace_string(object, "level", 32, index)?;
+                let text = trace_string(object, "text", MAX_TRACE_TEXT, index)?;
+                summary.console += 1;
+                if _level == "error" {
+                    summary.console_errors += 1;
+                    push_highlight(&mut highlights, t, "console", &text);
+                }
+            }
+            "exception" => {
+                let text = trace_string(object, "text", MAX_TRACE_TEXT, index)?;
+                summary.console += 1;
+                summary.console_errors += 1;
+                push_highlight(&mut highlights, t, "exception", &text);
+            }
+            "network" => {
+                let method = trace_string(object, "method", 16, index)?;
+                let url = trace_string(object, "url", MAX_TRACE_TEXT, index)?;
+                if ![
+                    "http://", "https://", "ws://", "wss://", "data:", "blob:", "file:", "about:",
+                ]
+                .iter()
+                .any(|prefix| url.starts_with(prefix))
+                {
+                    return Err(Error::BadRequest(format!(
+                        "trace event {index} has an unsupported url"
+                    )));
+                }
+                let status = object
+                    .get("status")
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default();
+                let failed = object
+                    .get("failed")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                    || status >= 400;
+                summary.network += 1;
+                if failed {
+                    summary.network_failed += 1;
+                    push_highlight(
+                        &mut highlights,
+                        t,
+                        "network",
+                        &format!(
+                            "{method} {url} → {}",
+                            if status == 0 {
+                                "failed".to_string()
+                            } else {
+                                status.to_string()
+                            }
+                        ),
+                    );
+                }
+            }
+            "action" => {
+                let _action = trace_string(object, "action", 64, index)?;
+                let _selector = trace_string(object, "selector", MAX_TRACE_TEXT, index)?;
+                summary.actions += 1;
+            }
+            "navigation" => {
+                let _url = trace_string(object, "url", MAX_TRACE_TEXT, index)?;
+            }
+            "marker" => {
+                let _label = trace_string(object, "label", MAX_TRACE_TEXT, index)?;
+                summary.markers += 1;
+            }
+            other => {
+                return Err(Error::BadRequest(format!(
+                    "trace event {index} has unknown kind {other}"
+                )))
+            }
+        }
+    }
+
+    Ok(TraceRef {
+        file: "trace.json".to_string(),
+        kind: upload.kind,
+        events: upload.events.len(),
+        started_at: upload.started_at,
+        duration_ms: upload.duration_ms,
+        summary,
+        redacted: upload.redaction.is_some(),
+        truncated: upload.truncated,
+        highlights,
+    })
+}
+
+fn trace_string(
+    event: &serde_json::Map<String, Value>,
+    key: &str,
+    max: usize,
+    index: usize,
+) -> Result<String> {
+    let value = event
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| Error::BadRequest(format!("trace event {index} has no {key}")))?;
+    if value.len() > max {
+        return Err(Error::BadRequest(format!(
+            "trace event {index} {key} is too long"
+        )));
+    }
+    Ok(value.to_string())
+}
+
+fn push_highlight(highlights: &mut Vec<TraceHighlight>, t: u64, kind: &str, text: &str) {
+    if highlights.len() >= 8 {
+        return;
+    }
+    let text = if text.chars().count() > 240 {
+        text.chars().take(239).collect::<String>() + "…"
+    } else {
+        text.to_string()
+    };
+    highlights.push(TraceHighlight {
+        t,
+        kind: kind.to_string(),
+        text,
+    });
 }
 
 /// Same rule as v0.1: one leading alphanumeric, then alphanumerics/`.`/`_`/`-`, max 121 chars.
@@ -146,6 +367,36 @@ pub fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false)
 }
 
+/// Refuse a round whose canvas was loaded before someone else's write. A missing base is a
+/// pre-v0.28 client and is accepted; the caller still stamps the next revision.
+fn check_revision(meta: &Meta, base_revision: Option<u64>) -> Result<()> {
+    let Some(base) = base_revision else {
+        return Ok(());
+    };
+    if base == meta.revision {
+        return Ok(());
+    }
+    Err(Error::RevisionConflict {
+        current_revision: meta.revision,
+        updated_by: meta.updated_by.clone(),
+        updated_by_name: meta.updated_by_name.clone(),
+        updated_at: meta.updated_at.clone(),
+    })
+}
+
+fn bump_revision(meta: &mut Meta, actor: Option<&UpdateActor>, stamp: &str) {
+    meta.revision = meta.revision.saturating_add(1);
+    meta.updated_at = Some(stamp.to_string());
+    if let Some(actor) = actor {
+        if let Some(id) = actor.id.as_deref() {
+            meta.updated_by = Some(id.to_string());
+        }
+        if let Some(name) = actor.name.as_deref() {
+            meta.updated_by_name = Some(name.to_string());
+        }
+    }
+}
+
 /// A fresh requested handoff, carrying the label/URL/message from a previous failed attempt. A
 /// retry must not make the rail — or the integration — forget which PR/deployment it was.
 fn requested_handoff(meta: &Meta, at: String) -> Handoff {
@@ -235,7 +486,7 @@ fn video_extension(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -248,13 +499,35 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_json(path: &Path, value: &Value) -> Result<()> {
+pub(crate) fn write_json(path: &Path, value: &Value) -> Result<()> {
     let mut text = serde_json::to_string_pretty(value)?;
     text.push('\n');
     write_atomic(path, text.as_bytes())
 }
 
-fn read_json(path: &Path) -> Option<Value> {
+/// A JSON file that holds credentials (users, sessions, tokens). The write is atomic and the
+/// result is `0600` on Unix; a world-readable password hash is still a password hash.
+pub(crate) fn write_secret_json(path: &Path, value: &Value) -> Result<()> {
+    let mut text = serde_json::to_string_pretty(value)?;
+    text.push('\n');
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::BadRequest(format!("invalid path: {}", path.display())))?;
+    let temp = path.with_file_name(format!(".{file_name}.tmp"));
+    fs::write(&temp, text.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))?;
+    }
+    fs::rename(&temp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp);
+    })?;
+    Ok(())
+}
+
+pub(crate) fn read_json(path: &Path) -> Option<Value> {
     let text = fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }
@@ -326,6 +599,35 @@ pub fn review_markdown(meta: &Meta, annotations: &[Annotation], frames: &[FrameR
         meta.submitted_at.as_deref().unwrap_or("-")
     ));
     lines.push(String::new());
+    if let Some(trace) = &meta.trace {
+        lines.push("## Browser trace".to_string());
+        lines.push(String::new());
+        lines.push(format!(
+            "- {} · {} actions · {} requests ({} failed) · {} console messages ({} errors) · {} markers{}",
+            timecode(trace.duration_ms as f64 / 1000.0),
+            trace.summary.actions,
+            trace.summary.network,
+            trace.summary.network_failed,
+            trace.summary.console,
+            trace.summary.console_errors,
+            trace.summary.markers,
+            if trace.truncated { " · truncated" } else { "" },
+        ));
+        if !trace.highlights.is_empty() {
+            lines.push(String::new());
+            lines.push("### Trace highlights".to_string());
+            lines.push(String::new());
+            for highlight in &trace.highlights {
+                lines.push(format!(
+                    "- @ {} {} — {}",
+                    timecode(highlight.t as f64 / 1000.0),
+                    highlight.kind,
+                    highlight.text
+                ));
+            }
+        }
+        lines.push(String::new());
+    }
     lines.push("## Annotations".to_string());
     lines.push(String::new());
 
@@ -767,6 +1069,26 @@ impl Store {
     /// Bind a repository discovered by an agent to a project. Repo keys are global, so a second
     /// agent reporting the same key updates the record instead of creating a duplicate project.
     /// The slug is derived once from the key and never changes.
+    /// The slug `sync_repo_project` will use, without creating anything. An agent token scoped to
+    /// a project must decide whether this repo is allowed before the project exists.
+    pub fn repo_project_slug(&self, repo: &str) -> Result<String> {
+        if let Some(project) = self
+            .projects()?
+            .into_iter()
+            .find(|project| project.repo.as_deref() == Some(repo))
+        {
+            return Ok(project.slug);
+        }
+        let base = slugify(repo);
+        let mut slug = base.clone();
+        let mut suffix = 2;
+        while self.project(&slug)?.is_some() {
+            slug = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        Ok(slug)
+    }
+
     pub fn sync_repo_project(
         &self,
         agent: &str,
@@ -925,9 +1247,14 @@ impl Store {
                 url: None,
                 image: None,
                 media: None,
+                trace: None,
                 frames: Vec::new(),
                 annotations: Vec::new(),
                 submitted_at: None,
+                revision: 0,
+                updated_by: None,
+                updated_by_name: None,
+                updated_at: None,
             }))
     }
 
@@ -992,6 +1319,166 @@ impl Store {
         meta.branch = branch;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
+    }
+
+    /// Move an existing review to another project (or back to the Inbox).
+    ///
+    /// The project is both a label and a physical folder: a review created in a project lives in
+    /// `sessions/projects/<slug>/<id>`, while an Inbox review is a flat `sessions/<id>`. The bridge
+    /// resolves the agent repository from `meta.project`, so the label and the folder move
+    /// together. An existing worktree is not moved; the next run creates one in the new project's
+    /// repository.
+    ///
+    /// The caller (the HTTP handler) refuses a submitted round or a live claim/handoff; this
+    /// method only performs the move. A failed handoff is terminal and may be moved (the exact
+    /// case where a review landed in the wrong project and the next retry needs the right repo).
+    pub fn set_project(&self, id: &str, project: Option<&str>) -> Result<Meta> {
+        let mut meta = self.require(id)?;
+        let old_dir = self.dir(id)?;
+        let target = match project.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(name) if slugify(name) != INBOX => {
+                let slug = slugify(name);
+                let project = self
+                    .project(&slug)?
+                    .ok_or_else(|| Error::NotFound(slug.clone()))?;
+                Some(project)
+            }
+            _ => None,
+        };
+        let target_slug = target.as_ref().map(|project| project.slug.clone());
+        let target_parent = match &target_slug {
+            Some(slug) => self.projects_root().join(slug),
+            None => self.root.clone(),
+        };
+        let old_parent = old_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.root.clone());
+        let needs_move = old_parent != target_parent;
+        if !needs_move && meta.project == target_slug {
+            return Ok(meta);
+        }
+
+        meta.project = target_slug;
+        // Serialize before touching the disk: a failed serialization must not leave the folder
+        // renamed with the old metadata.
+        let value = serde_json::to_value(&meta)?;
+        if needs_move {
+            fs::create_dir_all(&target_parent)?;
+            let target_dir = target_parent.join(id);
+            if target_dir.exists() {
+                return Err(Error::Exists(id.to_string()));
+            }
+            fs::rename(&old_dir, &target_dir)?;
+            if let Err(err) = write_json(&target_dir.join("meta.json"), &value) {
+                // Keep the caller's old path usable when the metadata write fails.
+                let _ = fs::rename(&target_dir, &old_dir);
+                return Err(err);
+            }
+        } else {
+            write_json(&old_dir.join("meta.json"), &value)?;
+        }
+        Ok(meta)
+    }
+
+    /// Stamp the human who created a task. A task created by an agent keeps `created_by` empty;
+    /// only the creator's own tester role may edit it before a developer submits.
+    pub fn set_creator(&self, id: &str, user_id: &str, display_name: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        meta.created_by = Some(user_id.to_string());
+        meta.created_by_name = Some(display_name.to_string());
+        meta.created_by_type = Some("user".to_string());
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// Cancel a tester request without touching the annotations or the last submitted round.
+    pub fn clear_agent_request(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        meta.agent_requested_at = None;
+        meta.agent_requested_by = None;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    pub fn comments(&self, id: &str) -> Result<Vec<Comment>> {
+        let path = self.dir(id)?.join("comments.jsonl");
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+        let mut comments = Vec::new();
+        for line in fs::read_to_string(path)?.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(comment) = serde_json::from_str::<Comment>(line) {
+                comments.push(comment);
+            }
+        }
+        Ok(comments)
+    }
+
+    fn save_comments(&self, id: &str, comments: &[Comment]) -> Result<()> {
+        let mut text = String::new();
+        for comment in comments {
+            text.push_str(&serde_json::to_string(comment)?);
+            text.push('\n');
+        }
+        write_atomic(&self.dir(id)?.join("comments.jsonl"), text.as_bytes())
+    }
+
+    pub fn add_comment(&self, id: &str, comment: Comment) -> Result<Comment> {
+        let mut comments = self.comments(id)?;
+        comments.push(comment.clone());
+        self.save_comments(id, &comments)?;
+        Ok(comment)
+    }
+
+    pub fn update_comment(
+        &self,
+        id: &str,
+        comment_id: &str,
+        body: Option<&str>,
+        resolved: Option<bool>,
+        user_id: &str,
+    ) -> Result<Comment> {
+        let mut comments = self.comments(id)?;
+        let comment = comments
+            .iter_mut()
+            .find(|comment| comment.id == comment_id)
+            .ok_or_else(|| Error::NotFound(comment_id.to_string()))?;
+        if let Some(body) = body {
+            let body = body.trim();
+            if body.is_empty() {
+                return Err(Error::BadRequest("comment body is required".to_string()));
+            }
+            comment.body = body.to_string();
+        }
+        if let Some(resolved) = resolved {
+            if resolved {
+                comment.resolved_at = Some(now());
+                comment.resolved_by = Some(user_id.to_string());
+            } else {
+                comment.resolved_at = None;
+                comment.resolved_by = None;
+            }
+        }
+        let updated = comment.clone();
+        self.save_comments(id, &comments)?;
+        Ok(updated)
+    }
+
+    pub fn delete_comment(&self, id: &str, comment_id: &str) -> Result<()> {
+        let mut comments = self.comments(id)?;
+        let before = comments.len();
+        comments.retain(|comment| comment.id != comment_id);
+        if comments.len() == before {
+            return Err(Error::NotFound(comment_id.to_string()));
+        }
+        self.save_comments(id, &comments)
     }
 
     /// Append one line to `agent-events.jsonl` (the activity feed the human watches).
@@ -1081,6 +1568,7 @@ impl Store {
             image_height: None,
             media: None,
             poster: None,
+            trace: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
             feature_confirmed_at: None,
@@ -1093,6 +1581,15 @@ impl Store {
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
+            created_by: None,
+            created_by_name: None,
+            created_by_type: None,
+            agent_requested_at: None,
+            agent_requested_by: None,
+            revision: 0,
+            updated_by: None,
+            updated_by_name: None,
+            updated_at: None,
             branch: Some(branch),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -1177,6 +1674,7 @@ impl Store {
             image_height: height,
             media: Some(media),
             poster: has_poster.then(|| "poster.png".to_string()),
+            trace: None,
             agent: agent.map(str::to_string),
             resolved_at: None,
             feature_confirmed_at: None,
@@ -1189,6 +1687,15 @@ impl Store {
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
+            created_by: None,
+            created_by_name: None,
+            created_by_type: None,
+            agent_requested_at: None,
+            agent_requested_by: None,
+            revision: 0,
+            updated_by: None,
+            updated_by_name: None,
+            updated_at: None,
             branch: Some(branch),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -1270,14 +1777,42 @@ impl Store {
         height: Option<u32>,
         fps: Option<f64>,
     ) -> Result<Meta> {
+        self.new_video_round_as(
+            id,
+            video,
+            poster,
+            duration_ms,
+            width,
+            height,
+            fps,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_video_round_as(
+        &self,
+        id: &str,
+        video: &[u8],
+        poster: Option<&[u8]>,
+        duration_ms: Option<u64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f64>,
+        base_revision: Option<u64>,
+        actor: Option<&UpdateActor>,
+    ) -> Result<Meta> {
         let extension = validate_video(video, poster, duration_ms)?;
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
+        check_revision(&meta, base_revision)?;
         let set = self.annotations(id)?;
         let has_round = meta.status == Status::Submitted
             || !set.annotations.is_empty()
             || dir.join("annotated.png").is_file()
-            || !set.frames.is_empty();
+            || !set.frames.is_empty()
+            || meta.trace.is_some();
         let stamp = if has_round {
             let stamp = meta
                 .round_stamp
@@ -1296,6 +1831,13 @@ impl Store {
 
         if let Some(stamp) = &stamp {
             let media_dir = dir.join("history").join(safe_stamp(stamp));
+            if meta.trace.is_some() {
+                fs::create_dir_all(&media_dir)?;
+                let trace = dir.join("trace.json");
+                if trace.is_file() {
+                    fs::rename(&trace, media_dir.join("trace.json"))?;
+                }
+            }
             if meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video) {
                 fs::create_dir_all(&media_dir)?;
                 let source = dir.join(&meta.image);
@@ -1329,9 +1871,18 @@ impl Store {
         let _ = fs::remove_file(dir.join("annotated.png"));
         let _ = fs::remove_file(dir.join("review.md"));
         let _ = fs::remove_dir_all(dir.join("frames"));
+        let updated_at = now();
+        bump_revision(&mut meta, actor, &updated_at);
         write_json(
             &dir.join("annotations.json"),
-            &json!({ "session": id, "annotations": [] }),
+            &json!({
+                "session": id,
+                "annotations": [],
+                "revision": meta.revision,
+                "updated_by": meta.updated_by.clone(),
+                "updated_by_name": meta.updated_by_name.clone(),
+                "updated_at": meta.updated_at.clone(),
+            }),
         )?;
 
         meta.image = file.clone();
@@ -1347,6 +1898,7 @@ impl Store {
             fps,
         });
         meta.poster = has_poster.then(|| "poster.png".to_string());
+        meta.trace = None;
         meta.status = Status::Open;
         meta.submitted_at = None;
         meta.round_stamp = None;
@@ -1457,6 +2009,10 @@ impl Store {
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
         let stamp = now();
+        // A new agent round is new evidence; a trace from the previous round no longer matches.
+        if meta.trace.take().is_some() {
+            let _ = fs::remove_file(dir.join("trace.json"));
+        }
 
         if image.is_some() && meta.media.as_ref().map(|media| media.kind) == Some(MediaKind::Video)
         {
@@ -1475,6 +2031,11 @@ impl Store {
             meta.image_height = height;
         }
 
+        let agent_actor = UpdateActor {
+            id: Some("agent".to_string()),
+            name: Some("Agent".to_string()),
+        };
+        bump_revision(&mut meta, Some(&agent_actor), &stamp);
         let set = AnnotationSet {
             session: id.to_string(),
             title: Some(meta.title.clone()),
@@ -1485,9 +2046,14 @@ impl Store {
                 height,
             }),
             media: meta.media.clone(),
+            trace: None,
             frames: Vec::new(),
             annotations: Vec::new(),
             submitted_at: None,
+            revision: meta.revision,
+            updated_by: meta.updated_by.clone(),
+            updated_by_name: meta.updated_by_name.clone(),
+            updated_at: meta.updated_at.clone(),
         };
         write_json(&dir.join("annotations.json"), &serde_json::to_value(&set)?)?;
 
@@ -1544,6 +2110,31 @@ impl Store {
         contact_sheet: Option<&[u8]>,
         frames: &[FrameUpload],
     ) -> Result<(Meta, AnnotationSet)> {
+        self.write_round(id, submission, contact_sheet, frames, None)
+    }
+
+    /// Tester request: save the same artifacts as a submit but keep the task open and hand it to
+    /// a developer. The tester's work is the current round; the agent only sees it after a
+    /// developer submits. No history row is archived for the request.
+    pub fn request_round(
+        &self,
+        id: &str,
+        submission: &Submission,
+        contact_sheet: Option<&[u8]>,
+        frames: &[FrameUpload],
+        user_id: &str,
+    ) -> Result<(Meta, AnnotationSet)> {
+        self.write_round(id, submission, contact_sheet, frames, Some(user_id))
+    }
+
+    fn write_round(
+        &self,
+        id: &str,
+        submission: &Submission,
+        contact_sheet: Option<&[u8]>,
+        frames: &[FrameUpload],
+        request_by: Option<&str>,
+    ) -> Result<(Meta, AnnotationSet)> {
         if frames.len() > MAX_FRAME_COUNT {
             return Err(Error::BadRequest(format!(
                 "at most {MAX_FRAME_COUNT} annotated timestamps per submission"
@@ -1567,18 +2158,29 @@ impl Store {
 
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
+        check_revision(&meta, submission.base_revision)?;
         let submitted_at = now();
         let round_stamp = unique_round_stamp(&dir, &submitted_at);
-        meta.round_stamp = Some(round_stamp.clone());
-        meta.status = Status::Submitted;
-        meta.submitted_at = Some(submitted_at.clone());
-        // A fresh round has not been seen by the agent yet, and it reopens a decided feature.
-        meta.seen_by_agent_at = None;
-        meta.agent_state = None;
-        meta.agent_failure = None;
-        meta.feature_confirmed_at = None;
-        meta.feature_cancelled_at = None;
-        meta.handoff = None;
+        if let Some(user_id) = request_by {
+            // A tester request is a saved round, not an agent-visible submission. Keep the
+            // current status and the last submitted round stamp; the agent `next` query ignores
+            // the task because `status` is still `open`.
+            meta.agent_requested_at = Some(submitted_at.clone());
+            meta.agent_requested_by = Some(user_id.to_string());
+        } else {
+            meta.round_stamp = Some(round_stamp.clone());
+            meta.status = Status::Submitted;
+            meta.submitted_at = Some(submitted_at.clone());
+            // A fresh round has not been seen by the agent yet, and it reopens a decided feature.
+            meta.seen_by_agent_at = None;
+            meta.agent_state = None;
+            meta.agent_failure = None;
+            meta.feature_confirmed_at = None;
+            meta.feature_cancelled_at = None;
+            meta.handoff = None;
+            meta.agent_requested_at = None;
+            meta.agent_requested_by = None;
+        }
         if let Some(prompt) = submission.note.as_deref() {
             let prompt = prompt.trim();
             if !prompt.is_empty() {
@@ -1590,6 +2192,12 @@ impl Store {
         }
         if let Some(height) = submission.height {
             meta.image_height = Some(height);
+        }
+        bump_revision(&mut meta, submission.actor.as_ref(), &submitted_at);
+        if meta.updated_by.is_none() {
+            if let Some(user_id) = request_by {
+                meta.updated_by = Some(user_id.to_string());
+            }
         }
 
         let frame_refs = write_frames(&dir, frames)?;
@@ -1603,9 +2211,14 @@ impl Store {
                 height: submission.height,
             }),
             media: meta.media.clone(),
+            trace: meta.trace.clone(),
             frames: frame_refs,
             annotations: submission.annotations.clone(),
             submitted_at: Some(submitted_at.clone()),
+            revision: meta.revision,
+            updated_by: meta.updated_by.clone(),
+            updated_by_name: meta.updated_by_name.clone(),
+            updated_at: meta.updated_at.clone(),
         };
 
         write_json(&dir.join("annotations.json"), &serde_json::to_value(&set)?)?;
@@ -1621,8 +2234,11 @@ impl Store {
             }
         }
 
-        // The round exists as soon as it is submitted, not when the next one replaces it.
-        archive_round(&dir, &round_stamp, &set, &meta.image)?;
+        // The round exists as soon as it is submitted, not when the next one replaces it. A
+        // tester request is a pending round and must not enter History.
+        if request_by.is_none() {
+            archive_round(&dir, &round_stamp, &set, &meta.image)?;
+        }
         Ok((meta, set))
     }
 
@@ -2084,6 +2700,46 @@ impl Store {
             return Err(Error::BadRequest("invalid file name".to_string()));
         }
         Ok(self.dir(id)?.join(name))
+    }
+
+    /// Validate and store `trace.json` for an existing session, then point `meta.trace` at it.
+    /// The caller usually validates first (to fail before creating a session); this repeats the
+    /// validation so a direct store call cannot write an unchecked trace.
+    pub fn attach_trace(&self, id: &str, bytes: &[u8]) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        let trace = validate_trace(
+            bytes,
+            meta.media.as_ref().and_then(|media| media.duration_ms),
+        )?;
+        write_atomic(&dir.join("trace.json"), bytes)?;
+        meta.trace = Some(trace);
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// The current `trace.json`, if this session has one.
+    pub fn trace_path(&self, id: &str) -> Result<PathBuf> {
+        let path = self.dir(id)?.join("trace.json");
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(Error::NotFound(format!("{id}/trace")))
+        }
+    }
+
+    /// The trace archived with a video round.
+    pub fn history_trace_path(&self, id: &str, stamp: &str) -> Result<PathBuf> {
+        let path = self
+            .dir(id)?
+            .join("history")
+            .join(safe_stamp(stamp))
+            .join("trace.json");
+        if path.is_file() {
+            Ok(path)
+        } else {
+            Err(Error::NotFound(format!("{id}/history/{stamp}/trace")))
+        }
     }
 
     /// A full-resolution still captured at an annotation time (`frames/<at>.<png|jpg>`).

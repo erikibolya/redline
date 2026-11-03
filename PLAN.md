@@ -7,7 +7,7 @@ the agent receives a precise, machine-readable description of what to change. Of
 accounts, runs where the agents run.
 
 **Shipped and in production:** `v0.26.1` on holly — `https://redline.ibolya.cz`, container
-`ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
+`ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`. **Release candidate: `v0.28.0`** (`CHANGELOG.md`, `docs/MIGRATION-v0.28.md`).
 
 ## What exists today
 
@@ -16,11 +16,11 @@ accounts, runs where the agents run.
 | Agent API | MCP over HTTP (`review_screenshot`, `capture_review`, `get_feedback`, `wait_for_feedback`, `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`) + plain JSON API + CLI; branch claims, leases and global/per-project run limits |
 | Capture | Headless Chromium server-side, from MCP or the UI (`/browser` image) |
 | Editor | 3-column shell: resizable session rail, zoom/pan canvas, inspector with a conversation + composer (v0.9); rect/ellipse/arrow/pen; numbered, per-shape notes (v0.8); round history with a read-only viewer and diff (v0.17); submitted lock + STOP; move, nudge, delete, undo/redo, grouping, z-order, align/distribute; resizable panels |
-| Sessions | open → submitted → resolved; repository-backed projects in the rail (v0.10, repo keys v0.19); search, filters, badges, "new" dots; feature confirm/cancel stamps; branch per feature; delete / mark done / reopen / purge cancelled; start-page gallery |
+| Sessions | open → submitted → resolved; repository-backed projects in the rail (v0.10, repo keys v0.19); move an existing review between projects (v0.27); search, filters, badges, "new" dots; feature confirm/cancel stamps; branch per feature; delete / mark done / reopen / purge cancelled; start-page gallery |
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 121 Rust tests, 265-check browser E2E in CI on Linux + Windows |
+| Tests | 173 Rust tests, 22 extension unit tests, 304-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -59,6 +59,22 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - [ ] Optional **TLS upstream**: let the app talk to an HTTPS server with its own client (today the
       desktop *webview* handles TLS; the CLI/setup probe is HTTP-only).
 
+### M7 — Multi-user collaboration (v0.28, in progress)
+
+- [x] **Auth foundation:** local users/sessions, one owner with transfer, PAT + multiple service
+      tokens, migration from the single token, audit: users, Argon2id passwords, server
+      sessions/CSRF, login page, owner bootstrap/transfer UI, the audit trail, personal tokens,
+      scoped agent tokens, invite/reset links and `docs/MIGRATION-v0.28.md`.
+- [x] **Roles & project ACL:** Developer/Tester/Viewer, per-project memberships, required project,
+      tester `Request agent review`, server-side submit permission, owner People & access.
+- [x] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, optimistic
+      revision conflicts (server `409`, in-stage Reload theirs / Keep mine).
+- [ ] **Integrations:** desktop/CLI login, share links, OIDC/SSO later. *Done:* extension/CLI PAT
+      with project scopes and a copy-once `/tokens` page.
+
+Full spec and permission matrix: `docs/COLLABORATION.md`. Target: standalone v0.28 with a
+migration guide; not part of v0.27.
+
 ## Decisions
 
 | # | Decision | Why |
@@ -80,7 +96,12 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Next (ordered)
 
-0. **Video reviews** — phases 1–3 are in (`docs/VIDEO.md`): media core, browser upload, canvas
+0. **Browser capture extension** — `docs/EXTENSION.md`: server trace foundation (Phase 1),
+   screenshot + side-panel image editor (Phase 2), tab recording with console/network/action trace
+   (Phase 3), the side-panel video annotator/trace panel (Phase 4), the store package/privacy copy
+   and extension e2e (Phase 5), and offline folder/ZIP export (Phase 6) are done; store publishing
+   remains.
+1. **Video reviews** — phases 1–3 are in (`docs/VIDEO.md`): media core, browser upload, canvas
    playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full
    frames, new video rounds, history playback and `post_round` video. Phase 4 is the release
    pass.
@@ -101,6 +122,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - Capture needs the `:browser` image (~768 MB); the slim image returns an actionable error instead.
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
 - No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
+  Planned for v0.28 (`docs/COLLABORATION.md`).
 - Repo routing is single-agent: all agents watch the same queue; a claim/filter router is next.
 - **Feature confirmation is a decision, not a git action.** RedLine records `feature_state` and,
   only when the human ticks the optional handoff, queues a generic **handoff job** (v0.23). The
@@ -114,11 +136,14 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 ## Testing plan
 
-- `cargo test --workspace` — 121 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
+- `cargo test --workspace` — 125 tests: store layout/atomics, HTTP auth/CSRF/traversal, MCP tools,
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
-  helpers, video media/limits/frames/rounds/timecodes, CLI end-to-end.
-- `desktop/scripts/e2e.sh` — 265 checks in real Chromium: every drawing tool is actually drawn
+  helpers, video media/limits/frames/rounds/timecodes, browser trace validation/summary/history/feedback/resource, CLI end-to-end.
+- `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 22 extension
+  unit tests: annotation geometry/hit-testing/moving, server URL/permission config, offline review
+  Markdown/JSON and the ZIP writer.
+- `desktop/scripts/e2e.sh` — 304 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

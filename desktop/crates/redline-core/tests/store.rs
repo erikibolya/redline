@@ -118,6 +118,8 @@ fn submission_writes_all_four_artifacts() {
         png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
         width: Some(1440),
         height: Some(900),
+
+        ..Default::default()
     };
 
     let (meta, set) = store.submit(&meta.id, &submission).expect("submit");
@@ -167,6 +169,8 @@ fn a_new_round_clears_the_feature_decision() {
         png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
         width: None,
         height: None,
+
+        ..Default::default()
     };
     let (meta, _) = store.submit(&meta.id, &submission).unwrap();
     assert_eq!(meta.status, Status::Submitted);
@@ -439,6 +443,8 @@ fn writes_leave_no_temp_files_behind() {
                 png: None,
                 width: None,
                 height: None,
+
+                ..Default::default()
             },
         )
         .unwrap();
@@ -468,6 +474,8 @@ fn malformed_png_payload_is_a_bad_request_not_a_crash() {
                 png: Some("data:image/png;base64,!!!not-base64!!!".to_string()),
                 width: None,
                 height: None,
+
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -512,6 +520,59 @@ fn repo_projects_are_idempotent_and_survive_agent_resync() {
         .find(|project| project.slug == repo.slug)
         .unwrap();
     assert_eq!(found.repo.as_deref(), Some("redline"));
+}
+
+#[test]
+fn an_existing_review_moves_its_folder_and_project_label() {
+    let (_dir, store) = store();
+    let project = store.ensure_project("Au.Net").unwrap();
+    let meta = store
+        .create_from_bytes(PNG, "a.png", "Move me", "", "", None, None, None)
+        .unwrap();
+    assert!(meta.project.is_none());
+    let inbox_dir = store.dir(&meta.id).unwrap();
+    assert_eq!(inbox_dir.parent(), Some(store.root()));
+
+    let moved = store.set_project(&meta.id, Some("Au.Net")).unwrap();
+    assert_eq!(moved.project.as_deref(), Some(project.slug.as_str()));
+    let project_dir = store.dir(&meta.id).unwrap();
+    assert_eq!(
+        project_dir,
+        store.projects_root().join(&project.slug).join(&meta.id)
+    );
+    assert!(project_dir.join("meta.json").is_file());
+    assert!(!inbox_dir.exists(), "the flat Inbox folder must be gone");
+    let saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(project_dir.join("meta.json")).unwrap())
+            .unwrap();
+    assert_eq!(saved["project"].as_str(), Some(project.slug.as_str()));
+    let listed = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|session| session.id == meta.id)
+        .unwrap();
+    assert_eq!(listed.project.as_deref(), Some(project.slug.as_str()));
+
+    // Moving back to Inbox flattens the folder and clears the stored label.
+    let back = store.set_project(&meta.id, Some("inbox")).unwrap();
+    assert!(back.project.is_none());
+    assert_eq!(store.dir(&meta.id).unwrap(), store.root().join(&meta.id));
+    let listed = store
+        .list()
+        .unwrap()
+        .into_iter()
+        .find(|session| session.id == meta.id)
+        .unwrap();
+    assert_eq!(listed.project.as_deref(), Some("inbox"));
+
+    // An unknown project is an error and must not move the review.
+    let before = store.dir(&meta.id).unwrap();
+    assert!(matches!(
+        store.set_project(&meta.id, Some("nope")),
+        Err(redline_core::Error::NotFound(_))
+    ));
+    assert_eq!(store.dir(&meta.id).unwrap(), before);
 }
 
 #[test]
@@ -592,6 +653,8 @@ fn video_sessions_keep_media_metadata_and_timecoded_annotations() {
         png: None,
         width: Some(1280),
         height: Some(720),
+
+        ..Default::default()
     };
     let (_meta, set) = store.submit(&meta.id, &submission).expect("submit");
     assert_eq!(set.media.as_ref().map(|m| m.kind), Some(MediaKind::Video));
@@ -706,6 +769,8 @@ fn a_new_video_round_archives_the_previous_clip_and_reopens_the_review() {
                 png: None,
                 width: Some(320),
                 height: Some(180),
+
+                ..Default::default()
             },
         )
         .unwrap();
@@ -844,4 +909,183 @@ fn a_pre_release_ship_record_is_read_as_a_generic_handoff() {
         opened.handoff.map(|handoff| handoff.status),
         Some(HandoffStatus::Running)
     );
+}
+
+/// A browser trace is summarized by the server (never trusted from the client), carried into the
+/// submitted round and review.md, and archived with the previous video round.
+#[test]
+fn a_browser_trace_is_validated_summarized_and_archived() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Checkout",
+            "https://app.test/checkout",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            Some(1440),
+            Some(900),
+            Some(30.0),
+        )
+        .unwrap();
+    let trace = json!({
+        "version": 1,
+        "kind": "browser-flow",
+        "started_at": "2026-11-01T14:00:00.000Z",
+        "duration_ms": 5000,
+        "redaction": {"headers": ["authorization"], "bodies": false},
+        "events": [
+            {"t": 100, "kind": "action", "action": "click", "selector": "#save", "label": "Save"},
+            {"t": 200, "kind": "network", "method": "POST", "url": "https://app.test/api", "status": 500, "duration_ms": 120},
+            {"t": 300, "kind": "console", "level": "error", "text": "boom"},
+            {"t": 400, "kind": "marker", "label": "total did not update"}
+        ]
+    });
+    let meta = store
+        .attach_trace(&meta.id, trace.to_string().as_bytes())
+        .expect("trace attach");
+    let reference = meta.trace.as_ref().expect("trace ref");
+    assert_eq!(reference.events, 4);
+    assert_eq!(reference.summary.console, 1);
+    assert_eq!(reference.summary.console_errors, 1);
+    assert_eq!(reference.summary.network, 1);
+    assert_eq!(reference.summary.network_failed, 1);
+    assert_eq!(reference.summary.actions, 1);
+    assert_eq!(reference.summary.markers, 1);
+    assert_eq!(reference.highlights.len(), 2);
+
+    let submission = Submission {
+        note: None,
+        annotations: Vec::new(),
+        png: None,
+        width: Some(1440),
+        height: Some(900),
+
+        ..Default::default()
+    };
+    let (submitted, set) = store
+        .submit_round(&meta.id, &submission, None, &[])
+        .unwrap();
+    assert_eq!(set.trace.as_ref().map(|trace| trace.events), Some(4));
+    let review = std::fs::read_to_string(store.dir(&meta.id).unwrap().join("review.md")).unwrap();
+    assert!(review.contains("## Browser trace"), "{review}");
+    assert!(review.contains("boom"), "{review}");
+
+    let stamp = submitted.round_stamp.expect("round stamp");
+    let next = store
+        .new_video_round(&meta.id, WEBM, None, Some(2000), None, None, None)
+        .expect("new round");
+    assert!(next.trace.is_none(), "the new round has no old trace");
+    assert!(
+        store
+            .history_trace_path(&meta.id, &stamp)
+            .unwrap()
+            .is_file(),
+        "the old trace must move to history"
+    );
+}
+
+#[test]
+fn an_invalid_trace_is_refused_without_attaching_it() {
+    let (_dir, store) = store();
+    let meta = store
+        .create_video_from_bytes(
+            MP4,
+            "Bad trace",
+            "",
+            "",
+            None,
+            None,
+            None,
+            None,
+            Some(5000),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+    for trace in [
+        json!({"version": 1, "kind": "browser-flow", "started_at": "x", "duration_ms": 0, "events": []}),
+        json!({"version": 1, "kind": "other", "started_at": "2026-11-01T00:00:00Z", "duration_ms": 1000, "events": []}),
+        json!({"version": 1, "kind": "browser-flow", "started_at": "2026-11-01T00:00:00Z", "duration_ms": 1000,
+               "events": [{"t": 6000, "kind": "console", "level": "error", "text": "late"}]}),
+    ] {
+        assert!(
+            store
+                .attach_trace(&meta.id, trace.to_string().as_bytes())
+                .is_err(),
+            "must reject {trace}"
+        );
+    }
+    assert!(
+        store.require(&meta.id).unwrap().trace.is_none(),
+        "a rejected trace must not update meta"
+    );
+}
+
+#[test]
+fn revisions_guard_rounds_and_stamp_the_canvas() {
+    use redline_core::error::Error;
+
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "a.png", "revision", "", "", None, None, None)
+        .unwrap();
+    assert_eq!(meta.revision, 0);
+
+    let first = Submission {
+        base_revision: Some(0),
+        ..Default::default()
+    };
+    let (meta, set) = store.submit(&meta.id, &first).unwrap();
+    assert_eq!(meta.revision, 1);
+    assert_eq!(set.revision, 1);
+    assert_eq!(meta.updated_at.is_some(), true);
+
+    let stale = Submission {
+        base_revision: Some(0),
+        ..Default::default()
+    };
+    let error = store.submit(&meta.id, &stale).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::RevisionConflict {
+                current_revision: 1,
+                ..
+            }
+        ),
+        "a stale base must be a revision conflict, not a silent overwrite"
+    );
+
+    let next = Submission {
+        base_revision: Some(1),
+        ..Default::default()
+    };
+    let (meta, set) = store.submit(&meta.id, &next).unwrap();
+    assert_eq!(meta.revision, 2);
+    assert_eq!(set.revision, 2);
+
+    // An agent-pushed round also advances the revision; a human canvas loaded before it cannot
+    // be submitted over the agent's new picture.
+    let pushed = store
+        .post_round(&meta.id, Some(PNG), "agent.png", "new shot", None, None)
+        .unwrap();
+    assert_eq!(pushed.revision, 3);
+    assert_eq!(pushed.updated_by.as_deref(), Some("agent"));
+    let stale_again = Submission {
+        base_revision: Some(2),
+        ..Default::default()
+    };
+    assert!(matches!(
+        store.submit(&meta.id, &stale_again).unwrap_err(),
+        Error::RevisionConflict {
+            current_revision: 3,
+            ..
+        }
+    ));
 }

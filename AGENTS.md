@@ -221,6 +221,40 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   `0.23.0-dev.N` while stable was already `0.23.0`, so the updater correctly refused to install
   one; "Install latest dev build…" looked broken. `DEV_BASE_VERSION` must be the *next* minor
   (now 0.27.0); the dev workflow now fails if the base does not sort above the latest stable.
+- **An image label is not a binary version.** The dev container job labeled its image
+  `0.27.0-dev.N` but built the binary from `Cargo.toml`, which still said `0.26.1`, so the dev
+  server reported the stable version (2026-11-01). Stamp the workspace, app and lockfile versions
+  before both dev builds (`desktop/scripts/dev-version.mjs`) and assert `redline --version` in CI;
+  a label is metadata, not something inside the artifact.
+- **An extension origin is not a web page.** The CSRF guard refused every `Sec-Fetch-Site:
+  cross-site` request, which also blocked the browser capture extension. Allow it only when the
+  request has a valid Bearer token and an extension Origin (or the explicit
+  `X-RedLine-Client: browser-extension` header), echo CORS only to that origin, and keep a web
+  page cross-site request `403`; a custom header needs a preflight a web page does not get. Test
+  both the allowed extension and the refused web origin.
+- **A client trace summary is not evidence.** The capture extension sends events, not trusted
+  counts. Validate the `trace.json` size/kinds/timestamps on the server, derive the summary and
+  highlights there, and never inline the raw trace into `get_feedback`; expose it as a bounded
+  resource/URL.
+- **A `background.js` service worker is not your extension.** Chrome ships built-in extension
+  workers named `background.js`; the e2e picked the first one, created
+  `chrome-extension://admcc…/src/options.html` on a built-in origin, got `ERR_FILE_NOT_FOUND`, and
+  every later `waitForFunction` timed out while the extension itself was fine (2026-11-01). Match
+  the manifest's exact worker path (`/src/background.js`) and verify
+  `chrome.runtime.getManifest().name` before using the worker. Then wait for the options page to
+  finish reading stored config (`data-ready`) before filling the form: its async `init()` overwrote
+  the test's server/token with defaults and the failure surfaced as "Token is required".
+- **`hidden` is a user-agent style, not an author guarantee.** `.video-bar { display: flex }`
+  outranked `[hidden] { display: none }`, so every image review showed a zero-length video
+  timeline and the Submit button fell below the side panel (2026-11-02, found while generating
+  store screenshots). When a class sets `display`, add `[hidden] { display: none }` for it and
+  assert `getComputedStyle(el).display`, not just `el.hidden`; a screenshot pass is a real UI test.
+- **A store reviewer is not a RedLine user.** The first submission required a RedLine server and
+  token, and the test-instructions answer said no test account was needed; a reviewer cannot
+  exercise capture → annotate → submit that way. v0.3.0 adds an offline export (folder or ZIP with
+  `review.md`, `annotations.json`, the annotated media and trace) that needs no server, and the
+  Chrome/Edge notes now describe it. A local-capture feature is also a review feature: if the
+  product needs infrastructure the reviewer does not have, give it a serverless path and say so.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).

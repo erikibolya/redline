@@ -452,6 +452,15 @@ The rail lists projects (conversation areas), not a flat stream of requests.
 - Sessions created without a project live flat and are shown as **Inbox** — there is no migration,
   the label is added on read. **Inbox** and legacy label-only projects still work; the agent uses
   its default `REDLINE_AGENT_REPO` for them.
+- **An existing review can change project (v0.27).** The editor header shows the project as a chip
+  next to the session id and the branch. Clicking it opens **Move to project** with the same
+  **Repositories** / **Other projects** groups and a hint that names the repository (or explains
+  that Inbox/label-only projects make the agent fall back to its default). Saving moves the session
+  folder and `meta.project`, regroups the rail immediately and expands the target group, so the
+  review does not seem to vanish. The move is refused while the round is `submitted`, an agent
+  holds a claim, or a handoff is queued/running; a terminally failed handoff is movable so its
+  retry resolves the right repository. The next review/handoff run uses the new project's repo;
+  the branch and any existing worktree are not moved.
 - Each project header shows its name and the total number of sessions — one count, not a waiting
   count beside the total (the per-row badge says which rounds are waiting). Click to collapse; the
   state persists per browser.
@@ -618,6 +627,101 @@ section, `Δ` shows the summary inline:
 - rect at 0,0
 ~ text “tighten this” (edited)
 ```
+
+## Sign-in and owner bootstrap (v0.28 auth foundation)
+
+- `/login` is public. On a fresh server it shows **Create the owner account** (username, display
+  name, password, server token); after bootstrap it shows **Sign in** with username/password.
+  A `?t=<legacy token>` is used only for the first-run bootstrap and is removed from the address
+  bar; `?stay=1` suppresses the automatic redirect for an existing cookie.
+- Login sets `redline_session` (`HttpOnly`, `SameSite=Strict`, `Secure` on HTTPS) and a readable
+  `redline_csrf` cookie. The UI mirrors the CSRF token into every state-changing request.
+- `app.js` redirects to `/login?next=…` on `401`; the editor/list pages are public HTML and the
+  data API is protected.
+- `POST /api/auth/logout` revokes the session and clears both cookies.
+- The owner bootstrap creates the single owner; ownership transfer is an owner-only API action
+  (`POST /api/admin/transfer-owner`), with a future People & access UI.
+- **Current slice:** named members can sign in but data routes are still owner-only until the
+  project ACL lands; the UI will show the 403 rather than pretending the queue is empty.
+
+## Roles, People & access and the editor (v0.28)
+
+- **People & access** (`/people`) is owner-only. It shows a `user × project` matrix with a role
+  select per cell (`—`, Viewer, Tester, Developer), an **Add user** form, and the project repo
+  under each column. The owner row is global and read-only. A member sees an owner-only message.
+- **Invite instead of a password:** the checkbox turns **Add user** into **Create invite link**.
+  The one-time `…/invite/rl_inv_…` URL appears in a copy-once panel; the invitee gets a public
+  page to choose a password and lands signed in. **Reset link** on each non-owner row generates a
+  24-hour `…/reset/rl_rst_…` URL the same way. Invited users show an **INVITED** mark.
+- **Transfer ownership:** owner-only select + current-password field below the matrix. It asks
+  for confirmation, warns that the old owner becomes a member immediately, and the new owner
+  receives an `owner.transfer` notification.
+- The owner-only people icon appears in the header after `/api/auth/me` answers; it is hidden for
+  developers/testers/viewers.
+- **Tester:** sees every task in their projects, edits only their own open tasks, and gets
+  **Request agent review** instead of **Send to agent**. The saved request is the current round;
+  the rail says **ready for agent** and the developer can send it. A tester cannot STOP, confirm/
+  cancel a feature or hand off; the server refuses those actions as well as the UI.
+- **Developer:** sees the ready task, edits if needed and sends it with **Send to agent**. The
+  tester's request fields clear on submit; the task becomes `submitted` and the agent can claim it.
+- **Viewer:** read-only; the canvas, composer and row actions are disabled.
+- The New review project picker is filtered by `/api/projects`; a member with no project cannot
+  create a task, and Inbox is offered only to the owner.
+
+## Discussion and notifications (v0.28)
+
+- **Discussion** is its own inspector section above History. It lists human comments (author,
+  relative time, resolved state) and posts with **Comment** or `Ctrl/Cmd+Enter`. Any member who can
+  read the task can post; the author edits their own text, while the author/developer/owner can
+  resolve or delete. Comments are kept separate from the agent conversation — resolving a
+  discussion is not a review round.
+- The **notification bell** appears in the header for any named user (it stays hidden for the
+  legacy agent token). The badge is the unread count, capped at `99+`; opening the panel lists
+  newest first, clicking a row marks it read and follows its `/s/<id>` link, and **Mark all read**
+  clears the badge. It polls every 15 s, independent of the review's 5 s conversation poll.
+- Notification rows name the human action in words (`ready for agent`, `sent to agent`,
+  `mention`, `discussion`), not the raw event kind or a bare timestamp.
+- The panel closes on an outside click; it never covers the composer on a narrow window.
+
+## Audit log (v0.28)
+
+- **Audit log** (`/audit`) is owner-only and linked from **People & access**. It lists newest
+  first with **When**, **Actor**, **Action**, **Project / task** and **Details** columns. Times
+  are formatted with the browser's locale (`toLocaleString`), never sliced from the ISO string;
+  task ids link to the editor.
+- Filters: action prefix (`review.`), project slug, task id and actor user id; the query string
+  is shareable and restored on load. A non-owner sees an explicit owner-only card, not an empty
+  table.
+- The page reads `GET /api/audit`; the server already enforces owner-only, so the UI check is
+  only a clearer message.
+
+## Personal and agent tokens (v0.28)
+
+- `/tokens` is linked from the notification panel (and from People & access for the owner).
+  A named user sees **Personal tokens**: name, optional project list, read-only and expiry. The
+  raw `rl_pat_…` appears once in a copyable field plus **Copy**; the list afterwards shows only
+  the prefix, scopes, creation/last-used/expiry and **Revoke**.
+- The owner additionally sees **Agent tokens** (`rl_agt_…`): agent id, name, project allowlist,
+  expiry and `review`/`handoff` job checkboxes. Revoking one token never affects another agent or
+  any human session.
+- A legacy server token sees a sign-in hint instead of a personal-token form; it has no named
+  account to own a PAT. The page never renders `hash` or a raw token in the list.
+- Times on the token page use the browser locale (`toLocaleString`), not ISO slices.
+
+## Revision conflicts (v0.28)
+
+- Every editor load remembers `meta.revision` as `baseRevision`; submit, tester request and a new
+  video send it. The server refuses a stale canvas with `409` instead of overwriting another
+  person's round.
+- A stale submit shows the in-stage **This task changed while you were working** banner with the
+  writer and current revision. **Reload theirs** discards this browser's draft and loads the
+  server round; **Keep mine** adopts the current revision and submits the local canvas over it.
+  The banner lives inside the stage, so its buttons join the pointer-capture guard (like the
+  toolbar and video bar).
+- The old draft is never silently re-applied over the newer round on Reload: `load()` takes a
+  `discardDraft` flag for this path. A normal navigation still restores drafts.
+- A new video upload with a stale revision reports the conflict and reloads instead of pretending
+  the clip was posted; the file must be chosen again.
 
 ## Verification
 

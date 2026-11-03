@@ -115,6 +115,21 @@ function listNames(names) {
   return `${titled.slice(0, -1).join(", ")} and ${titled[titled.length - 1]}`;
 }
 
+function notificationKindLabel(kind) {
+  return {
+    "review.ready": "ready for agent",
+    "review.submitted": "sent to agent",
+    "review.replied": "agent replied",
+    "review.resolved": "finished",
+    "review.handoff_done": "handoff done",
+    "review.handoff_failed": "handoff failed",
+    "comment.mention": "mention",
+    "comment.reply": "discussion",
+    "comment": "discussion",
+    "owner.transfer": "ownership",
+  }[kind] || kind;
+}
+
 function relativeTime(iso) {
   if (!iso) return "";
   const then = new Date(iso).getTime();
@@ -459,9 +474,141 @@ const seen = {
   },
 };
 
+function csrfToken() {
+  for (const part of document.cookie.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === "redline_csrf") return rest.join("=");
+  }
+  return "";
+}
+
+const NotificationCenter = {
+  items: [],
+  unread: 0,
+  timer: null,
+  started: false,
+  bind() {
+    const bell = $("#notifications-link");
+    const panel = $("#notification-panel");
+    if (!bell || !panel || this.bound) return;
+    this.bound = true;
+    bell.addEventListener("click", (event) => {
+      event.stopPropagation();
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) this.refresh();
+    });
+    $("#notifications-read")?.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        await api("/api/notifications/read", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        await this.refresh();
+      } catch { /* the next poll retries */ }
+    });
+    $("#notification-list")?.addEventListener("click", (event) => {
+      const row = event.target.closest("[data-notification-id]");
+      if (!row) return;
+      event.stopPropagation();
+      this.open(row.dataset.notificationId, row.dataset.notificationUrl);
+    });
+    document.addEventListener("click", (event) => {
+      if (panel.hidden) return;
+      if (event.target.closest("#notification-panel, #notifications-link")) return;
+      panel.hidden = true;
+    });
+  },
+  async start() {
+    if (this.started) return;
+    this.started = true;
+    try {
+      const me = await api("/api/auth/me");
+      if (!me.user) return;
+    } catch {
+      return;
+    }
+    const bell = $("#notifications-link");
+    if (!bell) return;
+    bell.hidden = false;
+    this.bind();
+    await this.refresh();
+    clearInterval(this.timer);
+    this.timer = setInterval(() => this.refresh(), 15000);
+  },
+  async refresh() {
+    try {
+      const data = await api("/api/notifications");
+      this.items = data.notifications || [];
+      this.unread = data.unread || 0;
+      this.render();
+    } catch { /* signed out; the api helper redirects */ }
+  },
+  render() {
+    const count = $("#notification-count");
+    if (count) {
+      count.hidden = this.unread === 0;
+      count.textContent = this.unread > 99 ? "99+" : String(this.unread);
+    }
+    const list = $("#notification-list");
+    if (!list) return;
+    if (!this.items.length) {
+      list.innerHTML = '<div class="notification-empty">No notifications yet.</div>';
+      return;
+    }
+    list.innerHTML = this.items
+      .map((item) => `<div class="notification-row${item.read_at ? "" : " unread"}"
+          data-notification-id="${escapeHtml(item.id)}"
+          data-notification-url="${escapeHtml(item.url)}" role="button" tabindex="0">
+        <div class="text">${escapeHtml(item.text)}</div>
+        <div class="meta">${escapeHtml(notificationKindLabel(item.kind))} · ${escapeHtml(relativeTime(item.at))}</div>
+      </div>`)
+      .join("");
+  },
+  async open(id, url) {
+    try {
+      await api("/api/notifications/read", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id] }),
+      });
+    } catch { /* navigating is more important than the read receipt */ }
+    if (url && url.startsWith("/")) location.href = url;
+    else location.reload();
+  },
+};
+
+async function showPeopleLink() {
+  const button = $("#people-link");
+  if (!button) return;
+  try {
+    const me = await api("/api/auth/me");
+    if (!me.is_owner) {
+      // Agent settings are owner-only; a visible gear that always answers 403 is a dead control.
+      $$("[data-agent-settings]").forEach((gear) => { gear.hidden = true; });
+      return;
+    }
+    button.hidden = false;
+    button.addEventListener("click", () => { location.href = "/people"; });
+  } catch { /* signed out; the api helper has already redirected */ }
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
+  const method = (options.method || "GET").toUpperCase();
+  const headers = { ...(options.headers || {}) };
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = csrfToken();
+    if (csrf && !headers.Authorization && !headers.authorization) {
+      headers["X-CSRF-Token"] = csrf;
+    }
+  }
+  const response = await fetch(path, { ...options, headers });
   const body = await response.json().catch(() => ({}));
+  if (response.status === 401 && location.pathname !== "/login") {
+    const next = encodeURIComponent(location.pathname + location.search);
+    location.replace(`/login?next=${next}`);
+  }
   if (!response.ok) {
     const error = new Error(body.error || `request failed (${response.status})`);
     error.status = response.status;
@@ -611,6 +758,114 @@ function askBranch(current, submitted = false) {
       input.focus();
       input.select();
     }
+  });
+}
+
+/**
+ * Pick a project for an existing review. Returns the chosen slug, or `null` when the human
+ * cancelled, kept the current project, or the move is blocked. The project is not just a label:
+ * the agent resolves its repository from it, so the dialog shows the repo (or says there is none).
+ */
+function askProject(current, projects, blockedReason = "") {
+  return new Promise((resolve) => {
+    let dialog = $("#project-dialog");
+    if (!dialog) {
+      document.body.insertAdjacentHTML("beforeend", `
+        <dialog class="feature-dialog" id="project-dialog" aria-labelledby="project-dialog-title">
+          <form method="dialog" class="feature-card dialog-frame">
+            <div class="dialog-head">
+              <div><h2 id="project-dialog-title">Move to project</h2></div>
+              <button type="submit" value="keep" class="btn icon dialog-close" aria-label="Close">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+              </button>
+            </div>
+            <div class="dialog-body stack">
+              <p id="project-dialog-body"></p>
+              <select id="project-select" aria-label="Project"></select>
+              <p class="project-dialog-hint" id="project-dialog-hint"></p>
+            </div>
+            <div class="dialog-foot feature-actions" id="project-actions"></div>
+          </form>
+        </dialog>`);
+      dialog = $("#project-dialog");
+    }
+    if (dialog.open) {
+      resolve(null);
+      return;
+    }
+    const items = [...(projects || [])];
+    if (!items.some((project) => project.slug === "inbox")) {
+      items.push({ slug: "inbox", name: "Inbox", repo: null });
+    }
+    if (!items.some((project) => project.slug === current)) {
+      items.push({ slug: current, name: current, repo: null });
+    }
+    const repos = items.filter((project) => project.slug !== "inbox" && project.repo);
+    const others = items.filter((project) => project.slug === "inbox" || !project.repo);
+    const option = (project) => {
+      const label = project.repo && project.repo !== project.name
+        ? `${project.name} — ${project.repo}`
+        : project.name;
+      return `<option value="${escapeHtml(project.slug)}">${escapeHtml(label)}</option>`;
+    };
+    const select = $("#project-select");
+    const options = [];
+    if (repos.length) {
+      options.push('<optgroup label="Repositories">');
+      for (const project of repos) options.push(option(project));
+      options.push("</optgroup>");
+    }
+    if (others.length) {
+      options.push('<optgroup label="Other projects">');
+      for (const project of others) options.push(option(project));
+      options.push("</optgroup>");
+    }
+    select.innerHTML = options.join("");
+    select.value = current;
+    const blocked = Boolean(blockedReason);
+    select.hidden = blocked;
+    select.disabled = blocked;
+    $("#project-dialog-body").textContent = blocked
+      ? blockedReason
+      : "The project decides which repository the next review or handoff run uses.";
+    const hint = $("#project-dialog-hint");
+    const syncHint = () => {
+      const project = items.find((item) => item.slug === select.value);
+      if (!project) {
+        hint.textContent = "";
+      } else if (project.repo) {
+        hint.textContent = `Agent repository: ${project.repo}`;
+      } else if (project.slug === "inbox") {
+        hint.textContent = "Inbox has no repository; the agent falls back to its default repo.";
+      } else {
+        hint.textContent = "This project has no repository; the agent falls back to its default repo.";
+      }
+    };
+    syncHint();
+    select.onchange = syncHint;
+    const actions = $("#project-actions");
+    actions.innerHTML = "";
+    const buttons = blocked
+      ? [{ value: "keep", label: "Close" }]
+      : [
+          { value: "keep", label: "Cancel" },
+          { value: "save", label: "Move review", kind: "primary" },
+        ];
+    for (const action of buttons) {
+      const button = document.createElement("button");
+      button.type = "submit";
+      button.value = action.value;
+      button.className = `btn${action.kind ? ` ${action.kind}` : ""}`;
+      button.textContent = action.label;
+      actions.appendChild(button);
+    }
+    dialog.returnValue = "keep";
+    dialog.onclose = () => {
+      const value = select.value;
+      resolve(dialog.returnValue === "save" && value && value !== current ? value : null);
+    };
+    dialog.showModal();
+    if (!blocked) select.focus();
   });
 }
 
@@ -1445,13 +1700,18 @@ class Rail {
         // nobody has picked up yet used to read "new" (unread by the human), which is a lie
         // about the state. Only a review that is back in the human's hands can be "new".
         const queued = session.status === "submitted";
+        const requested = Boolean(session.agent_requested_at) && session.status === "open";
+        const role = session.my_role || "owner";
+        const canDecide = role === "owner" || role === "developer";
         // An agent currently running outranks "new" and the annotation count: it is the one
         // state that changes a few seconds later without the human touching anything. A feature
         // decision is the human's answer to the session, so it outranks the unread marker.
         const baseBadge = working
           ? `<span class="badge work" title="The agent is working on this review">
             <span class="spin" aria-hidden="true"></span>working</span>`
-          : feature === "confirmed"
+          : requested
+            ? `<span class="badge ready" title="A tester saved this round; a developer must send it to the agent">ready for agent</span>`
+            : feature === "confirmed"
             ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
             : feature === "cancelled"
               ? `<span class="badge cancelled" title="Feature cancelled by the human">cancelled</span>`
@@ -1514,7 +1774,7 @@ class Rail {
                 session.note ? " · " + escapeHtml(session.note) : ""
               }</div>
             </div>
-            <span class="row-actions">
+            ${canDecide ? `<span class="row-actions">
               ${decided
                 ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
                 : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>`}
@@ -1524,7 +1784,7 @@ class Rail {
                 : ""}
               <button class="act" data-act="menu"
                       title="${decided ? "Feature actions (reopen or delete)" : "Feature actions (cancel or delete)"}">✕</button>
-            </span>
+            </span>` : ""}
             ${badge}
           </div>`);
         }
@@ -1592,6 +1852,13 @@ class Editor {
     this.ctx = this.canvas.getContext("2d");
     this.sessionId = root.dataset.sessionId;
     this.meta = null;
+    // Effective role in this task's project; the server enforces it, the UI mirrors it.
+    this.myRole = "owner";
+    this.userId = null;
+    // The round the canvas was loaded from. Every submit sends it; the server refuses a stale
+    // one instead of silently overwriting another person's work.
+    this.baseRevision = 0;
+    this.revisionConflict = null;
     this.image = null;
     this.video = null;
     this.videoBar = $("#video-bar");
@@ -1612,6 +1879,7 @@ class Editor {
     this.roundLoad = 0;
     this.live = null;
     this.historyEntries = [];
+    this.comments = [];
     this.draftNotice = null;
     // The conversation poll fills these; until it lands, `renderHeader` must not trip over
     // an undefined list (a fresh load of a submitted session renders the header first).
@@ -1693,6 +1961,12 @@ class Editor {
       },
       onViewChange: () => this.leaveIfFiltered(),
     });
+    api("/api/auth/me")
+      .then((me) => {
+        this.userId = me.user?.id || null;
+        if (this.meta) this.renderHeader();
+      })
+      .catch(() => {});
     this.bindChrome();
     this.bindPanels();
     this.bindCanvas();
@@ -1782,8 +2056,11 @@ class Editor {
     await this.load(id);
   }
 
-  async load(id) {
+  async load(id, { discardDraft = false } = {}) {
     clearTimeout(this.draftTimer);
+    // "Reload theirs" must show the round on the server, not re-apply this browser's draft over
+    // it. A normal navigation keeps the draft on purpose.
+    if (discardDraft) this.drafts.delete(id);
     $("#stage").classList.remove("hidden");
     this.viewing = null;
     this.roundLoad = 0;
@@ -1794,6 +2071,8 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
+      this.myRole = this.meta.my_role || "owner";
+      this.baseRevision = Number(this.meta.revision) || 0;
       this.showSessionSize(data.disk_bytes || 0);
       lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
@@ -1821,6 +2100,7 @@ class Editor {
       this.renderHeader();
       this.loadHistory();
       this.startConversationPolling();
+      this.startCommentsPolling();
       await this.loadMedia(this.meta);
       // The video element only exists after `loadMedia`, and the inspector chooses the grouped
       // timeline layout from `isVideo`. Render it again or a video session opens as a flat list.
@@ -2098,6 +2378,7 @@ class Editor {
       }
       form.append("width", String(details.width));
       form.append("height", String(details.height));
+      form.append("base_revision", String(this.baseRevision));
       const body = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/video`, {
         method: "POST",
         body: form,
@@ -2110,6 +2391,13 @@ class Editor {
       await this.load(this.sessionId);
       await this.rail.load();
     } catch (error) {
+      if (error.status === 409 && error.body?.current_revision != null) {
+        alert(
+          `This task changed while the video was uploading (now revision ${error.body.current_revision}). Reload the task and choose the video again.`,
+        );
+        await this.load(this.sessionId);
+        return;
+      }
       alert(`Could not post the new video: ${error.message}`);
     } finally {
       if (button) {
@@ -2252,27 +2540,63 @@ class Editor {
       ? `${this.meta.image_width}×${this.meta.image_height}` : null,
       this.meta.url || null].filter(Boolean);
     $("#session-sub").textContent = bits.join(" · ");
+    const projectChip = $("#project-edit");
+    if (projectChip) {
+      const slug = this.meta.project || "inbox";
+      const project = (this.rail?.projects || []).find((item) => item.slug === slug);
+      const label = project?.name || (slug === "inbox" ? "Inbox" : slug);
+      projectChip.hidden = false;
+      projectChip.textContent = label;
+      projectChip.dataset.project = slug;
+      projectChip.title = project?.repo
+        ? `Project: ${label} — ${project.repo}. Click to change.`
+        : `Project: ${label}. Click to change.`;
+    }
     const branch = $("#branch-edit");
     if (branch) {
       branch.hidden = !this.meta.branch;
       branch.textContent = this.meta.branch || "";
     }
+    const role = this.myRole || "owner";
+    const tester = role === "tester";
+    const viewer = role === "viewer";
+    const testerOther = tester && this.userId
+      && this.meta.created_by && this.meta.created_by !== this.userId;
     const waiting = this.meta.status === "submitted";
+    const requested = Boolean(this.meta.agent_requested_at);
     const button = $("#submit");
     if (waiting) {
-      button.innerHTML = '<span class="stop-square" aria-hidden="true"></span>STOP';
+      if (tester || viewer) {
+        button.textContent = "Waiting for agent";
+      } else {
+        button.innerHTML = '<span class="stop-square" aria-hidden="true"></span>STOP';
+      }
+    } else if (viewer) {
+      button.textContent = "Read-only";
+    } else if (tester) {
+      button.textContent = testerOther
+        ? "Read-only (another tester)"
+        : this.meta.status === "open"
+          ? (requested ? "Update request" : "Request agent review")
+          : "No action";
     } else {
-      button.textContent = this.meta.status === "open" ? "Submit review" : "Submit again";
+      button.textContent = this.meta.status === "open" ? "Send to agent" : "Send to agent again";
     }
-    button.classList.toggle("stop", waiting);
+    button.classList.toggle("stop", waiting && !tester && !viewer);
+    const cancelRequest = $("#cancel-request");
+    if (cancelRequest) {
+      cancelRequest.hidden = !(tester && requested && this.meta.status === "open");
+    }
     const composer = $("#composer-text");
     if (composer) {
-      composer.disabled = waiting || Boolean(this.viewing);
+      composer.disabled = waiting || Boolean(this.viewing) || viewer || testerOther;
       composer.placeholder = waiting
-        ? "Waiting for the agent — press STOP to edit again"
+        ? (tester ? "Waiting for a developer to send this task" : "Waiting for the agent — press STOP to edit again")
         : this.viewing
           ? "Read-only historical round — back to current to edit"
-          : "What should change? Sent with the annotations…";
+          : tester
+            ? "What should change? A developer will send it to the agent…"
+            : "What should change? Sent with the annotations…";
     }
     this.updateLock();
     const stageStatus = $("#stage-status");
@@ -2302,6 +2626,18 @@ class Editor {
   }
 
   bindChrome() {
+    $("#revision-reload")?.addEventListener("click", async () => {
+      this.revisionConflict = null;
+      this.hideRevisionConflict();
+      await this.load(this.sessionId, { discardDraft: true });
+    });
+    $("#revision-keep")?.addEventListener("click", async () => {
+      const conflict = this.revisionConflict;
+      this.revisionConflict = null;
+      this.hideRevisionConflict();
+      if (conflict) this.baseRevision = Number(conflict.current_revision) || 0;
+      await this.submit();
+    });
     const noteField = $("#note-text");
     if (noteField) {
       noteField.addEventListener("focus", () => {
@@ -2331,6 +2667,19 @@ class Editor {
       });
     }
     $("#submit").addEventListener("click", () => this.submit());
+    $("#cancel-request")?.addEventListener("click", async () => {
+      try {
+        const result = await api(
+          `/api/sessions/${encodeURIComponent(this.sessionId)}/request-agent`,
+          { method: "DELETE" },
+        );
+        if (result?.meta) this.meta = result.meta;
+        this.renderHeader();
+        await this.rail.load();
+      } catch (error) {
+        alert(`Could not cancel the request: ${error.message}`);
+      }
+    });
     const composerInput = $("#composer-text");
     if (composerInput) {
       composerInput.addEventListener("input", () => this.scheduleDraft());
@@ -2481,6 +2830,54 @@ class Editor {
       } catch (error) {
         alert(`Could not set the branch: ${error.message}`);
       }
+    });
+    $("#project-edit")?.addEventListener("click", async () => {
+      const current = this.meta.project || "inbox";
+      let projects = this.rail?.projects || [];
+      try {
+        const body = await api("/api/projects");
+        projects = body.projects || projects;
+      } catch { /* keep the rail's cached projects */ }
+      const handoffRunning = ["requested", "running"].includes(this.meta.handoff?.status);
+      const reason = this.meta.status === "submitted"
+        ? "Stop the review before changing its project. The agent may already have a worktree for the old one."
+        : handoffRunning
+          ? "The handoff is queued or running. Wait for it to finish, then move the review."
+          : "";
+      const chosen = await askProject(current, projects, reason);
+      if (!chosen || chosen === current) return;
+      try {
+        const body = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/project`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ project: chosen === "inbox" ? null : chosen }),
+        });
+        this.meta = body.meta;
+        lastProject.remember(chosen);
+        // Show the row where it moved: a collapsed target group would hide the review the human
+        // just filed there, which reads as a deletion.
+        if (this.rail) {
+          this.rail.collapsed.delete(chosen);
+          prefs.set("collapsedProjects", [...this.rail.collapsed]);
+        }
+        this.renderHeader();
+        await this.rail.load();
+      } catch (error) {
+        alert(`Could not change the project: ${error.message}`);
+      }
+    });
+    $("#comment-submit")?.addEventListener("click", () => this.submitComment());
+    $("#comment-text")?.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        this.submitComment();
+      }
+    });
+    $("#comments-list")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-comment-action]");
+      if (!button) return;
+      event.preventDefault();
+      this.commentAction(button.dataset.commentAction, button.dataset.commentId);
     });
     addEventListener("resize", () => this.resize());
     addEventListener("popstate", () => {
@@ -3194,7 +3591,9 @@ class Editor {
       if (!this.image || this.locked) return;
       // The options bar, the inline text editor and the "back to current" pill live inside the
       // stage. Capturing the pointer for marquee/pan on those would swallow their click events.
-      if (event.target.closest(".options, .text-editor, .viewing-bar, .video-bar")) return;
+      if (event.target.closest(
+        ".options, .text-editor, .viewing-bar, .video-bar, .revision-banner",
+      )) return;
 
       // Drawing on a moving video would capture a different frame than the one the human saw;
       // any canvas interaction pauses first. The play button resumes.
@@ -3928,6 +4327,7 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}`);
       this.meta = data.meta;
+      this.baseRevision = Number(this.meta.revision) || 0;
       this.serverAnnotations = JSON.stringify(
         (data.annotations && data.annotations.annotations) || [],
       );
@@ -3952,12 +4352,24 @@ class Editor {
 
   updateLock() {
     const before = this.locked;
-    this.locked = Boolean(this.meta && this.meta.status === "submitted") && !this.viewing;
+    const viewer = this.myRole === "viewer";
+    const testerOther = this.myRole === "tester" && this.userId
+      && this.meta?.created_by && this.meta.created_by !== this.userId;
+    this.locked = Boolean(this.meta
+      && (this.meta.status === "submitted" || viewer || testerOther)) && !this.viewing;
     // No modal overlay: the stage status pill is the visible signal. The drawing tools are
     // disabled as well — a button that looks armed but silently refuses every click reads as a
     // broken lock, which is exactly how this was reported.
     const status = $("#stage-status");
-    if (status) status.title = this.locked ? "STOP unlocks the canvas for another round." : "";
+    if (status) {
+      status.title = testerOther
+        ? "Another tester's task — read-only"
+        : viewer
+          ? "Read-only role"
+          : this.locked
+            ? "STOP unlocks the canvas for another round."
+            : "";
+    }
     $$('.tool[data-tool]').forEach((button) => {
       button.toggleAttribute("disabled", this.readOnly);
     });
@@ -3966,9 +4378,14 @@ class Editor {
       if (button) button.disabled = this.locked;
     });
     // A history round is read-only: submitting the canvas would send the archived annotations as
-    // a new live round, so the primary action is disabled until Back to current.
+    // a new live round, so the primary action is disabled until Back to current. A tester may
+    // request an agent review, but cannot submit or stop; a viewer cannot act at all.
     const submit = $("#submit");
-    if (submit) submit.disabled = Boolean(this.viewing);
+    if (submit) {
+      const testerBlocked = this.myRole === "tester"
+        && (this.meta?.status !== "open" || testerOther);
+      submit.disabled = Boolean(this.viewing) || viewer || testerBlocked;
+    }
     const dim = $("#stage-dim");
     if (dim) dim.hidden = !this.locked;
     if (this.locked) {
@@ -4016,6 +4433,105 @@ class Editor {
     clearInterval(this.threadTimer);
     this.loadConversation();
     this.threadTimer = setInterval(() => this.loadConversation({ quiet: true }), 5000);
+  }
+
+  /// Human discussion is a separate stream from the agent conversation and polls at its own,
+  /// slower pace; it is not the run's liveness signal.
+  startCommentsPolling() {
+    clearInterval(this.commentsTimer);
+    this.loadComments();
+    this.commentsTimer = setInterval(() => this.loadComments({ quiet: true }), 10000);
+  }
+
+  async loadComments({ quiet = false } = {}) {
+    const sessionId = this.sessionId;
+    try {
+      const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/comments`);
+      if (sessionId !== this.sessionId) return;
+      this.comments = data.comments || [];
+      this.renderComments();
+    } catch {
+      if (!quiet) this.renderComments();
+    }
+  }
+
+  renderComments() {
+    const list = $("#comments-list");
+    const count = $("#comments-count");
+    if (!list) return;
+    if (count) count.textContent = String(this.comments.length);
+    if (!this.comments.length) {
+      list.className = "comments-empty";
+      list.textContent = "No comments yet.";
+      return;
+    }
+    list.className = "";
+    list.innerHTML = this.comments
+      .map((comment) => {
+        const resolved = Boolean(comment.resolved_at);
+        return `<div class="comment-row${resolved ? " resolved" : ""}">
+          <div class="comment-head">
+            <b>${escapeHtml(comment.author_name || comment.author)}</b>
+            <span>${escapeHtml(relativeTime(comment.at))}</span>
+            ${resolved ? '<span class="resolved-mark">resolved</span>' : ""}
+          </div>
+          <p class="comment-body">${escapeHtml(comment.body)}</p>
+          <div class="comment-actions">
+            <button type="button" data-comment-action="${resolved ? "reopen" : "resolve"}"
+                    data-comment-id="${escapeHtml(comment.id)}">${resolved ? "Reopen" : "Resolve"}</button>
+            <button type="button" data-comment-action="delete"
+                    data-comment-id="${escapeHtml(comment.id)}">Delete</button>
+          </div>
+        </div>`;
+      })
+      .join("");
+  }
+
+  async submitComment() {
+    const input = $("#comment-text");
+    const button = $("#comment-submit");
+    if (!input || !button) return;
+    const body = input.value.trim();
+    if (!body) return;
+    button.disabled = true;
+    try {
+      await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/comments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      input.value = "";
+      await this.loadComments();
+    } catch (error) {
+      alert(`Could not post the comment: ${error.message}`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async commentAction(action, commentId) {
+    if (!commentId) return;
+    try {
+      if (action === "delete") {
+        if (!confirm("Delete this comment?")) return;
+        await api(
+          `/api/sessions/${encodeURIComponent(this.sessionId)}/comments/${encodeURIComponent(commentId)}`,
+          { method: "DELETE" },
+        );
+      } else {
+        await api(
+          `/api/sessions/${encodeURIComponent(this.sessionId)}/comments/${encodeURIComponent(commentId)}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ resolved: action === "resolve" }),
+          },
+        );
+      }
+      await this.loadComments();
+    } catch (error) {
+      alert(`Could not update the comment: ${error.message}`);
+    }
   }
 
   async loadConversation({ quiet = false } = {}) {
@@ -4546,17 +5062,20 @@ class Editor {
         width: this.mediaWidth(),
         height: this.mediaHeight(),
         note,
+        base_revision: this.baseRevision,
       }));
       if (sheet) form.append("png", sheet, "contact-sheet.png");
       for (const capture of captures) {
         form.append("frames", capture.blob, `${capture.at.toFixed(3)}.${capture.ext}`);
       }
       button.textContent = "Uploading…";
-      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/annotations`, {
-        method: "POST",
-        body: form,
-      });
+      const request = this.myRole === "tester";
+      const result = await api(
+        `/api/sessions/${encodeURIComponent(this.sessionId)}/${this.submitEndpoint()}`,
+        { method: "POST", body: form },
+      );
       if (result?.meta) this.meta = result.meta;
+      this.baseRevision = Number(this.meta?.revision) || 0;
       this.drafts.delete(this.sessionId);
       this.syncDirty();
       this.serverAnnotations = JSON.stringify(this.annotations);
@@ -4570,7 +5089,7 @@ class Editor {
       this.seenConversation();
       document.activeElement?.blur?.();
       await this.rail.load();
-      button.textContent = "Submitted ✓";
+      button.textContent = request ? "Request sent ✓" : "Submitted ✓";
       setTimeout(() => {
         button.disabled = false;
         this.renderHeader();
@@ -4584,9 +5103,34 @@ class Editor {
     void label;
   }
 
+  showRevisionConflict(error) {
+    const data = error?.body || {};
+    const who = data.updated_by_name || data.updated_by || "Someone else";
+    this.revisionConflict = data;
+    const text = $("#revision-banner-text");
+    if (text) {
+      text.textContent = `${who} saved revision ${data.current_revision ?? "?"}. Reload their version, or keep your canvas and replace it.`;
+    }
+    const banner = $("#revision-banner");
+    if (banner) banner.hidden = false;
+  }
+
+  hideRevisionConflict() {
+    const banner = $("#revision-banner");
+    if (banner) banner.hidden = true;
+  }
+
+  /// A tester saves a request; a developer/owner sends it to the agent.
+  submitEndpoint() {
+    return this.myRole === "tester" ? "request-agent" : "annotations";
+  }
+
   async submit() {
     if (this.viewing) return;
-    if (this.meta?.status === "submitted") return this.stop();
+    if (this.meta?.status === "submitted") {
+      if (this.myRole === "tester") return;
+      return this.stop();
+    }
     if (!this.image) return;
     const button = $("#submit");
     const label = button.textContent;
@@ -4614,13 +5158,19 @@ class Editor {
         height: this.mediaHeight(),
         png: exportCanvas.toDataURL("image/png"),
         note: composer ? composer.value.trim() : "",
+        base_revision: this.baseRevision,
       };
-      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/annotations`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const request = this.myRole === "tester";
+      const result = await api(
+        `/api/sessions/${encodeURIComponent(this.sessionId)}/${this.submitEndpoint()}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
       if (result?.meta) this.meta = result.meta;
+      this.baseRevision = Number(this.meta?.revision) || 0;
       this.drafts.delete(this.sessionId);
       this.syncDirty();
       this.serverAnnotations = JSON.stringify(this.annotations);
@@ -4636,7 +5186,7 @@ class Editor {
       // Hand the keyboard back to the canvas: the review is sent, the next key is a shortcut.
       document.activeElement?.blur?.();
       await this.rail.load();
-      button.textContent = "Submitted ✓";
+      button.textContent = request ? "Request sent ✓" : "Submitted ✓";
       // Re-render instead of hardcoding the next label: the status is `submitted` now, so the
       // button must become the red STOP with its square, not "Submit again".
       setTimeout(() => {
@@ -4646,6 +5196,10 @@ class Editor {
     } catch (error) {
       button.textContent = label;
       button.disabled = false;
+      if (error.status === 409 && error.body?.current_revision != null) {
+        this.showRevisionConflict(error);
+        return;
+      }
       alert(`Submit failed: ${error.message}`);
     }
   }
@@ -4718,13 +5272,19 @@ const NewReview = {
     if (!select) return;
     const previous = select.value;
     try {
-      const { projects } = await api("/api/projects");
+      const [{ projects }, me] = await Promise.all([
+        api("/api/projects"),
+        api("/api/auth/me").catch(() => null),
+      ]);
+      const isOwner = Boolean(me?.is_owner);
       const items = projects || [];
       const repos = items.filter((project) => project.repo);
       const others = items.filter(
         (project) => !project.repo && (project.sessions > 0 || project.slug === "inbox"),
       );
-      if (!repos.length && !others.length) {
+      // Inbox is owner-only; a member with no project must ask for access instead of being
+      // offered a project the server will reject.
+      if (!repos.length && !others.length && isOwner) {
         others.push({ slug: "inbox", name: "Inbox", sessions: 0 });
       }
       const options = ['<option value="" disabled>Choose a project…</option>'];
@@ -4745,7 +5305,7 @@ const NewReview = {
         }
         options.push("</optgroup>");
       }
-      options.push('<option value="__new__">+ New project…</option>');
+      if (isOwner) options.push('<option value="__new__">+ New project…</option>');
       select.innerHTML = options.join("");
       const wanted = lastProject.get() || previous;
       select.value = [...select.options].some((option) => option.value === wanted)
@@ -5169,4 +5729,6 @@ document.addEventListener("DOMContentLoaded", () => {
   } else {
     bootList();
   }
+  showPeopleLink();
+  NotificationCenter.start();
 });

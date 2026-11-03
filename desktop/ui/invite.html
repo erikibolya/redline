@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RedLine — set your password</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css" />
+<style>
+  body {
+    margin: 0; min-height: 100vh; display: grid; place-items: center;
+    padding: 24px; background: var(--bg); color: var(--text); font-family: var(--font);
+  }
+  .invite { width: min(460px, 100%); }
+  .invite-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .invite-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 24px 26px; box-shadow: 0 20px 50px rgba(0, 0, 0, .28);
+  }
+  .invite-card h1 { font-size: 18px; margin: 0 0 4px; }
+  .invite-card .lead { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0 0 20px; }
+  .invite-card .field { margin-bottom: 14px; }
+  .invite-card label {
+    display: block; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); margin: 0 0 6px;
+  }
+  .invite-card input {
+    width: 100%; padding: 9px 11px; border-radius: var(--radius);
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  .invite-card input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .invite-card .hint { color: var(--muted); font-size: 12px; margin: 6px 0 0; }
+  .invite-actions { display: flex; align-items: center; gap: 8px; margin-top: 20px; }
+  .invite-status { min-height: 20px; margin-top: 12px; font-size: 13px; }
+  .invite-status.error { color: var(--danger); }
+  .invite-status.ok { color: var(--ok); }
+  .invite-foot { color: var(--muted); font-size: 12px; margin: 14px 4px 0; line-height: 1.5; }
+  .invite-card[hidden], .invite-status[hidden] { display: none; }
+</style>
+</head>
+<body data-page="invite">
+<main class="invite">
+  <div class="invite-head">
+    <div class="brand"><span class="brand-mark" role="img" aria-label="RedLine"><i></i></span></div>
+  </div>
+
+  <section class="invite-card" id="invite-card" hidden>
+    <h1 id="invite-title">Set your password</h1>
+    <p class="lead" id="invite-lead"></p>
+    <form id="invite-form" autocomplete="off">
+      <div class="field">
+        <label for="invite-password">Password</label>
+        <input id="invite-password" type="password" autocomplete="new-password" minlength="12" required />
+        <p class="hint">At least 12 characters. Use a password manager.</p>
+      </div>
+      <div class="field">
+        <label for="invite-confirm">Repeat password</label>
+        <input id="invite-confirm" type="password" autocomplete="new-password" minlength="12" required />
+      </div>
+      <div class="invite-actions">
+        <button class="btn accent" type="submit" id="invite-submit">Save password &amp; sign in</button>
+      </div>
+    </form>
+    <div class="invite-status" id="invite-status" role="status" aria-live="polite"></div>
+  </section>
+
+  <section class="invite-card" id="invite-dead" hidden>
+    <h1>Link unavailable</h1>
+    <p class="lead" id="invite-dead-text">This link is invalid, expired or has already been used.</p>
+    <p class="lead">Ask the RedLine owner for a new invite or reset link.</p>
+    <div class="invite-actions"><a class="btn" href="/login">Go to sign in</a></div>
+  </section>
+
+  <p class="invite-foot">RedLine is a visual review queue. The owner copied this link to you; it
+    works once and is not stored in this browser.</p>
+</main>
+
+<script>
+const path = location.pathname;
+const kind = path.startsWith("/reset/") ? "reset" : "invite";
+const token = decodeURIComponent(path.split("/").filter(Boolean).pop() || "");
+const card = document.getElementById("invite-card");
+const dead = document.getElementById("invite-dead");
+const title = document.getElementById("invite-title");
+const lead = document.getElementById("invite-lead");
+const form = document.getElementById("invite-form");
+const statusBox = document.getElementById("invite-status");
+
+function setStatus(text, kind) {
+  statusBox.textContent = text || "";
+  statusBox.className = "invite-status" + (kind ? " " + kind : "");
+}
+
+async function load() {
+  if (!token) {
+    card.hidden = true;
+    dead.hidden = false;
+    return;
+  }
+  try {
+    const response = await fetch(`/api/auth/${kind}/${encodeURIComponent(token)}`, {
+      cache: "no-store",
+    });
+    const info = await response.json().catch(() => ({}));
+    if (!response.ok || !info.valid) {
+      card.hidden = true;
+      dead.hidden = false;
+      return;
+    }
+    title.textContent = kind === "reset" ? "Choose a new password" : "Set your password";
+    lead.textContent = kind === "reset"
+      ? `Reset the password for ${info.display_name || info.username}.`
+      : `Welcome to RedLine, ${info.display_name || info.username}. Choose a password to finish setting up your account.`;
+    card.hidden = false;
+    dead.hidden = true;
+    document.getElementById("invite-password").focus();
+  } catch {
+    card.hidden = true;
+    dead.hidden = false;
+    document.getElementById("invite-dead-text").textContent =
+      "The server did not answer. Check that it is running.";
+  }
+}
+
+form.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const password = document.getElementById("invite-password").value;
+  const confirm = document.getElementById("invite-confirm").value;
+  if (password !== confirm) {
+    setStatus("The passwords do not match", "error");
+    return;
+  }
+  setStatus("Saving…");
+  const button = document.getElementById("invite-submit");
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/auth/${kind}/${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      setStatus(body.error || `Could not save the password (${response.status})`, "error");
+      button.disabled = false;
+      return;
+    }
+    setStatus("Saved — signing in", "ok");
+    location.replace("/");
+  } catch (error) {
+    setStatus(error.message || "Could not reach the server", "error");
+    button.disabled = false;
+  }
+});
+
+load();
+</script>
+</body>
+</html>

@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RedLine — audit log</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css" />
+<style>
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: var(--font); padding: 24px;
+  }
+  .audit { width: min(1180px, 100%); margin: 0 auto; }
+  .audit-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .audit-head .back { margin-left: 12px; color: var(--muted); font-size: 12px; text-decoration: none; }
+  .audit-head .back:first-of-type { margin-left: auto; }
+  .audit-head .back:hover { color: var(--text); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 24px; box-shadow: 0 20px 50px rgba(0, 0, 0, .28);
+  }
+  .card h1 { font-size: 18px; margin: 0 0 4px; }
+  .card .lead { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0 0 18px; }
+  .filters {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto; gap: 8px;
+    margin: 0 0 16px; padding: 14px; border: 1px solid var(--border-soft); border-radius: 10px;
+  }
+  .filters input, .filters select {
+    min-width: 0; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  .filters input:focus, .filters select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .filters[hidden] { display: none; }
+  .status { min-height: 18px; margin: 8px 0 12px; color: var(--muted); font-size: 12px; }
+  .status.error { color: #fda4af; }
+  .status.ok { color: #86efac; }
+  .table-wrap { overflow-x: auto; border: 1px solid var(--border-soft); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 9px 10px; border-top: 1px solid var(--border-soft); text-align: left; vertical-align: top; }
+  thead th { border-top: 0; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+  td.when { white-space: nowrap; color: var(--muted); font-variant-numeric: tabular-nums; }
+  td.actor b { display: block; font-weight: 600; }
+  td.actor small { color: var(--muted); font-size: 10.5px; }
+  td.action code { color: var(--accent); font-size: 11px; }
+  td.where a { color: var(--text); text-decoration: none; }
+  td.where a:hover { color: var(--accent); }
+  td.where small { display: block; color: var(--muted); font-size: 10.5px; }
+  td.details {
+    color: var(--muted); font: 10.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    max-width: 340px; overflow-wrap: anywhere;
+  }
+  .empty { padding: 18px 10px; color: var(--muted); font-size: 13px; }
+  .error-card { padding: 18px; border: 1px solid #7f1d1d; border-radius: 10px; color: #fda4af; }
+  [data-theme="light"] .status.error, [data-theme="light"] .error-card { color: #be123c; }
+  [data-theme="light"] .status.ok { color: #15803d; }
+</style>
+</head>
+<body data-page="audit">
+<main class="audit">
+  <div class="audit-head">
+    <div class="brand"><span class="brand-mark" role="img" aria-label="RedLine"><i></i></span></div>
+    <a class="back" href="/people">← People &amp; access</a>
+    <a class="back" href="/">Sessions →</a>
+  </div>
+
+  <section class="card">
+    <h1>Audit log</h1>
+    <p class="lead">Owner only. Every authentication, user, membership, project, review and comment
+      action is recorded with its actor and time. Events are retained for one year.</p>
+
+    <form class="filters" id="audit-filters" autocomplete="off">
+      <input id="f-action" placeholder="Action prefix (review.)" spellcheck="false" />
+      <input id="f-project" placeholder="Project slug" spellcheck="false" />
+      <input id="f-session" placeholder="Task id" spellcheck="false" />
+      <input id="f-actor" placeholder="Actor user id (usr_…)" spellcheck="false" />
+      <button class="btn accent" type="submit" id="audit-apply">Apply</button>
+    </form>
+    <div class="status" id="audit-status" role="status" aria-live="polite"></div>
+    <div id="audit-table"><div class="empty">Loading…</div></div>
+  </section>
+</main>
+
+<script>
+const statusBox = document.getElementById("audit-status");
+const container = document.getElementById("audit-table");
+const form = document.getElementById("audit-filters");
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[char]));
+}
+
+function csrfToken() {
+  for (const part of document.cookie.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === "redline_csrf") return rest.join("=");
+  }
+  return "";
+}
+
+async function api(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = { ...(options.headers || {}) };
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = csrfToken();
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+  }
+  const response = await fetch(path, { ...options, headers });
+  const body = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    location.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+    throw new Error("sign in required");
+  }
+  if (!response.ok) throw new Error(body.error || `request failed (${response.status})`);
+  return body;
+}
+
+function setStatus(text, kind) {
+  statusBox.textContent = text || "";
+  statusBox.className = "status" + (kind ? " " + kind : "");
+}
+
+function queryString() {
+  const params = new URLSearchParams();
+  for (const [id, key] of [
+    ["f-action", "action"], ["f-project", "project"],
+    ["f-session", "session"], ["f-actor", "actor"],
+  ]) {
+    const value = document.getElementById(id).value.trim();
+    if (value) params.set(key, value);
+  }
+  params.set("limit", "300");
+  return params.toString();
+}
+
+async function load() {
+  setStatus("");
+  try {
+    const me = await api("/api/auth/me");
+    if (!me.is_owner) {
+      container.innerHTML = '<div class="error-card">The audit log is owner-only.</div>';
+      form.hidden = true;
+      return;
+    }
+    const data = await api(`/api/audit?${queryString()}`);
+    render(data.events || []);
+  } catch (error) {
+    container.innerHTML = `<div class="error-card">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function render(events) {
+  if (!events.length) {
+    container.innerHTML = '<div class="empty">No events match these filters.</div>';
+    return;
+  }
+  const rows = events.map((event) => {
+    const when = new Date(event.at);
+    const actor = event.actor_name || event.actor_id || event.actor_type || "system";
+    const actorMeta = [event.actor_type, event.actor_id].filter(Boolean).join(" · ");
+    const where = event.session
+      ? `<a href="/s/${encodeURIComponent(event.session)}">${escapeHtml(event.session)}</a>`
+      : event.project
+        ? escapeHtml(event.project)
+        : "—";
+    const details = event.details && Object.keys(event.details).length
+      ? JSON.stringify(event.details)
+      : "";
+    return `<tr>
+      <td class="when" title="${escapeHtml(event.at)}">${escapeHtml(Number.isNaN(when.getTime()) ? event.at : when.toLocaleString())}</td>
+      <td class="actor"><b>${escapeHtml(actor)}</b><small>${escapeHtml(actorMeta)}</small></td>
+      <td class="action"><code>${escapeHtml(event.action)}</code></td>
+      <td class="where">${where}${event.project && event.session ? `<small>${escapeHtml(event.project)}</small>` : ""}</td>
+      <td class="details">${escapeHtml(details)}</td>
+    </tr>`;
+  }).join("");
+  container.innerHTML = `
+    <div class="table-wrap">
+      <table id="audit-events">
+        <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Project / task</th><th>Details</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+}
+
+form.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const query = queryString();
+  history.replaceState(null, "", `/audit?${query}`);
+  load();
+});
+
+// A filters URL is shareable; restore it on load.
+const initial = new URLSearchParams(location.search);
+for (const [key, id] of [
+  ["action", "f-action"], ["project", "f-project"],
+  ["session", "f-session"], ["actor", "f-actor"],
+]) {
+  if (initial.get(key)) document.getElementById(id).value = initial.get(key);
+}
+
+load();
+</script>
+</body>
+</html>

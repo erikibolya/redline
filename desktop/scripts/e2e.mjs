@@ -99,6 +99,21 @@ async function drag(page, from, to, steps = 12) {
   await page.mouse.up();
 }
 
+/** Hover a session row, retrying when the rail's 8 s poll replaces the node mid-action. */
+async function hoverRow(page, selector) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    try {
+      await page.hover(selector);
+      return;
+    } catch (error) {
+      if (!/detached/i.test(error.message)) throw error;
+      await page.waitForSelector(selector, { timeout: 1000 });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw new Error(`row kept re-rendering: ${selector}`);
+}
+
 const main = async () => {
   // A real screenshot size, so the fitted zoom is not 1:1 — coordinate mapping must survive it.
   // Submitting locks the canvas now; tests that keep drawing must stop first. Ask the "agent"
@@ -118,9 +133,32 @@ const main = async () => {
       const button = document.querySelector("#submit");
       return button && !button.disabled && button.textContent.trim() === "STOP";
     }, { timeout: 5000 });
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.click("#submit");
-    await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
+    // A click can be swallowed while the rail is repainting; cancel is idempotent, so retry only
+    // while the server still reports the round as submitted. Then wait for the visible unlock,
+    // not just the field: drawing into a still-locked canvas looks like a lost rectangle.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.click("#submit");
+      try {
+        await page.waitForFunction(
+          () => window.redline.meta?.status === "open" && window.redline.locked === false,
+          { timeout: 5000 },
+        );
+        return;
+      } catch {
+        const state = await page.evaluate(() => ({
+          status: window.redline.meta?.status || null,
+          locked: window.redline.locked,
+          label: document.querySelector("#submit")?.textContent.trim() || "",
+          disabled: Boolean(document.querySelector("#submit")?.disabled),
+        }));
+        if (state.status === "open" && state.locked === false) return;
+        if (state.status !== "submitted") {
+          throw new Error(`STOP left the review open but locked: ${JSON.stringify(state)}`);
+        }
+      }
+    }
+    throw new Error("STOP did not unlock the canvas");
   };
 
   const created = await api("/api/sessions", {
@@ -133,6 +171,25 @@ const main = async () => {
     }),
   });
   const id = created.meta.id;
+
+  // First-run auth: the legacy token bootstraps the single owner account. The rest of this
+  // suite keeps using the legacy token so the agent/bridge path stays covered; the login page
+  // gets its own browser context at the end.
+  const ownerPassword = "correct horse battery staple";
+  const bootstrap = await fetch(`${BASE}/api/auth/bootstrap`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      username: "owner",
+      display_name: "Owner",
+      password: ownerPassword,
+    }),
+  });
+  const bootstrapBody = await bootstrap.json().catch(() => ({}));
+  check("first-run bootstrap creates the single owner",
+    bootstrap.ok && bootstrapBody.user?.username === "owner"
+      && bootstrapBody.user?.role === "owner",
+    `${bootstrap.status} ${JSON.stringify(bootstrapBody)}`);
 
   // The agent reports repos with portable keys; the UI and sessions use the resulting project.
   const synced = await api("/api/agent/repos", {
@@ -295,6 +352,12 @@ const main = async () => {
     JSON.stringify(brandEditor));
 
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
+  // The owner-only People button is revealed by an async /api/auth/me; wait for it so the count
+  // is deterministic instead of racing the auth probe.
+  await page.waitForFunction(
+    () => !document.querySelector("#people-link")?.hidden,
+    { timeout: 5000 },
+  );
   const chrome = await page.evaluate(() => {
     const header = document.querySelector(".header");
     const buttons = [...header.querySelectorAll(".header-actions .btn.icon")];
@@ -319,7 +382,7 @@ const main = async () => {
   check("the header carries no status pills — the toast and the rail card say it",
     chrome.pills === 0 && !chrome.stale, JSON.stringify(chrome));
   check("every header action is a labelled SVG icon",
-    chrome.count === 5 && chrome.svg && chrome.labelled && chrome.separator
+    chrome.count === 7 && chrome.svg && chrome.labelled && chrome.separator
       && chrome.panelMarks, JSON.stringify(chrome));
   check("agent settings is a solid gear, not a text glyph",
     chrome.gear && chrome.gear.fill !== "none" && chrome.gear.stroke === "none"
@@ -1008,17 +1071,34 @@ const main = async () => {
 
   // ---- multi-select with shift-click, then align left
   await page.keyboard.press("r");
-  await drag(page, at(620, 430), at(780, 540));
+  const beforeDraw = await page.evaluate(() => window.redline.annotations.length);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await drag(page, at(620, 430), at(780, 540));
+    const count = await page.evaluate(() => window.redline.annotations.length);
+    if (count === beforeDraw + 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const drawn = await page.evaluate(() => window.redline.annotations.length);
+  if (drawn !== beforeDraw + 1) {
+    throw new Error(`multi-select rectangle was not drawn: ${beforeDraw} -> ${drawn}`);
+  }
   await page.keyboard.press("v");
   const firstRect = at(310, 230); // centre of the first rectangle
-  await page.mouse.click(firstRect.x, firstRect.y);
-  await page.keyboard.down("Shift");
   const second = at(700, 485);
-  await page.mouse.click(second.x, second.y);
-  await page.keyboard.up("Shift");
   let selected = 0;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    selected = await page.evaluate(() => window.redline.selected.size);
+  // A headless click can be swallowed while the rail repaints; retry the whole gesture after
+  // Escape clears the selection, instead of calling a lost pointer event a broken multi-select.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await page.keyboard.press("Escape");
+    await page.mouse.click(firstRect.x, firstRect.y);
+    await page.keyboard.down("Shift");
+    await page.mouse.click(second.x, second.y);
+    await page.keyboard.up("Shift");
+    for (let poll = 0; poll < 20; poll += 1) {
+      selected = await page.evaluate(() => window.redline.selected.size);
+      if (selected === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     if (selected === 2) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -1258,7 +1338,7 @@ const main = async () => {
     chip?.click();
   }, label);
 
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.click(`${row} [data-act="confirm"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   const confirmDialog = await page.evaluate(() => {
@@ -1300,7 +1380,7 @@ const main = async () => {
   check("closing the feature dialog leaves the feature pending",
     !afterFeatureClose.meta.feature_confirmed_at,
     String(afterFeatureClose.meta.feature_confirmed_at || "none"));
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.click(`${row} [data-act="confirm"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   await page.click("#feature-dialog-check");
@@ -1478,7 +1558,7 @@ const main = async () => {
       && failedHandoff.href === "https://github.com/erikibolya/redline/pull/46"
       && failedHandoff.retry === "Retry handoff",
     JSON.stringify(failedHandoff));
-  await page.hover(`.session[data-id="${id}"]`);
+  await hoverRow(page, `.session[data-id="${id}"]`);
   await page.click(`.session[data-id="${id}"] [data-act="handoff"]`);
   let retriedHandoff = {};
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -1529,7 +1609,7 @@ const main = async () => {
       && staleHandoff.title.includes("stopped without reporting")
       && staleHandoff.retry === "Retry handoff",
     JSON.stringify(staleHandoff));
-  await page.hover(`.session[data-id="${id}"]`);
+  await hoverRow(page, `.session[data-id="${id}"]`);
   await page.click(`.session[data-id="${id}"] [data-act="handoff"]`);
   let retriedStale = {};
   for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -1566,7 +1646,7 @@ const main = async () => {
   }), id);
   check("a confirmed feature shows a badge and a reopen action",
     confirmedRow.badge.includes("confirmed") && confirmedRow.row, JSON.stringify(confirmedRow));
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.click(`${row} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   const decidedMenu = await page.evaluate(() => {
@@ -1581,7 +1661,7 @@ const main = async () => {
     decidedMenu.actions.join("|") === "Keep working|Reopen|Delete files…"
       && decidedMenu.deleteDanger, JSON.stringify(decidedMenu));
   await page.click('#feature-actions [data-action="keep"]');
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   let reopened = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -1597,7 +1677,7 @@ const main = async () => {
 
   await clickChip("Active");
   await page.waitForSelector(row, { timeout: 5000 });
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.click(`${row} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   const featureMenu = await page.evaluate(() => {
@@ -1682,7 +1762,7 @@ const main = async () => {
       && cancelledBadge.light.color === "rgb(159, 18, 57)"
       && cancelledBadge.light.border === "rgb(253, 164, 175)",
     JSON.stringify(cancelledBadge));
-  await page.hover(row);
+  await hoverRow(page, row);
   await page.$eval(`${row} [data-act="reopen"]`, (button) => button.click());
   let reopenedCancel = {};
   for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -2107,7 +2187,7 @@ const main = async () => {
   }));
   check("STOP unlocks the canvas and keeps the annotations",
     !unlocked.locked && !unlocked.dim && !unlocked.zoomDisabled
-      && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
+      && unlocked.label === "Send to agent" && unlocked.annotations === beforeStop,
     JSON.stringify(unlocked));
 
   // ---- touch mode: bigger tools, row actions not hover-only
@@ -2178,11 +2258,18 @@ const main = async () => {
   const penBefore = await page.evaluate(() => window.redline.annotations[0].points[0]);
   await page.keyboard.press("v");
   const penGrip = await onScreen({ type: "pen", point: 1 });
-  await drag(page, penGrip, { x: penGrip.x + 30, y: penGrip.y + 20 });
-  const penMoved = await page.evaluate(() => ({
-    point: window.redline.annotations[0].points[0],
-    scale: window.redline.view.scale,
-  }));
+  let penMoved = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await drag(page, penGrip, { x: penGrip.x + 30, y: penGrip.y + 20 });
+    penMoved = await page.evaluate(() => ({
+      point: window.redline.annotations[0].points[0],
+      scale: window.redline.view.scale,
+    }));
+    const dx = (penMoved.point.x - penBefore.x) * penMoved.scale;
+    const dy = (penMoved.point.y - penBefore.y) * penMoved.scale;
+    if (Math.abs(dx - 30) < 4 && Math.abs(dy - 20) < 4) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   const penDx = (penMoved.point.x - penBefore.x) * penMoved.scale;
   const penDy = (penMoved.point.y - penBefore.y) * penMoved.scale;
   check("dragging a freehand stroke moves its points",
@@ -2273,7 +2360,7 @@ const main = async () => {
   const doomedRow = `.session[data-id="${doomedId}"]`;
   await page.evaluate(() => window.redline.rail.load());
   await page.waitForSelector(doomedRow, { timeout: 5000 });
-  await page.hover(doomedRow);
+  await hoverRow(page, doomedRow);
   await page.click(`${doomedRow} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   await page.click('#feature-actions [data-action="delete"]');
@@ -3461,13 +3548,20 @@ const main = async () => {
   await page.goto(`${BASE}/s/${openDeleteId}`, { waitUntil: "networkidle2" });
   await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });
   const openDeleteRow = `.session[data-id="${openDeleteId}"]`;
-  await page.hover(openDeleteRow);
+  await hoverRow(page, openDeleteRow);
   await page.click(`${openDeleteRow} [data-act="menu"]`);
   await page.waitForSelector("#feature-dialog[open]", { timeout: 5000 });
   page.once("dialog", (dialog) => dialog.accept());
   await page.click('#feature-actions [data-action="delete"]');
   await page.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
   await page.waitForSelector("#gallery", { timeout: 10000 });
+  // The dashboard hydrates the rail/gallery from the tab's cached list before `/api/sessions`
+  // answers; poll for the deleted card to leave instead of reading the first paint.
+  await page.waitForFunction(
+    (sessionId) => !document.querySelector(`#gallery .card[data-session="${sessionId}"]`),
+    { timeout: 10000 },
+    openDeleteId,
+  );
   const deletedOpen = await fetch(`${BASE}/api/sessions/${openDeleteId}`, {
     headers: { Authorization: `Bearer ${TOKEN}` },
   });
@@ -3726,6 +3820,526 @@ const main = async () => {
     method: "POST",
     body: JSON.stringify({ agent_id: "e2e" }),
   });
+
+  // ---- an existing review moves to another project, and the move survives a reload (v0.27).
+  // The project is not just a rail label: the bridge resolves the agent's repository from it.
+  const movable = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "project move e2e",
+      image_base64: makePng(),
+      branch: "feat/project-move-e2e",
+    }),
+  });
+  const moveId = movable.meta.id;
+  check("a review created without a project starts in Inbox",
+    !movable.meta.project, String(movable.meta.project));
+  await page.goto(`${BASE}/s/${moveId}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  const inboxChip = await page.$eval("#project-edit", (el) => ({
+    text: el.textContent.trim(),
+    project: el.dataset.project,
+    hidden: el.hidden,
+    title: el.title,
+  }));
+  check("the editor header shows the review's project",
+    !inboxChip.hidden && inboxChip.text === "Inbox" && inboxChip.project === "inbox",
+    JSON.stringify(inboxChip));
+
+  await page.click("#project-edit");
+  await page.waitForSelector("#project-dialog[open]", { timeout: 5000 });
+  const projectPicker = await page.evaluate(() => {
+    const select = document.querySelector("#project-select");
+    return {
+      current: select?.value,
+      values: [...(select?.options || [])].map((option) => option.value),
+      hint: document.querySelector("#project-dialog-hint")?.textContent.trim() || "",
+    };
+  });
+  check("the project dialog lists the projects and selects the current one",
+    projectPicker.current === "inbox" && projectPicker.values.includes("inbox")
+      && projectPicker.values.includes("e2e-repo") && projectPicker.hint.includes("no repository"),
+    JSON.stringify(projectPicker));
+  await page.select("#project-select", "e2e-repo");
+  const repoHint = await page.$eval("#project-dialog-hint", (el) => el.textContent.trim());
+  check("choosing a repo project explains which repository the agent will use",
+    repoHint.includes("e2e-repo"), repoHint);
+  await page.click('#project-actions button[value="save"]');
+  await page.waitForFunction(
+    () => document.querySelector("#project-edit")?.dataset.project === "e2e-repo",
+    { timeout: 5000 },
+  );
+  const movedChip = await page.$eval("#project-edit", (el) => ({
+    text: el.textContent.trim(),
+    project: el.dataset.project,
+    title: el.title,
+  }));
+  check("the header chip follows the new project",
+    movedChip.project === "e2e-repo" && movedChip.text === "E2E Repo",
+    JSON.stringify(movedChip));
+  const persistedMove = await api(`/api/sessions/${moveId}`);
+  check("the project move is persisted on the server",
+    persistedMove.meta.project === "e2e-repo", String(persistedMove.meta.project));
+  // The rail refreshes from `/api/sessions` after the move; the chip is already correct. Poll for
+  // the row under its new group instead of reading the pre-refresh DOM.
+  await page.waitForFunction((id) => {
+    const header = document.querySelector('.rail-project[data-project="e2e-repo"]');
+    if (!header) return false;
+    let node = header.nextElementSibling;
+    while (node && !node.classList.contains("rail-project")) {
+      if (node.classList.contains("session") && node.dataset.id === id) return true;
+      node = node.nextElementSibling;
+    }
+    return false;
+  }, { timeout: 5000 }, moveId);
+  const movedGrouped = await page.evaluate((id) => {
+    const header = document.querySelector('.rail-project[data-project="e2e-repo"]');
+    if (!header) return { header: false, found: false, inbox: false };
+    let node = header.nextElementSibling;
+    let found = false;
+    while (node && !node.classList.contains("rail-project")) {
+      if (node.classList.contains("session") && node.dataset.id === id) found = true;
+      node = node.nextElementSibling;
+    }
+    const inbox = document.querySelector('.rail-project[data-project="inbox"]');
+    let inInbox = false;
+    if (inbox) {
+      let row = inbox.nextElementSibling;
+      while (row && !row.classList.contains("rail-project")) {
+        if (row.classList.contains("session") && row.dataset.id === id) inInbox = true;
+        row = row.nextElementSibling;
+      }
+    }
+    return { header: true, found, inbox: inInbox };
+  }, moveId);
+  check("the rail regroups the review under the new project",
+    movedGrouped.header && movedGrouped.found && !movedGrouped.inbox,
+    JSON.stringify(movedGrouped));
+
+  await page.reload({ waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  const reloadedProject = await page.$eval("#project-edit", (el) => el.dataset.project);
+  check("the project move survives a reload",
+    reloadedProject === "e2e-repo", reloadedProject);
+
+  await page.click("#project-edit");
+  await page.waitForSelector("#project-dialog[open]", { timeout: 5000 });
+  await page.select("#project-select", "inbox");
+  await page.click('#project-actions button[value="save"]');
+  await page.waitForFunction(
+    () => document.querySelector("#project-edit")?.dataset.project === "inbox",
+    { timeout: 5000 },
+  );
+  const movedBack = await api(`/api/sessions/${moveId}`);
+  check("moving a review back to Inbox persists too",
+    !movedBack.meta.project, String(movedBack.meta.project));
+
+  // ---- owner login page (multi-user auth foundation). Isolated context: its cookies must not
+  // leak into the legacy-token page used by the rest of the suite.
+  const authContext = await browser.createBrowserContext();
+  const loginPage = await authContext.newPage();
+  const authErrors = [];
+  loginPage.on("pageerror", (error) => authErrors.push(error.message));
+  await loginPage.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
+  await loginPage.waitForSelector("#login-form:not([hidden])", { timeout: 5000 });
+  const authShell = await loginPage.evaluate(() => ({
+    title: document.querySelector("#auth-title")?.textContent.trim(),
+    loginVisible: !document.querySelector("#login-form")?.hidden,
+    bootstrapVisible: !document.querySelector("#bootstrap-form")?.hidden,
+  }));
+  check("login page shows the sign-in form when an owner exists",
+    authShell.title === "Sign in" && authShell.loginVisible && !authShell.bootstrapVisible,
+    JSON.stringify(authShell));
+
+  await loginPage.type("#username", "owner");
+  await loginPage.type("#password", ownerPassword);
+  await loginPage.click("#login-submit");
+  await loginPage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await loginPage.waitForSelector("#gallery", { timeout: 15000 });
+  const signedIn = await loginPage.evaluate(async () => {
+    const response = await fetch("/api/auth/me", { cache: "no-store" });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  });
+  check("owner signs in with username and password",
+    signedIn.status === 200 && signedIn.body.user?.username === "owner"
+      && signedIn.body.is_owner === true,
+    `${signedIn.status} ${JSON.stringify(signedIn.body)}`);
+  const csrfCookie = await loginPage.evaluate(() =>
+    document.cookie.split("; ").some((part) => part.startsWith("redline_csrf=")));
+  check("login sets the readable CSRF cookie", csrfCookie);
+
+  // Owner-only People & access: create a tester and assign the repo project through the UI.
+  await loginPage.goto(`${BASE}/people`, { waitUntil: "networkidle2" });
+  await loginPage.waitForSelector("#people-table", { timeout: 10000 });
+  await loginPage.type("#new-username", "e2e-tester");
+  await loginPage.type("#new-name", "E2E Tester");
+  await loginPage.type("#new-password", "correct horse battery staple");
+  await loginPage.click("#new-user-submit");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#people-table")?.textContent.includes("@e2e-tester"),
+    { timeout: 10000 },
+  );
+  const testerId = await loginPage.evaluate(() => {
+    const row = [...document.querySelectorAll("#people-table tbody tr")]
+      .find((tr) => tr.textContent.includes("@e2e-tester"));
+    return row?.querySelector("select")?.dataset.user || "";
+  });
+  check("People & access creates a named user", Boolean(testerId), testerId);
+  await loginPage.select(
+    `#people-table select[data-project="e2e-repo"][data-user="${testerId}"]`,
+    "tester",
+  );
+  await loginPage.waitForFunction(
+    () => document.querySelector("#status")?.textContent.includes("Saved"),
+    { timeout: 10000 },
+  );
+  const projectMembers = await api("/api/projects/e2e-repo/members");
+  check("People & access saves a project role",
+    (projectMembers.members || []).some((member) =>
+      member.username === "e2e-tester" && member.role === "tester"),
+    JSON.stringify(projectMembers.members || []));
+
+  // Invite links: no SMTP, so the owner copies a one-time link; it activates the account.
+  await loginPage.type("#new-username", "e2e-invite");
+  await loginPage.type("#new-name", "E2E Invite");
+  await loginPage.click("#new-invite");
+  await loginPage.click("#new-user-submit");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#link-reveal") && !document.querySelector("#link-reveal").hidden,
+    { timeout: 10000 },
+  );
+  const inviteUrl = await loginPage.$eval("#link-raw", (el) => el.value);
+  check("the owner can create an invite link",
+    inviteUrl.includes("/invite/rl_inv_"), inviteUrl.slice(0, 60));
+
+  const inviteContext = await browser.createBrowserContext();
+  const invitePage = await inviteContext.newPage();
+  await invitePage.goto(inviteUrl, { waitUntil: "networkidle2" });
+  await invitePage.waitForSelector("#invite-card:not([hidden])", { timeout: 10000 });
+  const inviteGreeting = await invitePage.$eval("#invite-lead", (el) => el.textContent);
+  check("the invite page greets the invited person",
+    inviteGreeting.includes("E2E Invite"), inviteGreeting);
+  await invitePage.type("#invite-password", "correct horse battery staple");
+  await invitePage.type("#invite-confirm", "correct horse battery staple");
+  await invitePage.click("#invite-submit");
+  await invitePage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  const invitedMe = await invitePage.evaluate(async () => {
+    const response = await fetch("/api/auth/me", { cache: "no-store" });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  });
+  check("an invite link activates the account and signs in",
+    invitedMe.status === 200 && invitedMe.body.user?.username === "e2e-invite"
+      && invitedMe.body.user?.status === "active",
+    `${invitedMe.status} ${JSON.stringify(invitedMe.body)}`);
+  await inviteContext.close();
+
+  // Reset-link generation for the now-active account (acceptance is covered by Rust).
+  const inviteRow = await loginPage.evaluateHandle(() =>
+    [...document.querySelectorAll("#people-table tbody tr")]
+      .find((row) => row.textContent.includes("@e2e-invite")));
+  await inviteRow.asElement().$eval("[data-reset]", (button) => button.click());
+  await loginPage.waitForFunction(
+    () => document.querySelector("#link-reveal")?.value?.includes("/reset/")
+      || document.querySelector("#link-raw")?.value?.includes("/reset/"),
+    { timeout: 10000 },
+  );
+  const resetUrl = await loginPage.$eval("#link-raw", (el) => el.value);
+  check("the owner can generate a reset link from the people matrix",
+    resetUrl.includes("/reset/rl_rst_"), resetUrl.slice(0, 60));
+
+  // Owner-only audit log: the membership change just made must be visible with a local timestamp.
+  await loginPage.goto(`${BASE}/audit`, { waitUntil: "networkidle2" });
+  await loginPage.waitForSelector("#audit-events", { timeout: 10000 });
+  const auditView = await loginPage.evaluate(() => {
+    const rows = [...document.querySelectorAll("#audit-events tbody tr")];
+    return {
+      rows: rows.length,
+      actions: rows.map((row) => row.querySelector(".action code")?.textContent.trim() || ""),
+      times: rows.slice(0, 3).map((row) => row.querySelector("td.when")?.textContent.trim() || ""),
+      actors: rows.slice(0, 3).map((row) => row.querySelector("td.actor")?.innerText.trim() || ""),
+    };
+  });
+  check("the owner can read the audit log",
+    auditView.rows > 0 && auditView.actions.includes("membership.update"),
+    JSON.stringify(auditView));
+  check("audit rows show a readable local time and actor",
+    auditView.times.every((time) => time.length > 0 && !/^\d{2}:\d{2}$/.test(time))
+      && auditView.actors.every((actor) => actor.length > 0),
+    JSON.stringify({ times: auditView.times, actors: auditView.actors }));
+
+  // Personal and agent tokens: create them in the UI, verify the raw value works once, revoke.
+  await loginPage.goto(`${BASE}/tokens`, { waitUntil: "networkidle2" });
+  await loginPage.waitForSelector("#my-tokens-card", { timeout: 10000 });
+  await loginPage.waitForFunction(
+    () => !document.querySelector("#agent-tokens-card")?.hidden,
+    { timeout: 5000 },
+  );
+  await loginPage.type("#my-name", "E2E PAT");
+  await loginPage.type("#my-projects", "e2e-repo");
+  await loginPage.click("#my-create");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#my-reveal") && !document.querySelector("#my-reveal").hidden,
+    { timeout: 10000 },
+  );
+  const rawPat = await loginPage.$eval("#my-raw", (el) => el.value);
+  const myListText = await loginPage.$eval("#my-list", (el) => el.textContent);
+  check("the owner can create a personal token in the UI",
+    rawPat.startsWith("rl_pat_") && myListText.includes("E2E PAT"),
+    `${rawPat.slice(0, 12)} ${myListText.slice(0, 120)}`);
+  const patMe = await loginPage.evaluate(async (token) => {
+    const response = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }, rawPat);
+  check("the personal token authenticates as its user",
+    patMe.status === 200 && patMe.body.user?.username === "owner",
+    `${patMe.status} ${JSON.stringify(patMe.body)}`);
+
+  loginPage.once("dialog", (dialog) => dialog.accept());
+  await loginPage.click("#my-list [data-revoke]");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#my-list")?.textContent.includes("revoked"),
+    { timeout: 10000 },
+  );
+  const revokedPat = await loginPage.evaluate(async (token) => {
+    const response = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    return response.status;
+  }, rawPat);
+  check("revoking a personal token stops it immediately", revokedPat === 401, String(revokedPat));
+
+  await loginPage.type("#agent-id", "e2e-ui-bot");
+  await loginPage.type("#agent-name", "E2E bridge");
+  await loginPage.type("#agent-projects", "e2e-repo");
+  await loginPage.click("#agent-create");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#agent-reveal") && !document.querySelector("#agent-reveal").hidden,
+    { timeout: 10000 },
+  );
+  const rawAgent = await loginPage.$eval("#agent-raw", (el) => el.value);
+  const agentListText = await loginPage.$eval("#agent-list", (el) => el.textContent);
+  check("the owner can create a scoped agent token in the UI",
+    rawAgent.startsWith("rl_agt_") && agentListText.includes("E2E bridge")
+      && agentListText.includes("e2e-repo"),
+    `${rawAgent.slice(0, 12)} ${agentListText.slice(0, 120)}`);
+
+  // A tester sees the role in the editor, can create their own task and request an agent review;
+  // the server refuses the actual submit/STOP/confirm actions (covered by Rust tests).
+  const testerContext = await browser.createBrowserContext();
+  const testerPage = await testerContext.newPage();
+  await testerPage.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
+  await testerPage.waitForSelector("#login-form:not([hidden])", { timeout: 5000 });
+  await testerPage.type("#username", "e2e-tester");
+  await testerPage.type("#password", "correct horse battery staple");
+  await testerPage.click("#login-submit");
+  await testerPage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  const testerCreated = await testerPage.evaluate(async (png) => {
+    const csrf = document.cookie
+      .split("; ")
+      .find((part) => part.startsWith("redline_csrf="))
+      ?.split("=")[1] || "";
+    const response = await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-csrf-token": csrf },
+      body: JSON.stringify({
+        title: "tester request",
+        project: "e2e-repo",
+        image_base64: png,
+      }),
+    });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }, makePng());
+  check("a tester can create a task in their project",
+    testerCreated.status === 200 && Boolean(testerCreated.body.meta?.id),
+    `${testerCreated.status} ${JSON.stringify(testerCreated.body)}`);
+  const testerTask = testerCreated.body.meta.id;
+  await testerPage.goto(`${BASE}/s/${testerTask}`, { waitUntil: "networkidle2" });
+  await testerPage.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  const testerEditor = await testerPage.evaluate(() => ({
+    role: window.redline.myRole,
+    button: document.querySelector("#submit")?.textContent.trim(),
+    disabled: Boolean(document.querySelector("#submit")?.disabled),
+  }));
+  check("a tester gets Request agent review on their own task",
+    testerEditor.role === "tester" && testerEditor.button === "Request agent review"
+      && !testerEditor.disabled,
+    JSON.stringify(testerEditor));
+
+  await testerPage.click("#submit");
+  await testerPage.waitForFunction(
+    () => Boolean(window.redline.meta?.agent_requested_at),
+    { timeout: 10000 },
+  );
+  await testerPage.waitForFunction(
+    () => Boolean(document.querySelector('.session[aria-current="true"] .badge.ready')),
+    { timeout: 5000 },
+  );
+  // The transient "Request sent ✓" is replaced by the final label after 1.4 s.
+  await testerPage.waitForFunction(
+    () => document.querySelector("#submit")?.textContent.trim() === "Update request",
+    { timeout: 3000 },
+  );
+  const testerRequested = await testerPage.evaluate(() => ({
+    status: window.redline.meta.status,
+    requested: Boolean(window.redline.meta.agent_requested_at),
+    button: document.querySelector("#submit")?.textContent.trim(),
+    badge: document.querySelector(".session[aria-current=\"true\"] .badge.ready")?.textContent.trim() || "",
+  }));
+  check("the tester request stays open and is marked ready for agent",
+    testerRequested.status === "open" && testerRequested.requested
+      && testerRequested.button === "Update request"
+      && testerRequested.badge === "ready for agent",
+    JSON.stringify(testerRequested));
+
+  // Discussion: the tester comments on their own task through the inspector.
+  await testerPage.click("#comments-block > summary");
+  await testerPage.type("#comment-text", "Please send this to the agent.");
+  await testerPage.click("#comment-submit");
+  await testerPage.waitForFunction(
+    () => document.querySelector("#comments-list")?.textContent.includes("Please send this"),
+    { timeout: 5000 },
+  );
+  const testerComments = await testerPage.evaluate(async (taskId) => {
+    const response = await fetch(`/api/sessions/${taskId}/comments`);
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }, testerTask);
+  check("a tester can discuss a task in the inspector",
+    testerComments.status === 200
+      && (testerComments.body.comments || []).some((comment) =>
+        comment.body === "Please send this to the agent."),
+    JSON.stringify(testerComments.body.comments || []));
+
+  // The owner comments from the other context; the tester's bell must show it.
+  const ownerComment = await loginPage.evaluate(async (taskId) => {
+    const csrf = document.cookie
+      .split("; ")
+      .find((part) => part.startsWith("redline_csrf="))
+      ?.split("=")[1] || "";
+    const response = await fetch(`/api/sessions/${taskId}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-csrf-token": csrf },
+      body: JSON.stringify({ body: "I will send this to the agent soon." }),
+    });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }, testerTask);
+  check("the owner can comment on a project task", ownerComment.status === 200, JSON.stringify(ownerComment));
+  await testerPage.waitForFunction(
+    () => document.querySelector("#notifications-link") && !document.querySelector("#notifications-link").hidden,
+    { timeout: 5000 },
+  );
+  await testerPage.click("#notifications-link");
+  await testerPage.waitForFunction(
+    () => document.querySelector("#notification-list")?.textContent.includes("Owner commented"),
+    { timeout: 5000 },
+  );
+  const notificationText = await testerPage.$eval("#notification-list", (el) => el.textContent.trim());
+  check("the tester's bell shows the owner's comment",
+    notificationText.includes("Owner commented"), notificationText.slice(0, 120));
+
+  await testerPage.goto(`${BASE}/audit`, { waitUntil: "networkidle2" });
+  await testerPage.waitForSelector(".error-card", { timeout: 10000 });
+  const auditDenied = await testerPage.$eval(".error-card", (el) => el.textContent.trim());
+  check("a member cannot open the audit log",
+    auditDenied.includes("owner-only"), auditDenied);
+  await testerContext.close();
+
+  // Return to the dashboard so the logout/CSRF checks run in the same context.
+  await loginPage.goto(`${BASE}/`, { waitUntil: "networkidle2" });
+  const logout = await loginPage.evaluate(async () => {
+    const csrf = document.cookie
+      .split("; ")
+      .find((part) => part.startsWith("redline_csrf="))
+      ?.split("=")[1] || "";
+    const response = await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-csrf-token": csrf },
+      body: "{}",
+    });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  });
+  const afterLogout = await loginPage.evaluate(async () =>
+    (await fetch("/api/auth/me", { cache: "no-store" })).status);
+  check("logout revokes the browser session",
+    logout.status === 200 && afterLogout === 401,
+    `${logout.status} / me=${afterLogout}`);
+  check("login page has no uncaught JS errors", authErrors.length === 0, authErrors.join("; "));
+  await authContext.close();
+
+  // ---- optimistic revision: a stale canvas must not silently overwrite a newer round
+  const revision = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "revision e2e", image_base64: makePng() }),
+  });
+  const revisionId = revision.meta.id;
+  await page.goto(`${BASE}/s/${revisionId}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  const revisionStart = await page.evaluate(() => window.redline.baseRevision);
+  check("a fresh task starts at revision 0", revisionStart === 0, String(revisionStart));
+
+  // Draw locally, then let an agent post a round behind the canvas.
+  await page.keyboard.press("r");
+  await drag(page, at(300, 250), at(430, 340));
+  await page.keyboard.press("v");
+  const agentRound = (note) => api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "post_round", arguments: { session_id: revisionId, note } },
+    }),
+  });
+  await agentRound("a round posted behind the canvas");
+  await page.click("#submit");
+  await page.waitForSelector("#revision-banner:not([hidden])", { timeout: 10000 });
+  const conflictView = await page.evaluate(() => ({
+    text: document.querySelector("#revision-banner-text")?.textContent.trim() || "",
+    reload: Boolean(document.querySelector("#revision-reload")),
+    keep: Boolean(document.querySelector("#revision-keep")),
+  }));
+  check("a stale canvas shows the revision conflict banner",
+    conflictView.text.includes("revision 1") && conflictView.reload && conflictView.keep,
+    JSON.stringify(conflictView));
+
+  await page.click("#revision-reload");
+  await page.waitForFunction(() => window.redline.baseRevision === 1, { timeout: 10000 });
+  const revisionReload = await page.evaluate(() => ({
+    base: window.redline.baseRevision,
+    hidden: document.querySelector("#revision-banner")?.hidden,
+    annotations: window.redline.annotations.length,
+  }));
+  check("Reload theirs discards the local draft and takes the newer round",
+    revisionReload.base === 1 && revisionReload.hidden && revisionReload.annotations === 0,
+    JSON.stringify(revisionReload));
+
+  // Now keep local work: draw an ellipse, let the agent post again, then overwrite deliberately.
+  await page.keyboard.press("e");
+  await drag(page, at(500, 300), at(640, 390));
+  await page.keyboard.press("v");
+  await page.waitForFunction(() => window.redline.annotations.length === 1, { timeout: 5000 });
+  await agentRound("another agent round");
+  await page.click("#submit");
+  await page.waitForSelector("#revision-banner:not([hidden])", { timeout: 10000 });
+  const secondConflict = await page.evaluate(() =>
+    document.querySelector("#revision-banner-text")?.textContent.trim() || "");
+  check("the second conflict names revision 2",
+    secondConflict.includes("revision 2"), secondConflict);
+  await page.click("#revision-keep");
+  await page.waitForFunction(
+    () => window.redline.meta?.status === "submitted" && window.redline.baseRevision === 3,
+    { timeout: 15000 },
+  );
+  const kept = await api(`/api/sessions/${revisionId}`);
+  check("Keep mine submits over the newer revision",
+    kept.meta.revision === 3
+      && kept.annotations.annotations.length === 1
+      && kept.annotations.annotations[0].type === "ellipse"
+      && kept.annotations.revision === 3,
+    JSON.stringify({ revision: kept.meta.revision, annotations: kept.annotations.annotations }));
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

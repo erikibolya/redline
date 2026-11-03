@@ -14,6 +14,9 @@ optional: a green suite that never drew a freehand stroke is not a green suite.
 | Rust unit/integration | `docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm cargo test --workspace` | store layout, HTTP/API, MCP, auth, history, feature decisions, path/config helpers, CLI |
 | Browser e2e | `docker build -q -f desktop/Dockerfile.browser -t redline:local .` then `REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh` (or `REDLINE_BIN=/path/to/redline REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser` to mount a fresh binary without rebuilding the image) | real Chromium: pointer drags, clicks, dialogs, DOM/geometry/canvas pixels, server round-trip |
 | GitHub CI | required checks on `dev` and `main` | Linux + Windows, Tauri compile, browser e2e, container/image build |
+| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` | side-panel annotation geometry/hit-testing/moving, API request shape, URL/permission config, trace redaction and the offline Markdown/JSON/ZIP package |
+| Extension e2e | browser e2e job / `extension/scripts/e2e.mjs` | loads the unpacked extension in Chromium, submits server image and video+trace reviews, and exports offline image and video packages with a mocked folder picker |
+| Dev build | `.github/workflows/dev.yml` | `desktop/scripts/dev-version.mjs` stamps the workspace, app and lockfile versions; the Windows job asserts `redline --version`; the `browser-dev` image is built from the same stamped tree |
 | Release smoke | the checklist below against the exact tag/image | the thing users install, not just the source tree |
 
 `desktop/scripts/e2e.sh` is the release gate. Run it against the release image, not only a local
@@ -79,9 +82,9 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   goes silent (must fail with `timeout_idle`), one that keeps printing (must survive the idle
   window), and one that hits the hard cap (`timeout_hard`); the idle case also spawns a background
   grandchild and asserts the process-group kill reaps it (no orphaned builds); the handoff prompt
-  test asserts the draft-PR-first flow, the `REDLINE_BIN` preflight and the failed-result report;
-  the two-worktree bridge integration test asserts the fake agent's own stdout line arrives in the
-  review as a `state="log"` event.
+  test asserts it stays forge-agnostic (the repo's AGENTS.md owns the concrete commands) and
+  reports the result; the two-worktree bridge integration test asserts the fake agent's own stdout
+  line arrives in the review as a `state="log"` event.
 - Browser e2e: a running claim on an answered round restores the rail's **working** badge and the
   project spinner, and releasing it returns to **replied**; a failed run unlocks the canvas, the
   tools and the composer, shows **agent failed** on the rail, a red run card and the "it is yours
@@ -119,6 +122,130 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   creates a review through the dialog with the field left empty, and asserts the rail row and the
   loaded meta carry `feat/<title>-<tail>`.
 
+## Moving a review between projects (v0.27)
+
+- Rust `tests/store.rs`: `an_existing_review_moves_its_folder_and_project_label` — a flat Inbox
+  review moves to `projects/<slug>/<id>` with the label, the old folder disappears, `list()` keeps
+  the project, moving back to Inbox flattens it and reads as `inbox`, and an unknown project is an
+  error that leaves the review where it is.
+- Rust `tests/api.rs`: `an_existing_review_moves_between_projects_and_back_to_inbox` (the HTTP
+  path, persisted meta and `GET /api/sessions` row), `a_submitted_review_cannot_change_its_project`
+  (409 and no move), and `a_running_handoff_blocks_a_move_but_a_failed_handoff_can_move` (the
+  recovery path for a review filed in the wrong project).
+- Browser e2e: create an Inbox review, open the header project chip, assert the dialog lists the
+  current project and the repo hint, move it to the repo project, assert the chip/server/rail
+  grouping and that it survives a reload, then move it back to Inbox.
+
+## Authentication foundation (v0.28, in progress)
+
+- Rust `users.rs`: Argon2id hash/verify, duplicate/weak-password rejection, exactly one owner,
+  transfer moves the owner bit, public user never serializes `password_hash`.
+- Rust `sessions.rs`: create/lookup/revoke, expiry, per-user revoke, CSRF hash check.
+- Rust `auth.rs`: session cookie outranks the legacy cookie, cookie flags, credential sources.
+- Rust `tests/api.rs`: `auth_status_bootstrap_and_session_owner_path_work`,
+  `login_and_logout_use_the_session_cookie`, `a_member_can_sign_in_but_cannot_read_owner_data`,
+  `csrf_is_required_for_session_mutations`, `transfer_ownership_moves_the_single_owner_bit`,
+  `password_change_revokes_old_sessions_and_returns_a_new_one`,
+  `failed_logins_are_throttled`.
+- Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
+  username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
+  revokes the session. 304 checks.
+- **Current gaps:** PAT/agent-token UI, invite/reset links, audit UI and optimistic revision still
+  need their tests as they arrive.
+
+## Roles and project ACL (v0.28, in progress)
+
+- Rust `memberships.rs`: one role per `(project, user)`, different roles across projects,
+  `replace_project` leaves other projects alone.
+- Rust `tests/api.rs`: `project_membership_and_tester_to_developer_flow` — owner creates project,
+  tester/developer, assigns both, tester creates a task, reads project media, gets `403` for
+  submit/STOP/confirm, requests an agent review; developer sees it and submits; request fields
+  clear. `a_tester_cannot_request_a_developer_task_and_members_are_owner_managed` — tester reads
+  the project but cannot request someone else's task or change members.
+- Rust `tests/api.rs`: `a_member_can_sign_in_but_cannot_read_owner_data` and the transfer test
+  assert a member with no projects sees an empty queue, a foreign task/media is `404`, and the
+  old owner loses the Inbox.
+- Browser e2e: the owner-only People & access page creates a user and saves a tester role; the
+  editor/rail role labels are covered by the 304-check suite.
+
+## Invite and reset links (v0.28, in progress)
+
+- Rust `users.rs`: an invited account has no password and cannot log in until
+  `activate_with_password` makes it active.
+- Rust `invites.rs`: invite/reset links are hashed, kind-checked, one-time, expire, a new link
+  supersedes the previous one, and `revoke_user` kills every unused link.
+- Rust `tests/api.rs`: `invite_and_reset_links_are_one_time_and_audited` — the owner creates an
+  invited user, the status endpoint greets them, accepting activates + signs in, a second use is
+  `404`, a reset link invalidates the old session and old password while the new password works,
+  the owner cannot reset themselves, and `user.invite`/`user.reset` are audited. The existing
+  transfer test also asserts the `owner.transfer` notification.
+- Browser e2e: invite checkbox hidden-password mode, copy-once invite URL, the invited page greets
+  the person, accepting the link signs them in as an active member, and **Reset link** generates a
+  `/reset/rl_rst_…` URL from the matrix. 304 checks.
+- **Not yet covered:** accepting a reset link in Chromium, transfer ownership through the UI
+  (covered by Rust), and invite-link expiry through the browser.
+
+## Personal and agent tokens (v0.28, in progress)
+
+- Rust `tokens.rs`: a PAT stores only the hash, keeps its allowlist/read-only/expiry, looks up the
+  raw value, and stops working after revoke/expiry; an agent token carries its jobs and agent id;
+  bad names/scopes/jobs are refused; the raw value starts `rl_pat_`/`rl_agt_`.
+- Rust `tests/api.rs`: `personal_and_agent_tokens_are_scoped_hashed_and_revocable` — create a
+  read-only PAT scoped to one project, authenticate `/api/auth/me`, list only that project on
+  `/api/sessions`, `404` a foreign task, `403` a submit, create a review-only agent token, verify
+  token/agent mismatch is `403`, `list_reviews` excludes the foreign task, an agent token is `403`
+  on a human route, revoke both tokens and get `401`, and `token.create`/`token.revoke` in audit.
+- Browser e2e: the owner creates a personal token in `/tokens`, uses the raw value for
+  `/api/auth/me`, revokes it and gets `401`; creates an agent token with a project/job scope and
+  sees it listed. 304 checks.
+- **Not yet covered:** the extension/CLI using a PAT in its own e2e, `last_used_at` display
+  refreshed after use, and token expiry through the browser.
+
+## Optimistic revision (v0.28, in progress)
+
+- Rust `tests/store.rs`: `revisions_guard_rounds_and_stamp_the_canvas` — first submit with base 0
+  becomes revision 1, a stale base 0 is a `RevisionConflict`, base 1 becomes revision 2, an agent
+  `post_round` advances to 3 and a stale human submit is refused.
+- Rust `tests/api.rs`: `stale_revisions_are_refused_with_a_structured_conflict` — create starts at
+  0, submit stamps 1 with `updated_by`/`updated_by_name`, a stale submit returns `409` with
+  `current_revision`/writer/time, base 1 submits to 2, and a legacy client without `base_revision`
+  is accepted but still stamps 3 (meta and annotations agree).
+- Browser e2e: fresh task at revision 0; an agent `post_round` behind the canvas makes the UI
+  submit stale, the conflict banner names revision 1, **Reload theirs** discards the local draft
+  and loads the newer round; a second agent round names revision 2 and **Keep mine** submits the
+  local ellipse as revision 3. 304 checks.
+- **Not yet covered:** a tester request conflict through the UI, video-round conflicts in the
+  browser, and multi-tab edits on the same machine (the server guard is covered by Rust).
+
+## Audit log (v0.28, in progress)
+
+- Rust `audit.rs`: append/list newest-first, project/actor/action-prefix filters, 365-day
+  retention hides an old event, invalid action names are refused, and six concurrent writers
+  produce 60 intact lines (the store lock serializes appends).
+- Rust `tests/api.rs`: `audit_log_records_actions_and_is_owner_only` — bootstrap, project/user
+  creation, membership update, failed login, successful login, review create, submit and comment
+  all appear with actor/project/session; action and project filters work; a bad `since` is `400`;
+  a developer gets `403`.
+- Browser e2e: the owner opens **Audit log** from People & access, sees the `membership.update`
+  row just written, and the row shows a locale-formatted time and actor; a tester sees the
+  owner-only card. 304 checks.
+- **Not yet covered:** MCP/agent actions in the audit stream, audit for handoff results and
+  notification delivery, and audit-log rotation beyond the file-size compaction.
+
+## Comments and notifications (v0.28, in progress)
+
+- Rust `notifications.rs`: per-user files, unread count, mark-read by id/all, invalid user ids,
+  and the 90-day retention window drops an old entry.
+- Rust `tests/api.rs`: `comments_notifications_and_moderation_are_project_scoped` — developer
+  comments with a tester mention, the tester's notification is `comment.mention`, mark-read
+  clears unread, a tester cannot edit/delete the developer's comment but can edit their own,
+  a developer resolves it, and an unknown mention is `400`. The tester→developer test also
+  asserts `review.ready` and `review.submitted` notifications.
+- Browser e2e: the tester opens **Discussion**, posts a comment and the API returns it; the owner
+  comments from another context; the tester's bell shows the owner's comment. 304 checks.
+- **Not yet covered:** audit log, notification for handoff done/failed and ownership transfer,
+  comment rate limiting, and the desktop notification surface.
+
 ## Handoff after confirmation (v0.23)
 
 - Rust `tests/store.rs` / `tests/api.rs`: confirming with `handoff:true` queues
@@ -135,9 +262,10 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Rust `tests/agent.rs`: a bridge advertises `jobs`, a later sync does not downgrade it, and an
   old presence file defaults to review-only.
 - `redline-agent` tests: the review prompt explicitly forbids opening a PR/feature-ready/merging;
-  the handoff prompt grants the PR/merge and includes the `handoff_status` curl with generic
-  label/url/message; a legacy session branch with the commits wins over a `feat/...` name with
-  none.
+  the handoff prompt is forge-agnostic (it points at the repository's AGENTS.md and does not
+  hardcode `gh`/`feature-ready`/GitHub Actions) and includes the `handoff_status` curl with
+  generic label/url/message; a legacy session branch with the commits wins over a `feat/...`
+  name with none.
 - Browser e2e: the confirm dialog starts the handoff checkbox off for a review-only agent; tick
   it → rail shows `confirmed` + `handoff queued`; a queued/failed/running handoff keeps the review
   in **Active**, not **Done** (asserted right after the confirmation and after the retry); call
@@ -245,6 +373,54 @@ same path a human does: upload, play, draw, range, zoom, submit.
 5. Update `docs/UI.md`, `docs/API.md`, `CHANGELOG.md`, and `PLAN.md` when behaviour changes.
 6. Run Rust tests and the browser e2e locally; CI runs both on the PR.
 7. Release only from a green tag; rerun the e2e against the release image.
+
+## Browser trace (extension Phase 1, 2026-11-01)
+
+- Rust: `validate_trace` rejects an empty/invalid kind, a zero or overlong duration, an event after
+  the recording, an unknown event kind and a bad URL; it derives the summary/highlights itself.
+- Rust: a trace is attached to a video session, carried into `annotations.json` and `review.md`,
+  exposed by `get_feedback`/the MCP `trace.json` resource, and moved to
+  `history/<stamp>/trace.json` when a new clip replaces the round.
+- HTTP: `POST /api/sessions/video` accepts the optional multipart `trace`; `GET
+  /sessions/<id>/trace` returns `application/json`; a bad trace does not create an orphan session.
+- Auth: extension `Origin` + token is accepted (CORS echoed only to that origin); a web
+  `cross-site` request is still `403`; extension preflight is `204`, web preflight is `403`.
+
+## Browser recording (extension Phase 3, 2026-11-01)
+
+- Start a recording from the popup on a local test page; the debugger bar appears and the badge
+  says REC. Click, change, submit, let the page log an error and fail a fetch, then stop.
+- The uploaded session has a WebM clip, a poster and `meta.trace`; `GET /sessions/<id>/trace`
+  contains action/console/network events with redacted URLs and no headers/bodies.
+- `review.md` has the Browser trace summary and `get_feedback` returns `trace`/`trace_url`.
+- A 5-minute recording is bounded by the existing video limit; 5,000 events/10 MB mark the trace
+  truncated instead of failing the upload.
+- The manual smoke test lives in `extension/README.md`; extension unit tests cover geometry, API
+  request shape, URL/permission config and redaction.
+
+## Extension e2e (Phase 5, 2026-11-01)
+
+- The browser e2e job also builds a temporary extension copy with host
+  permission for `127.0.0.1:8788`, launches headless Chromium with `--load-extension`, configures
+  the options page, submits an image rectangle, then a video + trace rectangle at `0.5 s`.
+- It asserts the server payload: image annotation width 3; video `meta.trace.kind=browser-flow`,
+  `annotations[0].at=0.5`, and at least one annotated frame.
+- It measures the options row before configuring: the Project select and Branch input must share a
+  top, and the “(optional)” hint must stay on the Branch line (a bare flex item pushed the input
+  a row down; 2026-11-03).
+- Run locally with a loaded test extension and `REDLINE_BASE`, `REDLINE_TOKEN`, `CHROME_URL`
+  (see `extension/scripts/e2e.mjs`).
+
+## Offline export (v0.3.0, 2026-11-03)
+
+- `package.test.mjs` covers the review Markdown, RedLine-shaped `annotations.json`, trace summary
+  and the store-only ZIP writer (including CRC and central directory).
+- The extension e2e seeds an image and a video+trace local capture in IndexedDB, opens the side
+  panel, draws an annotation, mocks `showDirectoryPicker`, clicks **Export review**, and asserts
+  `review.md`, `annotations.json`, `annotated.png` (image) or `video.webm`/`poster.png`/`frames/`/
+  `contact-sheet.png`/`trace.json` (video) and `AI-PROMPT.md`.
+- Manual: in Chrome/Edge, capture offline from the popup, export to a real folder, open
+  `review.md` and verify the same files; then reject the folder picker and verify the ZIP fallback.
 
 ## Release gate
 

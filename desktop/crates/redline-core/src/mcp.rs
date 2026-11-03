@@ -5,6 +5,7 @@
 //! GUI libraries. Transport is streamable HTTP with plain JSON responses (no SSE), which every
 //! MCP client accepts.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use serde_json::{json, Value};
@@ -13,10 +14,49 @@ use crate::model::{AnnotationSet, HandoffStatus, Meta, Status};
 use crate::store::{HandoffReport, Store};
 use crate::MCP_PROTOCOL_VERSION;
 
+#[derive(Clone, Debug, Default)]
+pub struct AgentScope {
+    pub id: String,
+    pub projects: Option<HashSet<String>>,
+    pub jobs: HashSet<String>,
+}
+
 pub struct McpContext<'a> {
     pub store: &'a Store,
     pub base_url: &'a str,
     pub token: &'a str,
+    /// `Some` when the caller authenticated with an agent token; the legacy token has no scope.
+    pub agent: Option<AgentScope>,
+}
+
+fn allows_project(ctx: &McpContext<'_>, project: Option<&str>) -> Result<(), String> {
+    let Some(agent) = &ctx.agent else {
+        return Ok(());
+    };
+    let Some(project) = project else {
+        return Err("this agent token requires a project".to_string());
+    };
+    if let Some(projects) = &agent.projects {
+        if !projects.contains(project) {
+            return Err("project is outside this agent token's scope".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn allows_job(ctx: &McpContext<'_>, job: &str) -> Result<(), String> {
+    if let Some(agent) = &ctx.agent {
+        if !agent.jobs.contains(job) {
+            return Err(format!("this agent token does not have the {job} job"));
+        }
+    }
+    Ok(())
+}
+
+fn scoped_session(ctx: &McpContext<'_>, id: &str) -> Result<Meta, String> {
+    let meta = ctx.store.require(id).map_err(|error| error.to_string())?;
+    allows_project(ctx, meta.project.as_deref())?;
+    Ok(meta)
 }
 
 /// Returns `None` for notifications (no `id`), which the HTTP layer answers with `202 Accepted`.
@@ -324,6 +364,8 @@ fn string_arg(args: &Value, key: &str) -> Option<String> {
 async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     use base64::Engine as _;
 
+    allows_job(ctx, "review")?;
+    allows_project(ctx, string_arg(args, "project").as_deref())?;
     let title = string_arg(args, "title").unwrap_or_else(|| "Screenshot review".to_string());
     let (bytes, name) = match (
         string_arg(args, "image_base64"),
@@ -407,6 +449,8 @@ async fn review_screenshot(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
 async fn review_video(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     use base64::Engine as _;
 
+    allows_job(ctx, "review")?;
+    allows_project(ctx, string_arg(args, "project").as_deref())?;
     let title = string_arg(args, "title").unwrap_or_else(|| "Video review".to_string());
     let bytes = match (
         string_arg(args, "video_base64"),
@@ -501,6 +545,8 @@ async fn review_video(ctx: &McpContext<'_>, args: &Value) -> Result<Value, Strin
 }
 
 async fn capture_review(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
+    allows_job(ctx, "review")?;
+    allows_project(ctx, string_arg(args, "project").as_deref())?;
     let url = string_arg(args, "url").ok_or("url is required")?;
     let title = string_arg(args, "title").unwrap_or_else(|| url.clone());
     let (width, height) = match string_arg(args, "viewport") {
@@ -572,7 +618,7 @@ fn review_url(ctx: &McpContext<'_>, id: &str) -> String {
 
 fn get_feedback(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
-    let meta = ctx.store.require(&id).map_err(|err| err.to_string())?;
+    let meta = scoped_session(ctx, &id)?;
     let meta = mark_seen(ctx.store, meta);
     Ok(feedback_payload(ctx, &meta))
 }
@@ -595,7 +641,7 @@ async fn wait_for_feedback(ctx: &McpContext<'_>, args: &Value) -> Result<Value, 
         .and_then(Value::as_u64)
         .unwrap_or(600)
         .min(3600);
-    let meta = ctx.store.require(&id).map_err(|err| err.to_string())?;
+    let meta = scoped_session(ctx, &id)?;
     let meta = wait_for_status(ctx.store, &meta.id, timeout).await?;
     if meta.status == Status::Open {
         return Ok(json!({
@@ -632,6 +678,16 @@ fn list_reviews(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let sessions = ctx.store.list().map_err(|err| err.to_string())?;
     let items: Vec<Value> = sessions
         .into_iter()
+        .filter(|meta| match &ctx.agent {
+            None => true,
+            Some(agent) => match &agent.projects {
+                None => true,
+                Some(projects) => meta
+                    .project
+                    .as_deref()
+                    .is_some_and(|project| projects.contains(project)),
+            },
+        })
         .filter(|meta| match &wanted {
             Some(status) => meta.status.as_str() == status.as_str(),
             None => true,
@@ -665,6 +721,13 @@ fn list_projects(ctx: &McpContext<'_>) -> Result<Value, String> {
     let sessions = ctx.store.list().map_err(|err| err.to_string())?;
     let items: Vec<Value> = projects
         .into_iter()
+        .filter(|project| match &ctx.agent {
+            None => true,
+            Some(agent) => match &agent.projects {
+                None => true,
+                Some(projects) => projects.contains(&project.slug),
+            },
+        })
         .map(|project| {
             let mine: Vec<&Meta> = sessions
                 .iter()
@@ -687,6 +750,8 @@ fn list_projects(ctx: &McpContext<'_>) -> Result<Value, String> {
 fn post_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     use base64::Engine as _;
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    scoped_session(ctx, &id)?;
+    allows_job(ctx, "review")?;
     let note = string_arg(args, "note").unwrap_or_default();
     let video_base64 = string_arg(args, "video_base64");
     let video_path = string_arg(args, "video_path");
@@ -803,6 +868,8 @@ fn post_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
 
 async fn capture_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    scoped_session(ctx, &id)?;
+    allows_job(ctx, "review")?;
     let url = string_arg(args, "url").ok_or("url is required")?;
     let (width, height) = match string_arg(args, "viewport") {
         Some(viewport) => crate::capture::parse_viewport(&viewport)?,
@@ -831,6 +898,7 @@ async fn capture_round(ctx: &McpContext<'_>, args: &Value) -> Result<Value, Stri
 
 fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    scoped_session(ctx, &id)?;
     let message = string_arg(args, "message").ok_or("message is required")?;
     let state = string_arg(args, "state").unwrap_or_else(|| "step".to_string());
     let tool = string_arg(args, "tool");
@@ -862,6 +930,7 @@ fn progress(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
 
 fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    scoped_session(ctx, &id)?;
     let message = string_arg(args, "message").ok_or("message is required")?;
     let state = string_arg(args, "state").unwrap_or_else(|| "replied".to_string());
     let code = string_arg(args, "code").unwrap_or_else(|| "failed".to_string());
@@ -905,6 +974,8 @@ fn reply(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
 
 fn resolve(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    scoped_session(ctx, &id)?;
+    allows_job(ctx, "review")?;
     let meta = ctx.store.resolve(&id).map_err(|err| err.to_string())?;
     Ok(
         json!({ "session_id": meta.id, "status": meta.status.as_str(), "resolved_at": meta.resolved_at }),
@@ -915,6 +986,8 @@ fn resolve(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
 /// and message. The server never learns what git or a deployment is.
 fn handoff_status(ctx: &McpContext<'_>, args: &Value) -> Result<Value, String> {
     let id = string_arg(args, "session_id").ok_or("session_id is required")?;
+    scoped_session(ctx, &id)?;
+    allows_job(ctx, "handoff")?;
     let state = string_arg(args, "state").ok_or("state is required")?;
     let status = match state.as_str() {
         "done" => HandoffStatus::Done,
@@ -955,9 +1028,14 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         url: None,
         image: None,
         media: None,
+        trace: None,
         frames: Vec::new(),
         annotations: Vec::new(),
         submitted_at: None,
+        revision: 0,
+        updated_by: None,
+        updated_by_name: None,
+        updated_at: None,
     });
     let dir = ctx.store.dir(&meta.id).ok();
     let markdown = dir
@@ -982,6 +1060,13 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         "agent_failure": meta.agent_failure,
         "submitted_at": meta.submitted_at,
         "media": meta.media,
+        "trace": meta.trace,
+        "trace_url": meta.trace.as_ref().map(|_| format!(
+            "{}/sessions/{}/trace?t={}",
+            ctx.base_url.trim_end_matches('/'),
+            meta.id,
+            ctx.token
+        )),
         "video_url": meta.media.as_ref()
             .filter(|media| media.kind == crate::model::MediaKind::Video)
             .map(|_| format!(
@@ -1032,6 +1117,13 @@ fn resources_list(ctx: &McpContext<'_>) -> Result<Value, Value> {
             "name": format!("{} — review summary", meta.title),
             "mimeType": "text/markdown",
         }));
+        if meta.trace.is_some() {
+            resources.push(json!({
+                "uri": format!("{base}/trace.json"),
+                "name": format!("{} — browser trace", meta.title),
+                "mimeType": "application/json",
+            }));
+        }
     }
     Ok(json!({ "resources": resources }))
 }

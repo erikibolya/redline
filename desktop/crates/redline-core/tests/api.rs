@@ -92,6 +92,20 @@ fn with_session(method: &str, uri: &str, body: Value, session: &str, csrf: &str)
     builder.body(body).unwrap()
 }
 
+fn with_bearer(method: &str, uri: &str, body: Value, token: &str) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"));
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        builder = builder.header("content-type", "application/json");
+        Body::from(body.to_string())
+    };
+    builder.body(body).unwrap()
+}
+
 fn set_cookie(headers: &axum::http::HeaderMap, name: &str) -> String {
     headers
         .get_all(axum::http::header::SET_COOKIE)
@@ -5062,4 +5076,301 @@ async fn stale_revisions_are_refused_with_a_structured_conflict() {
     assert_eq!(status, StatusCode::OK, "{one}");
     assert_eq!(one["meta"]["revision"], 3);
     assert_eq!(one["annotations"]["revision"], 3);
+}
+
+#[tokio::test]
+async fn personal_and_agent_tokens_are_scoped_hashed_and_revocable() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Redline" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let (status, _, other) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Other" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other}");
+
+    let (status, _, redline_task) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "redline task", "image_base64": PNG_B64, "project": "Redline" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{redline_task}");
+    let redline_id = redline_task["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, other_task) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "other task", "image_base64": PNG_B64, "project": "Other" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{other_task}");
+    let other_id = other_task["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, pat) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/me/tokens",
+            json!({
+                "name": "Extension",
+                "projects": ["redline"],
+                "read_only": true,
+                "expires_days": 30,
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pat}");
+    let raw_pat = pat["token"].as_str().unwrap().to_string();
+    let pat_id = pat["personal_token"]["id"].as_str().unwrap().to_string();
+    assert!(raw_pat.starts_with("rl_pat_"));
+    assert!(pat["personal_token"].get("hash").is_none());
+    assert!(pat["personal_token"].get("token").is_none());
+
+    let (status, _, me) = send(
+        &h.app,
+        with_bearer("GET", "/api/auth/me", json!(null), &raw_pat),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["username"], "anna");
+
+    let (status, _, list) = send(
+        &h.app,
+        with_bearer("GET", "/api/sessions", json!(null), &raw_pat),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    let sessions = list["sessions"].as_array().unwrap();
+    assert!(sessions.iter().any(|row| row["id"] == redline_id));
+    assert!(!sessions.iter().any(|row| row["id"] == other_id));
+
+    let (status, _, body) = send(
+        &h.app,
+        with_bearer(
+            "GET",
+            &format!("/api/sessions/{other_id}"),
+            json!(null),
+            &raw_pat,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, _, body) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            &format!("/api/sessions/{redline_id}/annotations"),
+            json!({ "annotations": [], "base_revision": 0 }),
+            &raw_pat,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "read-only PAT: {body}");
+
+    let (status, _, agent_token) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/admin/agent-tokens",
+            json!({
+                "agent": "e2e-bot",
+                "name": "E2E bridge",
+                "projects": ["redline"],
+                "jobs": ["review"],
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{agent_token}");
+    let raw_agent = agent_token["token"].as_str().unwrap().to_string();
+    let agent_id = agent_token["agent_token"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(raw_agent.starts_with("rl_agt_"));
+    assert!(agent_token["agent_token"].get("hash").is_none());
+
+    let (status, _, repos) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/api/agent/repos",
+            json!({
+                "agent_id": "e2e-bot",
+                "repos": [
+                    { "key": "redline", "name": "Redline" },
+                    { "key": "other", "name": "Other" }
+                ]
+            }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{repos}");
+    assert!(repos["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|project| project["slug"] == "redline"));
+
+    let (status, _, body) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/api/agent/repos",
+            json!({ "agent_id": "someone-else", "repos": [] }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "token/agent mismatch: {body}"
+    );
+
+    let (status, _, next) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/api/agent/next",
+            json!({ "agent_id": "e2e-bot", "jobs": ["review", "handoff"] }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert!(next["session"].is_null());
+
+    let (status, _, mcp) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/mcp",
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": { "name": "list_reviews", "arguments": {} }
+            }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{mcp}");
+    let text = mcp["result"]["content"][0]["text"].as_str().unwrap();
+    let reviews: Value = serde_json::from_str(text).unwrap();
+    let rows = reviews["sessions"].as_array().unwrap();
+    assert!(rows.iter().any(|row| row["session_id"] == redline_id));
+    assert!(!rows.iter().any(|row| row["session_id"] == other_id));
+
+    let (status, _, body) = send(
+        &h.app,
+        with_bearer("GET", "/api/sessions", json!(null), &raw_agent),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "agent on human route: {body}"
+    );
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/admin/agent-tokens/{agent_id}"),
+            json!({}),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &h.app,
+        with_bearer(
+            "POST",
+            "/api/agent/repos",
+            json!({ "agent_id": "e2e-bot", "repos": [] }),
+            &raw_agent,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/me/tokens/{pat_id}"),
+            json!({}),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &h.app,
+        with_bearer("GET", "/api/auth/me", json!(null), &raw_pat),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, _, audit) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit?action=token.",
+            json!(null),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{audit}");
+    let actions: Vec<&str> = audit["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["action"].as_str())
+        .collect();
+    assert!(actions.contains(&"token.create"));
+    assert!(actions.contains(&"token.revoke"));
 }

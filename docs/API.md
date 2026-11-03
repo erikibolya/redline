@@ -28,8 +28,33 @@ agent credential. Named humans use a server-side session:
   single owner bit; the old owner becomes a member.
 
 Session-authenticated state-changing requests must send `X-CSRF-Token` matching the
-`redline_csrf` cookie. Bearer credentials (legacy token or a future PAT) are not cookie-based and
-do not need CSRF. Login is rate-limited (5 failures per username/IP per 15 minutes).
+`redline_csrf` cookie. Bearer credentials (legacy token, PAT or agent token) are not cookie-based
+and do not need CSRF. Login is rate-limited (5 failures per username/IP per 15 minutes).
+
+### Personal access tokens and agent tokens (v0.28)
+
+A **PAT** is a human Bearer credential for the extension, CLI or a script. It inherits the user's
+account status and project roles, optionally narrowed to a project allowlist and/or `read_only`.
+An **agent token** is a service identity: it is accepted only by `/api/agent/*` and `/mcp`, has
+its own project allowlist and `review`/`handoff` jobs, and never acts as a human. Raw values
+(`rl_pat_…`, `rl_agt_…`) are shown once; only a SHA-256 hash and a display prefix are stored in
+`tokens.json` (`0600`).
+
+- `GET /api/me/tokens` — the caller's PATs (metadata only, no hash/raw).
+- `POST /api/me/tokens` — `{ "name", "projects"?: ["slug"], "read_only"?: bool,
+  "expires_days"?: 1–3650 }`; returns `{ "token": "rl_pat_…", "personal_token": {…} }`.
+  Omitted `projects` means every project the user can already access.
+- `DELETE /api/me/tokens/{id}` — revoke the caller's PAT immediately.
+- `GET/POST /api/admin/agent-tokens` — owner only; body `{ "agent", "name", "projects"?,
+  "jobs"?: ["review"|"handoff"], "expires_days"? }`; returns `{ "token": "rl_agt_…",
+  "agent_token": {…} }`. Jobs default to `review`.
+- `DELETE /api/admin/agent-tokens/{id}` — owner only.
+
+A project outside a token's allowlist answers `404` (never `403`, which would confirm that the
+task exists). A read-only PAT gets `403` on mutations. An agent token on a human route gets `403`;
+a human session or owner on `/api/agent/*` is still accepted for administration, and the legacy
+server token remains a full owner + agent credential. `/api/agent/next` only hands an agent a
+task in its allowlist and only a `handoff` job when the token has that job.
 
 > **Current slice:** data routes are **project-scoped**. `GET /api/projects` and
 > `GET /api/sessions` return only the member's projects (the owner sees all); Inbox is owner-only.
@@ -42,7 +67,8 @@ do not need CSRF. Login is rate-limited (5 failures per username/IP per 15 minut
 >
 > `GET/PUT /api/projects/{slug}/members` is owner-only; `PUT` replaces the project's member list
 > (`{"members":[{"user_id","role"}]}` with role `viewer|tester|developer`). The agent routes and
-> `/mcp` still use the legacy/agent token.
+> `/mcp` accept a scoped agent token (or the legacy owner token); a human session on those routes
+> is accepted only for the owner administering the bridge.
 
 ### `POST /api/sessions/<id>/request-agent`
 

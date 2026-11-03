@@ -27,6 +27,7 @@ pub mod notify;
 pub mod paths;
 pub mod sessions;
 pub mod store;
+pub mod tokens;
 pub mod users;
 
 pub use error::{Error, Result};

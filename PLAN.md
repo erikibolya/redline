@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 162 Rust tests, 22 extension unit tests, 296-check browser E2E in CI on Linux + Windows |
+| Tests | 167 Rust tests, 22 extension unit tests, 300-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -63,13 +63,14 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 
 - [ ] **Auth foundation:** local users/sessions, one owner with transfer, PAT + multiple service
       tokens, migration from the single token, audit. *Done:* users, Argon2id passwords, server
-      sessions/CSRF, login page, owner bootstrap/transfer and the audit trail. *Next:* PAT,
-      multiple agent tokens, invite/reset links.
+      sessions/CSRF, login page, owner bootstrap/transfer, the audit trail, personal tokens and
+      scoped agent tokens. *Next:* invite/reset links and the migration guide.
 - [x] **Roles & project ACL:** Developer/Tester/Viewer, per-project memberships, required project,
       tester `Request agent review`, server-side submit permission, owner People & access.
 - [x] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, optimistic
       revision conflicts (server `409`, in-stage Reload theirs / Keep mine).
-- [ ] **Integrations:** extension PAT, desktop/CLI login, share links, OIDC/SSO later.
+- [ ] **Integrations:** desktop/CLI login, share links, OIDC/SSO later. *Done:* extension/CLI PAT
+      with project scopes and a copy-once `/tokens` page.
 
 Full spec and permission matrix: `docs/COLLABORATION.md`. Target: standalone v0.28 with a
 migration guide; not part of v0.27.
@@ -142,7 +143,7 @@ migration guide; not part of v0.27.
 - `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 22 extension
   unit tests: annotation geometry/hit-testing/moving, server URL/permission config, offline review
   Markdown/JSON and the ZIP writer.
-- `desktop/scripts/e2e.sh` — 296 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 300 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

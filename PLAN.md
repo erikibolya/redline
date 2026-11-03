@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 173 Rust tests, 22 extension unit tests, 304-check browser E2E in CI on Linux + Windows |
+| Tests | 173 Rust tests, 22 extension unit tests, 305-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -143,7 +143,7 @@ migration guide; not part of v0.27.
 - `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 22 extension
   unit tests: annotation geometry/hit-testing/moving, server URL/permission config, offline review
   Markdown/JSON and the ZIP writer.
-- `desktop/scripts/e2e.sh` — 304 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 305 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

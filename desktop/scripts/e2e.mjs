@@ -136,14 +136,20 @@ const main = async () => {
     // A click can be swallowed while the rail is repainting; cancel is idempotent, so retry only
     // while the server still reports the round as submitted. Then wait for the visible unlock,
     // not just the field: drawing into a still-locked canvas looks like a lost rectangle.
+    const acceptStop = (dialog) => {
+      // A retry may leave an older listener behind; only one accept can win.
+      dialog.accept().catch(() => {});
+    };
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      page.once("dialog", (dialog) => dialog.accept());
+      page.off("dialog", acceptStop);
+      page.once("dialog", acceptStop);
       await page.click("#submit");
       try {
         await page.waitForFunction(
           () => window.redline.meta?.status === "open" && window.redline.locked === false,
           { timeout: 5000 },
         );
+        page.off("dialog", acceptStop);
         return;
       } catch {
         const state = await page.evaluate(() => ({
@@ -152,7 +158,10 @@ const main = async () => {
           label: document.querySelector("#submit")?.textContent.trim() || "",
           disabled: Boolean(document.querySelector("#submit")?.disabled),
         }));
-        if (state.status === "open" && state.locked === false) return;
+        if (state.status === "open" && state.locked === false) {
+          page.off("dialog", acceptStop);
+          return;
+        }
         if (state.status !== "submitted") {
           throw new Error(`STOP left the review open but locked: ${JSON.stringify(state)}`);
         }
@@ -171,6 +180,34 @@ const main = async () => {
     }),
   });
   const id = created.meta.id;
+
+  const browser = await puppeteer.connect({
+    browserURL: CHROME,
+    defaultViewport: { width: 1280, height: 820 },
+  });
+  const page = await browser.newPage();
+  const jsErrors = [];
+  page.on("pageerror", (error) => jsErrors.push(error.message));
+
+  // A v0.27 browser still has `redline_token`; `/api/auth/me` answers as the legacy owner.
+  // That must not hide the first-run owner form (the cookie was redirecting /login to /).
+  const legacyContext = await browser.createBrowserContext();
+  const legacyPage = await legacyContext.newPage();
+  await legacyPage.goto(`${BASE}/?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await legacyPage.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
+  await legacyPage.waitForSelector("#bootstrap-form:not([hidden])", { timeout: 10000 });
+  const bootstrapShell = await legacyPage.evaluate(() => ({
+    title: document.querySelector("#auth-title")?.textContent.trim(),
+    bootstrap: !document.querySelector("#bootstrap-form")?.hidden,
+    login: !document.querySelector("#login-form")?.hidden,
+    path: location.pathname,
+  }));
+  check("a legacy cookie does not hide the first-run owner form",
+    bootstrapShell.title === "Create the owner account"
+      && bootstrapShell.bootstrap && !bootstrapShell.login
+      && bootstrapShell.path === "/login",
+    JSON.stringify(bootstrapShell));
+  await legacyContext.close();
 
   // First-run auth: the legacy token bootstraps the single owner account. The rest of this
   // suite keeps using the legacy token so the agent/bridge path stays covered; the login page
@@ -214,14 +251,6 @@ const main = async () => {
     body: JSON.stringify({ agent_id: "e2e", repos: [{ key: "../escape", name: "no" }] }),
   });
   check("agent repo sync rejects path traversal", traversal.status === 400, `status ${traversal.status}`);
-
-  const browser = await puppeteer.connect({
-    browserURL: CHROME,
-    defaultViewport: { width: 1280, height: 820 },
-  });
-  const page = await browser.newPage();
-  const jsErrors = [];
-  page.on("pageerror", (error) => jsErrors.push(error.message));
 
   await page.goto(`${BASE}/s/${id}?t=${TOKEN}`, { waitUntil: "networkidle2" });
   await page.waitForFunction(() => window.redline && window.redline.image, { timeout: 15000 });

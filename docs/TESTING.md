@@ -149,7 +149,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `failed_logins_are_throttled`.
 - Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
   username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
-  revokes the session. 304 checks.
+  revokes the session. 305 checks.
 - **Current gaps:** PAT/agent-token UI, invite/reset links, audit UI and optimistic revision still
   need their tests as they arrive.
 
@@ -166,7 +166,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   assert a member with no projects sees an empty queue, a foreign task/media is `404`, and the
   old owner loses the Inbox.
 - Browser e2e: the owner-only People & access page creates a user and saves a tester role; the
-  editor/rail role labels are covered by the 304-check suite.
+  editor/rail role labels are covered by the 305-check suite.
 
 ## Invite and reset links (v0.28, in progress)
 
@@ -181,7 +181,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   transfer test also asserts the `owner.transfer` notification.
 - Browser e2e: invite checkbox hidden-password mode, copy-once invite URL, the invited page greets
   the person, accepting the link signs them in as an active member, and **Reset link** generates a
-  `/reset/rl_rst_…` URL from the matrix. 304 checks.
+  `/reset/rl_rst_…` URL from the matrix. 305 checks.
 - **Not yet covered:** accepting a reset link in Chromium, transfer ownership through the UI
   (covered by Rust), and invite-link expiry through the browser.
 
@@ -197,7 +197,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   on a human route, revoke both tokens and get `401`, and `token.create`/`token.revoke` in audit.
 - Browser e2e: the owner creates a personal token in `/tokens`, uses the raw value for
   `/api/auth/me`, revokes it and gets `401`; creates an agent token with a project/job scope and
-  sees it listed. 304 checks.
+  sees it listed. 305 checks.
 - **Not yet covered:** the extension/CLI using a PAT in its own e2e, `last_used_at` display
   refreshed after use, and token expiry through the browser.
 
@@ -213,7 +213,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: fresh task at revision 0; an agent `post_round` behind the canvas makes the UI
   submit stale, the conflict banner names revision 1, **Reload theirs** discards the local draft
   and loads the newer round; a second agent round names revision 2 and **Keep mine** submits the
-  local ellipse as revision 3. 304 checks.
+  local ellipse as revision 3. 305 checks.
 - **Not yet covered:** a tester request conflict through the UI, video-round conflicts in the
   browser, and multi-tab edits on the same machine (the server guard is covered by Rust).
 
@@ -228,7 +228,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer gets `403`.
 - Browser e2e: the owner opens **Audit log** from People & access, sees the `membership.update`
   row just written, and the row shows a locale-formatted time and actor; a tester sees the
-  owner-only card. 304 checks.
+  owner-only card. 305 checks.
 - **Not yet covered:** MCP/agent actions in the audit stream, audit for handoff results and
   notification delivery, and audit-log rotation beyond the file-size compaction.
 
@@ -242,7 +242,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer resolves it, and an unknown mention is `400`. The tester→developer test also
   asserts `review.ready` and `review.submitted` notifications.
 - Browser e2e: the tester opens **Discussion**, posts a comment and the API returns it; the owner
-  comments from another context; the tester's bell shows the owner's comment. 304 checks.
+  comments from another context; the tester's bell shows the owner's comment. 305 checks.
 - **Not yet covered:** audit log, notification for handoff done/failed and ownership transfer,
   comment rate limiting, and the desktop notification surface.
 

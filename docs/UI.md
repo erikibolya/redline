@@ -631,7 +631,9 @@ section, `Δ` shows the summary inline:
 ## Sign-in and owner bootstrap (v0.28 auth foundation)
 
 - `/login` is public. On a fresh server it shows **Create the owner account** (username, display
-  name, password, server token); after bootstrap it shows **Sign in** with username/password.
+  name, password, server token) even when the browser still carries the v0.27 `redline_token`
+  cookie (`setup_required` outranks the legacy session); after bootstrap it shows **Sign in**
+  with username/password.
   A `?t=<legacy token>` is used only for the first-run bootstrap and is removed from the address
   bar; `?stay=1` suppresses the automatic redirect for an existing cookie.
 - Login sets `redline_session` (`HttpOnly`, `SameSite=Strict`, `Secure` on HTTPS) and a readable

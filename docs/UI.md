@@ -649,6 +649,13 @@ section, `Δ` shows the summary inline:
 - **People & access** (`/people`) is owner-only. It shows a `user × project` matrix with a role
   select per cell (`—`, Viewer, Tester, Developer), an **Add user** form, and the project repo
   under each column. The owner row is global and read-only. A member sees an owner-only message.
+- **Invite instead of a password:** the checkbox turns **Add user** into **Create invite link**.
+  The one-time `…/invite/rl_inv_…` URL appears in a copy-once panel; the invitee gets a public
+  page to choose a password and lands signed in. **Reset link** on each non-owner row generates a
+  24-hour `…/reset/rl_rst_…` URL the same way. Invited users show an **INVITED** mark.
+- **Transfer ownership:** owner-only select + current-password field below the matrix. It asks
+  for confirmation, warns that the old owner becomes a member immediately, and the new owner
+  receives an `owner.transfer` notification.
 - The owner-only people icon appears in the header after `/api/auth/me` answers; it is hidden for
   developers/testers/viewers.
 - **Tester:** sees every task in their projects, edits only their own open tasks, and gets

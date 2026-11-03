@@ -13,8 +13,9 @@
 > revize je v `dev`: `meta.revision` + `annotations.revision`, `base_revision` v submitu,
 > strukturovaný `409` a UI banner s **Reload theirs / Keep mine**. PAT a service tokeny jsou v
 > `dev`: `/tokens`, hashované `tokens.json`, projektové allowlisty, read-only PAT, joby agenta a
-> scope na `/api/agent/next` i MCP. Invite/reset linky, MCP akce v auditu a migrační guide
-> následují.
+> scope na `/api/agent/next` i MCP. Invite/reset linky jsou v `dev`: hashované `invites.json`,
+> jednorázové odkazy 7 dní / 24 h, veřejná stránka pro heslo, revoke starých sessions a audit;
+> People & access umí invite, reset i transfer ownershipu. Zbývá migrační guide a release.
 > **Cíl:** bezpečně pustit k jedné RedLine instanci více lidí, rozdělit je na role a omezit
 > přístup k projektům, aniž by se rozbila současná cesta agent → review → člověk.
 >

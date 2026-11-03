@@ -25,6 +25,7 @@ try {
     padding: 22px 24px; box-shadow: 0 20px 50px rgba(0, 0, 0, .28);
   }
   .card h1 { font-size: 18px; margin: 0 0 4px; }
+  .card h2 { font-size: 15px; margin: 0 0 4px; }
   .card .lead { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0 0 18px; }
   .status { min-height: 18px; margin: 8px 0 12px; color: var(--muted); font-size: 12px; }
   .status.error { color: #fda4af; }
@@ -38,6 +39,36 @@ try {
     background: var(--panel-2); color: var(--text); font: inherit;
   }
   .new-user input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .new-user input[hidden] { display: none; }
+  .check-line { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; margin: -8px 0 16px; }
+  .reveal {
+    margin: 0 0 16px; padding: 12px; border: 1px solid #4c1d95; border-radius: 10px;
+    background: #1c142f; color: #c4b5fd; font-size: 12px;
+  }
+  .reveal[hidden] { display: none; }
+  .reveal .row { display: flex; gap: 8px; margin-top: 8px; }
+  .reveal input {
+    flex: 1; min-width: 0; padding: 8px 10px; border-radius: 6px; border: 1px solid #6d28d9;
+    background: #120b1f; color: #ddd6fe; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  [data-theme="light"] .reveal { background: #f5f3ff; border-color: #c4b5fd; color: #5b21b6; }
+  [data-theme="light"] .reveal input { background: #fff; border-color: #a78bfa; color: #4c1d95; }
+  .transfer {
+    display: grid; grid-template-columns: 1.4fr 1.4fr auto; gap: 8px; align-items: center;
+    margin: 8px 0 0; padding: 14px; border: 1px solid var(--border-soft); border-radius: 10px;
+  }
+  .transfer select, .transfer input {
+    min-width: 0; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  .transfer select:focus, .transfer input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .transfer[hidden] { display: none; }
+  .section-gap { margin-top: 26px; }
+  .link-btn {
+    border: 0; background: transparent; color: var(--accent); font-size: 10.5px;
+    cursor: pointer; padding: 2px 0; margin-left: 7px;
+  }
+  .link-btn:hover { text-decoration: underline; }
   .matrix-wrap { overflow-x: auto; border: 1px solid var(--border-soft); border-radius: 10px; }
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
   th, td { padding: 9px 10px; border-top: 1px solid var(--border-soft); text-align: left; vertical-align: middle; }
@@ -80,11 +111,32 @@ try {
       <input id="new-password" type="password" placeholder="Temporary password" minlength="12" required />
       <button class="btn accent" type="submit" id="new-user-submit">Add user</button>
     </form>
+    <label class="check-line"><input type="checkbox" id="new-invite" />
+      Create a one-time invite link instead of a temporary password</label>
+    <div class="reveal" id="link-reveal" hidden>
+      <b id="link-reveal-title">Copy this link now. It will not be shown again.</b>
+      <div class="row">
+        <input id="link-raw" readonly spellcheck="false" aria-label="One-time link" />
+        <button class="btn" type="button" id="link-copy">Copy</button>
+      </div>
+    </div>
     <div class="status" id="status" role="status" aria-live="polite"></div>
     <div id="matrix"><div class="empty">Loading…</div></div>
     <p class="note">The owner row is global and cannot be limited per project. Passwords are stored
-      as Argon2id hashes; give the user the temporary password and ask them to change it after
-      signing in.</p>
+      as Argon2id hashes; invite links work once, expire after 7 days, and reset links after 24
+      hours.</p>
+
+    <div class="section-gap">
+      <h2>Transfer ownership</h2>
+      <p class="lead">Exactly one owner. Transferring makes you a regular member and keeps your
+        project roles; the new owner can change them. This needs your current password.</p>
+      <form class="transfer" id="transfer-form" autocomplete="off">
+        <select id="transfer-user" aria-label="New owner" required></select>
+        <input id="transfer-password" type="password" placeholder="Your current password"
+               autocomplete="current-password" required />
+        <button class="btn danger" type="submit" id="transfer-submit">Transfer ownership</button>
+      </form>
+    </div>
   </section>
 </main>
 
@@ -127,6 +179,26 @@ async function api(path, options = {}) {
 function setStatus(text, kind) {
   statusBox.textContent = text || "";
   statusBox.className = "status" + (kind ? " " + kind : "");
+}
+
+function showLink(title, url) {
+  document.getElementById("link-reveal-title").textContent =
+    `${title} — copy it now, it will not be shown again.`;
+  document.getElementById("link-raw").value = url;
+  document.getElementById("link-reveal").hidden = false;
+}
+
+async function copyLink() {
+  const input = document.getElementById("link-raw");
+  input.select();
+  try {
+    await navigator.clipboard.writeText(input.value);
+    setStatus("Link copied", "ok");
+  } catch {
+    document.execCommand("copy");
+    setStatus("Link copied", "ok");
+  }
+  setTimeout(() => setStatus(""), 1200);
 }
 
 async function load() {
@@ -190,7 +262,10 @@ function render() {
       return `<tr>
         <td class="user"><span class="name">${escapeHtml(user.display_name || user.username)}</span>
           ${owner ? '<span class="owner-mark">OWNER</span>' : ""}
-          <span class="username">@${escapeHtml(user.username)}</span></td>
+          ${user.status === "invited" ? '<span class="owner-mark">INVITED</span>' : ""}
+          <span class="username">@${escapeHtml(user.username)}</span>
+          ${owner ? "" : `<button class="link-btn" type="button" data-reset="${escapeHtml(user.id)}"
+            title="Generate a one-time password reset link">Reset link</button>`}</td>
         ${cells}
       </tr>`;
     })
@@ -205,6 +280,33 @@ function render() {
   matrix.querySelectorAll("select[data-project]").forEach((select) => {
     select.addEventListener("change", () => saveProject(select.dataset.project));
   });
+  matrix.querySelectorAll("[data-reset]").forEach((button) => {
+    button.addEventListener("click", () => resetLink(button.dataset.reset));
+  });
+  const transfer = document.getElementById("transfer-user");
+  const targets = model.users.filter(
+    (user) => user.role !== "owner" && user.status === "active",
+  );
+  transfer.innerHTML = targets.length
+    ? '<option value="" disabled selected>Choose the new owner…</option>' +
+      targets.map((user) =>
+        `<option value="${escapeHtml(user.id)}">${escapeHtml(user.display_name || user.username)} (@${escapeHtml(user.username)})</option>`
+      ).join("")
+    : '<option value="" disabled selected>No active member to transfer to</option>';
+  document.getElementById("transfer-submit").disabled = !targets.length;
+}
+
+async function resetLink(userId) {
+  setStatus("Creating reset link…");
+  try {
+    const data = await api(`/api/users/${encodeURIComponent(userId)}/reset`, {
+      method: "POST",
+    });
+    showLink("Reset link", data.reset_url);
+    setStatus("Reset link created", "ok");
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
 }
 
 async function saveProject(slug) {
@@ -227,22 +329,73 @@ async function saveProject(slug) {
   }
 }
 
+const inviteBox = document.getElementById("new-invite");
+const passwordInput = document.getElementById("new-password");
+const newUserSubmit = document.getElementById("new-user-submit");
+
+function syncInviteMode() {
+  const invite = inviteBox.checked;
+  passwordInput.hidden = invite;
+  passwordInput.required = !invite;
+  newUserSubmit.textContent = invite ? "Create invite link" : "Add user";
+  if (invite) {
+    passwordInput.value = "";
+  }
+}
+
+inviteBox.addEventListener("change", syncInviteMode);
+document.getElementById("link-copy").addEventListener("click", copyLink);
+
 document.getElementById("new-user-form").addEventListener("submit", async (event) => {
   event.preventDefault();
   const username = document.getElementById("new-username").value.trim();
   const display_name = document.getElementById("new-name").value.trim();
-  const password = document.getElementById("new-password").value;
-  if (!username || !display_name || !password) return;
-  setStatus("Adding user…");
+  const invite = inviteBox.checked;
+  const password = passwordInput.value;
+  if (!username || !display_name || (!invite && !password)) return;
+  setStatus(invite ? "Creating invite…" : "Adding user…");
   try {
-    await api("/api/users", {
+    const body = { username, display_name, invite };
+    if (!invite) body.password = password;
+    const created = await api("/api/users", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ username, display_name, password }),
+      body: JSON.stringify(body),
     });
     document.getElementById("new-user-form").reset();
-    setStatus("User added", "ok");
+    inviteBox.checked = false;
+    syncInviteMode();
     await load();
+    if (created.invite_url) {
+      showLink("Invite link", created.invite_url);
+      setStatus("Invite created", "ok");
+    } else {
+      setStatus("User added", "ok");
+    }
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+document.getElementById("transfer-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const userId = document.getElementById("transfer-user").value;
+  const password = document.getElementById("transfer-password").value;
+  const target = model.users.find((user) => user.id === userId);
+  if (!userId || !password) return;
+  const label = target?.display_name || target?.username || userId;
+  if (!confirm(
+    `Transfer server ownership to ${label}? You will become a regular member and lose owner access immediately.`,
+  )) return;
+  setStatus("Transferring ownership…");
+  try {
+    await api("/api/admin/transfer-owner", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user_id: userId, password }),
+    });
+    setStatus(`Ownership transferred to ${label}`, "ok");
+    setTimeout(() => location.reload(), 1200);
   } catch (error) {
     setStatus(error.message, "error");
   }

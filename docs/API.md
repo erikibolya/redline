@@ -56,6 +56,31 @@ a human session or owner on `/api/agent/*` is still accepted for administration,
 server token remains a full owner + agent credential. `/api/agent/next` only hands an agent a
 task in its allowlist and only a `handoff` job when the token has that job.
 
+### Invite and reset links (v0.28)
+
+There is no SMTP in MVP. The owner creates an account as `invited` (no password) or generates a
+reset link, copies the one-time URL to the person, and the link lets them choose a password:
+
+- `POST /api/users` — add `"invite": true` instead of `password`; returns
+  `{ "user": {status:"invited"}, "invite_url": "…/invite/rl_inv_…", "expires_at": … }`.
+  Invite links live **7 days**.
+- `POST /api/users/{id}/reset` — owner only; returns
+  `{ "reset_url": "…/reset/rl_rst_…", "expires_at": … }`; reset links live **24 hours** and
+  revoke the user's other sessions when consumed. The owner's own account is changed through
+  `POST /api/auth/password`, not a reset link (`400`).
+- `GET /api/auth/invite/{token}` / `GET /api/auth/reset/{token}` — public status
+  `{ "valid", "kind", "username", "display_name", "expires_at" }`; a used/expired token answers
+  `{ "valid": false }`.
+- `POST /api/auth/invite/{token}` / `POST /api/auth/reset/{token}` — public
+  `{ "password": "…" }` (12–200 chars); activates the account, consumes the link, revokes the
+  user's old sessions, signs the browser in and returns the same `{user, csrf_token}` shape as
+  login. A second use is `404`.
+
+Raw invite/reset tokens are stored only as SHA-256 hashes in `invites.json` (`0600`); issuing a
+new link of the same kind invalidates the previous unused one. Accepting an invite or reset writes
+`auth.invite_accept` / `auth.reset_accept` to the audit log, and issuing them writes
+`user.invite` / `user.reset`.
+
 > **Current slice:** data routes are **project-scoped**. `GET /api/projects` and
 > `GET /api/sessions` return only the member's projects (the owner sees all); Inbox is owner-only.
 > `GET /api/sessions/{id}` and every media/history route return `404` for a task outside the

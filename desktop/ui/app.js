@@ -584,7 +584,11 @@ async function showPeopleLink() {
   if (!button) return;
   try {
     const me = await api("/api/auth/me");
-    if (!me.is_owner) return;
+    if (!me.is_owner) {
+      // Agent settings are owner-only; a visible gear that always answers 403 is a dead control.
+      $$("[data-agent-settings]").forEach((gear) => { gear.hidden = true; });
+      return;
+    }
     button.hidden = false;
     button.addEventListener("click", () => { location.href = "/people"; });
   } catch { /* signed out; the api helper has already redirected */ }

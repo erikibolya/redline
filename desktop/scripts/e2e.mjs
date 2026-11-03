@@ -1084,14 +1084,21 @@ const main = async () => {
   }
   await page.keyboard.press("v");
   const firstRect = at(310, 230); // centre of the first rectangle
-  await page.mouse.click(firstRect.x, firstRect.y);
-  await page.keyboard.down("Shift");
   const second = at(700, 485);
-  await page.mouse.click(second.x, second.y);
-  await page.keyboard.up("Shift");
   let selected = 0;
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    selected = await page.evaluate(() => window.redline.selected.size);
+  // A headless click can be swallowed while the rail repaints; retry the whole gesture after
+  // Escape clears the selection, instead of calling a lost pointer event a broken multi-select.
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await page.keyboard.press("Escape");
+    await page.mouse.click(firstRect.x, firstRect.y);
+    await page.keyboard.down("Shift");
+    await page.mouse.click(second.x, second.y);
+    await page.keyboard.up("Shift");
+    for (let poll = 0; poll < 20; poll += 1) {
+      selected = await page.evaluate(() => window.redline.selected.size);
+      if (selected === 2) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     if (selected === 2) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -4011,6 +4018,66 @@ const main = async () => {
     auditView.times.every((time) => time.length > 0 && !/^\d{2}:\d{2}$/.test(time))
       && auditView.actors.every((actor) => actor.length > 0),
     JSON.stringify({ times: auditView.times, actors: auditView.actors }));
+
+  // Personal and agent tokens: create them in the UI, verify the raw value works once, revoke.
+  await loginPage.goto(`${BASE}/tokens`, { waitUntil: "networkidle2" });
+  await loginPage.waitForSelector("#my-tokens-card", { timeout: 10000 });
+  await loginPage.waitForFunction(
+    () => !document.querySelector("#agent-tokens-card")?.hidden,
+    { timeout: 5000 },
+  );
+  await loginPage.type("#my-name", "E2E PAT");
+  await loginPage.type("#my-projects", "e2e-repo");
+  await loginPage.click("#my-create");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#my-reveal") && !document.querySelector("#my-reveal").hidden,
+    { timeout: 10000 },
+  );
+  const rawPat = await loginPage.$eval("#my-raw", (el) => el.value);
+  const myListText = await loginPage.$eval("#my-list", (el) => el.textContent);
+  check("the owner can create a personal token in the UI",
+    rawPat.startsWith("rl_pat_") && myListText.includes("E2E PAT"),
+    `${rawPat.slice(0, 12)} ${myListText.slice(0, 120)}`);
+  const patMe = await loginPage.evaluate(async (token) => {
+    const response = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }, rawPat);
+  check("the personal token authenticates as its user",
+    patMe.status === 200 && patMe.body.user?.username === "owner",
+    `${patMe.status} ${JSON.stringify(patMe.body)}`);
+
+  loginPage.once("dialog", (dialog) => dialog.accept());
+  await loginPage.click("#my-list [data-revoke]");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#my-list")?.textContent.includes("revoked"),
+    { timeout: 10000 },
+  );
+  const revokedPat = await loginPage.evaluate(async (token) => {
+    const response = await fetch("/api/auth/me", {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    });
+    return response.status;
+  }, rawPat);
+  check("revoking a personal token stops it immediately", revokedPat === 401, String(revokedPat));
+
+  await loginPage.type("#agent-id", "e2e-ui-bot");
+  await loginPage.type("#agent-name", "E2E bridge");
+  await loginPage.type("#agent-projects", "e2e-repo");
+  await loginPage.click("#agent-create");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#agent-reveal") && !document.querySelector("#agent-reveal").hidden,
+    { timeout: 10000 },
+  );
+  const rawAgent = await loginPage.$eval("#agent-raw", (el) => el.value);
+  const agentListText = await loginPage.$eval("#agent-list", (el) => el.textContent);
+  check("the owner can create a scoped agent token in the UI",
+    rawAgent.startsWith("rl_agt_") && agentListText.includes("E2E bridge")
+      && agentListText.includes("e2e-repo"),
+    `${rawAgent.slice(0, 12)} ${agentListText.slice(0, 120)}`);
 
   // A tester sees the role in the editor, can create their own task and request an agent review;
   // the server refuses the actual submit/STOP/confirm actions (covered by Rust tests).

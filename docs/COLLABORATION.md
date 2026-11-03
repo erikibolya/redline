@@ -11,8 +11,10 @@
 > notifikací 90 dní (`REDLINE_NOTIFICATION_RETENTION_DAYS`). Audit je v `dev`: `audit.jsonl`,
 > owner-only `/audit` s filtry, retence 1 rok (`REDLINE_AUDIT_RETENTION_DAYS`). Optimistická
 > revize je v `dev`: `meta.revision` + `annotations.revision`, `base_revision` v submitu,
-> strukturovaný `409` a UI banner s **Reload theirs / Keep mine**. PAT, invite/reset a MCP akce
-> v auditu následují.
+> strukturovaný `409` a UI banner s **Reload theirs / Keep mine**. PAT a service tokeny jsou v
+> `dev`: `/tokens`, hashované `tokens.json`, projektové allowlisty, read-only PAT, joby agenta a
+> scope na `/api/agent/next` i MCP. Invite/reset linky, MCP akce v auditu a migrační guide
+> následují.
 > **Cíl:** bezpečně pustit k jedné RedLine instanci více lidí, rozdělit je na role a omezit
 > přístup k projektům, aniž by se rozbila současná cesta agent → review → člověk.
 >

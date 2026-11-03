@@ -25,6 +25,7 @@ async fn call(store: &Store, name: &str, arguments: Value) -> Value {
         store,
         base_url: "http://127.0.0.1:8788",
         token: TOKEN,
+        agent: None,
     };
     let request = json!({
         "jsonrpc": "2.0", "id": 7, "method": "tools/call",
@@ -43,6 +44,7 @@ async fn initialize_and_tool_list_are_well_formed() {
         store: &store,
         base_url: "http://127.0.0.1:8788",
         token: TOKEN,
+        agent: None,
     };
 
     let init = handle(
@@ -418,6 +420,7 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
         store: &store,
         base_url: "http://127.0.0.1:8788",
         token: TOKEN,
+        agent: None,
     };
     let listed = handle(
         &context,
@@ -736,6 +739,7 @@ async fn feedback_and_resources_expose_a_browser_trace() {
         store: &store,
         base_url: "http://127.0.0.1:8788",
         token: TOKEN,
+        agent: None,
     };
     let listed = handle(
         &context,

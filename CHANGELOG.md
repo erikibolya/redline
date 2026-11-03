@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The server token is not every token.** Humans can now mint personal access tokens
+  (`rl_pat_…`) for the extension, CLI or a script; each PAT inherits the user's project roles and
+  can be narrowed to a project allowlist, marked read-only, given an expiry and revoked
+  immediately. Agent/service tokens (`rl_agt_…`) are owner-managed identities accepted only by
+  `/api/agent/*` and `/mcp`, with their own project allowlist and `review`/`handoff` jobs; the
+  bridge's `next` and MCP reads/rounds are scoped to them. Only SHA-256 hashes are stored, raw
+  values are shown once, and the new `/tokens` page (linked from the notification panel and from
+  People & access for the owner) creates and revokes both. The legacy token remains a full
+  owner + agent credential for migration. Tested with 64 API tests, 38 core unit tests, 26 store
+  tests and 300 browser checks (2026-11-03).
 - **A last writer is not a merge.** Every task now carries a monotonic `revision` on both
   `meta.json` and `annotations.json`; submit, tester request, agent `post_round` and a new video
   round increment it with `updated_by`/`updated_by_name`/`updated_at`. The editor sends the

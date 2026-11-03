@@ -24,12 +24,13 @@ use crate::audit::{AuditEvent, AuditFilter, AuditStore};
 use crate::auth::{self, Auth, CredentialSource};
 use crate::comments::Comment;
 use crate::error::Error;
-use crate::mcp::{self, McpContext};
+use crate::mcp::{self, AgentScope, McpContext};
 use crate::memberships::{MembershipStore, ProjectRole};
 use crate::model::{HandoffStatus, Meta, NewSession, Status, Submission, UpdateActor};
 use crate::notifications::{Notification, NotificationStore};
 use crate::sessions::{SessionGrant, SessionStore};
 use crate::store::{FrameUpload, Store};
+use crate::tokens::TokenStore;
 use crate::users::{User, UserStatus, UserStore};
 use crate::{MAX_BODY_BYTES, MAX_SUBMIT_BYTES, MAX_TRACE_BYTES, MAX_VIDEO_BYTES};
 
@@ -81,6 +82,7 @@ pub struct AppState {
     pub memberships: MembershipStore,
     pub notifications: NotificationStore,
     pub audit: AuditStore,
+    pub tokens: TokenStore,
     login: Arc<LoginThrottle>,
     /// Directory holding `index.html` / `list.html`. `None` in tests and in headless mode.
     pub ui: Option<PathBuf>,
@@ -106,6 +108,7 @@ impl AppState {
         let memberships = MembershipStore::new(store.data_dir());
         let notifications = NotificationStore::new(store.data_dir());
         let audit = AuditStore::new(store.data_dir());
+        let tokens = TokenStore::new(store.data_dir());
         Self {
             store,
             auth,
@@ -114,6 +117,7 @@ impl AppState {
             memberships,
             notifications,
             audit,
+            tokens,
             login: Arc::new(LoginThrottle::default()),
             ui: None,
             inline_ui: None,
@@ -171,6 +175,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/password", post(auth_password))
         .route("/api/notifications", get(list_notifications))
         .route("/api/notifications/read", post(mark_notifications_read))
+        .route("/api/me/tokens", get(list_my_tokens).post(create_my_token))
+        .route("/api/me/tokens/{id}", delete(revoke_my_token))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_user_auth,
@@ -181,6 +187,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/bootstrap", post(auth_bootstrap))
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/admin/transfer-owner", post(transfer_owner))
+        .route(
+            "/api/admin/agent-tokens",
+            get(list_agent_tokens).post(create_agent_token),
+        )
+        .route("/api/admin/agent-tokens/{id}", delete(revoke_agent_token))
         .route("/api/audit", get(audit_log))
         .route("/api/config", get(config))
         .route("/api/setup", get(setup_status).post(save_setup))
@@ -205,7 +216,6 @@ pub fn router(state: AppState) -> Router {
             "/api/agent/settings",
             get(agent_settings).put(update_agent_settings),
         )
-        .route("/api/agent/status", get(agent_status))
         .route("/api/agent/next", post(agent_next))
         .route("/api/agent/claims", post(claim_session))
         .route("/api/agent/claims/{id}/heartbeat", post(claim_heartbeat))
@@ -215,7 +225,7 @@ pub fn router(state: AppState) -> Router {
         .route("/mcp", post(mcp_post))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            require_owner_auth,
+            require_agent_auth,
         ));
 
     let human = Router::new()
@@ -268,6 +278,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
         .route("/api/capture", post(capture_session))
+        .route("/api/agent/status", get(agent_status))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_user_auth,
@@ -312,6 +323,7 @@ pub fn router(state: AppState) -> Router {
         .route("/login", get(login_page))
         .route("/people", get(people_page))
         .route("/audit", get(audit_page))
+        .route("/tokens", get(tokens_page))
         .route("/setup", get(setup_page))
         .route("/servers", get(servers_page))
         .merge(public_auth)
@@ -325,6 +337,19 @@ pub fn router(state: AppState) -> Router {
 // ---------------------------------------------------------------- auth middleware
 
 #[derive(Clone, Debug)]
+struct PatContext {
+    projects: Option<HashSet<String>>,
+    read_only: bool,
+}
+
+#[derive(Clone, Debug)]
+struct AgentContext {
+    id: String,
+    projects: Option<HashSet<String>>,
+    jobs: HashSet<String>,
+}
+
+#[derive(Clone, Debug)]
 struct AuthContext {
     user_id: Option<String>,
     username: String,
@@ -332,6 +357,10 @@ struct AuthContext {
     is_owner: bool,
     raw_session: Option<String>,
     legacy: bool,
+    /// A personal token narrows its user's rights; a session has no PAT context.
+    pat: Option<PatContext>,
+    /// A service token is not a human user and is accepted only by agent routes/MCP.
+    agent: Option<AgentContext>,
 }
 
 impl AuthContext {
@@ -343,8 +372,21 @@ impl AuthContext {
             is_owner: true,
             raw_session: None,
             legacy: true,
+            pat: None,
+            agent: None,
         }
     }
+}
+
+fn allowed_projects(context: &AuthContext) -> Option<&HashSet<String>> {
+    if let Some(agent) = &context.agent {
+        return agent.projects.as_ref();
+    }
+    context.pat.as_ref().and_then(|pat| pat.projects.as_ref())
+}
+
+fn project_visible(context: &AuthContext, project: &str) -> bool {
+    allowed_projects(context).map_or(true, |projects| projects.contains(project))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -365,6 +407,25 @@ fn require_project(
     project: &str,
     action: ReviewAction,
 ) -> Result<(), Error> {
+    if !project_visible(context, project) {
+        // A scoped token must not learn that a project exists outside its scope.
+        return Err(Error::NotFound(project.to_string()));
+    }
+    if context.agent.is_some() {
+        return match action {
+            ReviewAction::Read => Ok(()),
+            _ => Err(Error::Forbidden(
+                "an agent token cannot perform this human action".to_string(),
+            )),
+        };
+    }
+    if let Some(pat) = &context.pat {
+        if pat.read_only && action != ReviewAction::Read {
+            return Err(Error::Forbidden(
+                "this personal token is read-only".to_string(),
+            ));
+        }
+    }
     if context.is_owner {
         return Ok(());
     }
@@ -401,11 +462,14 @@ fn require_review(
     action: ReviewAction,
 ) -> Result<Meta, Error> {
     let meta = state.store.require(id)?;
+    let project = meta.project.as_deref().unwrap_or("inbox");
+    require_project(state, context, project, action)?;
+    if context.agent.is_some() {
+        return Ok(meta);
+    }
     if context.is_owner {
         return Ok(meta);
     }
-    let project = meta.project.as_deref().unwrap_or("inbox");
-    require_project(state, context, project, action)?;
     let role = state
         .memberships
         .role_for(context.user_id.as_deref().unwrap_or_default(), project)?
@@ -444,16 +508,29 @@ fn visible_project_slugs(
     state: &AppState,
     context: &AuthContext,
 ) -> Result<Option<HashSet<String>>, Error> {
+    if let Some(agent) = &context.agent {
+        return Ok(agent.projects.clone());
+    }
     if context.is_owner {
-        return Ok(None);
+        return Ok(context.pat.as_ref().and_then(|pat| pat.projects.clone()));
     }
     let user_id = context.user_id.as_deref().unwrap_or_default();
+    let memberships: HashSet<String> = state
+        .memberships
+        .for_user(user_id)?
+        .into_iter()
+        .map(|membership| membership.project)
+        .collect();
+    let Some(pat) = &context.pat else {
+        return Ok(Some(memberships));
+    };
+    let Some(projects) = &pat.projects else {
+        return Ok(Some(memberships));
+    };
     Ok(Some(
-        state
-            .memberships
-            .for_user(user_id)?
+        memberships
             .into_iter()
-            .map(|membership| membership.project)
+            .filter(|project| projects.contains(project))
             .collect(),
     ))
 }
@@ -465,7 +542,7 @@ async fn require_user_auth(
 ) -> Response {
     let origin = extension_origin(request.headers());
     match authenticate(&state, &request) {
-        Ok(context) => {
+        Ok(context) if context.agent.is_none() => {
             request.extensions_mut().insert(context);
             let mut response = next.run(request).await;
             if let Some(origin) = origin {
@@ -473,6 +550,27 @@ async fn require_user_auth(
             }
             response
         }
+        Ok(_) => forbidden("an agent token cannot access human routes"),
+        Err(response) => response,
+    }
+}
+
+async fn require_agent_auth(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let origin = extension_origin(request.headers());
+    match authenticate(&state, &request) {
+        Ok(context) if context.legacy || context.is_owner || context.agent.is_some() => {
+            request.extensions_mut().insert(context);
+            let mut response = next.run(request).await;
+            if let Some(origin) = origin {
+                add_extension_cors(&mut response, &origin);
+            }
+            response
+        }
+        Ok(_) => forbidden("an agent token or owner access is required"),
         Err(response) => response,
     }
 }
@@ -551,40 +649,103 @@ fn authenticate(state: &AppState, request: &Request) -> std::result::Result<Auth
         return Ok(AuthContext::legacy_owner());
     }
 
-    let session = state
+    // A cookie is always a server-side login session; a Bearer token can be either a session
+    // (CLI login) or a PAT/agent token, so try the session store first and fall through.
+    if let Some(session) = state
         .sessions
         .lookup(&credential.value)
-        .map_err(internal_error)?;
-    let Some(session) = session else {
+        .map_err(internal_error)?
+    {
+        if credential.source == CredentialSource::SessionCookie && !safe_method(request.method()) {
+            let csrf = request
+                .headers()
+                .get("x-csrf-token")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or_default();
+            if !SessionStore::verify_csrf(&session, csrf) {
+                return Err(forbidden("csrf token required"));
+            }
+        }
+        let user = state
+            .users
+            .get(&session.user_id)
+            .map_err(internal_error)?
+            .ok_or_else(unauthorized)?;
+        if user.status != UserStatus::Active {
+            return Err(unauthorized());
+        }
+        let is_owner = state.users.is_owner(&user.id).map_err(internal_error)?;
+        return Ok(AuthContext {
+            user_id: Some(user.id),
+            username: user.username,
+            display_name: user.display_name,
+            is_owner,
+            raw_session: Some(credential.value),
+            legacy: false,
+            pat: None,
+            agent: None,
+        });
+    }
+
+    let Some(token) = state
+        .tokens
+        .lookup(&credential.value)
+        .map_err(internal_error)?
+    else {
         return Err(unauthorized());
     };
-    if credential.source == CredentialSource::SessionCookie && !safe_method(request.method()) {
-        let csrf = request
-            .headers()
-            .get("x-csrf-token")
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or_default();
-        if !SessionStore::verify_csrf(&session, csrf) {
-            return Err(forbidden("csrf token required"));
+    match token.kind {
+        crate::tokens::TokenKind::Personal => {
+            let Some(user_id) = token.user.clone() else {
+                return Err(unauthorized());
+            };
+            let user = state
+                .users
+                .get(&user_id)
+                .map_err(internal_error)?
+                .ok_or_else(unauthorized)?;
+            if user.status != UserStatus::Active {
+                return Err(unauthorized());
+            }
+            let is_owner = state.users.is_owner(&user.id).map_err(internal_error)?;
+            Ok(AuthContext {
+                user_id: Some(user.id),
+                username: user.username,
+                display_name: user.display_name,
+                is_owner,
+                raw_session: None,
+                legacy: false,
+                pat: Some(PatContext {
+                    projects: token
+                        .projects
+                        .map(|projects| projects.into_iter().collect()),
+                    read_only: token.read_only,
+                }),
+                agent: None,
+            })
+        }
+        crate::tokens::TokenKind::Agent => {
+            let Some(agent_id) = token.agent.clone() else {
+                return Err(unauthorized());
+            };
+            Ok(AuthContext {
+                user_id: None,
+                username: agent_id.clone(),
+                display_name: agent_id.clone(),
+                is_owner: false,
+                raw_session: None,
+                legacy: false,
+                pat: None,
+                agent: Some(AgentContext {
+                    id: agent_id,
+                    projects: token
+                        .projects
+                        .map(|projects| projects.into_iter().collect()),
+                    jobs: token.jobs.into_iter().collect(),
+                }),
+            })
         }
     }
-    let user = state
-        .users
-        .get(&session.user_id)
-        .map_err(internal_error)?
-        .ok_or_else(unauthorized)?;
-    if user.status != UserStatus::Active {
-        return Err(unauthorized());
-    }
-    let is_owner = state.users.is_owner(&user.id).map_err(internal_error)?;
-    Ok(AuthContext {
-        user_id: Some(user.id),
-        username: user.username,
-        display_name: user.display_name,
-        is_owner,
-        raw_session: Some(credential.value),
-        legacy: false,
-    })
 }
 
 fn public_guard(headers: &HeaderMap) -> std::result::Result<(), Response> {
@@ -668,6 +829,10 @@ fn record_audit(
 ) {
     let mut event = match context {
         Some(context) if context.legacy => AuditEvent::new("legacy", None, "Legacy owner", action),
+        Some(context) if context.agent.is_some() => {
+            let agent = context.agent.as_ref().expect("checked above");
+            AuditEvent::new("agent", Some(&agent.id), &agent.id, action)
+        }
         Some(context) => AuditEvent::new(
             "user",
             context.user_id.as_deref(),
@@ -1502,6 +1667,197 @@ async fn audit_log(
     Ok(Json(json!({ "events": events, "count": count })))
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct NewPersonalToken {
+    name: String,
+    #[serde(default)]
+    projects: Option<Vec<String>>,
+    #[serde(default)]
+    read_only: bool,
+    #[serde(default)]
+    expires_days: Option<i64>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct NewAgentToken {
+    agent: String,
+    name: String,
+    #[serde(default)]
+    projects: Option<Vec<String>>,
+    #[serde(default)]
+    jobs: Option<Vec<String>>,
+    #[serde(default)]
+    expires_days: Option<i64>,
+}
+
+fn validate_token_projects(
+    state: &AppState,
+    context: &AuthContext,
+    projects: Option<Vec<String>>,
+) -> Result<Option<Vec<String>>, Error> {
+    let Some(projects) = projects else {
+        return Ok(None);
+    };
+    let mut clean = Vec::new();
+    for slug in projects {
+        let slug = crate::store::slugify(&slug);
+        let project = state
+            .store
+            .project(&slug)?
+            .ok_or_else(|| Error::BadRequest(format!("unknown project {slug}")))?;
+        if !context.is_owner
+            && state
+                .memberships
+                .role_for(
+                    context.user_id.as_deref().unwrap_or_default(),
+                    &project.slug,
+                )?
+                .is_none()
+        {
+            return Err(Error::BadRequest(format!(
+                "you are not a member of project {}",
+                project.slug
+            )));
+        }
+        clean.push(project.slug);
+    }
+    Ok(Some(clean))
+}
+
+async fn list_my_tokens(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
+    let Some(user_id) = context.user_id.as_deref() else {
+        return Ok(Json(json!({ "tokens": [] })));
+    };
+    let tokens: Vec<Value> = state
+        .tokens
+        .for_user(user_id)?
+        .iter()
+        .map(|token| serde_json::to_value(token.public()))
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(Json(json!({ "tokens": tokens })))
+}
+
+async fn create_my_token(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    Json(body): Json<NewPersonalToken>,
+) -> Result<Json<Value>, Error> {
+    let user_id = context
+        .user_id
+        .clone()
+        .ok_or_else(|| Error::BadRequest("a legacy token cannot own a PAT".to_string()))?;
+    let projects = validate_token_projects(&state, &context, body.projects)?;
+    let grant = state.tokens.create_personal(
+        &user_id,
+        &body.name,
+        projects,
+        body.read_only,
+        body.expires_days,
+    )?;
+    record_audit(
+        &state,
+        Some(&context),
+        "token.create",
+        None,
+        Some(grant.token.id.clone()),
+        json!({
+            "kind": "personal",
+            "name": grant.token.name,
+            "projects": grant.token.projects,
+            "read_only": grant.token.read_only,
+        }),
+    );
+    Ok(Json(json!({
+        "token": grant.raw,
+        "personal_token": grant.token.public(),
+    })))
+}
+
+async fn revoke_my_token(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    let Some(user_id) = context.user_id.as_deref() else {
+        return Err(Error::NotFound(id));
+    };
+    if !state.tokens.revoke_for_user(&id, user_id)? {
+        return Err(Error::NotFound(id));
+    }
+    record_audit(
+        &state,
+        Some(&context),
+        "token.revoke",
+        None,
+        Some(id.clone()),
+        json!({ "kind": "personal" }),
+    );
+    Ok(Json(json!({ "ok": true })))
+}
+
+async fn list_agent_tokens(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    let tokens: Vec<Value> = state
+        .tokens
+        .agents()?
+        .iter()
+        .map(|token| serde_json::to_value(token.public()))
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(Json(json!({ "tokens": tokens })))
+}
+
+async fn create_agent_token(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    Json(body): Json<NewAgentToken>,
+) -> Result<Json<Value>, Error> {
+    let agent = normalize_agent_id(&body.agent)?;
+    let projects = validate_token_projects(&state, &context, body.projects)?;
+    let jobs = body.jobs.unwrap_or_else(|| vec!["review".to_string()]);
+    let grant = state
+        .tokens
+        .create_agent(&agent, &body.name, projects, jobs, body.expires_days)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "token.create",
+        None,
+        Some(grant.token.id.clone()),
+        json!({
+            "kind": "agent",
+            "agent": grant.token.agent,
+            "name": grant.token.name,
+            "projects": grant.token.projects,
+            "jobs": grant.token.jobs,
+        }),
+    );
+    Ok(Json(json!({
+        "token": grant.raw,
+        "agent_token": grant.token.public(),
+    })))
+}
+
+async fn revoke_agent_token(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    if !state.tokens.revoke_agent(&id)? {
+        return Err(Error::NotFound(id));
+    }
+    record_audit(
+        &state,
+        Some(&context),
+        "token.revoke",
+        None,
+        Some(id.clone()),
+        json!({ "kind": "agent" }),
+    );
+    Ok(Json(json!({ "ok": true })))
+}
+
 fn auth_response(state: &AppState, user: &User, is_owner: bool, grant: SessionGrant) -> Response {
     let mut response = Json(json!({
         "user": user.public(is_owner),
@@ -1620,6 +1976,10 @@ async fn people_page(State(state): State<AppState>) -> Response {
 
 async fn audit_page(State(state): State<AppState>) -> Response {
     serve_ui(&state, "audit.html")
+}
+
+async fn tokens_page(State(state): State<AppState>) -> Response {
+    serve_ui(&state, "tokens.html")
 }
 
 async fn editor_page(
@@ -2091,10 +2451,19 @@ struct RepoEntry {
 /// stores them as projects with a relative `repo` key so the same record works on every agent
 /// mount. This endpoint only creates/updates; it never deletes reviews.
 async fn sync_agent_repos(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<RepoSync>,
 ) -> Result<Json<Value>, Error> {
     let agent = normalize_agent_id(&body.agent_id)?;
+    if let Some(scope) = &context.agent {
+        if scope.id != agent {
+            return Err(Error::Forbidden(format!(
+                "this token belongs to agent {}, not {agent}",
+                scope.id
+            )));
+        }
+    }
     // A repo sync is the bridge's periodic heartbeat (every 60 s), so it is the natural place to
     // record presence even when no review is claimed.
     state
@@ -2115,6 +2484,14 @@ async fn sync_agent_repos(
             continue;
         }
         let name: String = repo.name.trim().chars().take(120).collect::<String>();
+        if let Some(scope) = &context.agent {
+            if let Some(allowed) = &scope.projects {
+                let slug = state.store.repo_project_slug(&key)?;
+                if !allowed.contains(&slug) {
+                    continue;
+                }
+            }
+        }
         let project = state.store.sync_repo_project(&agent, &key, &name)?;
         projects.push(json!(project));
     }
@@ -2232,6 +2609,11 @@ async fn update_agent_settings(
     State(state): State<AppState>,
     Json(body): Json<AgentSettingsUpdate>,
 ) -> Result<Json<Value>, Error> {
+    if !context.is_owner {
+        return Err(Error::Forbidden(
+            "owner access required to change agent settings".to_string(),
+        ));
+    }
     for value in [body.max_parallel, body.project_max_parallel]
         .into_iter()
         .flatten()
@@ -2311,10 +2693,19 @@ async fn agent_status(State(state): State<AppState>) -> Result<Json<Value>, Erro
 }
 
 async fn claim_session(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<ClaimBody>,
 ) -> Result<Json<Value>, Error> {
     let mut meta = state.store.require(&body.session_id)?;
+    if let Some(scope) = &context.agent {
+        if scope.id != body.agent_id {
+            return Err(Error::Forbidden("token/agent mismatch".to_string()));
+        }
+        if !project_visible(&context, meta.project.as_deref().unwrap_or("inbox")) {
+            return Err(Error::NotFound(body.session_id.clone()));
+        }
+    }
     if meta.status != Status::Submitted {
         return Err(Error::Conflict(
             "only a submitted review can be claimed".to_string(),
@@ -2356,10 +2747,20 @@ async fn claim_session(
 }
 
 async fn claim_heartbeat(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
     Json(body): Json<AgentHeartbeat>,
 ) -> Result<Json<Value>, Error> {
+    if let Some(scope) = &context.agent {
+        if scope.id != body.agent_id {
+            return Err(Error::Forbidden("token/agent mismatch".to_string()));
+        }
+        let meta = state.store.require(&id)?;
+        if !project_visible(&context, meta.project.as_deref().unwrap_or("inbox")) {
+            return Err(Error::NotFound(id.clone()));
+        }
+    }
     let lease_seconds = {
         let agent = state
             .agent
@@ -2381,11 +2782,20 @@ async fn claim_heartbeat(
 }
 
 async fn claim_state(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
     Json(body): Json<ClaimStateBody>,
 ) -> Result<Json<Value>, Error> {
     let meta = state.store.require(&id)?;
+    if let Some(scope) = &context.agent {
+        if scope.id != body.agent_id {
+            return Err(Error::Forbidden("token/agent mismatch".to_string()));
+        }
+        if !project_visible(&context, meta.project.as_deref().unwrap_or("inbox")) {
+            return Err(Error::NotFound(id));
+        }
+    }
     let project = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
     let mut agent = state
         .agent
@@ -2408,10 +2818,20 @@ async fn claim_state(
 }
 
 async fn claim_release(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
     Json(body): Json<AgentRelease>,
 ) -> Result<Json<Value>, Error> {
+    if let Some(scope) = &context.agent {
+        if scope.id != body.agent_id {
+            return Err(Error::Forbidden("token/agent mismatch".to_string()));
+        }
+        let meta = state.store.require(&id)?;
+        if !project_visible(&context, meta.project.as_deref().unwrap_or("inbox")) {
+            return Err(Error::NotFound(id.clone()));
+        }
+    }
     let claim = {
         let mut agent = state
             .agent
@@ -2424,26 +2844,57 @@ async fn claim_release(
 }
 
 async fn agent_next(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<NextBody>,
 ) -> Result<Json<Value>, Error> {
+    if let Some(agent) = &context.agent {
+        if agent.id != body.agent_id {
+            return Err(Error::Forbidden(format!(
+                "this token belongs to agent {}, not {}",
+                agent.id, body.agent_id
+            )));
+        }
+    }
+    let token_review = context
+        .agent
+        .as_ref()
+        .map_or(true, |agent| agent.jobs.contains("review"));
+    let token_handoff = context
+        .agent
+        .as_ref()
+        .map_or(true, |agent| agent.jobs.contains("handoff"));
     let mut sessions = state.store.list()?;
     sessions.retain(|meta| {
         meta.status == Status::Submitted
             && meta.agent_state.as_deref() != Some("working")
             && meta.agent_state.as_deref() != Some("replied")
+            && project_visible(&context, meta.project.as_deref().unwrap_or("inbox"))
     });
+    if !token_review {
+        sessions.clear();
+    }
     sessions.sort_by_key(|meta| {
         meta.submitted_at
             .clone()
             .unwrap_or_else(|| meta.created_at.clone())
     });
 
+    let effective_jobs: Option<Vec<String>> = match (&context.agent, &body.jobs) {
+        (Some(scope), Some(jobs)) => Some(
+            jobs.iter()
+                .filter(|job| scope.jobs.contains(job.as_str()))
+                .cloned()
+                .collect(),
+        ),
+        (Some(scope), None) => Some(scope.jobs.iter().cloned().collect()),
+        (None, jobs) => jobs.clone(),
+    };
     let mut agent = state
         .agent
         .lock()
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
-    agent.touch(&body.agent_id, body.jobs.as_deref());
+    agent.touch(&body.agent_id, effective_jobs.as_deref());
     let settings = agent.settings().clone();
     let claims = agent.claims();
     let mut blocked = "empty";
@@ -2492,10 +2943,11 @@ async fn agent_next(
         }
     }
 
-    let can_handoff = body
-        .jobs
-        .as_ref()
-        .is_some_and(|jobs| jobs.iter().any(|job| job == "handoff"));
+    let can_handoff = token_handoff
+        && body
+            .jobs
+            .as_ref()
+            .is_some_and(|jobs| jobs.iter().any(|job| job == "handoff"));
     if can_handoff {
         let mut handoffs = state.store.list()?;
         handoffs.retain(|meta| {
@@ -2504,6 +2956,7 @@ async fn agent_next(
                     .handoff
                     .as_ref()
                     .is_some_and(|handoff| handoff.status.claimable())
+                && project_visible(&context, meta.project.as_deref().unwrap_or("inbox"))
         });
         handoffs.sort_by_key(|meta| {
             meta.handoff
@@ -3339,6 +3792,17 @@ async fn resolve(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
+    if let Some(scope) = &context.agent {
+        let meta = state.store.require(&id)?;
+        if !project_visible(&context, meta.project.as_deref().unwrap_or("inbox")) {
+            return Err(Error::NotFound(id.clone()));
+        }
+        if !scope.jobs.contains("review") {
+            return Err(Error::Forbidden(
+                "this agent token does not have the review job".to_string(),
+            ));
+        }
+    }
     let meta = state.store.resolve(&id)?;
     record_audit(
         &state,
@@ -4249,11 +4713,21 @@ async fn review_markdown_route(
     Ok(serve_file(&path, Some("text/markdown; charset=utf-8")))
 }
 
-async fn mcp_post(State(state): State<AppState>, Json(request): Json<Value>) -> Response {
+async fn mcp_post(
+    State(state): State<AppState>,
+    Extension(context): Extension<AuthContext>,
+    Json(request): Json<Value>,
+) -> Response {
+    let agent = context.agent.as_ref().map(|agent| AgentScope {
+        id: agent.id.clone(),
+        projects: agent.projects.clone(),
+        jobs: agent.jobs.clone(),
+    });
     let context = McpContext {
         store: &state.store,
         base_url: &state.base_url,
         token: state.auth.token(),
+        agent,
     };
     match mcp::handle(&context, &request).await {
         Some(response) => Json(response).into_response(),

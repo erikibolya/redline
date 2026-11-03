@@ -54,7 +54,7 @@ The options page stores one RedLine server profile:
 | Field | Meaning |
 |---|---|
 | Server URL | `https://redline.ibolya.cz` or `http://127.0.0.1:8788` |
-| Token | the server token; stored in `chrome.storage.local`, never synced |
+| Token | a personal access token (`rl_pat_…`, created on `/tokens`; the legacy server token still works); stored in `chrome.storage.local`, never synced |
 | Project | optional; loaded from `GET /api/projects` |
 | Branch | optional; the server derives `feat/<title-slug>-<id-tail>` when empty |
 | Redaction | header/query patterns; request bodies off by default |

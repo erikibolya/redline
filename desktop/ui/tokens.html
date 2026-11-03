@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RedLine — tokens</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css" />
+<style>
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: var(--font); padding: 24px;
+  }
+  .tokens { width: min(1000px, 100%); margin: 0 auto; }
+  .tokens-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .tokens-head .back { margin-left: auto; color: var(--muted); font-size: 12px; text-decoration: none; }
+  .tokens-head .back:hover { color: var(--text); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 24px; box-shadow: 0 20px 50px rgba(0, 0, 0, .28); margin-bottom: 18px;
+  }
+  .card h1 { font-size: 18px; margin: 0 0 4px; }
+  .card h2 { font-size: 14px; margin: 0 0 4px; }
+  .card .lead { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0 0 18px; }
+  .card[hidden] { display: none; }
+  .token-form {
+    display: grid; grid-template-columns: 1.2fr 1.6fr .7fr auto; gap: 8px;
+    margin: 0 0 14px; padding: 14px; border: 1px solid var(--border-soft); border-radius: 10px;
+  }
+  .token-form.agent { grid-template-columns: .8fr 1fr 1.4fr .7fr auto; }
+  .token-form input {
+    min-width: 0; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  .token-form input[type="checkbox"] { width: auto; }
+  .token-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .token-form[hidden] { display: none; }
+  .check-line { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
+  .jobs-line { display: flex; align-items: center; gap: 12px; color: var(--muted); font-size: 12px; }
+  .jobs-line label { display: flex; align-items: center; gap: 5px; }
+  .status { min-height: 18px; margin: 8px 0 12px; color: var(--muted); font-size: 12px; }
+  .status.error { color: #fda4af; }
+  .status.ok { color: #86efac; }
+  .reveal {
+    margin: 0 0 16px; padding: 12px; border: 1px solid #4c1d95; border-radius: 10px;
+    background: #1c142f; color: #c4b5fd; font-size: 12px;
+  }
+  .reveal[hidden] { display: none; }
+  .reveal .row { display: flex; gap: 8px; margin-top: 8px; }
+  .reveal input {
+    flex: 1; min-width: 0; padding: 8px 10px; border-radius: 6px; border: 1px solid #6d28d9;
+    background: #120b1f; color: #ddd6fe; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .token-list { border: 1px solid var(--border-soft); border-radius: 10px; overflow: hidden; }
+  .token-row { padding: 11px 12px; border-top: 1px solid var(--border-soft); }
+  .token-row:first-child { border-top: 0; }
+  .token-row .top { display: flex; align-items: baseline; gap: 8px; }
+  .token-row .top b { font-size: 13px; }
+  .token-row .top code { color: var(--accent); font-size: 11px; }
+  .token-row .top .revoked { margin-left: auto; color: var(--danger); font-size: 10.5px; }
+  .token-row .meta { color: var(--muted); font-size: 11px; margin-top: 3px; line-height: 1.5; }
+  .token-row .actions { margin-top: 5px; }
+  .token-row .actions button {
+    border: 0; background: transparent; color: var(--muted); font-size: 11px; cursor: pointer; padding: 2px 0;
+  }
+  .token-row .actions button:hover { color: var(--danger); }
+  .empty { padding: 16px 12px; color: var(--muted); font-size: 12px; }
+  .error-card { padding: 18px; border: 1px solid #7f1d1d; border-radius: 10px; color: #fda4af; }
+  [data-theme="light"] .status.error, [data-theme="light"] .error-card { color: #be123c; }
+  [data-theme="light"] .status.ok { color: #15803d; }
+  [data-theme="light"] .reveal { background: #f5f3ff; border-color: #c4b5fd; color: #5b21b6; }
+  [data-theme="light"] .reveal input { background: #fff; border-color: #a78bfa; color: #4c1d95; }
+  @media (max-width: 760px) {
+    .token-form, .token-form.agent { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body data-page="tokens">
+<main class="tokens">
+  <div class="tokens-head">
+    <div class="brand"><span class="brand-mark" role="img" aria-label="RedLine"><i></i></span></div>
+    <a class="back" href="/">← Sessions</a>
+  </div>
+
+  <section class="card" id="my-tokens-card">
+    <h1>Personal tokens</h1>
+    <p class="lead">For the browser extension, the CLI or a script. A token inherits your project
+      roles; you can narrow it to an explicit project list or make it read-only. The raw token is
+      shown once — store it in your password manager or the extension options.</p>
+    <form class="token-form" id="my-token-form" autocomplete="off">
+      <input id="my-name" placeholder="Name (e.g. Extension – Chrome)" required />
+      <input id="my-projects" placeholder="Projects (comma separated; blank = all)" spellcheck="false" />
+      <input id="my-days" type="number" min="1" max="3650" placeholder="Expires (days)" />
+      <button class="btn accent" type="submit" id="my-create">Create token</button>
+    </form>
+    <label class="check-line"><input type="checkbox" id="my-readonly" /> Read-only</label>
+    <div class="status" id="my-status" role="status" aria-live="polite"></div>
+    <div class="reveal" id="my-reveal" hidden>
+      <b>Copy this token now. It will not be shown again.</b>
+      <div class="row">
+        <input id="my-raw" readonly spellcheck="false" aria-label="New personal token" />
+        <button class="btn" type="button" id="my-copy">Copy</button>
+      </div>
+    </div>
+    <div id="my-list"><div class="empty">Loading…</div></div>
+  </section>
+
+  <section class="card" id="agent-tokens-card" hidden>
+    <h2>Agent tokens</h2>
+    <p class="lead">Owner only. The bridge or another integration uses its own token, optionally
+      limited to projects and to review/handoff jobs. Revoking it never affects other agents.</p>
+    <form class="token-form agent" id="agent-token-form" autocomplete="off">
+      <input id="agent-id" placeholder="Agent id (e.g. holly)" spellcheck="false" required />
+      <input id="agent-name" placeholder="Name (e.g. Holly bridge)" required />
+      <input id="agent-projects" placeholder="Projects (comma separated; blank = all)" spellcheck="false" />
+      <input id="agent-days" type="number" min="1" max="3650" placeholder="Expires (days)" />
+      <button class="btn accent" type="submit" id="agent-create">Create token</button>
+    </form>
+    <div class="jobs-line">
+      <span>Jobs:</span>
+      <label><input type="checkbox" id="agent-job-review" checked /> review</label>
+      <label><input type="checkbox" id="agent-job-handoff" /> handoff</label>
+    </div>
+    <div class="status" id="agent-status" role="status" aria-live="polite"></div>
+    <div class="reveal" id="agent-reveal" hidden>
+      <b>Copy this token now. It will not be shown again.</b>
+      <div class="row">
+        <input id="agent-raw" readonly spellcheck="false" aria-label="New agent token" />
+        <button class="btn" type="button" id="agent-copy">Copy</button>
+      </div>
+    </div>
+    <div id="agent-list"><div class="empty">Loading…</div></div>
+  </section>
+
+  <div class="error-card" id="tokens-error" hidden></div>
+</main>
+
+<script>
+const myStatus = document.getElementById("my-status");
+const agentStatus = document.getElementById("agent-status");
+const myList = document.getElementById("my-list");
+const agentList = document.getElementById("agent-list");
+const agentCard = document.getElementById("agent-tokens-card");
+const tokensError = document.getElementById("tokens-error");
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[char]));
+}
+
+function csrfToken() {
+  for (const part of document.cookie.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === "redline_csrf") return rest.join("=");
+  }
+  return "";
+}
+
+async function api(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = { ...(options.headers || {}) };
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = csrfToken();
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+  }
+  const response = await fetch(path, { ...options, headers });
+  const body = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    location.replace(`/login?next=${encodeURIComponent(location.pathname)}`);
+    throw new Error("sign in required");
+  }
+  if (!response.ok) throw new Error(body.error || `request failed (${response.status})`);
+  return body;
+}
+
+function setStatus(box, text, kind) {
+  box.textContent = text || "";
+  box.className = "status" + (kind ? " " + kind : "");
+}
+
+function projectList(input) {
+  return input.value.split(",").map((value) => value.trim()).filter(Boolean);
+}
+
+function scopeText(token) {
+  const projects = token.projects == null
+    ? "all accessible projects"
+    : token.projects.length
+      ? token.projects.join(", ")
+      : "no projects";
+  const bits = [projects];
+  if (token.read_only) bits.push("read-only");
+  if (token.kind === "agent") bits.push(`jobs: ${(token.jobs || []).join(", ") || "none"}`);
+  return bits.join(" · ");
+}
+
+function when(iso) {
+  if (!iso) return "never";
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+}
+
+function renderTokens(target, tokens, kind) {
+  if (!tokens.length) {
+    target.innerHTML = `<div class="empty">No ${kind} tokens yet.</div>`;
+    return;
+  }
+  target.innerHTML = `<div class="token-list">${tokens.map((token) => `
+    <div class="token-row" data-token-id="${escapeHtml(token.id)}">
+      <div class="top">
+        <b>${escapeHtml(token.name)}</b>
+        <code>${escapeHtml(token.prefix)}…</code>
+        ${token.revoked_at ? '<span class="revoked">revoked</span>' : ""}
+      </div>
+      <div class="meta">
+        ${escapeHtml(scopeText(token))}<br>
+        Created ${escapeHtml(when(token.created_at))} · Last used ${escapeHtml(when(token.last_used_at))}
+        ${token.expires_at ? ` · Expires ${escapeHtml(when(token.expires_at))}` : ""}
+      </div>
+      ${token.revoked_at ? "" : `<div class="actions"><button type="button" data-revoke="${escapeHtml(token.id)}" data-kind="${kind}">Revoke</button></div>`}
+    </div>`).join("")}</div>`;
+  target.querySelectorAll("[data-revoke]").forEach((button) => {
+    button.addEventListener("click", () => revoke(button.dataset.revoke, button.dataset.kind));
+  });
+}
+
+async function copy(input, button, status) {
+  input.select();
+  try {
+    await navigator.clipboard.writeText(input.value);
+    setStatus(status, "Copied", "ok");
+    setTimeout(() => setStatus(status, ""), 1200);
+  } catch {
+    document.execCommand("copy");
+    setStatus(status, "Copied", "ok");
+  }
+}
+
+async function revoke(id, kind) {
+  if (!confirm("Revoke this token? Any client using it will stop working immediately.")) return;
+  try {
+    await api(kind === "agent"
+      ? `/api/admin/agent-tokens/${encodeURIComponent(id)}`
+      : `/api/me/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await load();
+  } catch (error) {
+    setStatus(myStatus, error.message, "error");
+  }
+}
+
+async function load() {
+  tokensError.hidden = true;
+  try {
+    const me = await api("/api/auth/me");
+    if (!me.user) {
+      myList.innerHTML = '<div class="error-card">Sign in with your own account to manage personal tokens.</div>';
+      document.getElementById("my-token-form").hidden = true;
+      return;
+    }
+    const mine = await api("/api/me/tokens");
+    renderTokens(myList, mine.tokens || [], "personal");
+    if (me.is_owner) {
+      agentCard.hidden = false;
+      const agents = await api("/api/admin/agent-tokens");
+      renderTokens(agentList, agents.tokens || [], "agent");
+    }
+  } catch (error) {
+    tokensError.hidden = false;
+    tokensError.textContent = error.message;
+  }
+}
+
+document.getElementById("my-token-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setStatus(myStatus, "Creating…");
+  try {
+    const days = Number(document.getElementById("my-days").value);
+    const body = {
+      name: document.getElementById("my-name").value.trim(),
+      projects: projectList(document.getElementById("my-projects")),
+      read_only: document.getElementById("my-readonly").checked,
+    };
+    if (!body.projects.length) delete body.projects;
+    if (days > 0) body.expires_days = days;
+    const created = await api("/api/me/tokens", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    document.getElementById("my-raw").value = created.token;
+    document.getElementById("my-reveal").hidden = false;
+    document.getElementById("my-token-form").reset();
+    setStatus(myStatus, "Token created", "ok");
+    await load();
+  } catch (error) {
+    setStatus(myStatus, error.message, "error");
+  }
+});
+
+document.getElementById("agent-token-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  setStatus(agentStatus, "Creating…");
+  try {
+    const days = Number(document.getElementById("agent-days").value);
+    const jobs = [
+      document.getElementById("agent-job-review").checked ? "review" : null,
+      document.getElementById("agent-job-handoff").checked ? "handoff" : null,
+    ].filter(Boolean);
+    const body = {
+      agent: document.getElementById("agent-id").value.trim(),
+      name: document.getElementById("agent-name").value.trim(),
+      projects: projectList(document.getElementById("agent-projects")),
+      jobs,
+    };
+    if (!body.projects.length) delete body.projects;
+    if (days > 0) body.expires_days = days;
+    const created = await api("/api/admin/agent-tokens", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    document.getElementById("agent-raw").value = created.token;
+    document.getElementById("agent-reveal").hidden = false;
+    document.getElementById("agent-token-form").reset();
+    setStatus(agentStatus, "Token created", "ok");
+    await load();
+  } catch (error) {
+    setStatus(agentStatus, error.message, "error");
+  }
+});
+
+document.getElementById("my-copy").addEventListener("click", () =>
+  copy(document.getElementById("my-raw"), document.getElementById("my-copy"), myStatus));
+document.getElementById("agent-copy").addEventListener("click", () =>
+  copy(document.getElementById("agent-raw"), document.getElementById("agent-copy"), agentStatus));
+
+load();
+</script>
+</body>
+</html>

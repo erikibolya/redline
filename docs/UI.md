@@ -688,6 +688,19 @@ section, `Δ` shows the summary inline:
 - The page reads `GET /api/audit`; the server already enforces owner-only, so the UI check is
   only a clearer message.
 
+## Personal and agent tokens (v0.28)
+
+- `/tokens` is linked from the notification panel (and from People & access for the owner).
+  A named user sees **Personal tokens**: name, optional project list, read-only and expiry. The
+  raw `rl_pat_…` appears once in a copyable field plus **Copy**; the list afterwards shows only
+  the prefix, scopes, creation/last-used/expiry and **Revoke**.
+- The owner additionally sees **Agent tokens** (`rl_agt_…`): agent id, name, project allowlist,
+  expiry and `review`/`handoff` job checkboxes. Revoking one token never affects another agent or
+  any human session.
+- A legacy server token sees a sign-in hint instead of a personal-token form; it has no named
+  account to own a PAT. The page never renders `hash` or a raw token in the list.
+- Times on the token page use the browser locale (`toLocaleString`), not ISO slices.
+
 ## Revision conflicts (v0.28)
 
 - Every editor load remembers `meta.revision` as `baseRevision`; submit, tester request and a new

@@ -149,7 +149,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `failed_logins_are_throttled`.
 - Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
   username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
-  revokes the session. 296 checks.
+  revokes the session. 300 checks.
 - **Current gaps:** PAT/agent-token UI, invite/reset links, audit UI and optimistic revision still
   need their tests as they arrive.
 
@@ -166,7 +166,23 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   assert a member with no projects sees an empty queue, a foreign task/media is `404`, and the
   old owner loses the Inbox.
 - Browser e2e: the owner-only People & access page creates a user and saves a tester role; the
-  editor/rail role labels are covered by the 296-check suite.
+  editor/rail role labels are covered by the 300-check suite.
+
+## Personal and agent tokens (v0.28, in progress)
+
+- Rust `tokens.rs`: a PAT stores only the hash, keeps its allowlist/read-only/expiry, looks up the
+  raw value, and stops working after revoke/expiry; an agent token carries its jobs and agent id;
+  bad names/scopes/jobs are refused; the raw value starts `rl_pat_`/`rl_agt_`.
+- Rust `tests/api.rs`: `personal_and_agent_tokens_are_scoped_hashed_and_revocable` — create a
+  read-only PAT scoped to one project, authenticate `/api/auth/me`, list only that project on
+  `/api/sessions`, `404` a foreign task, `403` a submit, create a review-only agent token, verify
+  token/agent mismatch is `403`, `list_reviews` excludes the foreign task, an agent token is `403`
+  on a human route, revoke both tokens and get `401`, and `token.create`/`token.revoke` in audit.
+- Browser e2e: the owner creates a personal token in `/tokens`, uses the raw value for
+  `/api/auth/me`, revokes it and gets `401`; creates an agent token with a project/job scope and
+  sees it listed. 300 checks.
+- **Not yet covered:** the extension/CLI using a PAT in its own e2e, `last_used_at` display
+  refreshed after use, and token expiry through the browser.
 
 ## Optimistic revision (v0.28, in progress)
 
@@ -180,7 +196,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: fresh task at revision 0; an agent `post_round` behind the canvas makes the UI
   submit stale, the conflict banner names revision 1, **Reload theirs** discards the local draft
   and loads the newer round; a second agent round names revision 2 and **Keep mine** submits the
-  local ellipse as revision 3. 296 checks.
+  local ellipse as revision 3. 300 checks.
 - **Not yet covered:** a tester request conflict through the UI, video-round conflicts in the
   browser, and multi-tab edits on the same machine (the server guard is covered by Rust).
 
@@ -195,7 +211,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer gets `403`.
 - Browser e2e: the owner opens **Audit log** from People & access, sees the `membership.update`
   row just written, and the row shows a locale-formatted time and actor; a tester sees the
-  owner-only card. 296 checks.
+  owner-only card. 300 checks.
 - **Not yet covered:** MCP/agent actions in the audit stream, audit for handoff results and
   notification delivery, and audit-log rotation beyond the file-size compaction.
 
@@ -209,7 +225,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer resolves it, and an unknown mention is `400`. The tester→developer test also
   asserts `review.ready` and `review.submitted` notifications.
 - Browser e2e: the tester opens **Discussion**, posts a comment and the API returns it; the owner
-  comments from another context; the tester's bell shows the owner's comment. 296 checks.
+  comments from another context; the tester's bell shows the owner's comment. 300 checks.
 - **Not yet covered:** audit log, notification for handoff done/failed and ownership transfer,
   comment rate limiting, and the desktop notification surface.
 

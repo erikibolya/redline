@@ -1069,6 +1069,26 @@ impl Store {
     /// Bind a repository discovered by an agent to a project. Repo keys are global, so a second
     /// agent reporting the same key updates the record instead of creating a duplicate project.
     /// The slug is derived once from the key and never changes.
+    /// The slug `sync_repo_project` will use, without creating anything. An agent token scoped to
+    /// a project must decide whether this repo is allowed before the project exists.
+    pub fn repo_project_slug(&self, repo: &str) -> Result<String> {
+        if let Some(project) = self
+            .projects()?
+            .into_iter()
+            .find(|project| project.repo.as_deref() == Some(repo))
+        {
+            return Ok(project.slug);
+        }
+        let base = slugify(repo);
+        let mut slug = base.clone();
+        let mut suffix = 2;
+        while self.project(&slug)?.is_some() {
+            slug = format!("{base}-{suffix}");
+            suffix += 1;
+        }
+        Ok(slug)
+    }
+
     pub fn sync_repo_project(
         &self,
         agent: &str,

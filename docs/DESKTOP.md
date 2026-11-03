@@ -82,6 +82,10 @@ the machine, and a random web page must not be able to POST annotations to `127.
   `redline_session` + `redline_csrf`; session mutations require `X-CSRF-Token`. The local
   (This computer) server remains owner-only; a remote profile's webview will redirect to `/login`
   on 401. Full desktop profile/login UX is part of the multi-user release.
+- A PAT (`rl_pat_…`, created on `/tokens`) is the recommended credential for the browser
+  extension and scripts; an agent token (`rl_agt_…`) is for `redline-agent`/MCP and is scoped to
+  projects and `review`/`handoff` jobs. The legacy server token remains a full owner + agent
+  credential during migration.
 - Human-facing links carry the token once: `GET /s/<id>?t=…` sets an `HttpOnly; SameSite=Strict`
   cookie and 302s to the clean URL, so the address bar and history stay tidy.
 - Mutating requests additionally require `Sec-Fetch-Site: same-origin|none`, defeating drive-by

@@ -281,6 +281,9 @@ same path a human does: upload, play, draw, range, zoom, submit.
   the options page, submits an image rectangle, then a video + trace rectangle at `0.5 s`.
 - It asserts the server payload: image annotation width 3; video `meta.trace.kind=browser-flow`,
   `annotations[0].at=0.5`, and at least one annotated frame.
+- It measures the options row before configuring: the Project select and Branch input must share a
+  top, and the “(optional)” hint must stay on the Branch line (a bare flex item pushed the input
+  a row down; 2026-11-03).
 - Run locally with a loaded test extension and `REDLINE_BASE`, `REDLINE_TOKEN`, `CHROME_URL`
   (see `extension/scripts/e2e.mjs`).
 

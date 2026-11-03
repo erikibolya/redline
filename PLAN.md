@@ -59,6 +59,18 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - [ ] Optional **TLS upstream**: let the app talk to an HTTPS server with its own client (today the
       desktop *webview* handles TLS; the CLI/setup probe is HTTP-only).
 
+### M7 — Multi-user collaboration (v0.28, planned)
+
+- [ ] **Auth foundation:** local users/sessions, one owner with transfer, PAT + multiple service
+      tokens, migration from the single token, audit.
+- [ ] **Roles & project ACL:** Developer/Tester/Viewer, per-project memberships, required project,
+      tester `Request agent review`, server-side submit permission.
+- [ ] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, revision conflicts.
+- [ ] **Integrations:** extension PAT, desktop/CLI login, share links, OIDC/SSO later.
+
+Full spec and permission matrix: `docs/COLLABORATION.md`. Target: standalone v0.28 with a
+migration guide; not part of v0.27.
+
 ## Decisions
 
 | # | Decision | Why |
@@ -106,6 +118,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - Capture needs the `:browser` image (~768 MB); the slim image returns an actionable error instead.
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
 - No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
+  Planned for v0.28 (`docs/COLLABORATION.md`).
 - Repo routing is single-agent: all agents watch the same queue; a claim/filter router is next.
 - **Feature confirmation is a decision, not a git action.** RedLine records `feature_state` and,
   only when the human ticks the optional handoff, queues a generic **handoff job** (v0.23). The

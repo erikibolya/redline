@@ -171,6 +171,33 @@ impl MembershipStore {
         self.save(&memberships)
     }
 
+    /// Replace one user's project roles without touching any other member. The People page edits
+    /// a person, not a project, so a save must not rewrite every other user in those projects.
+    pub fn replace_user_projects(
+        &self,
+        user_id: &str,
+        memberships: &[(String, ProjectRole)],
+    ) -> Result<()> {
+        let user_id = user_id.trim();
+        if user_id.is_empty() {
+            return Err(Error::BadRequest("user is required".to_string()));
+        }
+        let mut all = self.all()?;
+        all.retain(|membership| membership.user != user_id);
+        for (project, role) in memberships {
+            let project = project.trim();
+            if project.is_empty() {
+                return Err(Error::BadRequest("project is required".to_string()));
+            }
+            all.push(Membership {
+                project: project.to_string(),
+                user: user_id.to_string(),
+                role: *role,
+            });
+        }
+        self.save(&all)
+    }
+
     pub fn remove_user(&self, user_id: &str) -> Result<usize> {
         let mut memberships = self.all()?;
         let before = memberships.len();
@@ -242,6 +269,32 @@ mod tests {
             Some(ProjectRole::Tester)
         );
         assert_eq!(store.role_for("usr_anna", "other").unwrap(), None);
+    }
+
+    #[test]
+    fn replacing_a_users_projects_keeps_other_members() {
+        let (_dir, store) = store();
+        store
+            .set_role("a", "usr_anna", Some(ProjectRole::Developer))
+            .unwrap();
+        store
+            .set_role("b", "usr_anna", Some(ProjectRole::Tester))
+            .unwrap();
+        store
+            .set_role("a", "usr_petr", Some(ProjectRole::Viewer))
+            .unwrap();
+        store
+            .replace_user_projects("usr_anna", &[("b".to_string(), ProjectRole::Developer)])
+            .unwrap();
+        assert_eq!(store.role_for("usr_anna", "a").unwrap(), None);
+        assert_eq!(
+            store.role_for("usr_anna", "b").unwrap(),
+            Some(ProjectRole::Developer)
+        );
+        assert_eq!(
+            store.role_for("usr_petr", "a").unwrap(),
+            Some(ProjectRole::Viewer)
+        );
     }
 
     #[test]

@@ -648,14 +648,20 @@ section, `Δ` shows the summary inline:
 
 ## Roles, People & access and the editor (v0.28)
 
-- **People & access** (`/people`) is owner-only. It shows a `user × project` matrix with a role
-  select per cell (`—`, Viewer, Tester, Developer), an **Add user** form, and the project repo
-  under each column. The owner row is global and read-only. A member sees an owner-only message.
+- **People & access** (`/people`) is owner-only. It is a **list of people**, not a project
+  matrix: each row shows the person, their project **chips** with roles, **Projects**, **Reset
+  link**, and (for the owner) a global **Owner · all projects** chip. A member sees an owner-only
+  message.
+- **Projects** opens a modal with one row per project: a checkbox grants access and a role select
+  chooses Viewer / Tester / Developer. A filter narrows a long project list; **Save projects**
+  writes only that person's memberships through `PUT /api/users/{id}/projects`. The chips in the
+  row update after saving. This stays usable with many repositories; the page no longer renders
+  every project as a column.
 - **Invite instead of a password:** the checkbox turns **Add user** into **Create invite link**.
   The one-time `…/invite/rl_inv_…` URL appears in a copy-once panel; the invitee gets a public
   page to choose a password and lands signed in. **Reset link** on each non-owner row generates a
   24-hour `…/reset/rl_rst_…` URL the same way. Invited users show an **INVITED** mark.
-- **Transfer ownership:** owner-only select + current-password field below the matrix. It asks
+- **Transfer ownership:** owner-only select + current-password field below the people list. It asks
   for confirmation, warns that the old owner becomes a member immediately, and the new owner
   receives an `owner.transfer` notification.
 - The owner-only people icon appears in the header after `/api/auth/me` answers; it is hidden for

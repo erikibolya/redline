@@ -23,7 +23,9 @@ agent credential. Named humans use a server-side session:
 - `POST /api/auth/password` — `{ "current_password", "new_password" }`; revokes the old sessions
   and returns a new one.
 - `GET /api/users` / `POST /api/users` — owner only; list/create named users
-  (`{ "username", "display_name", "password" }`).
+  (`{ "username", "display_name", "password" }` or `{ "invite": true }`). `GET` embeds each
+  non-owner's project roles as `memberships: [{ "project", "role" }]` so the People page needs one
+  request instead of one per project.
 - `POST /api/admin/transfer-owner` — owner only; `{ "user_id", "password" }`; atomically moves the
   single owner bit; the old owner becomes a member.
 
@@ -124,6 +126,22 @@ Owner only. `GET` returns the member list with `user_id`, `username`, `display_n
 
 Roles are `viewer`, `tester` and `developer`; the owner is global and is not stored as a member.
 The owner can assign a user to several projects with different roles.
+
+### `PUT /api/users/<id>/projects`
+
+Owner only. Replaces **one user's** project roles without touching any other member of those
+projects — the write path behind the People page's **Projects** dialog:
+
+```json
+{ "memberships": [
+  { "project": "actiunit-au-net", "role": "developer" },
+  { "project": "redline", "role": "tester" }
+] }
+```
+
+A project must exist and a role must be `viewer|tester|developer`; the owner cannot be a target
+(owner access is global). The response repeats the stored memberships. Omitting a project removes
+that user's role there; other users in the same projects are unchanged.
 
 ### `GET/POST /api/sessions/<id>/comments`
 

@@ -5590,3 +5590,162 @@ async fn invite_and_reset_links_are_one_time_and_audited() {
     assert!(actions.contains(&"user.invite"));
     assert!(actions.contains(&"user.reset"));
 }
+
+#[tokio::test]
+async fn user_project_roles_replace_only_that_user() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    for name in ["Alpha", "Beta"] {
+        let (status, _, body) = send(
+            &h.app,
+            with_session(
+                "POST",
+                "/api/projects",
+                json!({ "name": name }),
+                &session,
+                &csrf,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let (status, _, anna) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "anna2",
+                "display_name": "Anna Two",
+                "password": "correct horse battery staple",
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{anna}");
+    let anna_id = anna["user"]["id"].as_str().unwrap().to_string();
+    let (status, _, petr) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "petr2",
+                "display_name": "Petr Two",
+                "password": "correct horse battery staple",
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{petr}");
+    let petr_id = petr["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            "/api/projects/alpha/members",
+            json!({ "members": [
+                { "user_id": anna_id, "role": "developer" },
+                { "user_id": petr_id, "role": "viewer" },
+            ] }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, _, saved) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/users/{anna_id}/projects"),
+            json!({ "memberships": [
+                { "project": "alpha", "role": "tester" },
+                { "project": "beta", "role": "developer" },
+            ] }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["memberships"].as_array().unwrap().len(), 2);
+
+    let (status, _, users) = send(
+        &h.app,
+        with_session("GET", "/api/users", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    let list = users["users"].as_array().unwrap();
+    let anna_row = list.iter().find(|row| row["id"] == anna_id).unwrap();
+    assert_eq!(anna_row["memberships"].as_array().unwrap().len(), 2);
+    let petr_row = list.iter().find(|row| row["id"] == petr_id).unwrap();
+    assert_eq!(petr_row["memberships"][0]["project"], "alpha");
+    assert_eq!(petr_row["memberships"][0]["role"], "viewer");
+
+    let (status, _, saved) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/users/{anna_id}/projects"),
+            json!({ "memberships": [{ "project": "beta", "role": "viewer" }] }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{saved}");
+    assert_eq!(saved["memberships"][0]["project"], "beta");
+    assert_eq!(saved["memberships"][0]["role"], "viewer");
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/users/{anna_id}/projects"),
+            json!({ "memberships": [{ "project": "missing", "role": "viewer" }] }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/users/{anna_id}/projects"),
+            json!({ "memberships": [{ "project": "beta", "role": "admin" }] }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (_, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    let owner_id = me["user"]["id"].as_str().unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/users/{owner_id}/projects"),
+            json!({ "memberships": [] }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+}

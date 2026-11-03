@@ -3999,29 +3999,67 @@ const main = async () => {
 
   // Owner-only People & access: create a tester and assign the repo project through the UI.
   await loginPage.goto(`${BASE}/people`, { waitUntil: "networkidle2" });
-  await loginPage.waitForSelector("#people-table", { timeout: 10000 });
+  await loginPage.waitForSelector("#people-list .person-row", { timeout: 10000 });
   await loginPage.type("#new-username", "e2e-tester");
   await loginPage.type("#new-name", "E2E Tester");
   await loginPage.type("#new-password", "correct horse battery staple");
   await loginPage.click("#new-user-submit");
   await loginPage.waitForFunction(
-    () => document.querySelector("#people-table")?.textContent.includes("@e2e-tester"),
+    () => [...document.querySelectorAll("#people-list .person-row")]
+      .some((row) => row.textContent.includes("@e2e-tester")),
     { timeout: 10000 },
   );
   const testerId = await loginPage.evaluate(() => {
-    const row = [...document.querySelectorAll("#people-table tbody tr")]
-      .find((tr) => tr.textContent.includes("@e2e-tester"));
-    return row?.querySelector("select")?.dataset.user || "";
+    const row = [...document.querySelectorAll("#people-list .person-row")]
+      .find((entry) => entry.textContent.includes("@e2e-tester"));
+    return row?.dataset.userId || "";
   });
   check("People & access creates a named user", Boolean(testerId), testerId);
-  await loginPage.select(
-    `#people-table select[data-project="e2e-repo"][data-user="${testerId}"]`,
-    "tester",
-  );
+  const peopleShape = await loginPage.evaluate(() => ({
+    rows: document.querySelectorAll("#people-list .person-row").length,
+    matrix: Boolean(document.querySelector("#people-table")),
+  }));
+  check("People & access is a user list, not a project matrix",
+    peopleShape.rows > 0 && !peopleShape.matrix, JSON.stringify(peopleShape));
+
+  await loginPage.evaluate(() => {
+    const row = [...document.querySelectorAll("#people-list .person-row")]
+      .find((entry) => entry.textContent.includes("@e2e-tester"));
+    row.querySelector("[data-edit-projects]").click();
+  });
+  await loginPage.waitForSelector("#projects-dialog[open]", { timeout: 5000 });
+  const projectDialog = await loginPage.evaluate(() => ({
+    title: document.querySelector("#projects-dialog-title")?.textContent.trim() || "",
+    projects: [...document.querySelectorAll("#projects-list .project-row")]
+      .map((row) => row.querySelector("[data-project-access]")?.dataset.projectAccess || ""),
+  }));
+  check("the Projects dialog opens with the project list",
+    projectDialog.title.includes("E2E Tester")
+      && projectDialog.projects.includes("e2e-repo"),
+    JSON.stringify(projectDialog));
+  await loginPage.evaluate(() => {
+    const box = document.querySelector('[data-project-access="e2e-repo"]');
+    if (!box.checked) box.click();
+  });
+  await loginPage.select('select[data-project-role="e2e-repo"]', "tester");
+  await loginPage.click("#projects-save");
   await loginPage.waitForFunction(
-    () => document.querySelector("#status")?.textContent.includes("Saved"),
+    () => [...document.querySelectorAll("#people-list .person-row")]
+      .some((row) => row.textContent.includes("@e2e-tester")
+        && Boolean(row.querySelector(".role-chip.tester"))),
     { timeout: 10000 },
   );
+  const testerChips = await loginPage.evaluate(() => {
+    const row = [...document.querySelectorAll("#people-list .person-row")]
+      .find((entry) => entry.textContent.includes("@e2e-tester"));
+    return {
+      text: row?.textContent || "",
+      chip: row?.querySelector(".role-chip.tester")?.textContent.trim() || "",
+    };
+  });
+  check("People & access saves roles as project chips",
+    testerChips.chip.includes("E2E Repo") && testerChips.text.includes("tester"),
+    JSON.stringify(testerChips));
   const projectMembers = await api("/api/projects/e2e-repo/members");
   check("People & access saves a project role",
     (projectMembers.members || []).some((member) =>
@@ -4064,7 +4102,7 @@ const main = async () => {
 
   // Reset-link generation for the now-active account (acceptance is covered by Rust).
   const inviteRow = await loginPage.evaluateHandle(() =>
-    [...document.querySelectorAll("#people-table tbody tr")]
+    [...document.querySelectorAll("#people-list .person-row")]
       .find((row) => row.textContent.includes("@e2e-invite")));
   await inviteRow.asElement().$eval("[data-reset]", (button) => button.click());
   await loginPage.waitForFunction(
@@ -4073,7 +4111,7 @@ const main = async () => {
     { timeout: 10000 },
   );
   const resetUrl = await loginPage.$eval("#link-raw", (el) => el.value);
-  check("the owner can generate a reset link from the people matrix",
+  check("the owner can generate a reset link from the people list",
     resetUrl.includes("/reset/rl_rst_"), resetUrl.slice(0, 60));
 
   // Owner-only audit log: the membership change just made must be visible with a local timestamp.

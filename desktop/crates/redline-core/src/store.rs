@@ -1244,6 +1244,66 @@ impl Store {
         Ok(meta)
     }
 
+    /// Move an existing review to another project (or back to the Inbox).
+    ///
+    /// The project is both a label and a physical folder: a review created in a project lives in
+    /// `sessions/projects/<slug>/<id>`, while an Inbox review is a flat `sessions/<id>`. The bridge
+    /// resolves the agent repository from `meta.project`, so the label and the folder move
+    /// together. An existing worktree is not moved; the next run creates one in the new project's
+    /// repository.
+    ///
+    /// The caller (the HTTP handler) refuses a submitted round or a live claim/handoff; this
+    /// method only performs the move. A failed handoff is terminal and may be moved (the exact
+    /// case where a review landed in the wrong project and the next retry needs the right repo).
+    pub fn set_project(&self, id: &str, project: Option<&str>) -> Result<Meta> {
+        let mut meta = self.require(id)?;
+        let old_dir = self.dir(id)?;
+        let target = match project.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(name) if slugify(name) != INBOX => {
+                let slug = slugify(name);
+                let project = self
+                    .project(&slug)?
+                    .ok_or_else(|| Error::NotFound(slug.clone()))?;
+                Some(project)
+            }
+            _ => None,
+        };
+        let target_slug = target.as_ref().map(|project| project.slug.clone());
+        let target_parent = match &target_slug {
+            Some(slug) => self.projects_root().join(slug),
+            None => self.root.clone(),
+        };
+        let old_parent = old_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| self.root.clone());
+        let needs_move = old_parent != target_parent;
+        if !needs_move && meta.project == target_slug {
+            return Ok(meta);
+        }
+
+        meta.project = target_slug;
+        // Serialize before touching the disk: a failed serialization must not leave the folder
+        // renamed with the old metadata.
+        let value = serde_json::to_value(&meta)?;
+        if needs_move {
+            fs::create_dir_all(&target_parent)?;
+            let target_dir = target_parent.join(id);
+            if target_dir.exists() {
+                return Err(Error::Exists(id.to_string()));
+            }
+            fs::rename(&old_dir, &target_dir)?;
+            if let Err(err) = write_json(&target_dir.join("meta.json"), &value) {
+                // Keep the caller's old path usable when the metadata write fails.
+                let _ = fs::rename(&target_dir, &old_dir);
+                return Err(err);
+            }
+        } else {
+            write_json(&old_dir.join("meta.json"), &value)?;
+        }
+        Ok(meta)
+    }
+
     /// Append one line to `agent-events.jsonl` (the activity feed the human watches).
     pub fn append_agent_event(&self, id: &str, event: &serde_json::Value) -> Result<()> {
         use std::io::Write as _;

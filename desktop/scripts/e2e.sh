@@ -30,6 +30,12 @@ fi
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 cleanup
+# The server inside the test container writes /data as root. A plain `rm -rf` as the invoking
+# user cannot empty those root-owned session folders and would silently reuse the previous run's
+# data (the `&& mkdir` then never runs). Empty it from a root container first.
+mkdir -p "$DATA"
+docker run --rm -v "$DATA:/data" --entrypoint /bin/sh "$IMAGE" \
+  -c 'rm -rf /data/*' >/dev/null 2>&1 || true
 rm -rf "$DATA" && mkdir -p "$DATA"
 
 docker run -d --name "$NAME" --network traefik_network \

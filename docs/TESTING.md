@@ -122,6 +122,20 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   creates a review through the dialog with the field left empty, and asserts the rail row and the
   loaded meta carry `feat/<title>-<tail>`.
 
+## Moving a review between projects (v0.27)
+
+- Rust `tests/store.rs`: `an_existing_review_moves_its_folder_and_project_label` — a flat Inbox
+  review moves to `projects/<slug>/<id>` with the label, the old folder disappears, `list()` keeps
+  the project, moving back to Inbox flattens it and reads as `inbox`, and an unknown project is an
+  error that leaves the review where it is.
+- Rust `tests/api.rs`: `an_existing_review_moves_between_projects_and_back_to_inbox` (the HTTP
+  path, persisted meta and `GET /api/sessions` row), `a_submitted_review_cannot_change_its_project`
+  (409 and no move), and `a_running_handoff_blocks_a_move_but_a_failed_handoff_can_move` (the
+  recovery path for a review filed in the wrong project).
+- Browser e2e: create an Inbox review, open the header project chip, assert the dialog lists the
+  current project and the repo hint, move it to the repo project, assert the chip/server/rail
+  grouping and that it survives a reload, then move it back to Inbox.
+
 ## Handoff after confirmation (v0.23)
 
 - Rust `tests/store.rs` / `tests/api.rs`: confirming with `handoff:true` queues

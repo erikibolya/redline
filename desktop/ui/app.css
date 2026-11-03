@@ -153,6 +153,23 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer;
 }
 .branch-chip:hover, .branch-chip:focus-visible { border-color: var(--accent); }
+/* The project routes the next agent run, so it is visible next to the branch rather than hidden
+   in the rail grouping. Neutral, because it is context, not the work's name. */
+.project-chip {
+  flex: none; max-width: 34%; padding: 1px 6px; border-radius: 5px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--muted);
+  font: 500 10.5px var(--font); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: pointer;
+}
+.project-chip:hover, .project-chip:focus-visible {
+  border-color: var(--accent); color: var(--text);
+}
+.feature-card select {
+  width: 100%; padding: 8px 10px; border-radius: var(--radius);
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  cursor: pointer;
+}
+.project-dialog-hint { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
 .header-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 /* A hairline between the app tools and the two panel toggles: they act on the layout, not the
    review, and used to read as one row of mystery glyphs. */

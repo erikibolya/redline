@@ -110,6 +110,24 @@ name) or has a handoff record (the link points at the handed-off branch). A revi
 a name already has a branch — `feat/<title-slug>-<id-tail>` — so `session/<id>` is no longer
 produced; sessions that v0.21 claimed under that fallback are read back under their `feat/…` name.
 
+### `PUT /api/sessions/<id>/project`
+
+Move an existing review to another project, or back to the Inbox.
+
+```json
+{ "project": "actiunit-au-net" }
+```
+
+`project` accepts a slug or a display name. `null`, an empty string or `"inbox"` moves the review
+to the Inbox. Returns `{ "meta": { … } }`; an unknown project is `404`.
+
+The project decides the repository the bridge resolves for the next review or handoff run, so the
+session folder moves with it (`sessions/projects/<slug>/<id>` for a project, `sessions/<id>` for
+the Inbox) and `meta.project` is updated. `409` while the round is `submitted`, while an agent
+holds a claim, or while a handoff is `requested`/`running`: the worktree for the old project
+already exists. A terminally `failed` handoff is movable — that is the recovery path when a review
+was filed under the wrong project and its retry needs the right repository.
+
 ### `POST /api/sessions/<id>/confirm-feature`
 
 The human says the feature is complete. Sets `status=resolved`, `resolved_at` (if unset) and

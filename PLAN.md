@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 160 Rust tests, 22 extension unit tests, 291-check browser E2E in CI on Linux + Windows |
+| Tests | 162 Rust tests, 22 extension unit tests, 296-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -59,19 +59,16 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - [ ] Optional **TLS upstream**: let the app talk to an HTTPS server with its own client (today the
       desktop *webview* handles TLS; the CLI/setup probe is HTTP-only).
 
-### M7 — Multi-user collaboration (v0.28, planned)
+### M7 — Multi-user collaboration (v0.28, in progress)
 
 - [ ] **Auth foundation:** local users/sessions, one owner with transfer, PAT + multiple service
-      tokens, migration from the single token, audit. *In progress:* users, Argon2id passwords,
-      server sessions/CSRF, login page, owner bootstrap and transfer are in; PAT/invite/audit next.
-- [ ] **Roles & project ACL:** Developer/Tester/Viewer, per-project memberships, required project,
-      tester `Request agent review`, server-side submit permission. *In progress:* memberships,
-      project filtering, read ACL, tester request/developer send and the owner People & access
-      matrix are in.
-- [ ] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, revision conflicts.
-      *In progress:* per-task Discussion (comments, mentions, resolve), per-user in-app
-      notifications with the header bell and 90-day retention, and the owner-only audit log
-      (365-day retention, filters) are in; optimistic revision is next.
+      tokens, migration from the single token, audit. *Done:* users, Argon2id passwords, server
+      sessions/CSRF, login page, owner bootstrap/transfer and the audit trail. *Next:* PAT,
+      multiple agent tokens, invite/reset links.
+- [x] **Roles & project ACL:** Developer/Tester/Viewer, per-project memberships, required project,
+      tester `Request agent review`, server-side submit permission, owner People & access.
+- [x] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, optimistic
+      revision conflicts (server `409`, in-stage Reload theirs / Keep mine).
 - [ ] **Integrations:** extension PAT, desktop/CLI login, share links, OIDC/SSO later.
 
 Full spec and permission matrix: `docs/COLLABORATION.md`. Target: standalone v0.28 with a
@@ -145,7 +142,7 @@ migration guide; not part of v0.27.
 - `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 22 extension
   unit tests: annotation geometry/hit-testing/moving, server URL/permission config, offline review
   Markdown/JSON and the ZIP writer.
-- `desktop/scripts/e2e.sh` — 291 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 296 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

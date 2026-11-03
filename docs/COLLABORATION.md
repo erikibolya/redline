@@ -9,8 +9,10 @@
 > **People & access** matice. Diskuse a notifikace jsou také v `dev`: `comments.jsonl` v tasku,
 > per-user `notifications/<user>.jsonl`, zvonek s unread badge, mentions a resolve; retence
 > notifikací 90 dní (`REDLINE_NOTIFICATION_RETENTION_DAYS`). Audit je v `dev`: `audit.jsonl`,
-> owner-only `/audit` s filtry, retence 1 rok (`REDLINE_AUDIT_RETENTION_DAYS`). PAT, invite/reset,
-> MCP akce v auditu a optimistická revize následují.
+> owner-only `/audit` s filtry, retence 1 rok (`REDLINE_AUDIT_RETENTION_DAYS`). Optimistická
+> revize je v `dev`: `meta.revision` + `annotations.revision`, `base_revision` v submitu,
+> strukturovaný `409` a UI banner s **Reload theirs / Keep mine**. PAT, invite/reset a MCP akce
+> v auditu následují.
 > **Cíl:** bezpečně pustit k jedné RedLine instanci více lidí, rozdělit je na role a omezit
 > přístup k projektům, aniž by se rozbila současná cesta agent → review → člověk.
 >

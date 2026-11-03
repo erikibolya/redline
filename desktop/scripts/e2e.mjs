@@ -4154,6 +4154,78 @@ const main = async () => {
   check("login page has no uncaught JS errors", authErrors.length === 0, authErrors.join("; "));
   await authContext.close();
 
+  // ---- optimistic revision: a stale canvas must not silently overwrite a newer round
+  const revision = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({ title: "revision e2e", image_base64: makePng() }),
+  });
+  const revisionId = revision.meta.id;
+  await page.goto(`${BASE}/s/${revisionId}?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(() => window.redline?.image, { timeout: 15000 });
+  const revisionStart = await page.evaluate(() => window.redline.baseRevision);
+  check("a fresh task starts at revision 0", revisionStart === 0, String(revisionStart));
+
+  // Draw locally, then let an agent post a round behind the canvas.
+  await page.keyboard.press("r");
+  await drag(page, at(300, 250), at(430, 340));
+  await page.keyboard.press("v");
+  const agentRound = (note) => api("/mcp", {
+    method: "POST",
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "post_round", arguments: { session_id: revisionId, note } },
+    }),
+  });
+  await agentRound("a round posted behind the canvas");
+  await page.click("#submit");
+  await page.waitForSelector("#revision-banner:not([hidden])", { timeout: 10000 });
+  const conflictView = await page.evaluate(() => ({
+    text: document.querySelector("#revision-banner-text")?.textContent.trim() || "",
+    reload: Boolean(document.querySelector("#revision-reload")),
+    keep: Boolean(document.querySelector("#revision-keep")),
+  }));
+  check("a stale canvas shows the revision conflict banner",
+    conflictView.text.includes("revision 1") && conflictView.reload && conflictView.keep,
+    JSON.stringify(conflictView));
+
+  await page.click("#revision-reload");
+  await page.waitForFunction(() => window.redline.baseRevision === 1, { timeout: 10000 });
+  const revisionReload = await page.evaluate(() => ({
+    base: window.redline.baseRevision,
+    hidden: document.querySelector("#revision-banner")?.hidden,
+    annotations: window.redline.annotations.length,
+  }));
+  check("Reload theirs discards the local draft and takes the newer round",
+    revisionReload.base === 1 && revisionReload.hidden && revisionReload.annotations === 0,
+    JSON.stringify(revisionReload));
+
+  // Now keep local work: draw an ellipse, let the agent post again, then overwrite deliberately.
+  await page.keyboard.press("e");
+  await drag(page, at(500, 300), at(640, 390));
+  await page.keyboard.press("v");
+  await page.waitForFunction(() => window.redline.annotations.length === 1, { timeout: 5000 });
+  await agentRound("another agent round");
+  await page.click("#submit");
+  await page.waitForSelector("#revision-banner:not([hidden])", { timeout: 10000 });
+  const secondConflict = await page.evaluate(() =>
+    document.querySelector("#revision-banner-text")?.textContent.trim() || "");
+  check("the second conflict names revision 2",
+    secondConflict.includes("revision 2"), secondConflict);
+  await page.click("#revision-keep");
+  await page.waitForFunction(
+    () => window.redline.meta?.status === "submitted" && window.redline.baseRevision === 3,
+    { timeout: 15000 },
+  );
+  const kept = await api(`/api/sessions/${revisionId}`);
+  check("Keep mine submits over the newer revision",
+    kept.meta.revision === 3
+      && kept.annotations.annotations.length === 1
+      && kept.annotations.annotations[0].type === "ellipse"
+      && kept.annotations.revision === 3,
+    JSON.stringify({ revision: kept.meta.revision, annotations: kept.annotations.annotations }));
+
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 
   await browser.close();

@@ -959,6 +959,10 @@ fn feedback_payload(ctx: &McpContext<'_>, meta: &Meta) -> Value {
         frames: Vec::new(),
         annotations: Vec::new(),
         submitted_at: None,
+        revision: 0,
+        updated_by: None,
+        updated_by_name: None,
+        updated_at: None,
     });
     let dir = ctx.store.dir(&meta.id).ok();
     let markdown = dir

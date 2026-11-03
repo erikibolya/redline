@@ -14,6 +14,15 @@ pub enum Error {
     BadRequest(String),
     #[error("{0}")]
     Conflict(String),
+    /// A submit/update carried a revision that no longer matches the round on disk. The fields
+    /// travel to the UI so the conflict banner can say who changed it and what to reload.
+    #[error("this task changed since you loaded it")]
+    RevisionConflict {
+        current_revision: u64,
+        updated_by: Option<String>,
+        updated_by_name: Option<String>,
+        updated_at: Option<String>,
+    },
     #[error("{0}")]
     Unauthorized(String),
     #[error("{0}")]
@@ -34,7 +43,9 @@ impl Error {
     pub fn status(&self) -> StatusCode {
         match self {
             Error::InvalidId | Error::NotFound(_) => StatusCode::NOT_FOUND,
-            Error::Exists(_) | Error::Conflict(_) => StatusCode::CONFLICT,
+            Error::Exists(_) | Error::Conflict(_) | Error::RevisionConflict { .. } => {
+                StatusCode::CONFLICT
+            }
             Error::BadRequest(_) => StatusCode::BAD_REQUEST,
             Error::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             Error::Forbidden(_) => StatusCode::FORBIDDEN,
@@ -51,7 +62,21 @@ impl Error {
 impl axum::response::IntoResponse for Error {
     fn into_response(self) -> axum::response::Response {
         let status = self.status();
-        let body = serde_json::json!({ "error": self.to_string() });
+        let body = match &self {
+            Error::RevisionConflict {
+                current_revision,
+                updated_by,
+                updated_by_name,
+                updated_at,
+            } => serde_json::json!({
+                "error": self.to_string(),
+                "current_revision": current_revision,
+                "updated_by": updated_by,
+                "updated_by_name": updated_by_name,
+                "updated_at": updated_at,
+            }),
+            _ => serde_json::json!({ "error": self.to_string() }),
+        };
         (status, axum::Json(body)).into_response()
     }
 }

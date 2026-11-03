@@ -13,7 +13,7 @@ use crate::comments::Comment;
 use crate::error::{Error, Result};
 use crate::model::{
     AgentFailure, Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind,
-    MediaRef, Meta, Status, Submission, TraceHighlight, TraceRef, TraceSummary,
+    MediaRef, Meta, Status, Submission, TraceHighlight, TraceRef, TraceSummary, UpdateActor,
 };
 use crate::{
     MAX_FRAMES_BYTES, MAX_FRAME_COUNT, MAX_TRACE_BYTES, MAX_TRACE_EVENTS, MAX_TRACE_TEXT,
@@ -365,6 +365,36 @@ fn effective_branch(mut meta: Meta) -> Meta {
 /// `datetime.now(timezone.utc).isoformat(timespec="seconds")`.
 pub fn now() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false)
+}
+
+/// Refuse a round whose canvas was loaded before someone else's write. A missing base is a
+/// pre-v0.28 client and is accepted; the caller still stamps the next revision.
+fn check_revision(meta: &Meta, base_revision: Option<u64>) -> Result<()> {
+    let Some(base) = base_revision else {
+        return Ok(());
+    };
+    if base == meta.revision {
+        return Ok(());
+    }
+    Err(Error::RevisionConflict {
+        current_revision: meta.revision,
+        updated_by: meta.updated_by.clone(),
+        updated_by_name: meta.updated_by_name.clone(),
+        updated_at: meta.updated_at.clone(),
+    })
+}
+
+fn bump_revision(meta: &mut Meta, actor: Option<&UpdateActor>, stamp: &str) {
+    meta.revision = meta.revision.saturating_add(1);
+    meta.updated_at = Some(stamp.to_string());
+    if let Some(actor) = actor {
+        if let Some(id) = actor.id.as_deref() {
+            meta.updated_by = Some(id.to_string());
+        }
+        if let Some(name) = actor.name.as_deref() {
+            meta.updated_by_name = Some(name.to_string());
+        }
+    }
 }
 
 /// A fresh requested handoff, carrying the label/URL/message from a previous failed attempt. A
@@ -1201,6 +1231,10 @@ impl Store {
                 frames: Vec::new(),
                 annotations: Vec::new(),
                 submitted_at: None,
+                revision: 0,
+                updated_by: None,
+                updated_by_name: None,
+                updated_at: None,
             }))
     }
 
@@ -1532,6 +1566,10 @@ impl Store {
             created_by_type: None,
             agent_requested_at: None,
             agent_requested_by: None,
+            revision: 0,
+            updated_by: None,
+            updated_by_name: None,
+            updated_at: None,
             branch: Some(branch),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -1634,6 +1672,10 @@ impl Store {
             created_by_type: None,
             agent_requested_at: None,
             agent_requested_by: None,
+            revision: 0,
+            updated_by: None,
+            updated_by_name: None,
+            updated_at: None,
             branch: Some(branch),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -1715,9 +1757,36 @@ impl Store {
         height: Option<u32>,
         fps: Option<f64>,
     ) -> Result<Meta> {
+        self.new_video_round_as(
+            id,
+            video,
+            poster,
+            duration_ms,
+            width,
+            height,
+            fps,
+            None,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_video_round_as(
+        &self,
+        id: &str,
+        video: &[u8],
+        poster: Option<&[u8]>,
+        duration_ms: Option<u64>,
+        width: Option<u32>,
+        height: Option<u32>,
+        fps: Option<f64>,
+        base_revision: Option<u64>,
+        actor: Option<&UpdateActor>,
+    ) -> Result<Meta> {
         let extension = validate_video(video, poster, duration_ms)?;
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
+        check_revision(&meta, base_revision)?;
         let set = self.annotations(id)?;
         let has_round = meta.status == Status::Submitted
             || !set.annotations.is_empty()
@@ -1782,9 +1851,18 @@ impl Store {
         let _ = fs::remove_file(dir.join("annotated.png"));
         let _ = fs::remove_file(dir.join("review.md"));
         let _ = fs::remove_dir_all(dir.join("frames"));
+        let updated_at = now();
+        bump_revision(&mut meta, actor, &updated_at);
         write_json(
             &dir.join("annotations.json"),
-            &json!({ "session": id, "annotations": [] }),
+            &json!({
+                "session": id,
+                "annotations": [],
+                "revision": meta.revision,
+                "updated_by": meta.updated_by.clone(),
+                "updated_by_name": meta.updated_by_name.clone(),
+                "updated_at": meta.updated_at.clone(),
+            }),
         )?;
 
         meta.image = file.clone();
@@ -1933,6 +2011,11 @@ impl Store {
             meta.image_height = height;
         }
 
+        let agent_actor = UpdateActor {
+            id: Some("agent".to_string()),
+            name: Some("Agent".to_string()),
+        };
+        bump_revision(&mut meta, Some(&agent_actor), &stamp);
         let set = AnnotationSet {
             session: id.to_string(),
             title: Some(meta.title.clone()),
@@ -1947,6 +2030,10 @@ impl Store {
             frames: Vec::new(),
             annotations: Vec::new(),
             submitted_at: None,
+            revision: meta.revision,
+            updated_by: meta.updated_by.clone(),
+            updated_by_name: meta.updated_by_name.clone(),
+            updated_at: meta.updated_at.clone(),
         };
         write_json(&dir.join("annotations.json"), &serde_json::to_value(&set)?)?;
 
@@ -2051,6 +2138,7 @@ impl Store {
 
         let dir = self.dir(id)?;
         let mut meta = self.require(id)?;
+        check_revision(&meta, submission.base_revision)?;
         let submitted_at = now();
         let round_stamp = unique_round_stamp(&dir, &submitted_at);
         if let Some(user_id) = request_by {
@@ -2085,6 +2173,12 @@ impl Store {
         if let Some(height) = submission.height {
             meta.image_height = Some(height);
         }
+        bump_revision(&mut meta, submission.actor.as_ref(), &submitted_at);
+        if meta.updated_by.is_none() {
+            if let Some(user_id) = request_by {
+                meta.updated_by = Some(user_id.to_string());
+            }
+        }
 
         let frame_refs = write_frames(&dir, frames)?;
         let set = AnnotationSet {
@@ -2101,6 +2195,10 @@ impl Store {
             frames: frame_refs,
             annotations: submission.annotations.clone(),
             submitted_at: Some(submitted_at.clone()),
+            revision: meta.revision,
+            updated_by: meta.updated_by.clone(),
+            updated_by_name: meta.updated_by_name.clone(),
+            updated_at: meta.updated_at.clone(),
         };
 
         write_json(&dir.join("annotations.json"), &serde_json::to_value(&set)?)?;

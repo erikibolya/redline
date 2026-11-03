@@ -149,7 +149,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `failed_logins_are_throttled`.
 - Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
   username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
-  revokes the session. 291 checks.
+  revokes the session. 296 checks.
 - **Current gaps:** PAT/agent-token UI, invite/reset links, audit UI and optimistic revision still
   need their tests as they arrive.
 
@@ -166,7 +166,23 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   assert a member with no projects sees an empty queue, a foreign task/media is `404`, and the
   old owner loses the Inbox.
 - Browser e2e: the owner-only People & access page creates a user and saves a tester role; the
-  editor/rail role labels are covered by the 291-check suite.
+  editor/rail role labels are covered by the 296-check suite.
+
+## Optimistic revision (v0.28, in progress)
+
+- Rust `tests/store.rs`: `revisions_guard_rounds_and_stamp_the_canvas` — first submit with base 0
+  becomes revision 1, a stale base 0 is a `RevisionConflict`, base 1 becomes revision 2, an agent
+  `post_round` advances to 3 and a stale human submit is refused.
+- Rust `tests/api.rs`: `stale_revisions_are_refused_with_a_structured_conflict` — create starts at
+  0, submit stamps 1 with `updated_by`/`updated_by_name`, a stale submit returns `409` with
+  `current_revision`/writer/time, base 1 submits to 2, and a legacy client without `base_revision`
+  is accepted but still stamps 3 (meta and annotations agree).
+- Browser e2e: fresh task at revision 0; an agent `post_round` behind the canvas makes the UI
+  submit stale, the conflict banner names revision 1, **Reload theirs** discards the local draft
+  and loads the newer round; a second agent round names revision 2 and **Keep mine** submits the
+  local ellipse as revision 3. 296 checks.
+- **Not yet covered:** a tester request conflict through the UI, video-round conflicts in the
+  browser, and multi-tab edits on the same machine (the server guard is covered by Rust).
 
 ## Audit log (v0.28, in progress)
 
@@ -179,7 +195,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer gets `403`.
 - Browser e2e: the owner opens **Audit log** from People & access, sees the `membership.update`
   row just written, and the row shows a locale-formatted time and actor; a tester sees the
-  owner-only card. 291 checks.
+  owner-only card. 296 checks.
 - **Not yet covered:** MCP/agent actions in the audit stream, audit for handoff results and
   notification delivery, and audit-log rotation beyond the file-size compaction.
 
@@ -193,7 +209,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer resolves it, and an unknown mention is `400`. The tester→developer test also
   asserts `review.ready` and `review.submitted` notifications.
 - Browser e2e: the tester opens **Discussion**, posts a comment and the API returns it; the owner
-  comments from another context; the tester's bell shows the owner's comment. 291 checks.
+  comments from another context; the tester's bell shows the owner's comment. 296 checks.
 - **Not yet covered:** audit log, notification for handoff done/failed and ownership transfer,
   comment rate limiting, and the desktop notification surface.
 

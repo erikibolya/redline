@@ -118,6 +118,8 @@ fn submission_writes_all_four_artifacts() {
         png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
         width: Some(1440),
         height: Some(900),
+
+        ..Default::default()
     };
 
     let (meta, set) = store.submit(&meta.id, &submission).expect("submit");
@@ -167,6 +169,8 @@ fn a_new_round_clears_the_feature_decision() {
         png: Some("data:image/png;base64,iVBORw0KGgo=".to_string()),
         width: None,
         height: None,
+
+        ..Default::default()
     };
     let (meta, _) = store.submit(&meta.id, &submission).unwrap();
     assert_eq!(meta.status, Status::Submitted);
@@ -439,6 +443,8 @@ fn writes_leave_no_temp_files_behind() {
                 png: None,
                 width: None,
                 height: None,
+
+                ..Default::default()
             },
         )
         .unwrap();
@@ -468,6 +474,8 @@ fn malformed_png_payload_is_a_bad_request_not_a_crash() {
                 png: Some("data:image/png;base64,!!!not-base64!!!".to_string()),
                 width: None,
                 height: None,
+
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -645,6 +653,8 @@ fn video_sessions_keep_media_metadata_and_timecoded_annotations() {
         png: None,
         width: Some(1280),
         height: Some(720),
+
+        ..Default::default()
     };
     let (_meta, set) = store.submit(&meta.id, &submission).expect("submit");
     assert_eq!(set.media.as_ref().map(|m| m.kind), Some(MediaKind::Video));
@@ -759,6 +769,8 @@ fn a_new_video_round_archives_the_previous_clip_and_reopens_the_review() {
                 png: None,
                 width: Some(320),
                 height: Some(180),
+
+                ..Default::default()
             },
         )
         .unwrap();
@@ -952,6 +964,8 @@ fn a_browser_trace_is_validated_summarized_and_archived() {
         png: None,
         width: Some(1440),
         height: Some(900),
+
+        ..Default::default()
     };
     let (submitted, set) = store
         .submit_round(&meta.id, &submission, None, &[])
@@ -1011,4 +1025,67 @@ fn an_invalid_trace_is_refused_without_attaching_it() {
         store.require(&meta.id).unwrap().trace.is_none(),
         "a rejected trace must not update meta"
     );
+}
+
+#[test]
+fn revisions_guard_rounds_and_stamp_the_canvas() {
+    use redline_core::error::Error;
+
+    let (_dir, store) = store();
+    let meta = store
+        .create_from_bytes(PNG, "a.png", "revision", "", "", None, None, None)
+        .unwrap();
+    assert_eq!(meta.revision, 0);
+
+    let first = Submission {
+        base_revision: Some(0),
+        ..Default::default()
+    };
+    let (meta, set) = store.submit(&meta.id, &first).unwrap();
+    assert_eq!(meta.revision, 1);
+    assert_eq!(set.revision, 1);
+    assert_eq!(meta.updated_at.is_some(), true);
+
+    let stale = Submission {
+        base_revision: Some(0),
+        ..Default::default()
+    };
+    let error = store.submit(&meta.id, &stale).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            Error::RevisionConflict {
+                current_revision: 1,
+                ..
+            }
+        ),
+        "a stale base must be a revision conflict, not a silent overwrite"
+    );
+
+    let next = Submission {
+        base_revision: Some(1),
+        ..Default::default()
+    };
+    let (meta, set) = store.submit(&meta.id, &next).unwrap();
+    assert_eq!(meta.revision, 2);
+    assert_eq!(set.revision, 2);
+
+    // An agent-pushed round also advances the revision; a human canvas loaded before it cannot
+    // be submitted over the agent's new picture.
+    let pushed = store
+        .post_round(&meta.id, Some(PNG), "agent.png", "new shot", None, None)
+        .unwrap();
+    assert_eq!(pushed.revision, 3);
+    assert_eq!(pushed.updated_by.as_deref(), Some("agent"));
+    let stale_again = Submission {
+        base_revision: Some(2),
+        ..Default::default()
+    };
+    assert!(matches!(
+        store.submit(&meta.id, &stale_again).unwrap_err(),
+        Error::RevisionConflict {
+            current_revision: 3,
+            ..
+        }
+    ));
 }

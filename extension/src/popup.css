@@ -6,6 +6,21 @@
   --text: #e6edf6;
   --muted: #93a4bb;
   --accent: #e11d48;
+  --button: #1c2940;
+  --notice-bg: #3a1d2a;
+  --notice-text: #fecdd3;
+}
+/* Only the tokens change: a light theme is not a second stylesheet. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f1f5f9;
+  --panel: #ffffff;
+  --line: #dbe3ef;
+  --text: #0f172a;
+  --muted: #64748b;
+  --button: #f8fafc;
+  --notice-bg: #fff1f2;
+  --notice-text: #9f1239;
 }
 * { box-sizing: border-box; }
 body {
@@ -19,7 +34,10 @@ header {
   display: flex; align-items: center; gap: 10px;
   padding: 12px 14px; border-bottom: 1px solid var(--line);
 }
-.grow { flex: 1; }
+.grow { flex: 1; min-width: 0; }
+.grow strong, .grow .muted {
+  display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .mark {
   width: 30px; height: 30px; border-radius: 9px;
   display: grid; place-items: center; font-weight: 800; font-size: 12px;
@@ -32,21 +50,52 @@ header {
   color: var(--muted); font-size: 11px; margin-top: 3px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* The project row is a server feature, so it is hidden (and removed from the flow) until a
+   server and token are configured. A class `display` outranks [hidden]; keep the guard. */
+.project {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 14px 10px;
+}
+.project[hidden] { display: none; }
+.project-label { color: var(--muted); font-size: 11px; font-weight: 600; }
+.project select {
+  flex: 1; min-width: 0; padding: 6px 8px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--text); font: inherit;
+}
+.project select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.project select:disabled { opacity: .6; }
 .actions { display: flex; gap: 8px; padding: 0 14px 12px; }
 button, .secondary {
   border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px;
-  background: #1c2940; color: var(--text); font: inherit; cursor: pointer;
+  background: var(--button); color: var(--text); font: inherit; cursor: pointer;
   text-decoration: none; text-align: center;
 }
 button.primary { background: var(--accent); border-color: var(--accent); font-weight: 700; flex: 1; }
 .secondary { flex: 0 0 auto; }
 button:disabled { opacity: .55; cursor: progress; }
-.icon { padding: 4px 8px; font-size: 16px; background: transparent; border: 0; }
+/* Icon buttons are square whatever the glyph inside, the same rule as the RedLine app header.
+   Inline SVGs keep one weight and never depend on an emoji font (the old ⚙ looked like a
+   different icon on some systems). */
+.header-actions { display: flex; align-items: center; gap: 2px; }
+.icon {
+  width: 30px; height: 30px; padding: 0; display: inline-grid; place-items: center;
+  border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.icon:hover { background: var(--button); color: var(--text); }
+.icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.icon svg {
+  width: 17px; height: 17px; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.icon svg.fill { fill: currentColor; stroke: none; }
 .notice {
   margin: 0 14px 12px; padding: 10px 12px; border-radius: 8px;
-  background: #3a1d2a; color: #fecdd3; font-size: 12px;
+  background: var(--notice-bg); color: var(--notice-text); font-size: 12px;
 }
-.link { border: 0; background: transparent; color: #fecdd3; padding: 0; text-decoration: underline; }
+.link { border: 0; background: transparent; color: var(--notice-text); padding: 0; text-decoration: underline; }
 .status { min-height: 18px; margin: 0 14px 12px; color: var(--muted); font-size: 12px; }
 .status.err { color: #fb7185; }
 .record { padding: 0 14px 4px; }
@@ -55,7 +104,7 @@ button:disabled { opacity: .55; cursor: progress; }
 .record-button { background: #1c2940; }
 .stop-button { background: var(--accent); border-color: var(--accent); font-weight: 700; }
 .mark-button { flex: 0 0 auto; }
-.timer { font-variant-numeric: tabular-nums; color: #fecdd3; min-width: 46px; text-align: right; }
+.timer { font-variant-numeric: tabular-nums; color: var(--notice-text); min-width: 46px; text-align: right; }
 .hint { color: var(--muted); font-size: 11px; margin: 6px 0 10px; }
 .offline { padding: 10px 14px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
 .offline-head {

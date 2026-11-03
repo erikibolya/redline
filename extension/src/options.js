@@ -5,6 +5,7 @@ import {
   normalizeServerUrl,
   saveConfig,
 } from "./lib/config.js";
+import { fillProjectSelect } from "./lib/projects.js";
 
 const $ = (id) => document.getElementById(id);
 const serverInput = $("server-url");
@@ -39,14 +40,7 @@ async function loadProjects(config) {
   const api = new RedLineApi(config);
   const data = await api.projects();
   const current = projectSelect.value || config.project || "";
-  projectSelect.innerHTML = '<option value="">Inbox</option>';
-  for (const project of data.projects || []) {
-    const option = document.createElement("option");
-    option.value = project.slug;
-    option.textContent = project.name || project.slug;
-    projectSelect.append(option);
-  }
-  projectSelect.value = current;
+  fillProjectSelect(projectSelect, data.projects || [], current);
 }
 
 async function testConnection() {
@@ -90,13 +84,7 @@ async function init() {
   tokenInput.value = config.token;
   branchInput.value = config.branch;
   openLink.href = config.serverUrl;
-  projectSelect.innerHTML = '<option value="">Inbox</option>';
-  if (config.project) {
-    const option = document.createElement("option");
-    option.value = config.project;
-    option.textContent = config.project;
-    projectSelect.append(option);
-  }
+  fillProjectSelect(projectSelect, [], config.project || "");
   if (config.token) {
     await loadProjects(config).catch(() => {});
     projectSelect.value = config.project || "";

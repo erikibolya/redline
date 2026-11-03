@@ -14,7 +14,10 @@ import puppeteer from "puppeteer-core";
 const BASE = (process.env.REDLINE_BASE || "http://127.0.0.1:8788").replace(/\/+$/, "");
 const TOKEN = process.env.REDLINE_TOKEN || "e2e-token";
 const CHROME = process.env.CHROME_URL || "http://127.0.0.1:9222";
-const repo = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
+// A copy of this script run from /tmp (the desktop e2e pattern) can still find the fixtures.
+const repo = process.env.REDLINE_REPO
+  ? path.resolve(process.env.REDLINE_REPO)
+  : path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
 function authed(init = {}) {
   return {
@@ -137,6 +140,12 @@ async function configure(browser, id) {
     { timeout: 10000 },
   );
   await page.close();
+}
+
+async function openPopup(browser) {
+  const page = await openExtensionPage(browser, "src/popup.html");
+  await page.waitForFunction(() => document.body.dataset.ready === "1", { timeout: 10000 });
+  return page;
 }
 
 async function createImageSession() {
@@ -329,6 +338,49 @@ try {
   const id = await extensionId(browser);
   await configure(browser, id);
 
+  // Popup: a connected server offers its projects, saves the choice, and the header carries the
+  // same settings/theme/close controls as the RedLine app. This is the user path the review asked
+  // for, not just a rendered <select>.
+  const createdProject = await json("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "Popup project" }),
+  });
+  const projectSlug = createdProject.project.slug;
+  const popup = await openPopup(browser);
+  assert.equal(
+    await popup.$eval("#project-row", (element) => element.hidden),
+    false,
+    "a configured popup must show the project row",
+  );
+  const projectValues = await popup.$$eval("#project option", (options) =>
+    options.map((option) => option.value),
+  );
+  assert.equal(projectValues[0], "", "Inbox is the first project choice");
+  assert.ok(
+    projectValues.includes(projectSlug),
+    `expected project ${projectSlug} in ${projectValues.join(",")}`,
+  );
+  await popup.select("#project", projectSlug);
+  await popup.waitForFunction(
+    async (slug) =>
+      (await chrome.storage.local.get("redlineConfig")).redlineConfig?.project === slug,
+    {},
+    projectSlug,
+  );
+  const themeBefore = await popup.evaluate(() => document.documentElement.dataset.theme);
+  await popup.click("#theme");
+  const themeAfter = await popup.evaluate(() => document.documentElement.dataset.theme);
+  assert.notEqual(themeAfter, themeBefore, "the theme toggle must change the scheme");
+  assert.equal(
+    await popup.evaluate(() => localStorage.getItem("redlineTheme")),
+    themeAfter,
+    "the theme choice must persist",
+  );
+  assert.equal(await popup.$eval("#theme", (element) => element.querySelectorAll("svg").length), 1);
+  assert.equal(await popup.$eval("#close", (element) => element.getAttribute("aria-label")), "Close");
+  await popup.close();
+
   const imageId = await createImageSession();
   const imagePage = await openCapture(browser, id, imageId, "image");
   assert.equal(
@@ -468,6 +520,33 @@ try {
   assert.equal(videoPayload.trace.kind, "browser-flow");
   assert.ok(videoExport.find((file) => file.name === "video.webm").bytes > 0);
   await localVideo.close();
+
+  // The project row is a server feature: an unconfigured extension must not show a select that
+  // cannot load anything, and must keep the offline notice in its place.
+  const offlinePopup = await openPopup(browser);
+  const savedConfig = await offlinePopup.evaluate(async () => {
+    const { redlineConfig } = await chrome.storage.local.get("redlineConfig");
+    await chrome.storage.local.set({
+      redlineConfig: { ...redlineConfig, token: "" },
+    });
+    return redlineConfig;
+  });
+  await offlinePopup.reload({ waitUntil: "domcontentloaded" });
+  await offlinePopup.waitForFunction(() => document.body.dataset.ready === "1", { timeout: 10000 });
+  assert.equal(
+    await offlinePopup.$eval("#project-row", (element) => element.hidden),
+    true,
+    "an unconfigured popup must hide the project row",
+  );
+  assert.equal(
+    await offlinePopup.$eval("#not-configured", (element) => element.hidden),
+    false,
+    "an unconfigured popup must keep the offline notice",
+  );
+  await offlinePopup.evaluate(async (config) => {
+    await chrome.storage.local.set({ redlineConfig: config });
+  }, savedConfig);
+  await offlinePopup.close();
 
   console.log("extension e2e: ok");
 } finally {

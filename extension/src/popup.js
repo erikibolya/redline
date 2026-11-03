@@ -1,4 +1,7 @@
-import { isConfigured, loadConfig } from "./lib/config.js";
+import { RedLineApi } from "./lib/api.js";
+import { isConfigured, loadConfig, saveConfig } from "./lib/config.js";
+import { fillProjectSelect } from "./lib/projects.js";
+import { applyTheme, preferredTheme, toggleTheme } from "./lib/theme.js";
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -9,11 +12,14 @@ const recordOfflineButton = $("record-offline");
 const stopButton = $("stop");
 const markButton = $("mark");
 const timerEl = $("timer");
+const projectRow = $("project-row");
+const projectSelect = $("project");
 
 let configured = false;
 let recording = null;
 let tick = null;
 let activeTabId = null;
+let projectSave = Promise.resolve();
 
 function setStatus(text, kind = "") {
   statusEl.textContent = text;
@@ -66,14 +72,22 @@ async function refreshRecording() {
 }
 
 async function init() {
+  applyTheme(preferredTheme());
   const config = await loadConfig();
   configured = isConfigured(config);
   $("not-configured").hidden = configured;
+  projectRow.hidden = !configured;
+  projectSelect.disabled = !configured;
   $("connection").textContent = configured
     ? `Configured · ${new URL(config.serverUrl).host}`
     : "Offline available";
   $("dashboard").href = config.serverUrl || "#";
   $("dashboard").hidden = !configured;
+  if (configured) {
+    fillProjectSelect(projectSelect, [], config.project || "");
+    await loadProjects(config).catch(() => {});
+    projectSelect.value = config.project || "";
+  }
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (tab) {
     activeTabId = tab.id;
@@ -88,6 +102,32 @@ async function openOptions() {
   window.close();
 }
 
+/// The popup is a quick capture surface: the project chosen here is saved into the same config the
+/// background worker reads when it creates the session, so the options page and the popup cannot
+/// disagree about where the review goes.
+async function loadProjects(config) {
+  const api = new RedLineApi(config);
+  const data = await api.projects();
+  const current = projectSelect.value || config.project || "";
+  fillProjectSelect(projectSelect, data.projects || [], current);
+}
+
+async function rememberProject() {
+  const project = projectSelect.value;
+  try {
+    const config = await loadConfig();
+    if (config.project === project) return;
+    await saveConfig({ ...config, project });
+  } catch (error) {
+    setStatus(error.message || String(error), "err");
+  }
+}
+
+function queueProjectSave() {
+  projectSave = rememberProject();
+  return projectSave;
+}
+
 async function capture() {
   if (recording?.active) return;
   captureButton.disabled = true;
@@ -97,6 +137,7 @@ async function capture() {
     captureButton.disabled = false;
     return;
   }
+  await projectSave;
 
   const pending = chrome.runtime.sendMessage({
     type: "capture-and-create",
@@ -157,6 +198,7 @@ async function captureOffline() {
 
 async function startRecording(local = false) {
   if (!activeTabId) return;
+  await projectSave;
   const button = local ? recordOfflineButton : recordButton;
   button.disabled = true;
   setStatus(local ? "Starting offline recorder…" : "Starting recorder…");
@@ -232,6 +274,9 @@ async function mark() {
 
 $("options").addEventListener("click", openOptions);
 $("configure").addEventListener("click", openOptions);
+$("theme").addEventListener("click", () => toggleTheme());
+$("close").addEventListener("click", () => window.close());
+projectSelect.addEventListener("change", queueProjectSave);
 captureButton.addEventListener("click", capture);
 captureOfflineButton.addEventListener("click", captureOffline);
 recordButton.addEventListener("click", () => startRecording(false));
@@ -240,4 +285,10 @@ stopButton.addEventListener("click", stopRecording);
 markButton.addEventListener("click", mark);
 window.addEventListener("unload", () => clearInterval(tick));
 
-init().catch((error) => setStatus(error.message || String(error), "err"));
+init()
+  .catch((error) => setStatus(error.message || String(error), "err"))
+  .finally(() => {
+    // The extension e2e (and a slow popup) can wait for the stored config and project list to land
+    // instead of racing the async init with a click.
+    document.body.dataset.ready = "1";
+  });

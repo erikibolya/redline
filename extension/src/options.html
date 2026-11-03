@@ -4,6 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>RedLine Capture — options</title>
+    <script>
+      // Same shared preference as the popup: no dark flash before the stylesheet loads.
+      try {
+        var redlineTheme = localStorage.getItem("redlineTheme");
+        document.documentElement.dataset.theme =
+          redlineTheme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+      } catch (e) {}
+    </script>
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>

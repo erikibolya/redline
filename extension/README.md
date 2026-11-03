@@ -62,7 +62,7 @@ offline paths need only Chromium with the extension loaded and `CHROME_URL`.
 ## Tests
 
 ```bash
-node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs
+node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/theme.test.mjs extension/tests/trace.test.mjs
 ```
 
 The same command runs in CI on Linux and Windows. There is no build step; reload the unpacked

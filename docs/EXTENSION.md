@@ -55,7 +55,7 @@ The options page stores one RedLine server profile:
 |---|---|
 | Server URL | `https://redline.ibolya.cz` or `http://127.0.0.1:8788` |
 | Token | the server token; stored in `chrome.storage.local`, never synced |
-| Project | optional; loaded from `GET /api/projects` |
+| Project | optional; loaded from `GET /api/projects` in the popup and the options page |
 | Branch | optional; the server derives `feat/<title-slug>-<id-tail>` when empty |
 | Redaction | header/query patterns; request bodies off by default |
 
@@ -73,6 +73,13 @@ The toolbar popup shows the current tab's title/URL and four actions:
 - **Stop & review** — stops recording, shows the draft form (title, note, project, branch,
   capture counts, redaction summary), then opens the side-panel editor on the video.
 - **Open RedLine** — the server dashboard.
+
+When a server and token are configured, the popup also shows a **Project** select loaded from
+`GET /api/projects`; the choice is written back to the same config the background worker reads,
+so the next screenshot or flow lands in that project. The row is hidden while the extension is
+unconfigured (there is no server list to choose from). The header carries the same controls as
+the RedLine app top bar: **settings** (gear, opens the options page), **theme** (sun/moon) and
+**close** (×). The theme is shared with the options page and the side panel.
 
 The popup may be closed while recording; the toolbar badge shows `REC` and the elapsed minute.
 Keyboard shortcuts: `Alt+Shift+S` screenshot, `Alt+Shift+R` start/stop recording,

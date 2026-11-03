@@ -20,6 +20,9 @@ import {
   moveAnnotation,
   TOOLS,
 } from "./lib/annotations.js";
+import { applyTheme, preferredTheme } from "./lib/theme.js";
+
+applyTheme(preferredTheme());
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");

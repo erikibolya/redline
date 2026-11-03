@@ -7,6 +7,20 @@
   --muted: #93a4bb;
   --accent: #e11d48;
   --accent-2: #fb7185;
+  --button: #1c2940;
+  --input: #0c1422;
+}
+/* Only the tokens change: a light theme is not a second stylesheet. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f1f5f9;
+  --panel: #ffffff;
+  --line: #dbe3ef;
+  --text: #0f172a;
+  --muted: #64748b;
+  --accent-2: #be123c;
+  --button: #f8fafc;
+  --input: #f8fafc;
 }
 * { box-sizing: border-box; }
 body {
@@ -33,7 +47,7 @@ h2 { font-size: 15px; margin: 0 0 8px; }
 label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; font-weight: 600; }
 input, select {
   width: 100%; padding: 10px 12px; border-radius: 9px;
-  border: 1px solid var(--line); background: #0c1422; color: var(--text);
+  border: 1px solid var(--line); background: var(--input); color: var(--text);
   font: inherit;
 }
 input:focus, select:focus { outline: 2px solid var(--accent-2); outline-offset: 1px; }
@@ -43,7 +57,7 @@ input:focus, select:focus { outline: 2px solid var(--accent-2); outline-offset: 
 .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 10px; }
 button, .button-link {
   border: 1px solid var(--line); border-radius: 9px; padding: 9px 14px;
-  background: #1c2940; color: var(--text); font: inherit; cursor: pointer;
+  background: var(--button); color: var(--text); font: inherit; cursor: pointer;
   text-decoration: none;
 }
 button.primary { background: var(--accent); border-color: var(--accent); font-weight: 700; }
@@ -51,5 +65,7 @@ button:disabled { opacity: .55; cursor: progress; }
 .status { min-height: 20px; margin: 12px 0 0; color: var(--muted); }
 .status.ok { color: #4ade80; }
 .status.err { color: #fb7185; }
-code { background: #0c1422; padding: 1px 5px; border-radius: 5px; }
+:root[data-theme="light"] .status.ok { color: #15803d; }
+:root[data-theme="light"] .status.err { color: #be123c; }
+code { background: var(--input); padding: 1px 5px; border-radius: 5px; }
 .small { padding: 14px 18px; }

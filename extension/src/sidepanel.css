@@ -7,6 +7,28 @@
   --muted: #93a4bb;
   --accent: #e11d48;
   --blue: #60a5fa;
+  --button: #1c2940;
+  --hover: #1c2940;
+  --stage: #080f1d;
+  --canvas: #111827;
+  --input: #0c1422;
+  --selected: #14233a;
+}
+/* Same shared preference as the popup; only tokens change between schemes. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f1f5f9;
+  --panel: #ffffff;
+  --line: #dbe3ef;
+  --text: #0f172a;
+  --muted: #64748b;
+  --blue: #2563eb;
+  --button: #f8fafc;
+  --hover: #f1f5f9;
+  --stage: #e2e8f0;
+  --canvas: #ffffff;
+  --input: #f8fafc;
+  --selected: #eff6ff;
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -21,26 +43,38 @@ header {
 .grow { flex: 1; min-width: 0; }
 .title { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .subtitle { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.icon { border: 0; background: transparent; color: var(--text); font-size: 16px; cursor: pointer; }
+.icon {
+  width: 30px; height: 30px; padding: 0; display: inline-grid; place-items: center;
+  border: 1px solid transparent; border-radius: 8px;
+  background: transparent; color: var(--muted); cursor: pointer;
+}
+.icon:hover { background: var(--hover); color: var(--text); }
+.icon:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.icon svg {
+  width: 17px; height: 17px; display: block;
+  fill: none; stroke: currentColor; stroke-width: 1.7;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+.icon svg.fill { fill: currentColor; stroke: none; }
 .empty { padding: 28px 18px; color: var(--muted); }
 .empty p { margin: 0 0 14px; }
 button {
   border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px;
-  background: #1c2940; color: var(--text); font: inherit; cursor: pointer;
+  background: var(--button); color: var(--text); font: inherit; cursor: pointer;
 }
 button.primary { background: var(--accent); border-color: var(--accent); font-weight: 700; }
 button.danger { background: #3a1d2a; border-color: #7f1d1d; color: #fecdd3; }
 button.link { border: 0; background: transparent; color: var(--blue); padding: 0; text-decoration: underline; }
 button:disabled { opacity: .5; cursor: not-allowed; }
 .stage {
-  position: relative; padding: 8px; background: #080f1d; overflow: auto;
+  position: relative; padding: 8px; background: var(--stage); overflow: auto;
   max-height: 52vh; text-align: center;
 }
-#canvas { max-width: 100%; height: auto; display: block; margin: 0 auto; cursor: crosshair; background: #111827; }
+#canvas { max-width: 100%; height: auto; display: block; margin: 0 auto; cursor: crosshair; background: var(--canvas); }
 .text-editor {
   position: absolute; z-index: 3; min-width: 150px; max-width: 240px;
   padding: 6px 8px; border-radius: 6px; border: 1px solid var(--blue);
-  background: #0b1220; color: var(--text); font: inherit; resize: vertical;
+  background: var(--input); color: var(--text); font: inherit; resize: vertical;
 }
 .toolbar {
   display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
@@ -50,7 +84,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .tool.active { background: var(--accent); border-color: var(--accent); }
 .sep { width: 1px; height: 22px; background: var(--line); margin: 0 3px; }
 input[type="color"] { width: 28px; height: 28px; padding: 0; border: 0; background: transparent; }
-select { background: #0c1422; color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px; }
+select { background: var(--input); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 5px; }
 .list-head {
   display: flex; justify-content: space-between; align-items: center;
   padding: 8px 12px 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
@@ -61,8 +95,8 @@ select { background: #0c1422; color: var(--text); border: 1px solid var(--line);
   border: 1px solid transparent; border-radius: 7px; padding: 5px 6px;
   background: transparent; color: var(--text); text-align: left; cursor: pointer;
 }
-.ann-row:hover { background: #1c2940; }
-.ann-row.selected { border-color: var(--blue); background: #14233a; }
+.ann-row:hover { background: var(--hover); }
+.ann-row.selected { border-color: var(--blue); background: var(--selected); }
 .ann-num {
   min-width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
   background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
@@ -71,7 +105,7 @@ select { background: #0c1422; color: var(--text); border: 1px solid var(--line);
 .note-label { display: block; padding: 8px 12px; color: var(--muted); font-size: 11px; }
 .note-label textarea {
   display: block; width: 100%; margin-top: 4px; padding: 7px 8px;
-  border: 1px solid var(--line); border-radius: 8px; background: #0c1422; color: var(--text);
+  border: 1px solid var(--line); border-radius: 8px; background: var(--input); color: var(--text);
   font: inherit; resize: vertical;
 }
 .footer { display: flex; gap: 8px; align-items: center; padding: 6px 12px; }
@@ -80,6 +114,8 @@ select { background: #0c1422; color: var(--text); border: 1px solid var(--line);
 .status { color: var(--muted); font-size: 11px; min-height: 16px; }
 .status.ok { color: #4ade80; }
 .status.err { color: #fb7185; }
+:root[data-theme="light"] .status.ok { color: #15803d; }
+:root[data-theme="light"] .status.err { color: #be123c; }
 .video-bar {
   display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
   padding: 6px 10px; border-bottom: 1px solid var(--line);
@@ -117,7 +153,7 @@ select { background: #0c1422; color: var(--text); border: 1px solid var(--line);
   border: 0; border-radius: 5px; padding: 3px 4px; background: transparent;
   color: var(--text); text-align: left; cursor: pointer; font: inherit;
 }
-.trace-row:hover { background: #1c2940; }
+.trace-row:hover { background: var(--hover); }
 .trace-row .t { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 10px; min-width: 52px; }
 .trace-row .k { color: var(--blue); font-size: 10px; min-width: 44px; text-transform: uppercase; }
 .trace-row .m { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

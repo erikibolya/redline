@@ -3999,6 +3999,54 @@ const main = async () => {
       member.username === "e2e-tester" && member.role === "tester"),
     JSON.stringify(projectMembers.members || []));
 
+  // Invite links: no SMTP, so the owner copies a one-time link; it activates the account.
+  await loginPage.type("#new-username", "e2e-invite");
+  await loginPage.type("#new-name", "E2E Invite");
+  await loginPage.click("#new-invite");
+  await loginPage.click("#new-user-submit");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#link-reveal") && !document.querySelector("#link-reveal").hidden,
+    { timeout: 10000 },
+  );
+  const inviteUrl = await loginPage.$eval("#link-raw", (el) => el.value);
+  check("the owner can create an invite link",
+    inviteUrl.includes("/invite/rl_inv_"), inviteUrl.slice(0, 60));
+
+  const inviteContext = await browser.createBrowserContext();
+  const invitePage = await inviteContext.newPage();
+  await invitePage.goto(inviteUrl, { waitUntil: "networkidle2" });
+  await invitePage.waitForSelector("#invite-card:not([hidden])", { timeout: 10000 });
+  const inviteGreeting = await invitePage.$eval("#invite-lead", (el) => el.textContent);
+  check("the invite page greets the invited person",
+    inviteGreeting.includes("E2E Invite"), inviteGreeting);
+  await invitePage.type("#invite-password", "correct horse battery staple");
+  await invitePage.type("#invite-confirm", "correct horse battery staple");
+  await invitePage.click("#invite-submit");
+  await invitePage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  const invitedMe = await invitePage.evaluate(async () => {
+    const response = await fetch("/api/auth/me", { cache: "no-store" });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  });
+  check("an invite link activates the account and signs in",
+    invitedMe.status === 200 && invitedMe.body.user?.username === "e2e-invite"
+      && invitedMe.body.user?.status === "active",
+    `${invitedMe.status} ${JSON.stringify(invitedMe.body)}`);
+  await inviteContext.close();
+
+  // Reset-link generation for the now-active account (acceptance is covered by Rust).
+  const inviteRow = await loginPage.evaluateHandle(() =>
+    [...document.querySelectorAll("#people-table tbody tr")]
+      .find((row) => row.textContent.includes("@e2e-invite")));
+  await inviteRow.asElement().$eval("[data-reset]", (button) => button.click());
+  await loginPage.waitForFunction(
+    () => document.querySelector("#link-reveal")?.value?.includes("/reset/")
+      || document.querySelector("#link-raw")?.value?.includes("/reset/"),
+    { timeout: 10000 },
+  );
+  const resetUrl = await loginPage.$eval("#link-raw", (el) => el.value);
+  check("the owner can generate a reset link from the people matrix",
+    resetUrl.includes("/reset/rl_rst_"), resetUrl.slice(0, 60));
+
   // Owner-only audit log: the membership change just made must be visible with a local timestamp.
   await loginPage.goto(`${BASE}/audit`, { waitUntil: "networkidle2" });
   await loginPage.waitForSelector("#audit-events", { timeout: 10000 });

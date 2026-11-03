@@ -19,6 +19,7 @@ pub mod client;
 pub mod comments;
 pub mod diff;
 pub mod error;
+pub mod invites;
 pub mod mcp;
 pub mod memberships;
 pub mod model;

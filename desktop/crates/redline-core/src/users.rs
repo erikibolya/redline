@@ -230,6 +230,35 @@ impl UserStore {
         self.create_with_role(username, display_name, password, UserRole::Member)
     }
 
+    /// A user who exists but cannot sign in yet. The one-time invite link is the only way to set
+    /// the first password; `verify_login` already refuses a non-active account.
+    pub fn create_invited(&self, username: &str, display_name: &str) -> Result<User> {
+        let username = validate_username(username)?;
+        let display_name = validate_display_name(display_name)?;
+        let mut users = self.users()?;
+        if users
+            .iter()
+            .any(|user| user.username.eq_ignore_ascii_case(&username))
+        {
+            return Err(Error::Exists(format!("username {username}")));
+        }
+        let user = User {
+            id: format!("usr_{}", uuid::Uuid::new_v4().simple()),
+            username,
+            display_name,
+            email: None,
+            password_hash: String::new(),
+            role: UserRole::Member,
+            status: UserStatus::Invited,
+            created_at: now(),
+            last_login_at: None,
+            must_change_password: false,
+        };
+        users.push(user.clone());
+        self.save_users(&users)?;
+        Ok(user)
+    }
+
     /// First-run bootstrap: exactly one owner, then never again through this path.
     pub fn create_owner(&self, username: &str, display_name: &str, password: &str) -> Result<User> {
         if self.owner_id()?.is_some() {
@@ -317,6 +346,27 @@ impl UserStore {
             .find(|user| user.id == id)
             .ok_or_else(|| Error::NotFound(id.to_string()))?;
         user.password_hash = hash_password(password)?;
+        user.must_change_password = false;
+        let updated = user.clone();
+        self.save_users(&users)?;
+        Ok(updated)
+    }
+
+    /// Consume an invite/reset link: set the password and make the account active in one write.
+    pub fn activate_with_password(&self, id: &str, password: &str) -> Result<User> {
+        validate_password(password)?;
+        let mut users = self.users()?;
+        let user = users
+            .iter_mut()
+            .find(|user| user.id == id)
+            .ok_or_else(|| Error::NotFound(id.to_string()))?;
+        if user.status == UserStatus::Disabled {
+            return Err(Error::Forbidden(
+                "this account is disabled; ask the owner to re-enable it".to_string(),
+            ));
+        }
+        user.password_hash = hash_password(password)?;
+        user.status = UserStatus::Active;
         user.must_change_password = false;
         let updated = user.clone();
         self.save_users(&users)?;
@@ -418,7 +468,7 @@ fn validate_display_name(display_name: &str) -> Result<String> {
     Ok(display_name.to_string())
 }
 
-fn validate_password(password: &str) -> Result<()> {
+pub(crate) fn validate_password(password: &str) -> Result<()> {
     let len = password.chars().count();
     if !(12..=200).contains(&len) {
         return Err(Error::BadRequest(
@@ -511,6 +561,25 @@ mod tests {
         assert!(store
             .create_user("bad name", "Petr", "correct horse battery staple")
             .is_err());
+    }
+
+    #[test]
+    fn an_invited_user_cannot_log_in_until_the_password_is_set() {
+        let (_dir, store) = store();
+        let user = store
+            .create_invited("jana", "Jana")
+            .expect("create invited");
+        assert_eq!(user.status, UserStatus::Invited);
+        assert!(user.password_hash.is_empty());
+        assert!(store.verify_login("jana", "anything").unwrap().is_none());
+        let active = store
+            .activate_with_password(&user.id, "correct horse battery staple")
+            .unwrap();
+        assert_eq!(active.status, UserStatus::Active);
+        assert!(store
+            .verify_login("jana", "correct horse battery staple")
+            .unwrap()
+            .is_some());
     }
 
     #[test]

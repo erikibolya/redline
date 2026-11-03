@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **A password in chat is not an onboarding flow.** Owners can create a user as **invited** and
+  hand over a one-time invite link (7 days), or generate a reset link (24 hours) from the People
+  matrix; both are stored as SHA-256 hashes in `invites.json`, work once, and are audited. The
+  invitee chooses a password on a public page and lands signed in; accepting a reset revokes the
+  account's older sessions. The People page also gained an owner transfer form (current password
+  + confirmation), and the new owner receives an `owner.transfer` notification. No SMTP is
+  involved in MVP. Tested with 65 API tests, 43 core unit tests, 26 store tests and 304 browser
+  checks (2026-11-03).
 - **The server token is not every token.** Humans can now mint personal access tokens
   (`rl_pat_…`) for the extension, CLI or a script; each PAT inherits the user's project roles and
   can be narrowed to a project allowlist, marked read-only, given an expiry and revoked

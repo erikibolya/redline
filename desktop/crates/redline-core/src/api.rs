@@ -24,6 +24,7 @@ use crate::audit::{AuditEvent, AuditFilter, AuditStore};
 use crate::auth::{self, Auth, CredentialSource};
 use crate::comments::Comment;
 use crate::error::Error;
+use crate::invites::{InviteKind, InviteStore};
 use crate::mcp::{self, AgentScope, McpContext};
 use crate::memberships::{MembershipStore, ProjectRole};
 use crate::model::{HandoffStatus, Meta, NewSession, Status, Submission, UpdateActor};
@@ -31,7 +32,7 @@ use crate::notifications::{Notification, NotificationStore};
 use crate::sessions::{SessionGrant, SessionStore};
 use crate::store::{FrameUpload, Store};
 use crate::tokens::TokenStore;
-use crate::users::{User, UserStatus, UserStore};
+use crate::users::{self, User, UserStatus, UserStore};
 use crate::{MAX_BODY_BYTES, MAX_SUBMIT_BYTES, MAX_TRACE_BYTES, MAX_VIDEO_BYTES};
 
 #[derive(Default)]
@@ -83,6 +84,7 @@ pub struct AppState {
     pub notifications: NotificationStore,
     pub audit: AuditStore,
     pub tokens: TokenStore,
+    pub invites: InviteStore,
     login: Arc<LoginThrottle>,
     /// Directory holding `index.html` / `list.html`. `None` in tests and in headless mode.
     pub ui: Option<PathBuf>,
@@ -109,6 +111,7 @@ impl AppState {
         let notifications = NotificationStore::new(store.data_dir());
         let audit = AuditStore::new(store.data_dir());
         let tokens = TokenStore::new(store.data_dir());
+        let invites = InviteStore::new(store.data_dir());
         Self {
             store,
             auth,
@@ -118,6 +121,7 @@ impl AppState {
             notifications,
             audit,
             tokens,
+            invites,
             login: Arc::new(LoginThrottle::default()),
             ui: None,
             inline_ui: None,
@@ -167,6 +171,14 @@ pub fn router(state: AppState) -> Router {
     let public_auth = Router::new()
         .route("/api/auth/status", get(auth_status))
         .route("/api/auth/login", post(auth_login))
+        .route(
+            "/api/auth/invite/{token}",
+            get(invite_info_invite).post(accept_invite),
+        )
+        .route(
+            "/api/auth/reset/{token}",
+            get(invite_info_reset).post(accept_reset),
+        )
         .layer(middleware::from_fn(no_store));
 
     let account = Router::new()
@@ -186,6 +198,7 @@ pub fn router(state: AppState) -> Router {
     let owner = Router::new()
         .route("/api/auth/bootstrap", post(auth_bootstrap))
         .route("/api/users", get(list_users).post(create_user))
+        .route("/api/users/{id}/reset", post(reset_user))
         .route("/api/admin/transfer-owner", post(transfer_owner))
         .route(
             "/api/admin/agent-tokens",
@@ -324,6 +337,8 @@ pub fn router(state: AppState) -> Router {
         .route("/people", get(people_page))
         .route("/audit", get(audit_page))
         .route("/tokens", get(tokens_page))
+        .route("/invite/{token}", get(invite_page))
+        .route("/reset/{token}", get(reset_page))
         .route("/setup", get(setup_page))
         .route("/servers", get(servers_page))
         .merge(public_auth)
@@ -972,7 +987,11 @@ struct BootstrapBody {
 struct CreateUserBody {
     username: String,
     display_name: String,
-    password: String,
+    #[serde(default)]
+    password: Option<String>,
+    /// Create the account as `invited` and return a one-time link instead of a password.
+    #[serde(default)]
+    invite: bool,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1169,6 +1188,121 @@ async fn auth_password(
     )?;
     let is_owner = state.users.is_owner(&user.id)?;
     Ok(auth_response(&state, &user, is_owner, grant))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct InviteAcceptBody {
+    password: String,
+}
+
+async fn invite_info_invite(
+    State(state): State<AppState>,
+    RoutePath(token): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    invite_info(&state, &token, InviteKind::Invite)
+}
+
+async fn invite_info_reset(
+    State(state): State<AppState>,
+    RoutePath(token): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    invite_info(&state, &token, InviteKind::Reset)
+}
+
+fn invite_info(state: &AppState, token: &str, kind: InviteKind) -> Result<Json<Value>, Error> {
+    let Some(invite) = state.invites.lookup(token, kind)? else {
+        return Ok(Json(json!({ "valid": false })));
+    };
+    let Some(user) = state.users.get(&invite.user_id)? else {
+        return Ok(Json(json!({ "valid": false })));
+    };
+    if user.status == UserStatus::Disabled
+        || (kind == InviteKind::Invite && user.status != UserStatus::Invited)
+    {
+        return Ok(Json(json!({ "valid": false })));
+    }
+    Ok(Json(json!({
+        "valid": true,
+        "kind": kind.as_str(),
+        "username": user.username,
+        "display_name": user.display_name,
+        "expires_at": invite.expires_at,
+    })))
+}
+
+async fn accept_invite(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RoutePath(token): RoutePath<String>,
+    Json(body): Json<InviteAcceptBody>,
+) -> Result<Response, Error> {
+    accept_invite_link(&state, &headers, &token, &body.password, InviteKind::Invite)
+}
+
+async fn accept_reset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RoutePath(token): RoutePath<String>,
+    Json(body): Json<InviteAcceptBody>,
+) -> Result<Response, Error> {
+    accept_invite_link(&state, &headers, &token, &body.password, InviteKind::Reset)
+}
+
+fn accept_invite_link(
+    state: &AppState,
+    headers: &HeaderMap,
+    token: &str,
+    password: &str,
+    kind: InviteKind,
+) -> Result<Response, Error> {
+    if let Err(response) = public_guard(headers) {
+        return Ok(response);
+    }
+    users::validate_password(password)?;
+    let Some(invite) = state.invites.lookup(token, kind)? else {
+        return Err(Error::NotFound(
+            "this link is invalid, expired or already used".to_string(),
+        ));
+    };
+    let Some(user) = state.users.get(&invite.user_id)? else {
+        return Err(Error::NotFound("account no longer exists".to_string()));
+    };
+    if user.status == UserStatus::Disabled {
+        return Err(Error::Forbidden(
+            "this account is disabled; ask the owner to re-enable it".to_string(),
+        ));
+    }
+    if kind == InviteKind::Invite && user.status != UserStatus::Invited {
+        return Err(Error::NotFound(
+            "this invite has already been used".to_string(),
+        ));
+    }
+    if !state.invites.consume(&invite.id)? {
+        return Err(Error::NotFound(
+            "this link is invalid, expired or already used".to_string(),
+        ));
+    }
+    let user = state.users.activate_with_password(&user.id, password)?;
+    state.sessions.revoke_user(&user.id)?;
+    let is_owner = state.users.is_owner(&user.id)?;
+    let grant = state.sessions.create(
+        &user.id,
+        request_ip(headers).as_deref(),
+        request_agent(headers).as_deref(),
+    )?;
+    record_auth_audit(
+        state,
+        "user",
+        Some(&user.id),
+        &user.display_name,
+        match kind {
+            InviteKind::Invite => "auth.invite_accept",
+            InviteKind::Reset => "auth.reset_accept",
+        },
+        headers,
+        json!({ "username": user.username }),
+    );
+    Ok(auth_response(state, &user, is_owner, grant))
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -1577,9 +1711,41 @@ async fn create_user(
     State(state): State<AppState>,
     Json(body): Json<CreateUserBody>,
 ) -> Result<Json<Value>, Error> {
+    if body.invite {
+        let user = state
+            .users
+            .create_invited(&body.username, &body.display_name)?;
+        let grant =
+            state
+                .invites
+                .create(InviteKind::Invite, &user.id, context.user_id.as_deref())?;
+        let invite_url = format!(
+            "{}/invite/{}",
+            state.base_url.trim_end_matches('/'),
+            grant.raw
+        );
+        record_audit(
+            &state,
+            Some(&context),
+            "user.invite",
+            None,
+            Some(user.id.clone()),
+            json!({ "username": user.username }),
+        );
+        return Ok(Json(json!({
+            "user": user.public(false),
+            "invite_url": invite_url,
+            "expires_at": grant.invite.expires_at,
+        })));
+    }
+    let password = body
+        .password
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| Error::BadRequest("password or invite is required".to_string()))?;
     let user = state
         .users
-        .create_user(&body.username, &body.display_name, &body.password)?;
+        .create_user(&body.username, &body.display_name, password)?;
     record_audit(
         &state,
         Some(&context),
@@ -1589,6 +1755,47 @@ async fn create_user(
         json!({ "username": user.username }),
     );
     Ok(Json(json!({ "user": user.public(false) })))
+}
+
+async fn reset_user(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    let user = state
+        .users
+        .get(&id)?
+        .ok_or_else(|| Error::NotFound(id.clone()))?;
+    if user.role == crate::users::UserRole::Owner {
+        return Err(Error::BadRequest(
+            "change the owner's password from /api/auth/password".to_string(),
+        ));
+    }
+    if user.status == UserStatus::Disabled {
+        return Err(Error::BadRequest(
+            "re-enable the account before resetting its password".to_string(),
+        ));
+    }
+    let grant = state
+        .invites
+        .create(InviteKind::Reset, &user.id, context.user_id.as_deref())?;
+    let reset_url = format!(
+        "{}/reset/{}",
+        state.base_url.trim_end_matches('/'),
+        grant.raw
+    );
+    record_audit(
+        &state,
+        Some(&context),
+        "user.reset",
+        None,
+        Some(user.id.clone()),
+        json!({ "username": user.username }),
+    );
+    Ok(Json(json!({
+        "reset_url": reset_url,
+        "expires_at": grant.invite.expires_at,
+    })))
 }
 
 async fn transfer_owner(
@@ -1610,6 +1817,17 @@ async fn transfer_owner(
         ));
     }
     let target = state.users.transfer_owner(&body.user_id)?;
+    let mut notification = Notification::new(
+        "owner.transfer",
+        format!(
+            "{} transferred ownership of this RedLine server to you",
+            context.display_name
+        ),
+        "/people",
+    );
+    notification.actor = context.user_id.clone();
+    notification.actor_name = Some(context.display_name.clone());
+    let _ = state.notifications.add(&target.id, notification);
     record_audit(
         &state,
         Some(&context),
@@ -1980,6 +2198,14 @@ async fn audit_page(State(state): State<AppState>) -> Response {
 
 async fn tokens_page(State(state): State<AppState>) -> Response {
     serve_ui(&state, "tokens.html")
+}
+
+async fn invite_page(State(state): State<AppState>) -> Response {
+    serve_ui(&state, "invite.html")
+}
+
+async fn reset_page(State(state): State<AppState>) -> Response {
+    serve_ui(&state, "invite.html")
 }
 
 async fn editor_page(

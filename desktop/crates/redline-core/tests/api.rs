@@ -3894,6 +3894,23 @@ async fn transfer_ownership_moves_the_single_owner_bit() {
     assert_eq!(status, StatusCode::OK, "{me}");
     assert_eq!(me["user"]["username"], "petr");
     assert_eq!(me["is_owner"], true);
+    let (status, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &new_session,
+            &new_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{notes}");
+    assert!(notes["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|note| note["kind"] == "owner.transfer"));
 }
 
 #[tokio::test]
@@ -5373,4 +5390,203 @@ async fn personal_and_agent_tokens_are_scoped_hashed_and_revocable() {
         .collect();
     assert!(actions.contains(&"token.create"));
     assert!(actions.contains(&"token.revoke"));
+}
+
+#[tokio::test]
+async fn invite_and_reset_links_are_one_time_and_audited() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({ "username": "jana", "display_name": "Jana", "invite": true }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let jana_id = created["user"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["user"]["status"], "invited");
+    let invite_url = created["invite_url"].as_str().unwrap().to_string();
+    assert!(invite_url.contains("/invite/rl_inv_"));
+    let token = invite_url.rsplit('/').next().unwrap().to_string();
+
+    let (status, _, info) = send(
+        &h.app,
+        public("GET", &format!("/api/auth/invite/{token}"), json!(null)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["valid"], true);
+    assert_eq!(info["username"], "jana");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            &format!("/api/auth/invite/{token}"),
+            json!({ "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["user"]["username"], "jana");
+    assert_eq!(body["user"]["status"], "active");
+    let invite_session = set_cookie(&headers, "redline_session");
+    let invite_csrf = set_cookie(&headers, "redline_csrf");
+    let (status, _, me) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/auth/me",
+            json!(null),
+            &invite_session,
+            &invite_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+
+    let (status, _, _) = send(
+        &h.app,
+        public(
+            "POST",
+            &format!("/api/auth/invite/{token}"),
+            json!({ "password": "another correct horse battery" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "an invite is one-time");
+
+    let (status, _, reset) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/users/{jana_id}/reset"),
+            json!({}),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{reset}");
+    let reset_url = reset["reset_url"].as_str().unwrap().to_string();
+    assert!(reset_url.contains("/reset/rl_rst_"));
+    let reset_token = reset_url.rsplit('/').next().unwrap().to_string();
+    let (status, _, info) = send(
+        &h.app,
+        public(
+            "GET",
+            &format!("/api/auth/reset/{reset_token}"),
+            json!(null),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{info}");
+    assert_eq!(info["valid"], true);
+    assert_eq!(info["kind"], "reset");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            &format!("/api/auth/reset/{reset_token}"),
+            json!({ "password": "a different correct horse" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let reset_session = set_cookie(&headers, "redline_session");
+    let reset_csrf = set_cookie(&headers, "redline_csrf");
+    assert!(!reset_session.is_empty());
+
+    // The pre-reset session and the old password are both gone.
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/auth/me",
+            json!(null),
+            &invite_session,
+            &invite_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _, _) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "jana", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "jana", "password": "a different correct horse" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/auth/me",
+            json!(null),
+            &reset_session,
+            &reset_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // The owner cannot be reset through the admin link path.
+    let (_, _, owner_me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    let owner_id = owner_me["user"]["id"].as_str().unwrap();
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/users/{owner_id}/reset"),
+            json!({}),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, _, audit) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit?action=user.",
+            json!(null),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{audit}");
+    let actions: Vec<&str> = audit["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["action"].as_str())
+        .collect();
+    assert!(actions.contains(&"user.invite"));
+    assert!(actions.contains(&"user.reset"));
 }

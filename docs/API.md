@@ -105,6 +105,29 @@ so a notification never names a project or task the reader cannot open.
 `POST` with `{ "ids": ["ntf_…"] }` marks those read; `{}` marks all. Notifications are pruned
 after **90 days** by default; set `REDLINE_NOTIFICATION_RETENTION_DAYS` to override.
 
+### `GET /api/audit`
+
+Owner only. Returns `{ "events": [ … ], "count": n }`, newest first. Each event has `at`,
+`actor_type` (`user|legacy|system`), optional `actor_id`, `actor_name`, `action`, optional
+`project`/`session`/`target`/`ip`/`user_agent`, and `details`.
+
+Filters: `limit` (1–1000, default 100), `project`, `session`, `actor` (user id), `action` (exact
+or prefix, e.g. `review.`) and `since` (RFC 3339). Examples:
+
+```
+GET /api/audit?action=review.&limit=50
+GET /api/audit?project=actiunit-au-net&since=2026-11-01T00:00:00Z
+```
+
+Actions include `auth.login`, `auth.logout`, `auth.failed`, `auth.password`, `owner.bootstrap`,
+`owner.transfer`, `user.create`, `project.create`, `membership.update`, `settings.update`,
+`review.create`, `review.request_agent`, `review.submit`, `review.stop`, `review.reopen`,
+`review.branch`, `review.move_project`, `review.delete`, `review.confirm`,
+`review.cancel_feature`, `review.handoff`, `review.resolve`, `comment.create`,
+`comment.update`, `comment.resolve`, `comment.delete` and `notification.read`. Events are retained
+for **one year** by default (`REDLINE_AUDIT_RETENTION_DAYS` overrides) and stored in
+`audit.jsonl` with `0600` permissions.
+
 ## Endpoints
 
 ### `GET /`

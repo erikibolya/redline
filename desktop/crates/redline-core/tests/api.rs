@@ -4741,3 +4741,217 @@ async fn comments_notifications_and_moderation_are_project_scoped() {
         "removed member loses the task: {body}"
     );
 }
+
+#[tokio::test]
+async fn audit_log_records_actions_and_is_owner_only() {
+    let h = harness();
+    let (owner_session, owner_csrf) = bootstrap_owner(&h).await;
+
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Audited" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap().to_string();
+
+    let (status, _, worker) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "worker",
+                "display_name": "Worker",
+                "password": "correct horse battery staple",
+            }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{worker}");
+    let worker_id = worker["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, members) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [{ "user_id": worker_id, "role": "developer" }] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+
+    // A failed sign-in is audited without revealing whether the user exists.
+    let (status, _, _) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "worker", "password": "nope" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "worker", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let worker_session = set_cookie(&headers, "redline_session");
+    let worker_csrf = set_cookie(&headers, "redline_csrf");
+
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "audited task", "image_base64": PNG_B64, "project": "Audited" }),
+            &worker_session,
+            &worker_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, submitted) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "note": "audit me" }),
+            &worker_session,
+            &worker_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "audited comment" }),
+            &worker_session,
+            &worker_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let (status, _, audit) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit",
+            json!(null),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{audit}");
+    let events = audit["events"].as_array().unwrap();
+    for action in [
+        "owner.bootstrap",
+        "project.create",
+        "user.create",
+        "membership.update",
+        "auth.failed",
+        "auth.login",
+        "review.create",
+        "review.submit",
+        "comment.create",
+    ] {
+        assert!(
+            events.iter().any(|event| event["action"] == action),
+            "audit must contain {action}: {audit}"
+        );
+    }
+    assert!(events.iter().any(|event| event["session"] == id
+        && event["project"] == slug
+        && event["actor_id"] == worker_id));
+
+    let (status, _, filtered) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit?action=review.",
+            json!(null),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{filtered}");
+    assert!(filtered["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|event| event["action"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("review.")));
+
+    let (status, _, filtered) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/audit?project={slug}&limit=2"),
+            json!(null),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{filtered}");
+    assert_eq!(filtered["events"].as_array().unwrap().len(), 2);
+    assert!(filtered["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|event| event["project"] == slug));
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit?since=not-a-date",
+            json!(null),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // A developer can do the work but cannot read the server audit trail.
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit",
+            json!(null),
+            &worker_session,
+            &worker_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}

@@ -39,6 +39,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("list.html", include_str!("../../ui/list.html")),
     ("login.html", include_str!("../../ui/login.html")),
     ("people.html", include_str!("../../ui/people.html")),
+    ("audit.html", include_str!("../../ui/audit.html")),
     ("setup.html", include_str!("../../ui/setup.html")),
     ("servers.html", include_str!("../../ui/servers.html")),
     ("app.css", include_str!("../../ui/app.css")),

@@ -149,7 +149,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `failed_logins_are_throttled`.
 - Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
   username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
-  revokes the session. 288 checks.
+  revokes the session. 291 checks.
 - **Current gaps:** PAT/agent-token UI, invite/reset links, audit UI and optimistic revision still
   need their tests as they arrive.
 
@@ -166,7 +166,22 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   assert a member with no projects sees an empty queue, a foreign task/media is `404`, and the
   old owner loses the Inbox.
 - Browser e2e: the owner-only People & access page creates a user and saves a tester role; the
-  editor/rail role labels are covered by the 288-check suite.
+  editor/rail role labels are covered by the 291-check suite.
+
+## Audit log (v0.28, in progress)
+
+- Rust `audit.rs`: append/list newest-first, project/actor/action-prefix filters, 365-day
+  retention hides an old event, invalid action names are refused, and six concurrent writers
+  produce 60 intact lines (the store lock serializes appends).
+- Rust `tests/api.rs`: `audit_log_records_actions_and_is_owner_only` — bootstrap, project/user
+  creation, membership update, failed login, successful login, review create, submit and comment
+  all appear with actor/project/session; action and project filters work; a bad `since` is `400`;
+  a developer gets `403`.
+- Browser e2e: the owner opens **Audit log** from People & access, sees the `membership.update`
+  row just written, and the row shows a locale-formatted time and actor; a tester sees the
+  owner-only card. 291 checks.
+- **Not yet covered:** MCP/agent actions in the audit stream, audit for handoff results and
+  notification delivery, and audit-log rotation beyond the file-size compaction.
 
 ## Comments and notifications (v0.28, in progress)
 
@@ -178,7 +193,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer resolves it, and an unknown mention is `400`. The tester→developer test also
   asserts `review.ready` and `review.submitted` notifications.
 - Browser e2e: the tester opens **Discussion**, posts a comment and the API returns it; the owner
-  comments from another context; the tester's bell shows the owner's comment. 288 checks.
+  comments from another context; the tester's bell shows the owner's comment. 291 checks.
 - **Not yet covered:** audit log, notification for handoff done/failed and ownership transfer,
   comment rate limiting, and the desktop notification surface.
 

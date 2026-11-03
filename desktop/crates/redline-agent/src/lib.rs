@@ -1499,6 +1499,29 @@ mod tests {
         script
     }
 
+    /// CI occasionally reports a transient spawn/`wait_timeout` error on a just-written script.
+    /// The behaviour under test is the idle/hard timeout, not host process pressure; retry only
+    /// the bridge's `spawn` code and keep the real error when the retries are exhausted.
+    #[cfg(unix)]
+    fn run_with_spawn_retry(
+        config: &AgentConfig,
+        session_id: &str,
+        prompt: &str,
+        repo: &Path,
+    ) -> Result<(bool, String), RunError> {
+        let mut last = None;
+        for _ in 0..5 {
+            match run_opencode(config, session_id, prompt, repo, false) {
+                Err(err) if err.code == "spawn" => {
+                    last = Some(err);
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                result => return result,
+            }
+        }
+        Err(last.expect("at least one attempt"))
+    }
+
     #[cfg(unix)]
     #[test]
     fn a_run_is_killed_when_it_goes_silent_or_exceeds_the_hard_cap() {
@@ -1512,8 +1535,8 @@ mod tests {
         config.opencode_bin = fake_opencode(&root, "idle", &idle_body)
             .to_string_lossy()
             .to_string();
-        let idle = run_opencode(&config, "idle", "prompt", &root, false).unwrap_err();
-        assert_eq!(idle.code, "timeout_idle");
+        let idle = run_with_spawn_retry(&config, "idle", "prompt", &root).unwrap_err();
+        assert_eq!(idle.code, "timeout_idle", "{}", idle.message);
         assert!(idle.message.contains("no output"), "{}", idle.message);
         #[cfg(target_os = "linux")]
         {
@@ -1557,7 +1580,7 @@ mod tests {
         )
         .to_string_lossy()
         .to_string();
-        let active = run_opencode(&config, "active", "prompt", &root, false);
+        let active = run_with_spawn_retry(&config, "active", "prompt", &root);
         assert!(active.is_ok(), "active output must keep the run alive");
 
         config.idle_timeout = Duration::from_secs(30);
@@ -1569,8 +1592,8 @@ mod tests {
         )
         .to_string_lossy()
         .to_string();
-        let hard = run_opencode(&config, "hard", "prompt", &root, false).unwrap_err();
-        assert_eq!(hard.code, "timeout_hard");
+        let hard = run_with_spawn_retry(&config, "hard", "prompt", &root).unwrap_err();
+        assert_eq!(hard.code, "timeout_hard", "{}", hard.message);
         assert!(hard.message.contains("run limit"), "{}", hard.message);
 
         let _ = std::fs::remove_dir_all(&root);

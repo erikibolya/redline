@@ -530,6 +530,14 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 [data-theme="light"] .session .badge.replied {
   background: #fef3c7; border-color: #fde68a; color: #92400e;
 }
+/* A tester saved a round and is waiting for a developer to send it. */
+.session .badge.ready {
+  padding: 0 8px; font-size: 10px; font-weight: 500; white-space: nowrap;
+  background: #231a08; border-color: #78350f; color: #fcd34d;
+}
+[data-theme="light"] .session .badge.ready {
+  background: #fef3c7; border-color: #fde68a; color: #92400e;
+}
 /* The agent could not run the round at all: red, not amber (nothing is running) and not a count. */
 .session .badge.failed {
   padding: 0 8px; font-size: 10px; font-weight: 600; white-space: nowrap;

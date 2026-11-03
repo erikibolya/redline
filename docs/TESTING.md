@@ -149,10 +149,25 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `failed_logins_are_throttled`.
 - Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
   username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
-  revokes the session. 280 checks.
+  revokes the session. 285 checks.
 - **Current gap:** the owner-only gate is intentional until project ACL lands; PAT/agent-token UI,
   People & access, invite/reset links and comments/notifications still need their tests as they
   arrive.
+
+## Roles and project ACL (v0.28, in progress)
+
+- Rust `memberships.rs`: one role per `(project, user)`, different roles across projects,
+  `replace_project` leaves other projects alone.
+- Rust `tests/api.rs`: `project_membership_and_tester_to_developer_flow` — owner creates project,
+  tester/developer, assigns both, tester creates a task, reads project media, gets `403` for
+  submit/STOP/confirm, requests an agent review; developer sees it and submits; request fields
+  clear. `a_tester_cannot_request_a_developer_task_and_members_are_owner_managed` — tester reads
+  the project but cannot request someone else's task or change members.
+- Rust `tests/api.rs`: `a_member_can_sign_in_but_cannot_read_owner_data` and the transfer test
+  assert a member with no projects sees an empty queue, a foreign task/media is `404`, and the
+  old owner loses the Inbox.
+- Browser e2e: the owner-only People & access page creates a user and saves a tester role; the
+  editor/rail role labels are covered by the 285-check suite.
 
 ## Handoff after confirmation (v0.23)
 

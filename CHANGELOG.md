@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **A token is not a role (project ACL).** Projects now have owner-managed memberships
+  (`viewer` / `tester` / `developer`); the owner-only **People & access** page sets them in a
+  user × project matrix. Data, media, history and traces are scoped to the member's projects;
+  Inbox stays owner-only. A tester creates and annotates their own tasks but cannot submit,
+  STOP, confirm or hand off; **Request agent review** saves the round and a developer sends it
+  with **Send to agent**. The rail shows **ready for agent** and hides feature actions from
+  testers/viewers. Tested with 60 Rust API tests and 285 browser checks (2026-11-03).
 - **A token is not a user (auth foundation).** RedLine now has named accounts, Argon2id
   passwords, server-side sessions with CSRF cookies, a login page, a first-run owner bootstrap,
   owner-only user management and a single-owner transfer. The legacy token still authenticates

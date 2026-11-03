@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **A legacy cookie is not a signed-in owner.** The v0.27 `redline_token` cookie made
+  `/api/auth/me` answer as the legacy owner, so `/login` redirected to the dashboard before it
+  checked `setup_required`; a fresh v0.28 install could not create its first owner from a browser
+  that had used v0.27. Bootstrap now wins over the legacy session, with a browser regression test
+  (2026-11-03).
+
 ## 0.28.0 — 2026-11-03
 
 - **A password in chat is not an onboarding flow.** Owners can create a user as **invited** and

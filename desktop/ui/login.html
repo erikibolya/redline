@@ -143,6 +143,17 @@ async function load() {
   try {
     const statusResponse = await fetch("/api/auth/status", { cache: "no-store" });
     const status = await statusResponse.json().catch(() => ({}));
+    // Bootstrap wins over an existing legacy cookie. A v0.27 browser still carries
+    // `redline_token`, and `/api/auth/me` answers as the legacy owner, which used to redirect
+    // this page back to the dashboard before the first owner could ever be created.
+    if (status.setup_required) {
+      title.textContent = "Create the owner account";
+      lead.textContent = "This is the first run. The owner manages users and projects.";
+      loginForm.hidden = true;
+      bootstrapForm.hidden = false;
+      document.getElementById("b-username").focus();
+      return;
+    }
     if (!stay) {
       const me = await fetch("/api/auth/me", { cache: "no-store" });
       if (me.ok) {
@@ -150,19 +161,11 @@ async function load() {
         return;
       }
     }
-    if (status.setup_required) {
-      title.textContent = "Create the owner account";
-      lead.textContent = "This is the first run. The owner manages users and projects.";
-      loginForm.hidden = true;
-      bootstrapForm.hidden = false;
-      document.getElementById("b-username").focus();
-    } else {
-      title.textContent = "Sign in";
-      lead.textContent = "Use your RedLine account.";
-      loginForm.hidden = false;
-      bootstrapForm.hidden = true;
-      document.getElementById("username").focus();
-    }
+    title.textContent = "Sign in";
+    lead.textContent = "Use your RedLine account.";
+    loginForm.hidden = false;
+    bootstrapForm.hidden = true;
+    document.getElementById("username").focus();
   } catch {
     setStatus("The server did not answer. Check that it is running.", "error");
   }

@@ -33,6 +33,10 @@ try {
         <span class="agent-dot" aria-hidden="true"></span>
         <span class="agent-label">Checking agent…</span>
       </button>
+      <button class="btn icon notification-bell" id="notifications-link" title="Notifications" aria-label="Notifications" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 10-12 0c0 5-2 6-2 6h16s-2-1-2-6"/><path d="M10 20a2 2 0 004 0"/></svg>
+        <span class="notification-count" id="notification-count" hidden></span>
+      </button>
       <button class="btn icon" id="people-link" title="People &amp; access" aria-label="People and access" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2"/><path d="M15.5 20c.2-2.2 2-4 4.2-4 .8 0 1.5.2 2.1.6"/></svg>
       </button>
@@ -211,6 +215,17 @@ try {
       </div>
     </section>
 
+    <details class="disclosure" id="comments-block">
+      <summary>Discussion <span class="count" id="comments-count">0</span></summary>
+      <div class="content">
+        <div id="comments-list" class="comments-empty">No comments yet.</div>
+        <div class="comment-compose">
+          <textarea id="comment-text" rows="2" placeholder="Comment for the team…"></textarea>
+          <button class="btn" id="comment-submit" type="button">Comment</button>
+        </div>
+      </div>
+    </details>
+
     <details class="disclosure" id="history-block">
       <summary>History <span class="count" id="history-count">0</span><span class="session-size" id="session-size"></span></summary>
       <div class="content"><div id="history-list" class="inspector-empty">No earlier submissions.</div></div>
@@ -327,6 +342,11 @@ try {
     <pre class="conv-output-body output-body" id="output-body">No output from this run yet.</pre>
   </div>
 </dialog>
+
+<div class="notification-panel" id="notification-panel" role="dialog" aria-label="Notifications" hidden>
+  <div class="notification-head"><b>Notifications</b><button type="button" id="notifications-read">Mark all read</button></div>
+  <div class="notification-list" id="notification-list"></div>
+</div>
 
 </body>
 </html>

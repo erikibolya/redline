@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **A comment is not a review round.** Tasks now have a human **Discussion** panel separate from
+  the agent conversation: any project member can comment, @mention a teammate, resolve a thread
+  (author/developer/owner) and delete (author/developer/owner); comments never create a history
+  round or alter annotations. Notifications are per-user, in-app (header bell, unread badge,
+  mark-all-read) and only ever name a project/task the reader can open; they cover tester
+  requests, developer submits, mentions and replies, and are retained for 90 days
+  (`REDLINE_NOTIFICATION_RETENTION_DAYS` overrides). Tested with 61 API tests, 30 core unit tests
+  and 288 browser checks (2026-11-03).
 - **A token is not a role (project ACL).** Projects now have owner-managed memberships
   (`viewer` / `tester` / `developer`); the owner-only **People & access** page sets them in a
   user × project matrix. Data, media, history and traces are scoped to the member's projects;

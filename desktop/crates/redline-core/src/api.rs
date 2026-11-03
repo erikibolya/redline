@@ -13,7 +13,7 @@ use axum::extract::{
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -21,10 +21,12 @@ use tower_http::services::ServeFile;
 
 use crate::agent::{AgentControl, AgentSettings, ClaimError, ClaimRequest, ClaimState};
 use crate::auth::{self, Auth, CredentialSource};
+use crate::comments::Comment;
 use crate::error::Error;
 use crate::mcp::{self, McpContext};
 use crate::memberships::{MembershipStore, ProjectRole};
 use crate::model::{HandoffStatus, Meta, NewSession, Status, Submission};
+use crate::notifications::{Notification, NotificationStore};
 use crate::sessions::{SessionGrant, SessionStore};
 use crate::store::{FrameUpload, Store};
 use crate::users::{User, UserStatus, UserStore};
@@ -76,6 +78,7 @@ pub struct AppState {
     pub users: UserStore,
     pub sessions: SessionStore,
     pub memberships: MembershipStore,
+    pub notifications: NotificationStore,
     login: Arc<LoginThrottle>,
     /// Directory holding `index.html` / `list.html`. `None` in tests and in headless mode.
     pub ui: Option<PathBuf>,
@@ -99,12 +102,14 @@ impl AppState {
         let users = UserStore::new(store.data_dir());
         let sessions = SessionStore::new(store.data_dir());
         let memberships = MembershipStore::new(store.data_dir());
+        let notifications = NotificationStore::new(store.data_dir());
         Self {
             store,
             auth,
             users,
             sessions,
             memberships,
+            notifications,
             login: Arc::new(LoginThrottle::default()),
             ui: None,
             inline_ui: None,
@@ -160,6 +165,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/me", get(auth_me))
         .route("/api/auth/logout", post(auth_logout))
         .route("/api/auth/password", post(auth_password))
+        .route("/api/notifications", get(list_notifications))
+        .route("/api/notifications/read", post(mark_notifications_read))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_user_auth,
@@ -246,6 +253,14 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/history", get(history))
         .route("/api/sessions/{id}/thread", get(agent_thread))
         .route("/api/sessions/{id}/events", get(agent_events))
+        .route(
+            "/api/sessions/{id}/comments",
+            get(list_comments).post(add_comment),
+        )
+        .route(
+            "/api/sessions/{id}/comments/{comment}",
+            patch(update_comment).delete(delete_comment),
+        )
         .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
         .route("/api/capture", post(capture_session))
         .route_layer(middleware::from_fn_with_state(
@@ -844,6 +859,353 @@ async fn auth_password(
     )?;
     let is_owner = state.users.is_owner(&user.id)?;
     Ok(auth_response(&state, &user, is_owner, grant))
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct ReadNotificationsBody {
+    #[serde(default)]
+    ids: Option<Vec<String>>,
+}
+
+async fn list_notifications(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
+    let Some(user_id) = context.user_id.as_deref() else {
+        return Ok(Json(json!({ "notifications": [], "unread": 0 })));
+    };
+    let mut items = state.notifications.list(user_id)?;
+    items.reverse();
+    let unread = items.iter().filter(|item| item.read_at.is_none()).count();
+    Ok(Json(json!({ "notifications": items, "unread": unread })))
+}
+
+async fn mark_notifications_read(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    Json(body): Json<ReadNotificationsBody>,
+) -> Result<Json<Value>, Error> {
+    let Some(user_id) = context.user_id.as_deref() else {
+        return Ok(Json(json!({ "marked": 0 })));
+    };
+    let marked = state
+        .notifications
+        .mark_read(user_id, body.ids.as_deref())?;
+    Ok(Json(json!({ "marked": marked })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CommentBody {
+    body: String,
+    #[serde(default)]
+    mentions: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CommentUpdate {
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    resolved: Option<bool>,
+}
+
+fn comment_author(context: &AuthContext) -> (String, String) {
+    (
+        context
+            .user_id
+            .clone()
+            .unwrap_or_else(|| "legacy".to_string()),
+        context.display_name.clone(),
+    )
+}
+
+fn validate_comment_body(body: &str) -> Result<String, Error> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(Error::BadRequest("comment body is required".to_string()));
+    }
+    if body.chars().count() > 4000 {
+        return Err(Error::BadRequest(
+            "comment is longer than 4000 characters".to_string(),
+        ));
+    }
+    if body
+        .chars()
+        .any(|ch| ch.is_control() && ch != '\n' && ch != '\t')
+    {
+        return Err(Error::BadRequest(
+            "comment must not contain control characters".to_string(),
+        ));
+    }
+    Ok(body.to_string())
+}
+
+fn comment_mentions(
+    state: &AppState,
+    meta: &Meta,
+    mentions: &[String],
+) -> Result<Vec<String>, Error> {
+    let project = meta.project.as_deref().unwrap_or("inbox");
+    let owner_id = state.users.owner_id()?;
+    let mut seen = HashSet::new();
+    let mut valid = Vec::new();
+    for user_id in mentions {
+        let user_id = user_id.trim();
+        if user_id.is_empty() || !seen.insert(user_id.to_string()) {
+            continue;
+        }
+        let Some(user) = state.users.get(user_id)? else {
+            return Err(Error::BadRequest(format!(
+                "unknown mentioned user {user_id}"
+            )));
+        };
+        if user.status != UserStatus::Active {
+            return Err(Error::BadRequest(format!(
+                "mentioned user {} is not active",
+                user.username
+            )));
+        }
+        let is_owner = owner_id.as_deref() == Some(user_id);
+        let is_member = state.memberships.role_for(user_id, project)?.is_some();
+        if !is_owner && !is_member {
+            return Err(Error::BadRequest(format!(
+                "mentioned user {} is not in this project",
+                user.username
+            )));
+        }
+        valid.push(user_id.to_string());
+    }
+    Ok(valid)
+}
+
+fn can_moderate_comment(
+    state: &AppState,
+    context: &AuthContext,
+    meta: &Meta,
+) -> Result<bool, Error> {
+    if context.is_owner {
+        return Ok(true);
+    }
+    let project = meta.project.as_deref().unwrap_or("inbox");
+    Ok(state
+        .memberships
+        .role_for(context.user_id.as_deref().unwrap_or_default(), project)?
+        == Some(ProjectRole::Developer))
+}
+
+/// A notification must never name a task its reader cannot open. The project membership can
+/// change after a task is created, so access is checked at delivery time, not only when the
+/// recipient list was built.
+fn can_read_task(state: &AppState, user_id: &str, meta: &Meta) -> Result<bool, Error> {
+    if state.users.is_owner(user_id)? {
+        return Ok(true);
+    }
+    let Some(project) = meta.project.as_deref() else {
+        return Ok(false);
+    };
+    Ok(state.memberships.role_for(user_id, project)?.is_some())
+}
+
+fn notify_user(
+    state: &AppState,
+    user_id: &str,
+    kind: &str,
+    text: String,
+    meta: &Meta,
+    actor: Option<&str>,
+    actor_name: &str,
+) -> Result<(), Error> {
+    if user_id.is_empty() || Some(user_id) == actor || !can_read_task(state, user_id, meta)? {
+        return Ok(());
+    }
+    let mut notification = Notification::new(kind, text, format!("/s/{}", meta.id));
+    notification.project = meta.project.clone();
+    notification.session = Some(meta.id.clone());
+    notification.actor = actor.map(str::to_string);
+    notification.actor_name = Some(actor_name.to_string());
+    state.notifications.add(user_id, notification)?;
+    Ok(())
+}
+
+fn notify_project_developers(
+    state: &AppState,
+    meta: &Meta,
+    kind: &str,
+    text: &str,
+    actor: Option<&str>,
+    actor_name: &str,
+) -> Result<(), Error> {
+    let Some(project) = meta.project.as_deref() else {
+        return Ok(());
+    };
+    let mut recipients: HashSet<String> = state
+        .memberships
+        .members(project)?
+        .into_iter()
+        .filter(|membership| membership.role == ProjectRole::Developer)
+        .map(|membership| membership.user)
+        .collect();
+    // A project without a developer still has the owner, who can send the task.
+    if let Some(owner_id) = state.users.owner_id()? {
+        recipients.insert(owner_id);
+    }
+    for user_id in recipients {
+        notify_user(
+            state,
+            &user_id,
+            kind,
+            text.to_string(),
+            meta,
+            actor,
+            actor_name,
+        )?;
+    }
+    Ok(())
+}
+
+async fn list_comments(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Read)?;
+    Ok(Json(json!({ "comments": state.store.comments(&id)? })))
+}
+
+async fn add_comment(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    Json(body): Json<CommentBody>,
+) -> Result<Json<Value>, Error> {
+    let meta = require_review(&state, &context, &id, ReviewAction::Read)?;
+    let mut requested = body.mentions.clone();
+    // `@username` in the text is the UI's mention path; an unknown handle is left as plain text,
+    // while an explicit `mentions` id must resolve to a project member.
+    for word in body.body.split_whitespace() {
+        let Some(name) = word.strip_prefix('@') else {
+            continue;
+        };
+        let name = name.trim_matches(|ch: char| {
+            !(ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+        });
+        if name.is_empty() {
+            continue;
+        }
+        if let Some(user) = state.users.by_username(name)? {
+            requested.push(user.id);
+        }
+    }
+    let mentions = comment_mentions(&state, &meta, &requested)?;
+    let body = validate_comment_body(&body.body)?;
+    let (author, author_name) = comment_author(&context);
+    let comment = state.store.add_comment(
+        &id,
+        Comment::new(&author, &author_name, &body, mentions.clone()),
+    )?;
+
+    let mut recipients: HashSet<String> = mentions.iter().cloned().collect();
+    if let Some(creator) = meta.created_by.as_deref() {
+        recipients.insert(creator.to_string());
+    }
+    if let Some(project) = meta.project.as_deref() {
+        for membership in state.memberships.members(project)? {
+            if membership.role == ProjectRole::Developer {
+                recipients.insert(membership.user);
+            }
+        }
+    }
+    for user_id in recipients {
+        let kind = if mentions.iter().any(|mention| mention == &user_id) {
+            "comment.mention"
+        } else {
+            "comment.reply"
+        };
+        notify_user(
+            &state,
+            &user_id,
+            kind,
+            format!("{author_name} commented on \"{}\"", meta.title),
+            &meta,
+            Some(&author),
+            &author_name,
+        )?;
+    }
+    Ok(Json(json!({ "comment": comment })))
+}
+
+async fn update_comment(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath((id, comment_id)): RoutePath<(String, String)>,
+    Json(body): Json<CommentUpdate>,
+) -> Result<Json<Value>, Error> {
+    let meta = require_review(&state, &context, &id, ReviewAction::Read)?;
+    let comment = state
+        .store
+        .comments(&id)?
+        .into_iter()
+        .find(|comment| comment.id == comment_id)
+        .ok_or_else(|| Error::NotFound(comment_id.clone()))?;
+    let author = context
+        .user_id
+        .as_deref()
+        .is_some_and(|user_id| comment.author == user_id);
+    let moderator = can_moderate_comment(&state, &context, &meta)?;
+    // Resolving a thread is moderation; changing the words someone else wrote is not.
+    if body.body.is_some() && !author {
+        return Err(Error::Forbidden(
+            "you can edit only your own comments".to_string(),
+        ));
+    }
+    if body.resolved.is_some() && !author && !moderator {
+        return Err(Error::Forbidden(
+            "only the author or a developer can resolve a comment".to_string(),
+        ));
+    }
+    if body.body.is_none() && body.resolved.is_none() {
+        return Err(Error::BadRequest(
+            "send a body or a resolved flag".to_string(),
+        ));
+    }
+    let body_text = body
+        .body
+        .as_deref()
+        .map(validate_comment_body)
+        .transpose()?;
+    let updated = state.store.update_comment(
+        &id,
+        &comment_id,
+        body_text.as_deref(),
+        body.resolved,
+        context.user_id.as_deref().unwrap_or("legacy"),
+    )?;
+    Ok(Json(json!({ "comment": updated })))
+}
+
+async fn delete_comment(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath((id, comment_id)): RoutePath<(String, String)>,
+) -> Result<Json<Value>, Error> {
+    let meta = require_review(&state, &context, &id, ReviewAction::Read)?;
+    let comment = state
+        .store
+        .comments(&id)?
+        .into_iter()
+        .find(|comment| comment.id == comment_id)
+        .ok_or_else(|| Error::NotFound(comment_id.clone()))?;
+    let author = context
+        .user_id
+        .as_deref()
+        .is_some_and(|user_id| comment.author == user_id);
+    if !author && !can_moderate_comment(&state, &context, &meta)? {
+        return Err(Error::Forbidden(
+            "you can delete only your own comments".to_string(),
+        ));
+    }
+    state.store.delete_comment(&id, &comment_id)?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn list_users(State(state): State<AppState>) -> Result<Json<Value>, Error> {
@@ -2467,6 +2829,18 @@ async fn submit(
         state
             .store
             .submit_round(&id, &body, contact_sheet.as_deref(), &frames)?;
+    let (actor, actor_name) = comment_author(&context);
+    if let Some(creator) = meta.created_by.as_deref() {
+        notify_user(
+            &state,
+            creator,
+            "review.submitted",
+            format!("{actor_name} sent \"{}\" to the agent", meta.title),
+            &meta,
+            Some(&actor),
+            &actor_name,
+        )?;
+    }
     // Wake up whatever agent the host wired in; a dead endpoint must not fail the submission.
     if let Some(url) = state.webhook.clone() {
         let payload = json!({
@@ -2510,6 +2884,15 @@ async fn request_agent_review(
         state
             .store
             .request_round(&id, &body, contact_sheet.as_deref(), &frames, user_id)?;
+    let (actor, actor_name) = comment_author(&context);
+    notify_project_developers(
+        &state,
+        &meta,
+        "review.ready",
+        &format!("{actor_name} requested agent review for \"{}\"", meta.title),
+        Some(&actor),
+        &actor_name,
+    )?;
     Ok(Json(
         json!({ "ok": true, "meta": meta, "annotations": annotations }),
     ))

@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use chrono::{SecondsFormat, Utc};
 use serde_json::{json, Value};
 
+use crate::comments::Comment;
 use crate::error::{Error, Result};
 use crate::model::{
     AgentFailure, Annotation, AnnotationSet, FrameRef, Handoff, HandoffStatus, ImageRef, MediaKind,
@@ -455,7 +456,7 @@ fn video_extension(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -1346,6 +1347,84 @@ impl Store {
         meta.agent_requested_by = None;
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
         Ok(meta)
+    }
+
+    pub fn comments(&self, id: &str) -> Result<Vec<Comment>> {
+        let path = self.dir(id)?.join("comments.jsonl");
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+        let mut comments = Vec::new();
+        for line in fs::read_to_string(path)?.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            if let Ok(comment) = serde_json::from_str::<Comment>(line) {
+                comments.push(comment);
+            }
+        }
+        Ok(comments)
+    }
+
+    fn save_comments(&self, id: &str, comments: &[Comment]) -> Result<()> {
+        let mut text = String::new();
+        for comment in comments {
+            text.push_str(&serde_json::to_string(comment)?);
+            text.push('\n');
+        }
+        write_atomic(&self.dir(id)?.join("comments.jsonl"), text.as_bytes())
+    }
+
+    pub fn add_comment(&self, id: &str, comment: Comment) -> Result<Comment> {
+        let mut comments = self.comments(id)?;
+        comments.push(comment.clone());
+        self.save_comments(id, &comments)?;
+        Ok(comment)
+    }
+
+    pub fn update_comment(
+        &self,
+        id: &str,
+        comment_id: &str,
+        body: Option<&str>,
+        resolved: Option<bool>,
+        user_id: &str,
+    ) -> Result<Comment> {
+        let mut comments = self.comments(id)?;
+        let comment = comments
+            .iter_mut()
+            .find(|comment| comment.id == comment_id)
+            .ok_or_else(|| Error::NotFound(comment_id.to_string()))?;
+        if let Some(body) = body {
+            let body = body.trim();
+            if body.is_empty() {
+                return Err(Error::BadRequest("comment body is required".to_string()));
+            }
+            comment.body = body.to_string();
+        }
+        if let Some(resolved) = resolved {
+            if resolved {
+                comment.resolved_at = Some(now());
+                comment.resolved_by = Some(user_id.to_string());
+            } else {
+                comment.resolved_at = None;
+                comment.resolved_by = None;
+            }
+        }
+        let updated = comment.clone();
+        self.save_comments(id, &comments)?;
+        Ok(updated)
+    }
+
+    pub fn delete_comment(&self, id: &str, comment_id: &str) -> Result<()> {
+        let mut comments = self.comments(id)?;
+        let before = comments.len();
+        comments.retain(|comment| comment.id != comment_id);
+        if comments.len() == before {
+            return Err(Error::NotFound(comment_id.to_string()));
+        }
+        self.save_comments(id, &comments)
     }
 
     /// Append one line to `agent-events.jsonl` (the activity feed the human watches).

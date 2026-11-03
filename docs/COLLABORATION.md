@@ -6,7 +6,10 @@
 > **Implementace:** auth foundation je v `dev` — uživatelé, Argon2id, serverové session/CSRF,
 > login stránka, owner bootstrap a transfer. Navazuje projektová ACL: memberships, filtrování
 > projektů/session/media, tester `Request agent review`, developer `Send to agent` a owner
-> **People & access** matice. PAT, invite/reset, audit, komentáře a notifikace následují.
+> **People & access** matice. Diskuse a notifikace jsou také v `dev`: `comments.jsonl` v tasku,
+> per-user `notifications/<user>.jsonl`, zvonek s unread badge, mentions a resolve; retence
+> notifikací 90 dní (`REDLINE_NOTIFICATION_RETENTION_DAYS`). PAT, invite/reset, audit a
+> optimistická revize následují.
 > **Cíl:** bezpečně pustit k jedné RedLine instanci více lidí, rozdělit je na role a omezit
 > přístup k projektům, aniž by se rozbila současná cesta agent → review → člověk.
 >

@@ -359,7 +359,7 @@ const main = async () => {
   check("the header carries no status pills — the toast and the rail card say it",
     chrome.pills === 0 && !chrome.stale, JSON.stringify(chrome));
   check("every header action is a labelled SVG icon",
-    chrome.count === 6 && chrome.svg && chrome.labelled && chrome.separator
+    chrome.count === 7 && chrome.svg && chrome.labelled && chrome.separator
       && chrome.panelMarks, JSON.stringify(chrome));
   check("agent settings is a solid gear, not a text glyph",
     chrome.gear && chrome.gear.fill !== "none" && chrome.gear.stroke === "none"
@@ -4019,6 +4019,51 @@ const main = async () => {
       && testerRequested.button === "Update request"
       && testerRequested.badge === "ready for agent",
     JSON.stringify(testerRequested));
+
+  // Discussion: the tester comments on their own task through the inspector.
+  await testerPage.click("#comments-block > summary");
+  await testerPage.type("#comment-text", "Please send this to the agent.");
+  await testerPage.click("#comment-submit");
+  await testerPage.waitForFunction(
+    () => document.querySelector("#comments-list")?.textContent.includes("Please send this"),
+    { timeout: 5000 },
+  );
+  const testerComments = await testerPage.evaluate(async (taskId) => {
+    const response = await fetch(`/api/sessions/${taskId}/comments`);
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }, testerTask);
+  check("a tester can discuss a task in the inspector",
+    testerComments.status === 200
+      && (testerComments.body.comments || []).some((comment) =>
+        comment.body === "Please send this to the agent."),
+    JSON.stringify(testerComments.body.comments || []));
+
+  // The owner comments from the other context; the tester's bell must show it.
+  const ownerComment = await loginPage.evaluate(async (taskId) => {
+    const csrf = document.cookie
+      .split("; ")
+      .find((part) => part.startsWith("redline_csrf="))
+      ?.split("=")[1] || "";
+    const response = await fetch(`/api/sessions/${taskId}/comments`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-csrf-token": csrf },
+      body: JSON.stringify({ body: "I will send this to the agent soon." }),
+    });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }, testerTask);
+  check("the owner can comment on a project task", ownerComment.status === 200, JSON.stringify(ownerComment));
+  await testerPage.waitForFunction(
+    () => document.querySelector("#notifications-link") && !document.querySelector("#notifications-link").hidden,
+    { timeout: 5000 },
+  );
+  await testerPage.click("#notifications-link");
+  await testerPage.waitForFunction(
+    () => document.querySelector("#notification-list")?.textContent.includes("Owner commented"),
+    { timeout: 5000 },
+  );
+  const notificationText = await testerPage.$eval("#notification-list", (el) => el.textContent.trim());
+  check("the tester's bell shows the owner's comment",
+    notificationText.includes("Owner commented"), notificationText.slice(0, 120));
   await testerContext.close();
 
   // Return to the dashboard so the logout/CSRF checks run in the same context.

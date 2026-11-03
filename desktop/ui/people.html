@@ -53,6 +53,76 @@ try {
   }
   [data-theme="light"] .reveal { background: #f5f3ff; border-color: #c4b5fd; color: #5b21b6; }
   [data-theme="light"] .reveal input { background: #fff; border-color: #a78bfa; color: #4c1d95; }
+  .people-list { border: 1px solid var(--border-soft); border-radius: 10px; overflow: hidden; }
+  .person-row {
+    display: grid; grid-template-columns: minmax(170px, 1.1fr) minmax(220px, 2fr) auto;
+    gap: 12px; align-items: center; padding: 12px; border-top: 1px solid var(--border-soft);
+  }
+  .person-row:first-child { border-top: 0; }
+  .person-main { min-width: 0; }
+  .person-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-weight: 600; font-size: 13px; }
+  .person-name .owner-mark { color: #86efac; font-size: 10px; }
+  .person-username { color: var(--muted); font-size: 10.5px; margin-top: 2px; }
+  .person-chips { display: flex; flex-wrap: wrap; gap: 5px; min-width: 0; }
+  .role-chip {
+    display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 999px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--muted);
+    font-size: 10.5px; line-height: 1.5; white-space: nowrap;
+  }
+  button.role-chip { cursor: pointer; font-family: inherit; }
+  button.role-chip:hover { color: var(--text); border-color: var(--accent); }
+  .role-chip b { color: var(--text); font-weight: 600; }
+  .role-chip.owner { border-color: #166534; color: #86efac; background: rgba(22, 101, 52, .15); }
+  .role-chip.developer { border-color: #1e40af; color: #93c5fd; background: rgba(30, 64, 175, .16); }
+  .role-chip.tester { border-color: #92400e; color: #fcd34d; background: rgba(146, 64, 14, .2); }
+  .role-chip.viewer { border-color: var(--border); color: var(--muted); }
+  .role-chip.none { border-style: dashed; color: var(--muted); }
+  [data-theme="light"] .role-chip.owner { color: #15803d; background: #f0fdf4; }
+  [data-theme="light"] .role-chip.developer { color: #1d4ed8; background: #eff6ff; }
+  [data-theme="light"] .role-chip.tester { color: #b45309; background: #fffbeb; }
+  .person-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+  .person-actions .btn { white-space: nowrap; }
+  .person-empty { padding: 16px 12px; color: var(--muted); font-size: 12px; }
+
+  .projects-dialog {
+    padding: 0; width: min(620px, calc(100vw - 32px)); max-height: min(82vh, 760px);
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+    border-radius: 14px; box-shadow: 0 24px 60px rgba(0, 0, 0, .55); overflow: hidden;
+  }
+  .projects-dialog::backdrop { background: rgba(3, 7, 12, .6); backdrop-filter: blur(2px); }
+  .projects-dialog form { display: flex; flex-direction: column; max-height: inherit; }
+  .project-dialog-head {
+    display: flex; align-items: flex-start; gap: 12px; padding: 18px 20px 12px;
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .project-dialog-head h2 { margin: 0; font-size: 16px; }
+  .project-dialog-head p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+  .project-dialog-head .dialog-close { margin-left: auto; }
+  .project-dialog-body { padding: 12px 20px; overflow: auto; }
+  .project-dialog-body input[type="search"] {
+    width: 100%; margin: 0 0 10px; padding: 8px 10px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  .project-row {
+    display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 10px; align-items: center;
+    padding: 8px 0; border-top: 1px solid var(--border-soft);
+  }
+  .project-row:first-child { border-top: 0; }
+  .project-row[hidden] { display: none; }
+  .project-row label { display: flex; align-items: center; gap: 8px; min-width: 0; cursor: pointer; }
+  .project-row .project-copy { min-width: 0; }
+  .project-row .project-copy b { display: block; font-size: 12.5px; }
+  .project-row .project-copy small { display: block; color: var(--muted); font-size: 10.5px; overflow-wrap: anywhere; }
+  .project-row select {
+    width: 100%; padding: 5px 6px; border-radius: 5px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  .project-row select:disabled { opacity: .45; }
+  .project-dialog-foot {
+    display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .project-dialog-foot .btn.primary { margin-left: 0; }
   .transfer {
     display: grid; grid-template-columns: 1.4fr 1.4fr auto; gap: 8px; align-items: center;
     margin: 8px 0 0; padding: 14px; border: 1px solid var(--border-soft); border-radius: 10px;
@@ -69,25 +139,10 @@ try {
     cursor: pointer; padding: 2px 0; margin-left: 7px;
   }
   .link-btn:hover { text-decoration: underline; }
-  .matrix-wrap { overflow-x: auto; border: 1px solid var(--border-soft); border-radius: 10px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { padding: 9px 10px; border-top: 1px solid var(--border-soft); text-align: left; vertical-align: middle; }
-  thead th { border-top: 0; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
-  thead th small { display: block; text-transform: none; letter-spacing: 0; font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
-  td.user { white-space: nowrap; }
-  td.user .name { font-weight: 600; }
-  td.user .username { color: var(--muted); font-size: 10.5px; }
-  td.user .owner-mark { color: #86efac; font-size: 10px; margin-left: 6px; }
-  td select {
-    width: 100%; min-width: 105px; padding: 5px 6px; border-radius: 5px;
-    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit;
-  }
-  td.owner-cell { color: #86efac; font-size: 11px; }
-  .empty { padding: 18px 10px; color: var(--muted); font-size: 13px; }
   .note { margin: 12px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
   .error-card { padding: 18px; border: 1px solid #7f1d1d; border-radius: 10px; color: #fda4af; }
   [data-theme="light"] .status.error, [data-theme="light"] .error-card { color: #be123c; }
-  [data-theme="light"] td.owner-cell, [data-theme="light"] td.user .owner-mark { color: #15803d; }
+  [data-theme="light"] .person-name .owner-mark { color: #15803d; }
 </style>
 </head>
 <body data-page="people">
@@ -101,8 +156,9 @@ try {
 
   <section class="card">
     <h1>People &amp; access</h1>
-    <p class="lead">Owner only. Assign each person a role in each project: a viewer reads, a tester
-      creates and annotates tasks, a developer also sends them to the agent. Inbox is owner-only;
+    <p class="lead">Owner only. Each person gets a role per project: a viewer reads, a tester
+      creates and annotates tasks, a developer also sends them to the agent. Click <b>Projects</b>
+      on a person to edit the whole set; the chips show what they can access. Inbox is owner-only;
       new tasks always need a project.</p>
 
     <form class="new-user" id="new-user-form" autocomplete="off">
@@ -121,7 +177,7 @@ try {
       </div>
     </div>
     <div class="status" id="status" role="status" aria-live="polite"></div>
-    <div id="matrix"><div class="empty">Loading…</div></div>
+    <div id="people-list"><div class="person-empty">Loading…</div></div>
     <p class="note">The owner row is global and cannot be limited per project. Passwords are stored
       as Argon2id hashes; invite links work once, expire after 7 days, and reset links after 24
       hours.</p>
@@ -138,12 +194,32 @@ try {
       </form>
     </div>
   </section>
+
+  <dialog class="projects-dialog" id="projects-dialog" aria-labelledby="projects-dialog-title">
+    <form method="dialog" id="projects-form">
+      <div class="project-dialog-head">
+        <div>
+          <h2 id="projects-dialog-title">Projects</h2>
+          <p id="projects-dialog-sub"></p>
+        </div>
+        <button type="submit" value="cancel" class="btn icon dialog-close" aria-label="Close">✕</button>
+      </div>
+      <div class="project-dialog-body">
+        <input id="projects-search" type="search" placeholder="Filter projects…" autocomplete="off" />
+        <div id="projects-list"></div>
+      </div>
+      <div class="project-dialog-foot">
+        <button type="submit" value="cancel" class="btn">Cancel</button>
+        <button type="submit" value="save" class="btn primary" id="projects-save">Save projects</button>
+      </div>
+    </form>
+  </dialog>
 </main>
 
 <script>
 const statusBox = document.getElementById("status");
-const matrix = document.getElementById("matrix");
-let model = { users: [], projects: [], members: {}, me: null };
+const peopleList = document.getElementById("people-list");
+let model = { users: [], projects: [], me: null, editingUserId: null };
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
@@ -207,7 +283,7 @@ async function load() {
     const me = await api("/api/auth/me");
     model.me = me;
     if (!me.is_owner) {
-      matrix.innerHTML = `<div class="error-card">People &amp; access is owner-only.</div>`;
+      peopleList.innerHTML = `<div class="error-card">People &amp; access is owner-only.</div>`;
       document.getElementById("new-user-form").hidden = true;
       return;
     }
@@ -217,70 +293,56 @@ async function load() {
     ]);
     model.users = users.users || [];
     model.projects = (projects.projects || []).filter((project) => project.slug !== "inbox");
-    const memberLists = await Promise.all(
-      model.projects.map(async (project) => {
-        const data = await api(`/api/projects/${encodeURIComponent(project.slug)}/members`);
-        return [project.slug, data.members || []];
-      }),
-    );
-    model.members = Object.fromEntries(memberLists);
     render();
   } catch (error) {
-    matrix.innerHTML = `<div class="error-card">${escapeHtml(error.message)}</div>`;
+    peopleList.innerHTML = `<div class="error-card">${escapeHtml(error.message)}</div>`;
   }
 }
 
+function projectName(slug) {
+  return model.projects.find((project) => project.slug === slug)?.name || slug;
+}
+
 function render() {
-  if (!model.projects.length) {
-    matrix.innerHTML = `<div class="empty">No repository projects yet. The agent creates them when it syncs its repositories; the owner can then assign people here.</div>`;
+  if (!model.users.length) {
+    peopleList.innerHTML = '<div class="person-empty">No users yet.</div>';
     return;
   }
-  const head = model.projects
-    .map((project) => `<th>${escapeHtml(project.name || project.slug)}<small>${escapeHtml(project.repo || "no repository")}</small></th>`)
-    .join("");
   const rows = model.users
     .map((user) => {
       const owner = user.role === "owner";
-      const cells = model.projects
-        .map((project) => {
-          if (owner) return `<td class="owner-cell">owner</td>`;
-          const membership = (model.members[project.slug] || [])
-            .find((entry) => entry.user_id === user.id);
-          const role = membership?.role || "";
-          const options = [
-            ["", "—"],
-            ["viewer", "Viewer"],
-            ["tester", "Tester"],
-            ["developer", "Developer"],
-          ].map(([value, label]) =>
-            `<option value="${value}"${value === role ? " selected" : ""}>${label}</option>`
-          ).join("");
-          return `<td><select data-project="${escapeHtml(project.slug)}" data-user="${escapeHtml(user.id)}"
-                    aria-label="${escapeHtml(user.username)} in ${escapeHtml(project.name || project.slug)}">${options}</select></td>`;
-        })
-        .join("");
-      return `<tr>
-        <td class="user"><span class="name">${escapeHtml(user.display_name || user.username)}</span>
-          ${owner ? '<span class="owner-mark">OWNER</span>' : ""}
-          ${user.status === "invited" ? '<span class="owner-mark">INVITED</span>' : ""}
-          <span class="username">@${escapeHtml(user.username)}</span>
-          ${owner ? "" : `<button class="link-btn" type="button" data-reset="${escapeHtml(user.id)}"
-            title="Generate a one-time password reset link">Reset link</button>`}</td>
-        ${cells}
-      </tr>`;
+      const membership = user.memberships || [];
+      const chips = owner
+        ? '<span class="role-chip owner">Owner · all projects</span>'
+        : membership.length
+          ? membership.map((entry) => `<button type="button"
+              class="role-chip ${escapeHtml(entry.role)}"
+              data-edit-projects="${escapeHtml(user.id)}"
+              title="Edit ${escapeHtml(user.username)}'s projects"><b>${escapeHtml(projectName(entry.project))}</b>${escapeHtml(entry.role)}</button>`).join("")
+          : '<span class="role-chip none">No projects</span>';
+      const actions = owner
+        ? ""
+        : `<button class="btn small" type="button" data-edit-projects="${escapeHtml(user.id)}">Projects</button>
+           <button class="link-btn" type="button" data-reset="${escapeHtml(user.id)}"
+             title="Generate a one-time password reset link">Reset link</button>`;
+      return `<div class="person-row" data-user-id="${escapeHtml(user.id)}">
+        <div class="person-main">
+          <div class="person-name">${escapeHtml(user.display_name || user.username)}
+            ${owner ? '<span class="owner-mark">OWNER</span>' : ""}
+            ${user.status === "invited" ? '<span class="owner-mark">INVITED</span>' : ""}
+          </div>
+          <div class="person-username">@${escapeHtml(user.username)}</div>
+        </div>
+        <div class="person-chips">${chips}</div>
+        <div class="person-actions">${actions}</div>
+      </div>`;
     })
     .join("");
-  matrix.innerHTML = `
-    <div class="matrix-wrap">
-      <table id="people-table">
-        <thead><tr><th>User</th>${head}</tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>`;
-  matrix.querySelectorAll("select[data-project]").forEach((select) => {
-    select.addEventListener("change", () => saveProject(select.dataset.project));
+  peopleList.innerHTML = `<div class="people-list">${rows}</div>`;
+  peopleList.querySelectorAll("[data-edit-projects]").forEach((button) => {
+    button.addEventListener("click", () => openProjects(button.dataset.editProjects));
   });
-  matrix.querySelectorAll("[data-reset]").forEach((button) => {
+  peopleList.querySelectorAll("[data-reset]").forEach((button) => {
     button.addEventListener("click", () => resetLink(button.dataset.reset));
   });
   const transfer = document.getElementById("transfer-user");
@@ -296,6 +358,63 @@ function render() {
   document.getElementById("transfer-submit").disabled = !targets.length;
 }
 
+function renderProjectRows(user) {
+  const list = document.getElementById("projects-list");
+  if (!model.projects.length) {
+    list.innerHTML = '<div class="person-empty">No repository projects yet. The agent creates them when it syncs its repositories.</div>';
+    return;
+  }
+  const current = new Map((user.memberships || []).map((entry) => [entry.project, entry.role]));
+  list.innerHTML = model.projects
+    .map((project) => {
+      const checked = current.has(project.slug);
+      const role = current.get(project.slug) || "viewer";
+      const search = `${project.name || ""} ${project.slug} ${project.repo || ""}`.toLowerCase();
+      const options = [
+        ["viewer", "Viewer"],
+        ["tester", "Tester"],
+        ["developer", "Developer"],
+      ].map(([value, label]) =>
+        `<option value="${value}"${value === role ? " selected" : ""}>${label}</option>`
+      ).join("");
+      return `<div class="project-row" data-search="${escapeHtml(search)}">
+        <label>
+          <input type="checkbox" data-project-access="${escapeHtml(project.slug)}"${checked ? " checked" : ""} />
+          <span class="project-copy">
+            <b>${escapeHtml(project.name || project.slug)}</b>
+            <small>${escapeHtml(project.repo || project.slug)}</small>
+          </span>
+        </label>
+        <select data-project-role="${escapeHtml(project.slug)}"
+                aria-label="${escapeHtml(project.name || project.slug)} role"${checked ? "" : " disabled"}>${options}</select>
+      </div>`;
+    })
+    .join("");
+  list.querySelectorAll("[data-project-access]").forEach((checkbox) => {
+    checkbox.addEventListener("change", () => {
+      const select = checkbox.closest(".project-row").querySelector("select");
+      select.disabled = !checkbox.checked;
+    });
+  });
+}
+
+function openProjects(userId) {
+  const user = model.users.find((entry) => entry.id === userId);
+  if (!user) return;
+  model.editingUserId = userId;
+  document.getElementById("projects-dialog-title").textContent =
+    `Projects for ${user.display_name || user.username}`;
+  document.getElementById("projects-dialog-sub").textContent =
+    `@${user.username} · ${user.status}`;
+  document.getElementById("projects-search").value = "";
+  renderProjectRows(user);
+  document.getElementById("projects-save").disabled = false;
+  const dialog = document.getElementById("projects-dialog");
+  dialog.returnValue = "";
+  dialog.showModal();
+  document.getElementById("projects-search").focus();
+}
+
 async function resetLink(userId) {
   setStatus("Creating reset link…");
   try {
@@ -309,25 +428,45 @@ async function resetLink(userId) {
   }
 }
 
-async function saveProject(slug) {
-  const selections = [...matrix.querySelectorAll(`select[data-project="${slug}"]`)];
-  const members = selections
-    .filter((select) => select.value)
-    .map((select) => ({ user_id: select.dataset.user, role: select.value }));
-  setStatus("Saving…");
+document.getElementById("projects-search").addEventListener("input", (event) => {
+  const query = event.target.value.trim().toLowerCase();
+  document.querySelectorAll("#projects-list .project-row").forEach((row) => {
+    row.hidden = Boolean(query) && !row.dataset.search.includes(query);
+  });
+});
+
+document.getElementById("projects-form").addEventListener("submit", async (event) => {
+  if (event.submitter?.value !== "save") {
+    // Enter in the search field must not close the dialog; Cancel/✕ should.
+    if (!event.submitter) event.preventDefault();
+    return;
+  }
+  event.preventDefault();
+  const memberships = [];
+  document.querySelectorAll("#projects-list .project-row").forEach((row) => {
+    const checkbox = row.querySelector("[data-project-access]");
+    if (!checkbox?.checked) return;
+    memberships.push({
+      project: checkbox.dataset.projectAccess,
+      role: row.querySelector("select[data-project-role]").value,
+    });
+  });
+  const button = document.getElementById("projects-save");
+  button.disabled = true;
   try {
-    const data = await api(`/api/projects/${encodeURIComponent(slug)}/members`, {
+    await api(`/api/users/${encodeURIComponent(model.editingUserId)}/projects`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ members }),
+      body: JSON.stringify({ memberships }),
     });
-    model.members[slug] = data.members || [];
-    setStatus("Saved", "ok");
-    setTimeout(() => setStatus(""), 1200);
+    document.getElementById("projects-dialog").close("saved");
+    await load();
+    setStatus("Projects saved", "ok");
   } catch (error) {
     setStatus(error.message, "error");
+    button.disabled = false;
   }
-}
+});
 
 const inviteBox = document.getElementById("new-invite");
 const passwordInput = document.getElementById("new-password");

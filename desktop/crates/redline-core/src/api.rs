@@ -198,6 +198,7 @@ pub fn router(state: AppState) -> Router {
     let owner = Router::new()
         .route("/api/auth/bootstrap", post(auth_bootstrap))
         .route("/api/users", get(list_users).post(create_user))
+        .route("/api/users/{id}/projects", put(set_user_projects))
         .route("/api/users/{id}/reset", post(reset_user))
         .route("/api/admin/transfer-owner", post(transfer_owner))
         .route(
@@ -1694,15 +1695,38 @@ async fn delete_comment(
 
 async fn list_users(State(state): State<AppState>) -> Result<Json<Value>, Error> {
     let owner_id = state.users.owner_id()?;
+    let memberships = state.memberships.all()?;
     let users: Vec<Value> = state
         .users
         .users()?
         .into_iter()
         .map(|user| {
             let is_owner = owner_id.as_deref() == Some(user.id.as_str());
-            serde_json::to_value(user.public(is_owner))
+            let mut projects: Vec<Value> = memberships
+                .iter()
+                .filter(|membership| membership.user == user.id)
+                .map(|membership| {
+                    json!({
+                        "project": membership.project,
+                        "role": membership.role.as_str(),
+                    })
+                })
+                .collect();
+            projects.sort_by(|left, right| {
+                left["project"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .cmp(right["project"].as_str().unwrap_or_default())
+            });
+            let mut value = serde_json::to_value(user.public(is_owner))?;
+            if let Some(object) = value.as_object_mut() {
+                // One request for the People list: the UI should not need a members request per
+                // project, which becomes unusable with many repositories.
+                object.insert("memberships".to_string(), json!(projects));
+            }
+            Ok(value)
         })
-        .collect::<std::result::Result<_, _>>()?;
+        .collect::<std::result::Result<_, Error>>()?;
     Ok(Json(json!({ "users": users })))
 }
 
@@ -2658,6 +2682,87 @@ async fn set_project_members(
         details,
     );
     Ok(Json(members_payload(&state, &project.slug)?))
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct UserProjectsBody {
+    #[serde(default)]
+    memberships: Vec<UserProjectEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct UserProjectEntry {
+    project: String,
+    role: String,
+}
+
+/// Replace one user's project roles. The People page edits a person, so this is the natural
+/// write path; the older per-project `PUT /members` stays for compatibility and scripts.
+async fn set_user_projects(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    Json(body): Json<UserProjectsBody>,
+) -> Result<Json<Value>, Error> {
+    let user = state
+        .users
+        .get(&id)?
+        .ok_or_else(|| Error::NotFound(id.clone()))?;
+    if state.users.is_owner(&user.id)? {
+        return Err(Error::BadRequest(
+            "the owner is global and does not need project roles".to_string(),
+        ));
+    }
+    if user.status == UserStatus::Disabled {
+        return Err(Error::BadRequest(
+            "re-enable the account before assigning projects".to_string(),
+        ));
+    }
+    let previous = state.memberships.for_user(&user.id)?;
+    let mut memberships = Vec::<(String, ProjectRole)>::new();
+    let mut seen = HashSet::new();
+    for entry in body.memberships {
+        let slug = crate::store::slugify(&entry.project);
+        state
+            .store
+            .project(&slug)?
+            .ok_or_else(|| Error::BadRequest(format!("unknown project {}", entry.project)))?;
+        let role = ProjectRole::parse(&entry.role)
+            .ok_or_else(|| Error::BadRequest(format!("unknown project role {}", entry.role)))?;
+        if seen.insert(slug.clone()) {
+            memberships.push((slug, role));
+        }
+    }
+    state
+        .memberships
+        .replace_user_projects(&user.id, &memberships)?;
+    let details = json!({
+        "user_id": user.id,
+        "username": user.username,
+        "previous": previous
+            .iter()
+            .map(|membership| json!({ "project": membership.project, "role": membership.role.as_str() }))
+            .collect::<Vec<_>>(),
+        "memberships": memberships
+            .iter()
+            .map(|(project, role)| json!({ "project": project, "role": role.as_str() }))
+            .collect::<Vec<_>>(),
+    });
+    record_audit(
+        &state,
+        Some(&context),
+        "membership.update",
+        None,
+        Some(user.id.clone()),
+        details,
+    );
+    Ok(Json(json!({
+        "user_id": user.id,
+        "memberships": memberships
+            .iter()
+            .map(|(project, role)| json!({ "project": project, "role": role.as_str() }))
+            .collect::<Vec<_>>(),
+    })))
 }
 
 #[derive(Debug, serde::Deserialize)]

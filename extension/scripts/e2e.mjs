@@ -127,6 +127,30 @@ async function openExtensionPage(browser, pathname) {
 async function configure(browser, id) {
   const page = await openExtensionPage(browser, "src/options.html");
   await page.waitForFunction(() => document.body.dataset.ready === "1");
+  // The Project select and Branch input share one row. "(optional)" is a hint on the Branch line,
+  // not its own row: as a bare flex item it pushed the Branch input a full line down (2026-11-03).
+  const layout = await page.evaluate(() => {
+    const project = document.querySelector("#project");
+    const branch = document.querySelector("#branch");
+    const label = branch.closest("label");
+    const hint = label.querySelector(".muted");
+    return {
+      projectTop: project.getBoundingClientRect().top,
+      branchTop: branch.getBoundingClientRect().top,
+      labelTop: label.getBoundingClientRect().top,
+      hintTop: hint.getBoundingClientRect().top,
+      hintText: hint.textContent,
+    };
+  });
+  assert.equal(layout.hintText, "(optional)");
+  assert.ok(
+    Math.abs(layout.projectTop - layout.branchTop) <= 1,
+    `Project select and Branch input must align (${layout.projectTop} vs ${layout.branchTop})`,
+  );
+  assert.ok(
+    layout.hintTop - layout.labelTop <= 6,
+    `the (optional) hint must stay on the Branch line (${layout.hintTop} vs ${layout.labelTop})`,
+  );
   await page.evaluate(({ base, token }) => {
     document.querySelector("#server-url").value = base;
     document.querySelector("#token").value = token;

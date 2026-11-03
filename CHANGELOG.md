@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **A hint is not a label row.** The extension options page rendered “(optional)” as its own flex
+  item, so the hint wrapped to a second line and pushed the Branch input below the Project select
+  (2026-11-03). It now shares the Branch line and both fields align; the extension e2e measures the
+  field tops and the hint's line.
 - **A dev image label is not a binary version.** The browser dev job labeled its image
   `0.27.0-dev.N` but built the binary from `Cargo.toml`, which still said `0.26.1`, so the dev
   server reported the stable version (2026-11-01). `desktop/scripts/dev-version.mjs` now stamps

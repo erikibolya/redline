@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Stop & save now stops the recording.** The popup's `stop-recording` message was broadcast to
+  every extension context, so the offscreen recorder stopped itself first and the service worker's
+  follow-up call failed with *No recording is running*; the clip was never uploaded and the REC
+  badge stayed on. The recorder now ignores messages that are not addressed to it
+  (`target: "offscreen"`), and a unit test fences the routing.
 - **A dev image label is not a binary version.** The browser dev job labeled its image
   `0.27.0-dev.N` but built the binary from `Cargo.toml`, which still said `0.26.1`, so the dev
   server reported the stable version (2026-11-01). `desktop/scripts/dev-version.mjs` now stamps

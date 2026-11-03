@@ -197,6 +197,7 @@ const RECORDER_MESSAGES = new Set([
 ]);
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.target !== "offscreen") return false;
   if (!RECORDER_MESSAGES.has(message?.type)) return false;
   (async () => {
     try {

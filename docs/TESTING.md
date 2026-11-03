@@ -14,7 +14,7 @@ optional: a green suite that never drew a freehand stroke is not a green suite.
 | Rust unit/integration | `docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm cargo test --workspace` | store layout, HTTP/API, MCP, auth, history, feature decisions, path/config helpers, CLI |
 | Browser e2e | `docker build -q -f desktop/Dockerfile.browser -t redline:local .` then `REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh` (or `REDLINE_BIN=/path/to/redline REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser` to mount a fresh binary without rebuilding the image) | real Chromium: pointer drags, clicks, dialogs, DOM/geometry/canvas pixels, server round-trip |
 | GitHub CI | required checks on `dev` and `main` | Linux + Windows, Tauri compile, browser e2e, container/image build |
-| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` | side-panel annotation geometry/hit-testing/moving, API request shape, URL/permission config, trace redaction and the offline Markdown/JSON/ZIP package |
+| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/offscreen.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` | side-panel annotation geometry/hit-testing/moving, API request shape, URL/permission config, offscreen message routing, trace redaction and the offline Markdown/JSON/ZIP package |
 | Extension e2e | browser e2e job / `extension/scripts/e2e.mjs` | loads the unpacked extension in Chromium, submits server image and video+trace reviews, and exports offline image and video packages with a mocked folder picker |
 | Dev build | `.github/workflows/dev.yml` | `desktop/scripts/dev-version.mjs` stamps the workspace, app and lockfile versions; the Windows job asserts `redline --version`; the `browser-dev` image is built from the same stamped tree |
 | Release smoke | the checklist below against the exact tag/image | the thing users install, not just the source tree |
@@ -273,6 +273,11 @@ same path a human does: upload, play, draw, range, zoom, submit.
   truncated instead of failing the upload.
 - The manual smoke test lives in `extension/README.md`; extension unit tests cover geometry, API
   request shape, URL/permission config and redaction.
+- Routing regression: `extension/tests/offscreen.test.mjs` asserts that a popup broadcast
+  (`stop-recording` with no `target`) is ignored by the offscreen recorder while the service
+  worker's `target: "offscreen"` call still reaches it. Chrome delivers `runtime.sendMessage` to
+  every extension context, so an untargeted handler stops the recording twice and the upload is
+  lost.
 
 ## Extension e2e (Phase 5, 2026-11-01)
 

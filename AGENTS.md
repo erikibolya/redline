@@ -561,6 +561,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   deferred, and reserve the height of any data-driven block above static content. Test it with the
   request *held* — a `waitForSelector` after the response proves nothing — and measure that a
   heading below the block does not move when the response is released.
+- **A broadcast message is not addressed to every listener.** The extension popup sent
+  `stop-recording` with `runtime.sendMessage`, which Chrome delivers to the service worker *and*
+  the offscreen recorder; the recorder stopped itself, the service worker's follow-up call then
+  answered *No recording is running*, the clip never uploaded and the REC badge stayed on
+  (2026-11-03). Tag messages that belong to one context (`target: "offscreen"`) and make every
+  listener drop the ones it does not own; test the untargeted broadcast as well as the intended
+  call. A handler that acts on every message it recognises will act twice when two contexts
+  share a bus.
 
 ## 8. Working rules
 

@@ -4955,3 +4955,111 @@ async fn audit_log_records_actions_and_is_owner_only() {
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
 }
+
+#[tokio::test]
+async fn stale_revisions_are_refused_with_a_structured_conflict() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    let owner_id = me["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "revision task", "image_base64": PNG_B64 }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+    assert_eq!(created["meta"]["revision"], 0);
+
+    let (status, _, first) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "base_revision": 0 }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(first["meta"]["revision"], 1);
+    assert_eq!(first["annotations"]["revision"], 1);
+    assert_eq!(first["meta"]["updated_by"], owner_id);
+    assert_eq!(first["meta"]["updated_by_name"], "Anna");
+
+    let (status, _, conflict) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "base_revision": 0 }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{conflict}");
+    assert_eq!(conflict["current_revision"], 1);
+    assert_eq!(conflict["updated_by"], owner_id);
+    assert_eq!(conflict["updated_by_name"], "Anna");
+    assert!(conflict["updated_at"].is_string());
+
+    let (status, _, second) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [], "base_revision": 1 }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    assert_eq!(second["meta"]["revision"], 2);
+    assert_eq!(second["annotations"]["revision"], 2);
+
+    // A pre-v0.28 client sends no base_revision; it is accepted and the next reader still gets
+    // the bumped revision (backward compatibility without pretending there was no write).
+    let (status, _, legacy) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/annotations"),
+            json!({ "annotations": [] }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{legacy}");
+    assert_eq!(legacy["meta"]["revision"], 3);
+
+    let (status, _, one) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{id}"),
+            json!(null),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{one}");
+    assert_eq!(one["meta"]["revision"], 3);
+    assert_eq!(one["annotations"]["revision"], 3);
+}

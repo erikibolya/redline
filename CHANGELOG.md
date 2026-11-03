@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A last writer is not a merge.** Every task now carries a monotonic `revision` on both
+  `meta.json` and `annotations.json`; submit, tester request, agent `post_round` and a new video
+  round increment it with `updated_by`/`updated_by_name`/`updated_at`. The editor sends the
+  revision it loaded as `base_revision` and the server refuses a stale canvas with `409` and the
+  current writer instead of silently overwriting another person's work. The in-stage conflict
+  banner offers **Reload theirs** (discarding this browser's draft) or **Keep mine** (adopt the
+  current revision and submit deliberately). Pre-v0.28 clients without `base_revision` remain
+  accepted, but still advance the revision. Tested with 63 API tests, 34 core unit tests, 26 store
+  tests and 296 browser checks (2026-11-03).
 - **A log nobody can read is not an audit trail.** `audit.jsonl` now records authentication
   (success, failure, logout, password), owner bootstrap/transfer, user creation, membership
   changes, project creation, agent settings, review create/submit/stop/reopen/branch/move/delete/

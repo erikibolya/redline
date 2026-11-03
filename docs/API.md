@@ -215,6 +215,9 @@ non-zero run). The UI says "agent timed out" for the two timeout codes and "agen
 
 `annotations` is the last submitted payload (or `{session, annotations: []}` before submission).
 The `meta` object carries `feature_confirmed_at` / `feature_cancelled_at` when the human decided.
+Both `meta.revision` and `annotations.revision` start at `0`; every submit, tester request, agent
+`post_round` and new video round increments both, with `updated_by` / `updated_by_name` /
+`updated_at` describing the writer.
 
 ### `PUT /api/sessions/<id>/branch`
 
@@ -394,13 +397,30 @@ Request:
   "annotations": [ … ],
   "width": 1440,
   "height": 900,
-  "png": "data:image/png;base64,…"
+  "png": "data:image/png;base64,…",
+  "base_revision": 4
 }
 ```
 
 - `annotations`: array; may be empty.
 - `width`/`height`: canvas dimensions; stored in meta + payload.
 - `png`: optional; when present, decoded and written to `annotated.png`.
+- `base_revision`: the `revision` the canvas was loaded from (v0.28). The server accepts only a
+  match and bumps the revision; a stale value is `409`:
+
+```json
+{
+  "error": "this task changed since you loaded it",
+  "current_revision": 5,
+  "updated_by": "usr_…",
+  "updated_by_name": "Jana",
+  "updated_at": "2026-11-03T18:20:00+00:00"
+}
+```
+
+  A missing `base_revision` is treated as a pre-v0.28 client and accepted (the new revision is
+  still stamped). The UI always sends it. `request-agent` and a video round accept it too
+  (`base_revision` form field for multipart).
 
 For a video submit use `multipart/form-data` instead of JSON:
 
@@ -419,8 +439,8 @@ Response `200`:
 ```json
 {
   "ok": true,
-  "meta": { "…": "status=submitted, submitted_at=…" },
-  "annotations": { "…": "stored payload" }
+  "meta": { "…": "status=submitted, submitted_at=…, revision=5, updated_by=…" },
+  "annotations": { "…": "stored payload with the same revision" }
 }
 ```
 

@@ -1851,6 +1851,10 @@ class Editor {
     // Effective role in this task's project; the server enforces it, the UI mirrors it.
     this.myRole = "owner";
     this.userId = null;
+    // The round the canvas was loaded from. Every submit sends it; the server refuses a stale
+    // one instead of silently overwriting another person's work.
+    this.baseRevision = 0;
+    this.revisionConflict = null;
     this.image = null;
     this.video = null;
     this.videoBar = $("#video-bar");
@@ -2048,8 +2052,11 @@ class Editor {
     await this.load(id);
   }
 
-  async load(id) {
+  async load(id, { discardDraft = false } = {}) {
     clearTimeout(this.draftTimer);
+    // "Reload theirs" must show the round on the server, not re-apply this browser's draft over
+    // it. A normal navigation keeps the draft on purpose.
+    if (discardDraft) this.drafts.delete(id);
     $("#stage").classList.remove("hidden");
     this.viewing = null;
     this.roundLoad = 0;
@@ -2061,6 +2068,7 @@ class Editor {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
       this.myRole = this.meta.my_role || "owner";
+      this.baseRevision = Number(this.meta.revision) || 0;
       this.showSessionSize(data.disk_bytes || 0);
       lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
@@ -2366,6 +2374,7 @@ class Editor {
       }
       form.append("width", String(details.width));
       form.append("height", String(details.height));
+      form.append("base_revision", String(this.baseRevision));
       const body = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/video`, {
         method: "POST",
         body: form,
@@ -2378,6 +2387,13 @@ class Editor {
       await this.load(this.sessionId);
       await this.rail.load();
     } catch (error) {
+      if (error.status === 409 && error.body?.current_revision != null) {
+        alert(
+          `This task changed while the video was uploading (now revision ${error.body.current_revision}). Reload the task and choose the video again.`,
+        );
+        await this.load(this.sessionId);
+        return;
+      }
       alert(`Could not post the new video: ${error.message}`);
     } finally {
       if (button) {
@@ -2606,6 +2622,18 @@ class Editor {
   }
 
   bindChrome() {
+    $("#revision-reload")?.addEventListener("click", async () => {
+      this.revisionConflict = null;
+      this.hideRevisionConflict();
+      await this.load(this.sessionId, { discardDraft: true });
+    });
+    $("#revision-keep")?.addEventListener("click", async () => {
+      const conflict = this.revisionConflict;
+      this.revisionConflict = null;
+      this.hideRevisionConflict();
+      if (conflict) this.baseRevision = Number(conflict.current_revision) || 0;
+      await this.submit();
+    });
     const noteField = $("#note-text");
     if (noteField) {
       noteField.addEventListener("focus", () => {
@@ -3559,7 +3587,9 @@ class Editor {
       if (!this.image || this.locked) return;
       // The options bar, the inline text editor and the "back to current" pill live inside the
       // stage. Capturing the pointer for marquee/pan on those would swallow their click events.
-      if (event.target.closest(".options, .text-editor, .viewing-bar, .video-bar")) return;
+      if (event.target.closest(
+        ".options, .text-editor, .viewing-bar, .video-bar, .revision-banner",
+      )) return;
 
       // Drawing on a moving video would capture a different frame than the one the human saw;
       // any canvas interaction pauses first. The play button resumes.
@@ -4293,6 +4323,7 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}`);
       this.meta = data.meta;
+      this.baseRevision = Number(this.meta.revision) || 0;
       this.serverAnnotations = JSON.stringify(
         (data.annotations && data.annotations.annotations) || [],
       );
@@ -5027,6 +5058,7 @@ class Editor {
         width: this.mediaWidth(),
         height: this.mediaHeight(),
         note,
+        base_revision: this.baseRevision,
       }));
       if (sheet) form.append("png", sheet, "contact-sheet.png");
       for (const capture of captures) {
@@ -5039,6 +5071,7 @@ class Editor {
         { method: "POST", body: form },
       );
       if (result?.meta) this.meta = result.meta;
+      this.baseRevision = Number(this.meta?.revision) || 0;
       this.drafts.delete(this.sessionId);
       this.syncDirty();
       this.serverAnnotations = JSON.stringify(this.annotations);
@@ -5064,6 +5097,23 @@ class Editor {
       }
     }
     void label;
+  }
+
+  showRevisionConflict(error) {
+    const data = error?.body || {};
+    const who = data.updated_by_name || data.updated_by || "Someone else";
+    this.revisionConflict = data;
+    const text = $("#revision-banner-text");
+    if (text) {
+      text.textContent = `${who} saved revision ${data.current_revision ?? "?"}. Reload their version, or keep your canvas and replace it.`;
+    }
+    const banner = $("#revision-banner");
+    if (banner) banner.hidden = false;
+  }
+
+  hideRevisionConflict() {
+    const banner = $("#revision-banner");
+    if (banner) banner.hidden = true;
   }
 
   /// A tester saves a request; a developer/owner sends it to the agent.
@@ -5104,6 +5154,7 @@ class Editor {
         height: this.mediaHeight(),
         png: exportCanvas.toDataURL("image/png"),
         note: composer ? composer.value.trim() : "",
+        base_revision: this.baseRevision,
       };
       const request = this.myRole === "tester";
       const result = await api(
@@ -5115,6 +5166,7 @@ class Editor {
         },
       );
       if (result?.meta) this.meta = result.meta;
+      this.baseRevision = Number(this.meta?.revision) || 0;
       this.drafts.delete(this.sessionId);
       this.syncDirty();
       this.serverAnnotations = JSON.stringify(this.annotations);
@@ -5140,6 +5192,10 @@ class Editor {
     } catch (error) {
       button.textContent = label;
       button.disabled = false;
+      if (error.status === 409 && error.body?.current_revision != null) {
+        this.showRevisionConflict(error);
+        return;
+      }
       alert(`Submit failed: ${error.message}`);
     }
   }

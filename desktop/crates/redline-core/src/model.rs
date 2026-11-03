@@ -90,6 +90,16 @@ pub struct Meta {
     pub agent_requested_at: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_requested_by: Option<String>,
+    /// Optimistic concurrency (v0.28). Every annotation/media round increments both `meta` and
+    /// `annotations.json` revision; a submit carrying a stale `base_revision` is refused.
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
     /// Feature branch the agent is working on (v0.22). Set at session creation or on the first
     /// claim; v0.21's `session/<id>` fallback is read back as `feat/<title-slug>-<id-tail>`.
     /// RedLine uses it as the branch-lock key.
@@ -436,6 +446,16 @@ pub struct AnnotationSet {
     pub annotations: Vec<Annotation>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submitted_at: Option<String>,
+    /// Kept in lock-step with `meta.revision`; a reader can compare the round it loaded with
+    /// the round on disk without a second request.
+    #[serde(default)]
+    pub revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_by_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 /// One captured video frame: `at` is the timecode the human annotated, `file` is relative to the
@@ -458,8 +478,16 @@ pub struct ImageRef {
     pub height: Option<u32>,
 }
 
+/// The human who produced the round. It is not serialized by the client; the API fills it from
+/// the authenticated identity before handing the submission to the store.
+#[derive(Debug, Clone, Default)]
+pub struct UpdateActor {
+    pub id: Option<String>,
+    pub name: Option<String>,
+}
+
 /// The payload the browser POSTs to `/api/sessions/{id}/annotations`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 pub struct Submission {
     /// The prompt the human wrote with this round. Additive (v0.9).
     #[serde(default)]
@@ -473,6 +501,12 @@ pub struct Submission {
     pub width: Option<u32>,
     #[serde(default)]
     pub height: Option<u32>,
+    /// The revision the canvas was loaded from (v0.28). Missing means a pre-v0.28 client: the
+    /// round is accepted, but the new revision is still stamped for everyone else.
+    #[serde(default)]
+    pub base_revision: Option<u64>,
+    #[serde(skip)]
+    pub actor: Option<UpdateActor>,
 }
 
 /// The payload used to create a session over HTTP/MCP instead of the CLI.

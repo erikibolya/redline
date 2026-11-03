@@ -688,6 +688,21 @@ section, `Δ` shows the summary inline:
 - The page reads `GET /api/audit`; the server already enforces owner-only, so the UI check is
   only a clearer message.
 
+## Revision conflicts (v0.28)
+
+- Every editor load remembers `meta.revision` as `baseRevision`; submit, tester request and a new
+  video send it. The server refuses a stale canvas with `409` instead of overwriting another
+  person's round.
+- A stale submit shows the in-stage **This task changed while you were working** banner with the
+  writer and current revision. **Reload theirs** discards this browser's draft and loads the
+  server round; **Keep mine** adopts the current revision and submits the local canvas over it.
+  The banner lives inside the stage, so its buttons join the pointer-capture guard (like the
+  toolbar and video bar).
+- The old draft is never silently re-applied over the newer round on Reload: `load()` takes a
+  `discardDraft` flag for this path. A normal navigation still restores drafts.
+- A new video upload with a stale revision reports the conflict and reloads instead of pretending
+  the clip was posted; the file must be chosen again.
+
 ## Verification
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:

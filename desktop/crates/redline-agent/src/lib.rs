@@ -1960,6 +1960,8 @@ mod tests {
             png: None,
             width: None,
             height: None,
+
+            ..Default::default()
         };
         let mut session_ids = Vec::new();
         for branch in ["feat/parallel-a", "feat/parallel-b"] {

@@ -26,7 +26,7 @@ use crate::comments::Comment;
 use crate::error::Error;
 use crate::mcp::{self, McpContext};
 use crate::memberships::{MembershipStore, ProjectRole};
-use crate::model::{HandoffStatus, Meta, NewSession, Status, Submission};
+use crate::model::{HandoffStatus, Meta, NewSession, Status, Submission, UpdateActor};
 use crate::notifications::{Notification, NotificationStore};
 use crate::sessions::{SessionGrant, SessionStore};
 use crate::store::{FrameUpload, Store};
@@ -647,6 +647,13 @@ fn internal_error(error: impl std::fmt::Display) -> Response {
         Json(json!({ "error": error.to_string() })),
     )
         .into_response()
+}
+
+fn update_actor(context: &AuthContext) -> UpdateActor {
+    UpdateActor {
+        id: context.user_id.clone(),
+        name: Some(context.display_name.clone()),
+    }
 }
 
 /// An audit failure is logged, never turned into a failed human action: the review still
@@ -2955,7 +2962,11 @@ async fn replace_video(
     if let Some(trace) = form.trace.as_deref() {
         crate::store::validate_trace(trace, duration_ms)?;
     }
-    let meta = state.store.new_video_round(
+    let base_revision = form
+        .field("base_revision")
+        .and_then(|value| value.parse::<u64>().ok());
+    let actor = update_actor(&context);
+    let meta = state.store.new_video_round_as(
         &id,
         &form.video,
         form.poster.as_deref(),
@@ -2966,6 +2977,8 @@ async fn replace_video(
             .and_then(|value| value.parse::<u32>().ok()),
         form.field("fps")
             .and_then(|value| value.parse::<f64>().ok()),
+        base_revision,
+        Some(&actor),
     )?;
     let meta = match form.trace.as_deref() {
         Some(trace) => state.store.attach_trace(&meta.id, trace)?,
@@ -3144,7 +3157,8 @@ async fn submit(
     request: Request,
 ) -> Result<Json<Value>, Error> {
     require_review(&state, &context, &id, ReviewAction::Submit)?;
-    let (body, contact_sheet, frames) = read_submit_request(&state, request).await?;
+    let (mut body, contact_sheet, frames) = read_submit_request(&state, request).await?;
+    body.actor = Some(update_actor(&context));
     let (meta, annotations) =
         state
             .store
@@ -3211,7 +3225,8 @@ async fn request_agent_review(
             "only a named user can request an agent review".to_string(),
         ));
     };
-    let (body, contact_sheet, frames) = read_submit_request(&state, request).await?;
+    let (mut body, contact_sheet, frames) = read_submit_request(&state, request).await?;
+    body.actor = Some(update_actor(&context));
     let (meta, annotations) =
         state
             .store

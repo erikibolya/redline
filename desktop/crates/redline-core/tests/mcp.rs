@@ -284,6 +284,8 @@ async fn feedback_lists_the_full_resolution_frames() {
                 png: None,
                 width: Some(320),
                 height: Some(180),
+
+                ..Default::default()
             },
             Some(&png),
             &[FrameUpload {
@@ -384,6 +386,8 @@ async fn feedback_includes_annotations_markdown_and_the_png_uri() {
                 png: Some(format!("data:image/png;base64,{PNG_B64}")),
                 width: Some(800),
                 height: Some(600),
+
+                ..Default::default()
             },
         )
         .unwrap();
@@ -586,6 +590,8 @@ async fn a_failed_run_hands_the_round_back_and_says_so() {
                 png: None,
                 width: None,
                 height: None,
+
+                ..Default::default()
             },
         )
         .unwrap();
@@ -646,6 +652,8 @@ async fn a_failed_run_hands_the_round_back_and_says_so() {
                 png: None,
                 width: None,
                 height: None,
+
+                ..Default::default()
             },
         )
         .unwrap();
@@ -709,6 +717,8 @@ async fn feedback_and_resources_expose_a_browser_trace() {
                 png: None,
                 width: Some(1280),
                 height: Some(720),
+
+                ..Default::default()
             },
             None,
             &[],

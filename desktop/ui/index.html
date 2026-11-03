@@ -88,6 +88,16 @@ try {
     <div class="stage-dim" id="stage-dim" hidden></div>
     <div class="stage-status" id="stage-status" hidden></div>
     <div class="viewing-bar" id="viewing-bar" hidden></div>
+    <div class="revision-banner" id="revision-banner" hidden role="alert">
+      <div class="revision-copy">
+        <b>This task changed while you were working.</b>
+        <span id="revision-banner-text"></span>
+      </div>
+      <div class="revision-actions">
+        <button class="btn small" id="revision-reload" type="button">Reload theirs</button>
+        <button class="btn small primary" id="revision-keep" type="button">Keep mine</button>
+      </div>
+    </div>
 
     <div class="video-bar" id="video-bar" hidden>
       <div class="video-controls">

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.0 — 2026-11-03
 
 - **A password in chat is not an onboarding flow.** Owners can create a user as **invited** and
   hand over a one-time invite link (7 days), or generate a reset link (24 hours) from the People

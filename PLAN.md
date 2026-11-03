@@ -7,7 +7,7 @@ the agent receives a precise, machine-readable description of what to change. Of
 accounts, runs where the agents run.
 
 **Shipped and in production:** `v0.26.1` on holly — `https://redline.ibolya.cz`, container
-`ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`.
+`ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`. **Release candidate: `v0.28.0`** (`CHANGELOG.md`, `docs/MIGRATION-v0.28.md`).
 
 ## What exists today
 

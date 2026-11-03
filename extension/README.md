@@ -1,7 +1,7 @@
 # RedLine Capture (browser extension)
 
 A Chrome/Edge MV3 extension that captures the current tab, opens it in a side-panel annotator, and
-submits the annotated screenshot to a RedLine server.
+either submits the review to a RedLine server or exports it as a folder/ZIP for an AI assistant.
 
 ## Development
 
@@ -17,6 +17,17 @@ submits the annotated screenshot to a RedLine server.
    the app, use **Mark** for a moment, then **Stop & save**. The clip and trace upload together.
    The side panel opens the recorded flow with a video timeline, trace filters and timecoded
    annotations.
+
+## Offline export (no server)
+
+1. In the popup, use **Screenshot offline** or **Record offline**; no token or server is needed.
+2. Annotate in the side panel and click **Export review**.
+3. Choose a folder (File System Access API) or let the ZIP fallback download
+   `redline-review-<id>.zip`.
+
+The package contains `review.md`, `annotations.json`, `AI-PROMPT.md`, `annotated.png` (image) or
+`video.webm` + `poster.png` + `frames/` + `contact-sheet.png` (video), and `trace.json` for a
+recording. Attach it to an AI assistant; the prompt explains what to read.
 
 ## What is implemented
 
@@ -45,22 +56,24 @@ for the listing/permission copy and [`../docs/PRIVACY-EXTENSION.md`](../docs/PRI
 for the privacy policy.
 
 The extension e2e (`extension/scripts/e2e.mjs`) runs in CI against a temporary host-permitted
-copy; it needs a running RedLine server, Chromium with the extension loaded, and
-`REDLINE_BASE`/`REDLINE_TOKEN`/`CHROME_URL`.
+copy; the server paths need a running RedLine server and `REDLINE_BASE`/`REDLINE_TOKEN`, the
+offline paths need only Chromium with the extension loaded and `CHROME_URL`.
 
 ## Tests
 
 ```bash
-node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/trace.test.mjs
+node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs
 ```
 
 The same command runs in CI on Linux and Windows. There is no build step; reload the unpacked
 extension after changing a file.
 
-Manual smoke test (until the extension e2e lands): configure a local/test RedLine, capture a page,
+Manual smoke test: configure a local/test RedLine, capture a page,
 draw a rectangle, arrow, pen and text note, move one, undo/redo, reload the side panel to prove
 the draft survives, submit, then open the review in RedLine and verify the numbered annotations and
-the agent note. Also verify that a submitted review opens read-only.
+the agent note. Also verify that a submitted review opens read-only. For offline mode, use
+**Screenshot offline** / **Record offline**, annotate, export to a folder, and verify the files; then
+reject the folder picker and verify the ZIP fallback.
 
 Recording smoke test: start Record on a local page, trigger a click, a console error and a failed
 fetch, press Mark, stop, then verify the video plays in RedLine, `trace.json` has action/console/

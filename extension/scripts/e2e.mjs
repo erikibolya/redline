@@ -190,6 +190,120 @@ async function openCapture(browser, id, sessionId, kind) {
   return page;
 }
 
+async function openLocalCapture(
+  browser,
+  {
+    id,
+    kind,
+    title,
+    url,
+    imageBase64 = "",
+    videoBase64 = "",
+    posterBase64 = "",
+    trace = null,
+    width = 0,
+    height = 0,
+    durationMs = 0,
+  },
+) {
+  const page = await openExtensionPage(browser, "src/sidepanel.html");
+  await page.waitForFunction(() => document.querySelector("#workspace"));
+  await page.evaluate(
+    async ({ id, kind, title, url, imageBase64, videoBase64, posterBase64, trace, width, height, durationMs }) => {
+      const bytes = (base64) => {
+        const binary = atob(base64);
+        const out = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) out[index] = binary.charCodeAt(index);
+        return out;
+      };
+      const db = await new Promise((resolve, reject) => {
+        const request = indexedDB.open("redline-local", 1);
+        request.onupgradeneeded = () => {
+          if (!request.result.objectStoreNames.contains("captures")) {
+            request.result.createObjectStore("captures", { keyPath: "id" });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      const capture = {
+        id,
+        sessionId: id,
+        mode: "local",
+        kind,
+        title,
+        url,
+        note: "offline export",
+        createdAt: new Date().toISOString(),
+        annotations: [],
+        width,
+        height,
+        durationMs,
+      };
+      if (kind === "video") {
+        capture.videoBlob = new Blob([bytes(videoBase64)], { type: "video/webm" });
+        capture.posterBlob = new Blob([bytes(posterBase64)], { type: "image/png" });
+        capture.trace = trace;
+      } else {
+        capture.imageBlob = new Blob([bytes(imageBase64)], { type: "image/png" });
+      }
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction("captures", "readwrite");
+        tx.objectStore("captures").put(capture);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+      await chrome.storage.session.set({
+        activeCapture: { id, sessionId: id, mode: "local", kind, title, url },
+      });
+    },
+    { id, kind, title, url, imageBase64, videoBase64, posterBase64, trace, width, height, durationMs },
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForSelector("#workspace:not([hidden])", { timeout: 15000 });
+  return page;
+}
+
+async function installPickerMock(page) {
+  await page.evaluate(() => {
+    const collected = [];
+    globalThis.__exported = collected;
+    const makeDir = (prefix = "") => ({
+      async getDirectoryHandle(name) {
+        return makeDir(`${prefix}${name}/`);
+      },
+      async getFileHandle(name) {
+        const full = `${prefix}${name}`;
+        return {
+          async createWritable() {
+            return {
+              async write(data) {
+                if (data instanceof Blob) {
+                  collected.push({
+                    name: full,
+                    type: data.type,
+                    bytes: data.size,
+                    text:
+                      data.type.startsWith("text/") ||
+                      full.endsWith(".md") ||
+                      full.endsWith(".json")
+                        ? await data.text()
+                        : null,
+                  });
+                } else {
+                  collected.push({ name: full, text: String(data) });
+                }
+              },
+              async close() {},
+            };
+          },
+        };
+      },
+    });
+    globalThis.__redlineTestPicker = async () => makeDir();
+  });
+}
+
 async function drawRect(page) {
   const box = await page.$eval("#canvas", (canvas) => {
     const rect = canvas.getBoundingClientRect();
@@ -256,6 +370,104 @@ try {
   assert.equal(video.meta.trace.kind, "browser-flow");
   assert.equal(video.annotations.annotations[0].at, 0.5);
   assert.ok(video.annotations.frames.length >= 1, "expected at least one annotated frame");
+
+  const iconBase64 = fs
+    .readFileSync(path.join(repo, "desktop/app/icons/128x128.png"))
+    .toString("base64");
+  const localPage = await openLocalCapture(browser, {
+    id: "local-e2e-image",
+    kind: "image",
+    title: "Local image e2e",
+    url: "https://app.test/local",
+    imageBase64: iconBase64,
+  });
+  assert.equal(
+    (await localPage.$eval("#submit", (element) => element.textContent)).trim(),
+    "Export review",
+  );
+  assert.equal(await localPage.$eval("#open-redline", (element) => element.hidden), true);
+  await drawRect(localPage);
+  await installPickerMock(localPage);
+  await localPage.click("#submit");
+  await localPage.waitForFunction(
+    () => document.querySelector("#status")?.textContent.includes("Exported"),
+    { timeout: 15000 },
+  );
+  const exported = await localPage.evaluate(() => globalThis.__exported);
+  const names = exported.map((file) => file.name);
+  assert.ok(names.includes("review.md"), `missing review.md: ${names}`);
+  assert.ok(names.includes("annotations.json"), `missing annotations.json: ${names}`);
+  assert.ok(names.includes("annotated.png"), `missing annotated.png: ${names}`);
+  assert.ok(names.includes("AI-PROMPT.md"), `missing AI-PROMPT.md: ${names}`);
+  const review = exported.find((file) => file.name === "review.md").text;
+  assert.match(review, /Local image e2e/);
+  assert.match(review, /Rectangle/);
+  const payload = JSON.parse(exported.find((file) => file.name === "annotations.json").text);
+  assert.equal(payload.session, "local-e2e-image");
+  assert.equal(payload.annotations.length, 1);
+  assert.equal(payload.image.file, "annotated.png");
+  assert.ok(exported.find((file) => file.name === "annotated.png").bytes > 0);
+  await localPage.close();
+
+  const videoBase64 = fs
+    .readFileSync(path.join(repo, "extension/tests/fixtures/flow.webm"))
+    .toString("base64");
+  const trace = JSON.parse(
+    fs.readFileSync(path.join(repo, "extension/tests/fixtures/trace.json"), "utf8"),
+  );
+  const localVideo = await openLocalCapture(browser, {
+    id: "local-e2e-video",
+    kind: "video",
+    title: "Local video e2e",
+    url: "https://app.test/flow",
+    videoBase64,
+    posterBase64: iconBase64,
+    trace,
+    width: 320,
+    height: 180,
+    durationMs: 1500,
+  });
+  await localVideo.waitForSelector("#video-bar:not([hidden])", { timeout: 10000 });
+  await localVideo.waitForSelector("#trace-panel:not([hidden])", { timeout: 10000 });
+  await localVideo.evaluate(() => {
+    const timeline = document.querySelector("#timeline");
+    timeline.value = "0.5";
+    timeline.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  await drawRect(localVideo);
+  await installPickerMock(localVideo);
+  await localVideo.click("#submit");
+  await localVideo.waitForFunction(
+    () => document.querySelector("#status")?.textContent.includes("Exported"),
+    { timeout: 15000 },
+  );
+  const videoExport = await localVideo.evaluate(() => globalThis.__exported);
+  const videoNames = videoExport.map((file) => file.name);
+  for (const name of [
+    "review.md",
+    "annotations.json",
+    "AI-PROMPT.md",
+    "video.webm",
+    "poster.png",
+    "trace.json",
+    "frames/0.500.png",
+    "contact-sheet.png",
+  ]) {
+    assert.ok(videoNames.includes(name), `missing ${name}: ${videoNames}`);
+  }
+  const videoReview = videoExport.find((file) => file.name === "review.md").text;
+  assert.match(videoReview, /Local video e2e/);
+  assert.match(videoReview, /Browser trace/);
+  const videoPayload = JSON.parse(
+    videoExport.find((file) => file.name === "annotations.json").text,
+  );
+  assert.equal(videoPayload.media.kind, "video");
+  assert.equal(videoPayload.image.file, "poster.png");
+  assert.equal(videoPayload.frames[0].file, "frames/0.500.png");
+  assert.equal(videoPayload.trace.kind, "browser-flow");
+  assert.ok(videoExport.find((file) => file.name === "video.webm").bytes > 0);
+  await localVideo.close();
 
   console.log("extension e2e: ok");
 } finally {

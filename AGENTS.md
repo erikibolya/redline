@@ -249,6 +249,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   timeline and the Submit button fell below the side panel (2026-11-02, found while generating
   store screenshots). When a class sets `display`, add `[hidden] { display: none }` for it and
   assert `getComputedStyle(el).display`, not just `el.hidden`; a screenshot pass is a real UI test.
+- **A store reviewer is not a RedLine user.** The first submission required a RedLine server and
+  token, and the test-instructions answer said no test account was needed; a reviewer cannot
+  exercise capture → annotate → submit that way. v0.3.0 adds an offline export (folder or ZIP with
+  `review.md`, `annotations.json`, the annotated media and trace) that needs no server, and the
+  Chrome/Edge notes now describe it. A local-capture feature is also a review feature: if the
+  product needs infrastructure the reviewer does not have, give it a serverless path and say so.
 - **Chromium binds its debugger to loopback**: run the puppeteer container with
   `--network container:redline-e2e`.
 - **In tests, poll; never `sleep`** for a submit to land (flaked twice).

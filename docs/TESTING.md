@@ -14,8 +14,8 @@ optional: a green suite that never drew a freehand stroke is not a green suite.
 | Rust unit/integration | `docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm cargo test --workspace` | store layout, HTTP/API, MCP, auth, history, feature decisions, path/config helpers, CLI |
 | Browser e2e | `docker build -q -f desktop/Dockerfile.browser -t redline:local .` then `REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh` (or `REDLINE_BIN=/path/to/redline REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser` to mount a fresh binary without rebuilding the image) | real Chromium: pointer drags, clicks, dialogs, DOM/geometry/canvas pixels, server round-trip |
 | GitHub CI | required checks on `dev` and `main` | Linux + Windows, Tauri compile, browser e2e, container/image build |
-| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/trace.test.mjs` | side-panel annotation geometry/hit-testing/moving, API request shape, URL/permission config and trace redaction |
-| Extension e2e | browser e2e job / `extension/scripts/e2e.mjs` | loads the unpacked extension in Chromium, configures a local server, submits an image annotation and a video+trace annotation, and checks the server payload |
+| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` | side-panel annotation geometry/hit-testing/moving, API request shape, URL/permission config, trace redaction and the offline Markdown/JSON/ZIP package |
+| Extension e2e | browser e2e job / `extension/scripts/e2e.mjs` | loads the unpacked extension in Chromium, submits server image and video+trace reviews, and exports offline image and video packages with a mocked folder picker |
 | Dev build | `.github/workflows/dev.yml` | `desktop/scripts/dev-version.mjs` stamps the workspace, app and lockfile versions; the Windows job asserts `redline --version`; the `browser-dev` image is built from the same stamped tree |
 | Release smoke | the checklist below against the exact tag/image | the thing users install, not just the source tree |
 
@@ -283,6 +283,17 @@ same path a human does: upload, play, draw, range, zoom, submit.
   `annotations[0].at=0.5`, and at least one annotated frame.
 - Run locally with a loaded test extension and `REDLINE_BASE`, `REDLINE_TOKEN`, `CHROME_URL`
   (see `extension/scripts/e2e.mjs`).
+
+## Offline export (v0.3.0, 2026-11-03)
+
+- `package.test.mjs` covers the review Markdown, RedLine-shaped `annotations.json`, trace summary
+  and the store-only ZIP writer (including CRC and central directory).
+- The extension e2e seeds an image and a video+trace local capture in IndexedDB, opens the side
+  panel, draws an annotation, mocks `showDirectoryPicker`, clicks **Export review**, and asserts
+  `review.md`, `annotations.json`, `annotated.png` (image) or `video.webm`/`poster.png`/`frames/`/
+  `contact-sheet.png`/`trace.json` (video) and `AI-PROMPT.md`.
+- Manual: in Chrome/Edge, capture offline from the popup, export to a real folder, open
+  `review.md` and verify the same files; then reject the folder picker and verify the ZIP fallback.
 
 ## Release gate
 

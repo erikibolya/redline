@@ -76,6 +76,20 @@ pub struct Meta {
     /// Project slug this session belongs to (v0.10). Missing on disk means the Inbox.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// Human who created the task (v0.28). Agent-created tasks may only carry the agent field;
+    /// a tester may edit only a task whose `created_by` is their user id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_type: Option<String>,
+    /// Tester → developer handoff: the tester's work is saved on the task, but the agent must
+    /// not pick it up until a developer submits it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_requested_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_requested_by: Option<String>,
     /// Feature branch the agent is working on (v0.22). Set at session creation or on the first
     /// claim; v0.21's `session/<id>` fallback is read back as `feat/<title-slug>-<id-tail>`.
     /// RedLine uses it as the branch-lock key.

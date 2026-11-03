@@ -1326,6 +1326,28 @@ impl Store {
         Ok(meta)
     }
 
+    /// Stamp the human who created a task. A task created by an agent keeps `created_by` empty;
+    /// only the creator's own tester role may edit it before a developer submits.
+    pub fn set_creator(&self, id: &str, user_id: &str, display_name: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        meta.created_by = Some(user_id.to_string());
+        meta.created_by_name = Some(display_name.to_string());
+        meta.created_by_type = Some("user".to_string());
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
+    /// Cancel a tester request without touching the annotations or the last submitted round.
+    pub fn clear_agent_request(&self, id: &str) -> Result<Meta> {
+        let dir = self.dir(id)?;
+        let mut meta = self.require(id)?;
+        meta.agent_requested_at = None;
+        meta.agent_requested_by = None;
+        write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
+        Ok(meta)
+    }
+
     /// Append one line to `agent-events.jsonl` (the activity feed the human watches).
     pub fn append_agent_event(&self, id: &str, event: &serde_json::Value) -> Result<()> {
         use std::io::Write as _;
@@ -1426,6 +1448,11 @@ impl Store {
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
+            created_by: None,
+            created_by_name: None,
+            created_by_type: None,
+            agent_requested_at: None,
+            agent_requested_by: None,
             branch: Some(branch),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -1523,6 +1550,11 @@ impl Store {
             cancelled_at: None,
             round_stamp: None,
             project: project.as_ref().map(|project| project.slug.clone()),
+            created_by: None,
+            created_by_name: None,
+            created_by_type: None,
+            agent_requested_at: None,
+            agent_requested_by: None,
             branch: Some(branch),
         };
         write_json(&dir.join("meta.json"), &serde_json::to_value(&meta)?)?;
@@ -1892,6 +1924,31 @@ impl Store {
         contact_sheet: Option<&[u8]>,
         frames: &[FrameUpload],
     ) -> Result<(Meta, AnnotationSet)> {
+        self.write_round(id, submission, contact_sheet, frames, None)
+    }
+
+    /// Tester request: save the same artifacts as a submit but keep the task open and hand it to
+    /// a developer. The tester's work is the current round; the agent only sees it after a
+    /// developer submits. No history row is archived for the request.
+    pub fn request_round(
+        &self,
+        id: &str,
+        submission: &Submission,
+        contact_sheet: Option<&[u8]>,
+        frames: &[FrameUpload],
+        user_id: &str,
+    ) -> Result<(Meta, AnnotationSet)> {
+        self.write_round(id, submission, contact_sheet, frames, Some(user_id))
+    }
+
+    fn write_round(
+        &self,
+        id: &str,
+        submission: &Submission,
+        contact_sheet: Option<&[u8]>,
+        frames: &[FrameUpload],
+        request_by: Option<&str>,
+    ) -> Result<(Meta, AnnotationSet)> {
         if frames.len() > MAX_FRAME_COUNT {
             return Err(Error::BadRequest(format!(
                 "at most {MAX_FRAME_COUNT} annotated timestamps per submission"
@@ -1917,16 +1974,26 @@ impl Store {
         let mut meta = self.require(id)?;
         let submitted_at = now();
         let round_stamp = unique_round_stamp(&dir, &submitted_at);
-        meta.round_stamp = Some(round_stamp.clone());
-        meta.status = Status::Submitted;
-        meta.submitted_at = Some(submitted_at.clone());
-        // A fresh round has not been seen by the agent yet, and it reopens a decided feature.
-        meta.seen_by_agent_at = None;
-        meta.agent_state = None;
-        meta.agent_failure = None;
-        meta.feature_confirmed_at = None;
-        meta.feature_cancelled_at = None;
-        meta.handoff = None;
+        if let Some(user_id) = request_by {
+            // A tester request is a saved round, not an agent-visible submission. Keep the
+            // current status and the last submitted round stamp; the agent `next` query ignores
+            // the task because `status` is still `open`.
+            meta.agent_requested_at = Some(submitted_at.clone());
+            meta.agent_requested_by = Some(user_id.to_string());
+        } else {
+            meta.round_stamp = Some(round_stamp.clone());
+            meta.status = Status::Submitted;
+            meta.submitted_at = Some(submitted_at.clone());
+            // A fresh round has not been seen by the agent yet, and it reopens a decided feature.
+            meta.seen_by_agent_at = None;
+            meta.agent_state = None;
+            meta.agent_failure = None;
+            meta.feature_confirmed_at = None;
+            meta.feature_cancelled_at = None;
+            meta.handoff = None;
+            meta.agent_requested_at = None;
+            meta.agent_requested_by = None;
+        }
         if let Some(prompt) = submission.note.as_deref() {
             let prompt = prompt.trim();
             if !prompt.is_empty() {
@@ -1970,8 +2037,11 @@ impl Store {
             }
         }
 
-        // The round exists as soon as it is submitted, not when the next one replaces it.
-        archive_round(&dir, &round_stamp, &set, &meta.image)?;
+        // The round exists as soon as it is submitted, not when the next one replaces it. A
+        // tester request is a pending round and must not enter History.
+        if request_by.is_none() {
+            archive_round(&dir, &round_stamp, &set, &meta.image)?;
+        }
         Ok((meta, set))
     }
 

@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RedLine — people & access</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css" />
+<style>
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: var(--font); padding: 24px;
+  }
+  .people { width: min(1180px, 100%); margin: 0 auto; }
+  .people-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .people-head .back { margin-left: auto; color: var(--muted); font-size: 12px; text-decoration: none; }
+  .people-head .back:hover { color: var(--text); }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 24px; box-shadow: 0 20px 50px rgba(0, 0, 0, .28);
+  }
+  .card h1 { font-size: 18px; margin: 0 0 4px; }
+  .card .lead { color: var(--muted); font-size: 13px; line-height: 1.55; margin: 0 0 18px; }
+  .status { min-height: 18px; margin: 8px 0 12px; color: var(--muted); font-size: 12px; }
+  .status.error { color: #fda4af; }
+  .status.ok { color: #86efac; }
+  .new-user {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 8px;
+    margin: 0 0 18px; padding: 14px; border: 1px solid var(--border-soft); border-radius: 10px;
+  }
+  .new-user input {
+    min-width: 0; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  .new-user input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .matrix-wrap { overflow-x: auto; border: 1px solid var(--border-soft); border-radius: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 9px 10px; border-top: 1px solid var(--border-soft); text-align: left; vertical-align: middle; }
+  thead th { border-top: 0; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+  thead th small { display: block; text-transform: none; letter-spacing: 0; font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; }
+  td.user { white-space: nowrap; }
+  td.user .name { font-weight: 600; }
+  td.user .username { color: var(--muted); font-size: 10.5px; }
+  td.user .owner-mark { color: #86efac; font-size: 10px; margin-left: 6px; }
+  td select {
+    width: 100%; min-width: 105px; padding: 5px 6px; border-radius: 5px;
+    border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit;
+  }
+  td.owner-cell { color: #86efac; font-size: 11px; }
+  .empty { padding: 18px 10px; color: var(--muted); font-size: 13px; }
+  .note { margin: 12px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+  .error-card { padding: 18px; border: 1px solid #7f1d1d; border-radius: 10px; color: #fda4af; }
+  [data-theme="light"] .status.error, [data-theme="light"] .error-card { color: #be123c; }
+  [data-theme="light"] td.owner-cell, [data-theme="light"] td.user .owner-mark { color: #15803d; }
+</style>
+</head>
+<body data-page="people">
+<main class="people">
+  <div class="people-head">
+    <div class="brand"><span class="brand-mark" role="img" aria-label="RedLine"><i></i></span></div>
+    <a class="back" href="/">← Back to sessions</a>
+  </div>
+
+  <section class="card">
+    <h1>People &amp; access</h1>
+    <p class="lead">Owner only. Assign each person a role in each project: a viewer reads, a tester
+      creates and annotates tasks, a developer also sends them to the agent. Inbox is owner-only;
+      new tasks always need a project.</p>
+
+    <form class="new-user" id="new-user-form" autocomplete="off">
+      <input id="new-username" placeholder="Username" spellcheck="false" required />
+      <input id="new-name" placeholder="Display name" required />
+      <input id="new-password" type="password" placeholder="Temporary password" minlength="12" required />
+      <button class="btn accent" type="submit" id="new-user-submit">Add user</button>
+    </form>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <div id="matrix"><div class="empty">Loading…</div></div>
+    <p class="note">The owner row is global and cannot be limited per project. Passwords are stored
+      as Argon2id hashes; give the user the temporary password and ask them to change it after
+      signing in.</p>
+  </section>
+</main>
+
+<script>
+const statusBox = document.getElementById("status");
+const matrix = document.getElementById("matrix");
+let model = { users: [], projects: [], members: {}, me: null };
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[char]));
+}
+
+function csrfToken() {
+  for (const part of document.cookie.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === "redline_csrf") return rest.join("=");
+  }
+  return "";
+}
+
+async function api(path, options = {}) {
+  const method = (options.method || "GET").toUpperCase();
+  const headers = { ...(options.headers || {}) };
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = csrfToken();
+    if (csrf) headers["X-CSRF-Token"] = csrf;
+  }
+  const response = await fetch(path, { ...options, headers });
+  const body = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    location.replace(`/login?next=${encodeURIComponent(location.pathname)}`);
+    throw new Error("sign in required");
+  }
+  if (!response.ok) throw new Error(body.error || `request failed (${response.status})`);
+  return body;
+}
+
+function setStatus(text, kind) {
+  statusBox.textContent = text || "";
+  statusBox.className = "status" + (kind ? " " + kind : "");
+}
+
+async function load() {
+  setStatus("");
+  try {
+    const me = await api("/api/auth/me");
+    model.me = me;
+    if (!me.is_owner) {
+      matrix.innerHTML = `<div class="error-card">People &amp; access is owner-only.</div>`;
+      document.getElementById("new-user-form").hidden = true;
+      return;
+    }
+    const [users, projects] = await Promise.all([
+      api("/api/users"),
+      api("/api/projects"),
+    ]);
+    model.users = users.users || [];
+    model.projects = (projects.projects || []).filter((project) => project.slug !== "inbox");
+    const memberLists = await Promise.all(
+      model.projects.map(async (project) => {
+        const data = await api(`/api/projects/${encodeURIComponent(project.slug)}/members`);
+        return [project.slug, data.members || []];
+      }),
+    );
+    model.members = Object.fromEntries(memberLists);
+    render();
+  } catch (error) {
+    matrix.innerHTML = `<div class="error-card">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function render() {
+  if (!model.projects.length) {
+    matrix.innerHTML = `<div class="empty">No repository projects yet. The agent creates them when it syncs its repositories; the owner can then assign people here.</div>`;
+    return;
+  }
+  const head = model.projects
+    .map((project) => `<th>${escapeHtml(project.name || project.slug)}<small>${escapeHtml(project.repo || "no repository")}</small></th>`)
+    .join("");
+  const rows = model.users
+    .map((user) => {
+      const owner = user.role === "owner";
+      const cells = model.projects
+        .map((project) => {
+          if (owner) return `<td class="owner-cell">owner</td>`;
+          const membership = (model.members[project.slug] || [])
+            .find((entry) => entry.user_id === user.id);
+          const role = membership?.role || "";
+          const options = [
+            ["", "—"],
+            ["viewer", "Viewer"],
+            ["tester", "Tester"],
+            ["developer", "Developer"],
+          ].map(([value, label]) =>
+            `<option value="${value}"${value === role ? " selected" : ""}>${label}</option>`
+          ).join("");
+          return `<td><select data-project="${escapeHtml(project.slug)}" data-user="${escapeHtml(user.id)}"
+                    aria-label="${escapeHtml(user.username)} in ${escapeHtml(project.name || project.slug)}">${options}</select></td>`;
+        })
+        .join("");
+      return `<tr>
+        <td class="user"><span class="name">${escapeHtml(user.display_name || user.username)}</span>
+          ${owner ? '<span class="owner-mark">OWNER</span>' : ""}
+          <span class="username">@${escapeHtml(user.username)}</span></td>
+        ${cells}
+      </tr>`;
+    })
+    .join("");
+  matrix.innerHTML = `
+    <div class="matrix-wrap">
+      <table id="people-table">
+        <thead><tr><th>User</th>${head}</tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  matrix.querySelectorAll("select[data-project]").forEach((select) => {
+    select.addEventListener("change", () => saveProject(select.dataset.project));
+  });
+}
+
+async function saveProject(slug) {
+  const selections = [...matrix.querySelectorAll(`select[data-project="${slug}"]`)];
+  const members = selections
+    .filter((select) => select.value)
+    .map((select) => ({ user_id: select.dataset.user, role: select.value }));
+  setStatus("Saving…");
+  try {
+    const data = await api(`/api/projects/${encodeURIComponent(slug)}/members`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ members }),
+    });
+    model.members[slug] = data.members || [];
+    setStatus("Saved", "ok");
+    setTimeout(() => setStatus(""), 1200);
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+}
+
+document.getElementById("new-user-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const username = document.getElementById("new-username").value.trim();
+  const display_name = document.getElementById("new-name").value.trim();
+  const password = document.getElementById("new-password").value;
+  if (!username || !display_name || !password) return;
+  setStatus("Adding user…");
+  try {
+    await api("/api/users", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ username, display_name, password }),
+    });
+    document.getElementById("new-user-form").reset();
+    setStatus("User added", "ok");
+    await load();
+  } catch (error) {
+    setStatus(error.message, "error");
+  }
+});
+
+load();
+</script>
+</body>
+</html>

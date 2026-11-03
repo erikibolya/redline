@@ -31,11 +31,48 @@ Session-authenticated state-changing requests must send `X-CSRF-Token` matching 
 `redline_csrf` cookie. Bearer credentials (legacy token or a future PAT) are not cookie-based and
 do not need CSRF. Login is rate-limited (5 failures per username/IP per 15 minutes).
 
-> **Current slice:** the data routes (`/api/sessions`, `/api/projects`, `/api/agent/*`, `/mcp`,
-> media/history) still require an **owner** (legacy token or owner session); a named member can
-> sign in and use `/api/auth/me` but gets `403` on data until the project ACL from
-> [`COLLABORATION.md`](COLLABORATION.md) lands. This is deliberate: no route is opened to a member
-> before it can check project membership.
+> **Current slice:** data routes are **project-scoped**. `GET /api/projects` and
+> `GET /api/sessions` return only the member's projects (the owner sees all); Inbox is owner-only.
+> `GET /api/sessions/{id}` and every media/history route return `404` for a task outside the
+> member's projects. `GET /api/sessions/{id}` carries `meta.my_role` (`owner|developer|tester|
+> viewer`). A tester may create and annotate their own open tasks, but `POST /annotations`,
+> `POST /cancel`, confirm/cancel-feature and handoff return `403`. A tester hands work to a
+> developer with `POST /api/sessions/{id}/request-agent`; the task stays `open` until the
+> developer calls `POST /annotations`.
+>
+> `GET/PUT /api/projects/{slug}/members` is owner-only; `PUT` replaces the project's member list
+> (`{"members":[{"user_id","role"}]}` with role `viewer|tester|developer`). The agent routes and
+> `/mcp` still use the legacy/agent token.
+
+### `POST /api/sessions/<id>/request-agent`
+
+Tester → developer handoff. The body is the same `Submission`/multipart payload as
+`POST /api/sessions/<id>/annotations` (annotations, optional contact sheet, frames, note).
+
+```json
+{ "annotations": [], "width": 1440, "height": 900, "note": "Please send this to the agent" }
+```
+
+Returns `{ "ok": true, "meta", "annotations" }`. `meta.status` stays `open`; the task gets
+`agent_requested_at`/`agent_requested_by` and never appears in `/api/agent/next` until a developer
+submits. `DELETE` on the same path cancels the request. A tester may request only a task they
+created (`meta.created_by`) and only while it is `open`; a developer/owner may request any open
+task in their project.
+
+### `GET/PUT /api/projects/<slug>/members`
+
+Owner only. `GET` returns the member list with `user_id`, `username`, `display_name` and `role`.
+`PUT` replaces it:
+
+```json
+{ "members": [
+  { "user_id": "usr_…", "role": "developer" },
+  { "user_id": "usr_…", "role": "tester" }
+] }
+```
+
+Roles are `viewer`, `tester` and `developer`; the owner is global and is not stored as a member.
+The owner can assign a user to several projects with different roles.
 
 ## Endpoints
 

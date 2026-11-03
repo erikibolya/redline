@@ -329,6 +329,12 @@ const main = async () => {
     JSON.stringify(brandEditor));
 
   // ---- the header is a row of labelled icons; status lives in the toast and the rail card
+  // The owner-only People button is revealed by an async /api/auth/me; wait for it so the count
+  // is deterministic instead of racing the auth probe.
+  await page.waitForFunction(
+    () => !document.querySelector("#people-link")?.hidden,
+    { timeout: 5000 },
+  );
   const chrome = await page.evaluate(() => {
     const header = document.querySelector(".header");
     const buttons = [...header.querySelectorAll(".header-actions .btn.icon")];
@@ -353,7 +359,7 @@ const main = async () => {
   check("the header carries no status pills — the toast and the rail card say it",
     chrome.pills === 0 && !chrome.stale, JSON.stringify(chrome));
   check("every header action is a labelled SVG icon",
-    chrome.count === 5 && chrome.svg && chrome.labelled && chrome.separator
+    chrome.count === 6 && chrome.svg && chrome.labelled && chrome.separator
       && chrome.panelMarks, JSON.stringify(chrome));
   check("agent settings is a solid gear, not a text glyph",
     chrome.gear && chrome.gear.fill !== "none" && chrome.gear.stroke === "none"
@@ -2141,7 +2147,7 @@ const main = async () => {
   }));
   check("STOP unlocks the canvas and keeps the annotations",
     !unlocked.locked && !unlocked.dim && !unlocked.zoomDisabled
-      && unlocked.label === "Submit review" && unlocked.annotations === beforeStop,
+      && unlocked.label === "Send to agent" && unlocked.annotations === beforeStop,
     JSON.stringify(unlocked));
 
   // ---- touch mode: bigger tools, row actions not hover-only
@@ -3915,6 +3921,108 @@ const main = async () => {
     document.cookie.split("; ").some((part) => part.startsWith("redline_csrf=")));
   check("login sets the readable CSRF cookie", csrfCookie);
 
+  // Owner-only People & access: create a tester and assign the repo project through the UI.
+  await loginPage.goto(`${BASE}/people`, { waitUntil: "networkidle2" });
+  await loginPage.waitForSelector("#people-table", { timeout: 10000 });
+  await loginPage.type("#new-username", "e2e-tester");
+  await loginPage.type("#new-name", "E2E Tester");
+  await loginPage.type("#new-password", "correct horse battery staple");
+  await loginPage.click("#new-user-submit");
+  await loginPage.waitForFunction(
+    () => document.querySelector("#people-table")?.textContent.includes("@e2e-tester"),
+    { timeout: 10000 },
+  );
+  const testerId = await loginPage.evaluate(() => {
+    const row = [...document.querySelectorAll("#people-table tbody tr")]
+      .find((tr) => tr.textContent.includes("@e2e-tester"));
+    return row?.querySelector("select")?.dataset.user || "";
+  });
+  check("People & access creates a named user", Boolean(testerId), testerId);
+  await loginPage.select(
+    `#people-table select[data-project="e2e-repo"][data-user="${testerId}"]`,
+    "tester",
+  );
+  await loginPage.waitForFunction(
+    () => document.querySelector("#status")?.textContent.includes("Saved"),
+    { timeout: 10000 },
+  );
+  const projectMembers = await api("/api/projects/e2e-repo/members");
+  check("People & access saves a project role",
+    (projectMembers.members || []).some((member) =>
+      member.username === "e2e-tester" && member.role === "tester"),
+    JSON.stringify(projectMembers.members || []));
+
+  // A tester sees the role in the editor, can create their own task and request an agent review;
+  // the server refuses the actual submit/STOP/confirm actions (covered by Rust tests).
+  const testerContext = await browser.createBrowserContext();
+  const testerPage = await testerContext.newPage();
+  await testerPage.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
+  await testerPage.waitForSelector("#login-form:not([hidden])", { timeout: 5000 });
+  await testerPage.type("#username", "e2e-tester");
+  await testerPage.type("#password", "correct horse battery staple");
+  await testerPage.click("#login-submit");
+  await testerPage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  const testerCreated = await testerPage.evaluate(async (png) => {
+    const csrf = document.cookie
+      .split("; ")
+      .find((part) => part.startsWith("redline_csrf="))
+      ?.split("=")[1] || "";
+    const response = await fetch("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-csrf-token": csrf },
+      body: JSON.stringify({
+        title: "tester request",
+        project: "e2e-repo",
+        image_base64: png,
+      }),
+    });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }, makePng());
+  check("a tester can create a task in their project",
+    testerCreated.status === 200 && Boolean(testerCreated.body.meta?.id),
+    `${testerCreated.status} ${JSON.stringify(testerCreated.body)}`);
+  const testerTask = testerCreated.body.meta.id;
+  await testerPage.goto(`${BASE}/s/${testerTask}`, { waitUntil: "networkidle2" });
+  await testerPage.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  const testerEditor = await testerPage.evaluate(() => ({
+    role: window.redline.myRole,
+    button: document.querySelector("#submit")?.textContent.trim(),
+    disabled: Boolean(document.querySelector("#submit")?.disabled),
+  }));
+  check("a tester gets Request agent review on their own task",
+    testerEditor.role === "tester" && testerEditor.button === "Request agent review"
+      && !testerEditor.disabled,
+    JSON.stringify(testerEditor));
+
+  await testerPage.click("#submit");
+  await testerPage.waitForFunction(
+    () => Boolean(window.redline.meta?.agent_requested_at),
+    { timeout: 10000 },
+  );
+  await testerPage.waitForFunction(
+    () => Boolean(document.querySelector('.session[aria-current="true"] .badge.ready')),
+    { timeout: 5000 },
+  );
+  // The transient "Request sent ✓" is replaced by the final label after 1.4 s.
+  await testerPage.waitForFunction(
+    () => document.querySelector("#submit")?.textContent.trim() === "Update request",
+    { timeout: 3000 },
+  );
+  const testerRequested = await testerPage.evaluate(() => ({
+    status: window.redline.meta.status,
+    requested: Boolean(window.redline.meta.agent_requested_at),
+    button: document.querySelector("#submit")?.textContent.trim(),
+    badge: document.querySelector(".session[aria-current=\"true\"] .badge.ready")?.textContent.trim() || "",
+  }));
+  check("the tester request stays open and is marked ready for agent",
+    testerRequested.status === "open" && testerRequested.requested
+      && testerRequested.button === "Update request"
+      && testerRequested.badge === "ready for agent",
+    JSON.stringify(testerRequested));
+  await testerContext.close();
+
+  // Return to the dashboard so the logout/CSRF checks run in the same context.
+  await loginPage.goto(`${BASE}/`, { waitUntil: "networkidle2" });
   const logout = await loginPage.evaluate(async () => {
     const csrf = document.cookie
       .split("; ")

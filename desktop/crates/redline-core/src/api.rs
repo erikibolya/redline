@@ -23,7 +23,8 @@ use crate::agent::{AgentControl, AgentSettings, ClaimError, ClaimRequest, ClaimS
 use crate::auth::{self, Auth, CredentialSource};
 use crate::error::Error;
 use crate::mcp::{self, McpContext};
-use crate::model::{HandoffStatus, NewSession, Status, Submission};
+use crate::memberships::{MembershipStore, ProjectRole};
+use crate::model::{HandoffStatus, Meta, NewSession, Status, Submission};
 use crate::sessions::{SessionGrant, SessionStore};
 use crate::store::{FrameUpload, Store};
 use crate::users::{User, UserStatus, UserStore};
@@ -74,6 +75,7 @@ pub struct AppState {
     pub auth: Auth,
     pub users: UserStore,
     pub sessions: SessionStore,
+    pub memberships: MembershipStore,
     login: Arc<LoginThrottle>,
     /// Directory holding `index.html` / `list.html`. `None` in tests and in headless mode.
     pub ui: Option<PathBuf>,
@@ -96,11 +98,13 @@ impl AppState {
         let agent = Arc::new(Mutex::new(AgentControl::load(store.data_dir())));
         let users = UserStore::new(store.data_dir());
         let sessions = SessionStore::new(store.data_dir());
+        let memberships = MembershipStore::new(store.data_dir());
         Self {
             store,
             auth,
             users,
             sessions,
+            memberships,
             login: Arc::new(LoginThrottle::default()),
             ui: None,
             inline_ui: None,
@@ -162,7 +166,7 @@ pub fn router(state: AppState) -> Router {
         ))
         .layer(middleware::from_fn(no_store));
 
-    let protected = Router::new()
+    let owner = Router::new()
         .route("/api/auth/bootstrap", post(auth_bootstrap))
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/admin/transfer-owner", post(transfer_owner))
@@ -174,6 +178,35 @@ pub fn router(state: AppState) -> Router {
         .route("/api/servers/{id}/activate", post(activate_server))
         .route("/api/servers/{id}/probe", get(probe_server))
         .route("/api/servers/{id}", delete(remove_server))
+        .route(
+            "/api/projects/{slug}/members",
+            get(project_members).put(set_project_members),
+        )
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_owner_auth,
+        ));
+
+    let agent = Router::new()
+        .route("/api/agent/repos", post(sync_agent_repos))
+        .route(
+            "/api/agent/settings",
+            get(agent_settings).put(update_agent_settings),
+        )
+        .route("/api/agent/status", get(agent_status))
+        .route("/api/agent/next", post(agent_next))
+        .route("/api/agent/claims", post(claim_session))
+        .route("/api/agent/claims/{id}/heartbeat", post(claim_heartbeat))
+        .route("/api/agent/claims/{id}/state", post(claim_state))
+        .route("/api/agent/claims/{id}/release", post(claim_release))
+        .route("/api/sessions/{id}/resolve", post(resolve))
+        .route("/mcp", post(mcp_post))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_owner_auth,
+        ));
+
+    let human = Router::new()
         .route("/api/sessions", get(list_sessions).post(create_session))
         .route(
             "/api/sessions/video",
@@ -188,17 +221,6 @@ pub fn router(state: AppState) -> Router {
             )),
         )
         .route("/api/projects", get(list_projects).post(create_project))
-        .route("/api/agent/repos", post(sync_agent_repos))
-        .route(
-            "/api/agent/settings",
-            get(agent_settings).put(update_agent_settings),
-        )
-        .route("/api/agent/status", get(agent_status))
-        .route("/api/agent/next", post(agent_next))
-        .route("/api/agent/claims", post(claim_session))
-        .route("/api/agent/claims/{id}/heartbeat", post(claim_heartbeat))
-        .route("/api/agent/claims/{id}/state", post(claim_state))
-        .route("/api/agent/claims/{id}/release", post(claim_release))
         .route(
             "/api/sessions/{id}",
             get(get_session).delete(delete_session),
@@ -209,7 +231,10 @@ pub fn router(state: AppState) -> Router {
             "/api/sessions/{id}/annotations",
             post(submit).layer(DefaultBodyLimit::max(MAX_SUBMIT_BYTES)),
         )
-        .route("/api/sessions/{id}/resolve", post(resolve))
+        .route(
+            "/api/sessions/{id}/request-agent",
+            post(request_agent_review).delete(cancel_agent_request),
+        )
         .route("/api/sessions/{id}/reopen", post(reopen))
         .route("/api/sessions/{id}/confirm-feature", post(confirm_feature))
         .route("/api/sessions/{id}/cancel-feature", post(cancel_feature))
@@ -222,6 +247,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/sessions/{id}/thread", get(agent_thread))
         .route("/api/sessions/{id}/events", get(agent_events))
         .route("/api/sessions/{id}/history/{stamp}/diff", get(history_diff))
+        .route("/api/capture", post(capture_session))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_user_auth,
+        ));
+
+    let media = Router::new()
         .route("/sessions/{id}/history/{file}", get(history_file))
         .route("/sessions/{id}/history/{stamp}/video", get(history_video))
         .route(
@@ -229,7 +261,6 @@ pub fn router(state: AppState) -> Router {
             get(history_frame),
         )
         .route("/sessions/{id}/history/{stamp}/trace", get(history_trace))
-        .route("/api/capture", post(capture_session))
         .route("/sessions/{id}/image", get(image))
         .route("/sessions/{id}/media", get(media))
         .route("/sessions/{id}/trace", get(trace_file))
@@ -237,13 +268,18 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{id}/annotated.png", get(annotated))
         .route("/sessions/{id}/rounds/{name}", get(round_image))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
-        .route("/mcp", post(mcp_post))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
-            require_owner_auth,
-        ))
-        // The rail polls `/api/sessions`; a browser must never answer a decision with yesterday's
-        // list. API/session responses are live data, not documents, so no-store is correct.
+            require_media_auth,
+        ));
+
+    // The rail polls `/api/sessions`; a browser must never answer a decision with yesterday's
+    // list. API/session responses are live data, not documents, so no-store is correct.
+    let protected = Router::new()
+        .merge(owner)
+        .merge(agent)
+        .merge(human)
+        .merge(media)
         .layer(middleware::from_fn(no_store))
         // Extension preflight has no Authorization header by design; answer it before the token
         // guard, but only for an extension origin and only with CORS for that origin.
@@ -254,6 +290,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(list_page))
         .route("/s/{id}", get(editor_page))
         .route("/login", get(login_page))
+        .route("/people", get(people_page))
         .route("/setup", get(setup_page))
         .route("/servers", get(servers_page))
         .merge(public_auth)
@@ -270,6 +307,7 @@ pub fn router(state: AppState) -> Router {
 struct AuthContext {
     user_id: Option<String>,
     username: String,
+    display_name: String,
     is_owner: bool,
     raw_session: Option<String>,
     legacy: bool,
@@ -280,11 +318,123 @@ impl AuthContext {
         Self {
             user_id: None,
             username: "legacy".to_string(),
+            display_name: "Legacy owner".to_string(),
             is_owner: true,
             raw_session: None,
             legacy: true,
         }
     }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReviewAction {
+    Read,
+    Edit,
+    Submit,
+    Stop,
+    Confirm,
+    Handoff,
+    Delete,
+    MoveProject,
+}
+
+fn require_project(
+    state: &AppState,
+    context: &AuthContext,
+    project: &str,
+    action: ReviewAction,
+) -> Result<(), Error> {
+    if context.is_owner {
+        return Ok(());
+    }
+    // Inbox is owner-only: it has no repository and no membership row.
+    if project == "inbox" {
+        return Err(Error::NotFound(project.to_string()));
+    }
+    let user_id = context.user_id.as_deref().unwrap_or_default();
+    let Some(role) = state.memberships.role_for(user_id, project)? else {
+        return Err(Error::NotFound(project.to_string()));
+    };
+    let allowed = match action {
+        ReviewAction::Read => true,
+        ReviewAction::Edit | ReviewAction::Delete => role.can_create(),
+        ReviewAction::Submit
+        | ReviewAction::Stop
+        | ReviewAction::Confirm
+        | ReviewAction::Handoff
+        | ReviewAction::MoveProject => role.can_submit(),
+    };
+    if !allowed {
+        return Err(Error::Forbidden(format!(
+            "your {role} role cannot perform this action",
+            role = role.as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn require_review(
+    state: &AppState,
+    context: &AuthContext,
+    id: &str,
+    action: ReviewAction,
+) -> Result<Meta, Error> {
+    let meta = state.store.require(id)?;
+    if context.is_owner {
+        return Ok(meta);
+    }
+    let project = meta.project.as_deref().unwrap_or("inbox");
+    require_project(state, context, project, action)?;
+    let role = state
+        .memberships
+        .role_for(context.user_id.as_deref().unwrap_or_default(), project)?
+        .ok_or_else(|| Error::NotFound(id.to_string()))?;
+    if action == ReviewAction::Edit
+        && role == ProjectRole::Tester
+        && meta.created_by.as_deref() != context.user_id.as_deref()
+    {
+        return Err(Error::Forbidden(
+            "a tester may edit only their own tasks".to_string(),
+        ));
+    }
+    if matches!(action, ReviewAction::Edit | ReviewAction::Submit)
+        && meta.status == Status::Submitted
+    {
+        return Err(Error::Conflict(
+            "stop the review before editing or submitting it".to_string(),
+        ));
+    }
+    if action == ReviewAction::Delete {
+        if meta.created_by.as_deref() != context.user_id.as_deref() {
+            return Err(Error::Forbidden(
+                "only the creator can delete an unsubmitted task".to_string(),
+            ));
+        }
+        if meta.status != Status::Open {
+            return Err(Error::Forbidden(
+                "only an unsubmitted task can be deleted by its creator".to_string(),
+            ));
+        }
+    }
+    Ok(meta)
+}
+
+fn visible_project_slugs(
+    state: &AppState,
+    context: &AuthContext,
+) -> Result<Option<HashSet<String>>, Error> {
+    if context.is_owner {
+        return Ok(None);
+    }
+    let user_id = context.user_id.as_deref().unwrap_or_default();
+    Ok(Some(
+        state
+            .memberships
+            .for_user(user_id)?
+            .into_iter()
+            .map(|membership| membership.project)
+            .collect(),
+    ))
 }
 
 async fn require_user_auth(
@@ -332,6 +482,41 @@ async fn require_owner_auth(
     }
 }
 
+async fn require_media_auth(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let origin = extension_origin(request.headers());
+    let mut response = match authenticate(&state, &request) {
+        Ok(context) => {
+            let id = request
+                .uri()
+                .path()
+                .split('/')
+                .nth(2)
+                .unwrap_or_default()
+                .to_string();
+            if !crate::store::valid_id(&id) {
+                Error::NotFound(id).into_response()
+            } else {
+                match require_review(&state, &context, &id, ReviewAction::Read) {
+                    Ok(_) => {
+                        request.extensions_mut().insert(context);
+                        next.run(request).await
+                    }
+                    Err(error) => error.into_response(),
+                }
+            }
+        }
+        Err(response) => response,
+    };
+    if let Some(origin) = origin {
+        add_extension_cors(&mut response, &origin);
+    }
+    response
+}
+
 /// Resolve a request to one identity. The legacy token is deliberately still an owner: it is
 /// what the agent bridge and an unmigrated installation use, and it can be rotated later.
 fn authenticate(state: &AppState, request: &Request) -> std::result::Result<AuthContext, Response> {
@@ -374,6 +559,7 @@ fn authenticate(state: &AppState, request: &Request) -> std::result::Result<Auth
     Ok(AuthContext {
         user_id: Some(user.id),
         username: user.username,
+        display_name: user.display_name,
         is_owner,
         raw_session: Some(credential.value),
         legacy: false,
@@ -817,6 +1003,10 @@ async fn login_page(State(state): State<AppState>) -> Response {
     serve_ui(&state, "login.html")
 }
 
+async fn people_page(State(state): State<AppState>) -> Response {
+    serve_ui(&state, "people.html")
+}
+
 async fn editor_page(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
@@ -965,9 +1155,33 @@ async fn health() -> Json<Value> {
     Json(json!({ "ok": true, "version": crate::VERSION, "mcp": "/mcp" }))
 }
 
-async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+async fn list_sessions(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
     // The rail wants a badge per session; computing it here saves N round-trips from the UI.
-    let sessions = state.store.list()?;
+    let accessible = visible_project_slugs(&state, &context)?;
+    let roles: HashMap<String, ProjectRole> = match context.user_id.as_deref() {
+        Some(user_id) if !context.is_owner => state
+            .memberships
+            .for_user(user_id)?
+            .into_iter()
+            .map(|membership| (membership.project, membership.role))
+            .collect(),
+        _ => HashMap::new(),
+    };
+    let sessions: Vec<Meta> = state
+        .store
+        .list()?
+        .into_iter()
+        .filter(|meta| match &accessible {
+            None => true,
+            Some(projects) => meta
+                .project
+                .as_deref()
+                .is_some_and(|project| projects.contains(project)),
+        })
+        .collect();
     // `agent_state` records the last thing an agent *said*; a claim with a live lease is the only
     // evidence that a run is still going. A reply lands mid-run, so the rail must be able to tell
     // "the agent answered and kept working" from "the run is over" (2026-10-31).
@@ -994,6 +1208,16 @@ async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Err
             let mut value = serde_json::to_value(&meta).unwrap_or(Value::Null);
             if let Some(object) = value.as_object_mut() {
                 object.insert("annotation_count".to_string(), json!(count));
+                let project = meta.project.as_deref().unwrap_or("inbox");
+                let my_role = if context.is_owner {
+                    "owner"
+                } else {
+                    roles
+                        .get(project)
+                        .map(|role| role.as_str())
+                        .unwrap_or("viewer")
+                };
+                object.insert("my_role".to_string(), json!(my_role));
                 object.insert("feature_state".to_string(), json!(meta.feature_state()));
                 object.insert(
                     "agent_running".to_string(),
@@ -1025,7 +1249,20 @@ async fn list_sessions(State(state): State<AppState>) -> Result<Json<Value>, Err
     Ok(Json(json!({ "sessions": items })))
 }
 
-async fn list_projects(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+async fn list_projects(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
+    let accessible = visible_project_slugs(&state, &context)?;
+    let roles: HashMap<String, ProjectRole> = match context.user_id.as_deref() {
+        Some(user_id) if !context.is_owner => state
+            .memberships
+            .for_user(user_id)?
+            .into_iter()
+            .map(|membership| (membership.project, membership.role))
+            .collect(),
+        _ => HashMap::new(),
+    };
     let projects = state.store.projects()?;
     let sessions = state.store.list()?;
     let default_project_max = state
@@ -1035,6 +1272,10 @@ async fn list_projects(State(state): State<AppState>) -> Result<Json<Value>, Err
         .unwrap_or(1);
     let items: Vec<Value> = projects
         .into_iter()
+        .filter(|project| match &accessible {
+            None => true,
+            Some(projects) => projects.contains(&project.slug),
+        })
         .map(|project| {
             let mine: Vec<&crate::model::Meta> = sessions
                 .iter()
@@ -1068,6 +1309,14 @@ async fn list_projects(State(state): State<AppState>) -> Result<Json<Value>, Err
                 "waiting": waiting,
                 "done": done,
                 "last_activity": last,
+                "my_role": if context.is_owner {
+                    "owner"
+                } else {
+                    roles
+                        .get(&project.slug)
+                        .map(|role| role.as_str())
+                        .unwrap_or("viewer")
+                },
             })
         })
         .collect();
@@ -1082,11 +1331,104 @@ struct NewProject {
 }
 
 async fn create_project(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<NewProject>,
 ) -> Result<Json<Value>, Error> {
+    if !context.is_owner {
+        return Err(Error::Forbidden(
+            "only the owner can create projects".to_string(),
+        ));
+    }
     let project = state.store.ensure_project(&body.name)?;
     Ok(Json(json!({ "project": project })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct MembersBody {
+    #[serde(default)]
+    members: Vec<MemberEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct MemberEntry {
+    user_id: String,
+    role: String,
+}
+
+fn members_payload(state: &AppState, project: &str) -> Result<Value, Error> {
+    let mut members = Vec::new();
+    for membership in state.memberships.members(project)? {
+        let Some(user) = state.users.get(&membership.user)? else {
+            continue;
+        };
+        members.push(json!({
+            "user_id": user.id,
+            "username": user.username,
+            "display_name": user.display_name,
+            "role": membership.role.as_str(),
+        }));
+    }
+    members.sort_by(|left, right| {
+        left["display_name"]
+            .as_str()
+            .unwrap_or_default()
+            .to_lowercase()
+            .cmp(
+                &right["display_name"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_lowercase(),
+            )
+    });
+    Ok(json!({ "members": members }))
+}
+
+async fn project_members(
+    State(state): State<AppState>,
+    RoutePath(slug): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    let project = state
+        .store
+        .project(&slug)?
+        .ok_or_else(|| Error::NotFound(slug.clone()))?;
+    Ok(Json(members_payload(&state, &project.slug)?))
+}
+
+async fn set_project_members(
+    State(state): State<AppState>,
+    RoutePath(slug): RoutePath<String>,
+    Json(body): Json<MembersBody>,
+) -> Result<Json<Value>, Error> {
+    let project = state
+        .store
+        .project(&slug)?
+        .ok_or_else(|| Error::NotFound(slug.clone()))?;
+    let owner_id = state.users.owner_id()?;
+    let mut members = Vec::<(String, ProjectRole)>::new();
+    let mut seen = HashSet::new();
+    for entry in body.members {
+        if owner_id.as_deref() == Some(entry.user_id.as_str()) {
+            continue;
+        }
+        let Some(user) = state.users.get(&entry.user_id)? else {
+            return Err(Error::BadRequest(format!("unknown user {}", entry.user_id)));
+        };
+        if user.status != UserStatus::Active {
+            return Err(Error::BadRequest(format!(
+                "{} is not active",
+                user.username
+            )));
+        }
+        let role = ProjectRole::parse(&entry.role)
+            .ok_or_else(|| Error::BadRequest(format!("unknown project role {}", entry.role)))?;
+        if !seen.insert(user.id.clone()) {
+            continue;
+        }
+        members.push((user.id, role));
+    }
+    state.memberships.replace_project(&project.slug, &members)?;
+    Ok(Json(members_payload(&state, &project.slug)?))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1604,18 +1946,30 @@ fn normalize_repo_key(raw: &str) -> Result<String, Error> {
 }
 
 async fn get_session(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    let meta = state.store.require(&id)?;
+    let meta = require_review(&state, &context, &id, ReviewAction::Read)?;
     let annotations = state.store.annotations(&id)?;
     let disk_bytes = state.store.session_size(&id).unwrap_or(0);
     // The editor prints the same run cost History does, measured from the agent's pickup
     // (2026-10-31). It travels inside `meta` so the live view keeps it across polls.
     let last_run = state.store.last_run(&id).ok().flatten();
+    let my_role = if context.is_owner {
+        "owner".to_string()
+    } else {
+        let project = meta.project.as_deref().unwrap_or("inbox");
+        state
+            .memberships
+            .role_for(context.user_id.as_deref().unwrap_or_default(), project)?
+            .map(|role| role.as_str().to_string())
+            .unwrap_or_else(|| "viewer".to_string())
+    };
     let mut meta = serde_json::to_value(&meta)?;
     if let Some(object) = meta.as_object_mut() {
         object.insert("last_run".to_string(), json!(last_run));
+        object.insert("my_role".to_string(), json!(my_role));
     }
     Ok(Json(
         json!({ "meta": meta, "annotations": annotations, "disk_bytes": disk_bytes }),
@@ -1634,11 +1988,12 @@ struct BranchBody {
 /// Renaming is refused while the round is submitted: the agent's worktree was already created for
 /// the old name, so a rename would describe work that is happening somewhere else.
 async fn set_session_branch(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
     Json(body): Json<BranchBody>,
 ) -> Result<Json<Value>, Error> {
-    let meta = state.store.require(&id)?;
+    let meta = require_review(&state, &context, &id, ReviewAction::Confirm)?;
     if meta.status == Status::Submitted {
         return Err(Error::Conflict(
             "stop the review before renaming its branch".to_string(),
@@ -1673,11 +2028,12 @@ struct ProjectBody {
 /// or while a handoff is queued/running — the worktree for the old project already exists. A
 /// terminally failed handoff is explicitly movable so the retry can use the right repository.
 async fn set_session_project(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
     Json(body): Json<ProjectBody>,
 ) -> Result<Json<Value>, Error> {
-    let meta = state.store.require(&id)?;
+    let meta = require_review(&state, &context, &id, ReviewAction::MoveProject)?;
     if meta.status == Status::Submitted {
         return Err(Error::Conflict(
             "stop the review before changing its project".to_string(),
@@ -1709,16 +2065,36 @@ async fn set_session_project(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let target = project
+        .map(crate::store::slugify)
+        .unwrap_or_else(|| "inbox".to_string());
+    require_project(&state, &context, &target, ReviewAction::MoveProject)?;
     Ok(Json(json!({
         "meta": state.store.set_project(&id, project)?,
     })))
 }
 
 async fn create_session(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<NewSession>,
 ) -> Result<Json<Value>, Error> {
+    if !context.is_owner {
+        let project = body
+            .project
+            .as_deref()
+            .map(crate::store::slugify)
+            .unwrap_or_else(|| "inbox".to_string());
+        require_project(&state, &context, &project, ReviewAction::Edit)?;
+    }
     let meta = create_from_request(&state, body)?;
+    let meta = if let Some(user_id) = context.user_id.as_deref() {
+        state
+            .store
+            .set_creator(&meta.id, user_id, &context.display_name)?
+    } else {
+        meta
+    };
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({
         "meta": meta,
@@ -1814,10 +2190,18 @@ async fn read_video_form(mut multipart: Multipart) -> Result<VideoForm, Error> {
 /// the same metadata fields as `POST /api/sessions`. The route has its own body limit; JSON
 /// uploads stay bounded by `MAX_BODY_BYTES`.
 async fn create_video_session(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     multipart: Multipart,
 ) -> Result<Json<Value>, Error> {
     let form = read_video_form(multipart).await?;
+    if !context.is_owner {
+        let project = form
+            .field("project")
+            .map(crate::store::slugify)
+            .unwrap_or_else(|| "inbox".to_string());
+        require_project(&state, &context, &project, ReviewAction::Edit)?;
+    }
     let title = form.field("title").unwrap_or("Video review");
     let duration_ms = form
         .field("duration_ms")
@@ -1858,6 +2242,13 @@ async fn create_video_session(
     } else {
         meta
     };
+    let meta = if let Some(user_id) = context.user_id.as_deref() {
+        state
+            .store
+            .set_creator(&meta.id, user_id, &context.display_name)?
+    } else {
+        meta
+    };
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({
         "meta": meta,
@@ -1869,10 +2260,12 @@ async fn create_video_session(
 /// Post a new video as the next round of an existing review. The current round (annotations,
 /// contact sheet, frames and clip) is archived; the session reopens on the new clip.
 async fn replace_video(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
     multipart: Multipart,
 ) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Edit)?;
     let form = read_video_form(multipart).await?;
     let duration_ms = form
         .field("duration_ms")
@@ -2023,20 +2416,27 @@ pub fn create_from_request(
     }
 }
 
-async fn submit(
-    State(state): State<AppState>,
-    RoutePath(id): RoutePath<String>,
+fn decode_contact_sheet(png: &str) -> Result<Vec<u8>, Error> {
+    let raw = png.split_once(',').map(|(_, data)| data).unwrap_or(png);
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD
+        .decode(raw.trim())
+        .map_err(|err| Error::BadRequest(format!("invalid png payload: {err}")))
+}
+
+async fn read_submit_request(
+    state: &AppState,
     request: Request,
-) -> Result<Json<Value>, Error> {
+) -> Result<(Submission, Option<Vec<u8>>, Vec<FrameUpload>), Error> {
     let multipart = request
         .headers()
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value.starts_with("multipart/form-data"));
-    let (body, contact_sheet, frames) = if multipart {
+    let (body, mut contact_sheet, frames) = if multipart {
         parse_multipart_submit(request).await?
     } else {
-        let Json(body) = Json::<Submission>::from_request(request, &state)
+        let Json(body) = Json::<Submission>::from_request(request, state)
             .await
             .map_err(|err| {
                 if err.status() == StatusCode::UNSUPPORTED_MEDIA_TYPE {
@@ -2047,13 +2447,26 @@ async fn submit(
             })?;
         (body, None, Vec::new())
     };
-    let (meta, annotations) = if multipart {
+    if contact_sheet.is_none() {
+        if let Some(png) = body.png.as_deref() {
+            contact_sheet = Some(decode_contact_sheet(png)?);
+        }
+    }
+    Ok((body, contact_sheet, frames))
+}
+
+async fn submit(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    request: Request,
+) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Submit)?;
+    let (body, contact_sheet, frames) = read_submit_request(&state, request).await?;
+    let (meta, annotations) =
         state
             .store
-            .submit_round(&id, &body, contact_sheet.as_deref(), &frames)?
-    } else {
-        state.store.submit(&id, &body)?
-    };
+            .submit_round(&id, &body, contact_sheet.as_deref(), &frames)?;
     // Wake up whatever agent the host wired in; a dead endpoint must not fail the submission.
     if let Some(url) = state.webhook.clone() {
         let payload = json!({
@@ -2072,6 +2485,50 @@ async fn submit(
     Ok(Json(
         json!({ "ok": true, "meta": meta, "annotations": annotations }),
     ))
+}
+
+/// A tester saves a round and asks a developer to send it. The agent must not see the task yet.
+async fn request_agent_review(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+    request: Request,
+) -> Result<Json<Value>, Error> {
+    let meta = require_review(&state, &context, &id, ReviewAction::Edit)?;
+    if meta.status != Status::Open {
+        return Err(Error::Conflict(
+            "request an agent review on an open task".to_string(),
+        ));
+    }
+    let Some(user_id) = context.user_id.as_deref() else {
+        return Err(Error::BadRequest(
+            "only a named user can request an agent review".to_string(),
+        ));
+    };
+    let (body, contact_sheet, frames) = read_submit_request(&state, request).await?;
+    let (meta, annotations) =
+        state
+            .store
+            .request_round(&id, &body, contact_sheet.as_deref(), &frames, user_id)?;
+    Ok(Json(
+        json!({ "ok": true, "meta": meta, "annotations": annotations }),
+    ))
+}
+
+async fn cancel_agent_request(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(id): RoutePath<String>,
+) -> Result<Json<Value>, Error> {
+    let meta = require_review(&state, &context, &id, ReviewAction::Edit)?;
+    if meta.agent_requested_at.is_none() {
+        return Err(Error::Conflict(
+            "this task has no pending agent request".to_string(),
+        ));
+    }
+    Ok(Json(json!({
+        "meta": state.store.clear_agent_request(&id)?,
+    })))
 }
 
 /// A video submit carries the annotations JSON, the contact sheet as a file and one file per
@@ -2147,16 +2604,20 @@ async fn resolve(
 }
 
 async fn cancel(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Stop)?;
     Ok(Json(json!({ "meta": state.store.cancel(&id)? })))
 }
 
 async fn reopen(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Confirm)?;
     Ok(Json(json!({ "meta": state.store.reopen(&id)? })))
 }
 
@@ -2169,10 +2630,12 @@ struct ConfirmBody {
 }
 
 async fn confirm_feature(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
     body: Option<Json<ConfirmBody>>,
 ) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Confirm)?;
     let handoff = body.map(|Json(body)| body.handoff).unwrap_or(false);
     Ok(Json(
         json!({ "meta": state.store.confirm_feature(&id, handoff)? }),
@@ -2180,35 +2643,41 @@ async fn confirm_feature(
 }
 
 async fn cancel_feature(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Confirm)?;
     Ok(Json(json!({ "meta": state.store.cancel_feature(&id)? })))
 }
 
 /// Queue (or retry) a handoff for a feature the human already confirmed. Used by the rail's
 /// retry action after a failed handoff, and by scripts for features confirmed before v0.23.
 async fn request_handoff(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Handoff)?;
     Ok(Json(json!({ "meta": state.store.request_handoff(&id)? })))
 }
 
 async fn history(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    state.store.require(&id)?;
+    require_review(&state, &context, &id, ReviewAction::Read)?;
     Ok(Json(json!({ "submissions": state.store.history(&id)? })))
 }
 
 /// What changed between an archived round and what is submitted now.
 async fn history_diff(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath((id, stamp)): RoutePath<(String, String)>,
 ) -> Result<Json<Value>, Error> {
-    state.store.require(&id)?;
+    require_review(&state, &context, &id, ReviewAction::Read)?;
     let path = state.store.history_file(&id, &format!("{stamp}.json"))?;
     let text = std::fs::read_to_string(&path)
         .map_err(|_| Error::NotFound(format!("{id}/history/{stamp}.json")))?;
@@ -2246,10 +2715,11 @@ async fn history_file(
 /// Written by the agent, read by the human: without this route the file exists on disk and no
 /// screen ever shows it, so a human who submitted a review had no way to see an answer.
 async fn agent_thread(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    state.store.require(&id)?;
+    require_review(&state, &context, &id, ReviewAction::Read)?;
     let path = state.store.dir(&id)?.join("agent-thread.jsonl");
     let mut messages = Vec::new();
     if path.is_file() {
@@ -2270,10 +2740,11 @@ async fn agent_thread(
 
 /// What the agent said it is doing (`progress` → `agent-events.jsonl`). Newest last.
 async fn agent_events(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    state.store.require(&id)?;
+    require_review(&state, &context, &id, ReviewAction::Read)?;
     let mut events = state.store.agent_events(&id)?;
     let total = events.len();
     if events.len() > 100 {
@@ -2302,12 +2773,21 @@ struct CaptureRequest {
 /// Screenshot a URL server-side and open a review for it. Same engine as the MCP tool, so the
 /// browser image (or REDLINE_CHROME) decides whether this works.
 async fn capture_session(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<CaptureRequest>,
 ) -> Result<Json<Value>, Error> {
     let url = body.url.trim().to_string();
     if url.is_empty() {
         return Err(Error::BadRequest("url is required".to_string()));
+    }
+    if !context.is_owner {
+        let project = body
+            .project
+            .as_deref()
+            .map(crate::store::slugify)
+            .unwrap_or_else(|| "inbox".to_string());
+        require_project(&state, &context, &project, ReviewAction::Edit)?;
     }
     let (width, height) = match body.viewport.as_deref() {
         Some(viewport) if !viewport.trim().is_empty() => {
@@ -2345,14 +2825,23 @@ async fn capture_session(
     } else {
         meta
     };
+    let meta = if let Some(user_id) = context.user_id.as_deref() {
+        state
+            .store
+            .set_creator(&meta.id, user_id, &context.display_name)?
+    } else {
+        meta
+    };
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({ "meta": meta, "review_url": review_url })))
 }
 
 async fn delete_session(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
+    require_review(&state, &context, &id, ReviewAction::Delete)?;
     let dir = state.store.remove(&id)?;
     Ok(Json(
         json!({ "ok": true, "removed": dir.display().to_string() }),

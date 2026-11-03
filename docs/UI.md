@@ -644,6 +644,23 @@ section, `Δ` shows the summary inline:
 - **Current slice:** named members can sign in but data routes are still owner-only until the
   project ACL lands; the UI will show the 403 rather than pretending the queue is empty.
 
+## Roles, People & access and the editor (v0.28)
+
+- **People & access** (`/people`) is owner-only. It shows a `user × project` matrix with a role
+  select per cell (`—`, Viewer, Tester, Developer), an **Add user** form, and the project repo
+  under each column. The owner row is global and read-only. A member sees an owner-only message.
+- The owner-only people icon appears in the header after `/api/auth/me` answers; it is hidden for
+  developers/testers/viewers.
+- **Tester:** sees every task in their projects, edits only their own open tasks, and gets
+  **Request agent review** instead of **Send to agent**. The saved request is the current round;
+  the rail says **ready for agent** and the developer can send it. A tester cannot STOP, confirm/
+  cancel a feature or hand off; the server refuses those actions as well as the UI.
+- **Developer:** sees the ready task, edits if needed and sends it with **Send to agent**. The
+  tester's request fields clear on submit; the task becomes `submitted` and the agent can claim it.
+- **Viewer:** read-only; the canvas, composer and row actions are disabled.
+- The New review project picker is filtered by `/api/projects`; a member with no project cannot
+  create a task, and Inbox is offered only to the owner.
+
 ## Verification
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:

@@ -467,6 +467,17 @@ function csrfToken() {
   return "";
 }
 
+async function showPeopleLink() {
+  const button = $("#people-link");
+  if (!button) return;
+  try {
+    const me = await api("/api/auth/me");
+    if (!me.is_owner) return;
+    button.hidden = false;
+    button.addEventListener("click", () => { location.href = "/people"; });
+  } catch { /* signed out; the api helper has already redirected */ }
+}
+
 async function api(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const headers = { ...(options.headers || {}) };
@@ -1573,13 +1584,18 @@ class Rail {
         // nobody has picked up yet used to read "new" (unread by the human), which is a lie
         // about the state. Only a review that is back in the human's hands can be "new".
         const queued = session.status === "submitted";
+        const requested = Boolean(session.agent_requested_at) && session.status === "open";
+        const role = session.my_role || "owner";
+        const canDecide = role === "owner" || role === "developer";
         // An agent currently running outranks "new" and the annotation count: it is the one
         // state that changes a few seconds later without the human touching anything. A feature
         // decision is the human's answer to the session, so it outranks the unread marker.
         const baseBadge = working
           ? `<span class="badge work" title="The agent is working on this review">
             <span class="spin" aria-hidden="true"></span>working</span>`
-          : feature === "confirmed"
+          : requested
+            ? `<span class="badge ready" title="A tester saved this round; a developer must send it to the agent">ready for agent</span>`
+            : feature === "confirmed"
             ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
             : feature === "cancelled"
               ? `<span class="badge cancelled" title="Feature cancelled by the human">cancelled</span>`
@@ -1642,7 +1658,7 @@ class Rail {
                 session.note ? " · " + escapeHtml(session.note) : ""
               }</div>
             </div>
-            <span class="row-actions">
+            ${canDecide ? `<span class="row-actions">
               ${decided
                 ? `<button class="act" data-act="reopen" title="Reopen feature">↺</button>`
                 : `<button class="act" data-act="confirm" title="Confirm feature done">✓</button>`}
@@ -1652,7 +1668,7 @@ class Rail {
                 : ""}
               <button class="act" data-act="menu"
                       title="${decided ? "Feature actions (reopen or delete)" : "Feature actions (cancel or delete)"}">✕</button>
-            </span>
+            </span>` : ""}
             ${badge}
           </div>`);
         }
@@ -1720,6 +1736,9 @@ class Editor {
     this.ctx = this.canvas.getContext("2d");
     this.sessionId = root.dataset.sessionId;
     this.meta = null;
+    // Effective role in this task's project; the server enforces it, the UI mirrors it.
+    this.myRole = "owner";
+    this.userId = null;
     this.image = null;
     this.video = null;
     this.videoBar = $("#video-bar");
@@ -1821,6 +1840,12 @@ class Editor {
       },
       onViewChange: () => this.leaveIfFiltered(),
     });
+    api("/api/auth/me")
+      .then((me) => {
+        this.userId = me.user?.id || null;
+        if (this.meta) this.renderHeader();
+      })
+      .catch(() => {});
     this.bindChrome();
     this.bindPanels();
     this.bindCanvas();
@@ -1922,6 +1947,7 @@ class Editor {
     try {
       const data = await api(`/api/sessions/${encodeURIComponent(id)}`);
       this.meta = data.meta;
+      this.myRole = this.meta.my_role || "owner";
       this.showSessionSize(data.disk_bytes || 0);
       lastProject.remember(this.meta.project);
       const server = (data.annotations && data.annotations.annotations) || [];
@@ -2397,22 +2423,46 @@ class Editor {
       branch.hidden = !this.meta.branch;
       branch.textContent = this.meta.branch || "";
     }
+    const role = this.myRole || "owner";
+    const tester = role === "tester";
+    const viewer = role === "viewer";
+    const testerOther = tester && this.userId
+      && this.meta.created_by && this.meta.created_by !== this.userId;
     const waiting = this.meta.status === "submitted";
+    const requested = Boolean(this.meta.agent_requested_at);
     const button = $("#submit");
     if (waiting) {
-      button.innerHTML = '<span class="stop-square" aria-hidden="true"></span>STOP';
+      if (tester || viewer) {
+        button.textContent = "Waiting for agent";
+      } else {
+        button.innerHTML = '<span class="stop-square" aria-hidden="true"></span>STOP';
+      }
+    } else if (viewer) {
+      button.textContent = "Read-only";
+    } else if (tester) {
+      button.textContent = testerOther
+        ? "Read-only (another tester)"
+        : this.meta.status === "open"
+          ? (requested ? "Update request" : "Request agent review")
+          : "No action";
     } else {
-      button.textContent = this.meta.status === "open" ? "Submit review" : "Submit again";
+      button.textContent = this.meta.status === "open" ? "Send to agent" : "Send to agent again";
     }
-    button.classList.toggle("stop", waiting);
+    button.classList.toggle("stop", waiting && !tester && !viewer);
+    const cancelRequest = $("#cancel-request");
+    if (cancelRequest) {
+      cancelRequest.hidden = !(tester && requested && this.meta.status === "open");
+    }
     const composer = $("#composer-text");
     if (composer) {
-      composer.disabled = waiting || Boolean(this.viewing);
+      composer.disabled = waiting || Boolean(this.viewing) || viewer || testerOther;
       composer.placeholder = waiting
-        ? "Waiting for the agent — press STOP to edit again"
+        ? (tester ? "Waiting for a developer to send this task" : "Waiting for the agent — press STOP to edit again")
         : this.viewing
           ? "Read-only historical round — back to current to edit"
-          : "What should change? Sent with the annotations…";
+          : tester
+            ? "What should change? A developer will send it to the agent…"
+            : "What should change? Sent with the annotations…";
     }
     this.updateLock();
     const stageStatus = $("#stage-status");
@@ -2471,6 +2521,19 @@ class Editor {
       });
     }
     $("#submit").addEventListener("click", () => this.submit());
+    $("#cancel-request")?.addEventListener("click", async () => {
+      try {
+        const result = await api(
+          `/api/sessions/${encodeURIComponent(this.sessionId)}/request-agent`,
+          { method: "DELETE" },
+        );
+        if (result?.meta) this.meta = result.meta;
+        this.renderHeader();
+        await this.rail.load();
+      } catch (error) {
+        alert(`Could not cancel the request: ${error.message}`);
+      }
+    });
     const composerInput = $("#composer-text");
     if (composerInput) {
       composerInput.addEventListener("input", () => this.scheduleDraft());
@@ -4127,12 +4190,24 @@ class Editor {
 
   updateLock() {
     const before = this.locked;
-    this.locked = Boolean(this.meta && this.meta.status === "submitted") && !this.viewing;
+    const viewer = this.myRole === "viewer";
+    const testerOther = this.myRole === "tester" && this.userId
+      && this.meta?.created_by && this.meta.created_by !== this.userId;
+    this.locked = Boolean(this.meta
+      && (this.meta.status === "submitted" || viewer || testerOther)) && !this.viewing;
     // No modal overlay: the stage status pill is the visible signal. The drawing tools are
     // disabled as well — a button that looks armed but silently refuses every click reads as a
     // broken lock, which is exactly how this was reported.
     const status = $("#stage-status");
-    if (status) status.title = this.locked ? "STOP unlocks the canvas for another round." : "";
+    if (status) {
+      status.title = testerOther
+        ? "Another tester's task — read-only"
+        : viewer
+          ? "Read-only role"
+          : this.locked
+            ? "STOP unlocks the canvas for another round."
+            : "";
+    }
     $$('.tool[data-tool]').forEach((button) => {
       button.toggleAttribute("disabled", this.readOnly);
     });
@@ -4141,9 +4216,14 @@ class Editor {
       if (button) button.disabled = this.locked;
     });
     // A history round is read-only: submitting the canvas would send the archived annotations as
-    // a new live round, so the primary action is disabled until Back to current.
+    // a new live round, so the primary action is disabled until Back to current. A tester may
+    // request an agent review, but cannot submit or stop; a viewer cannot act at all.
     const submit = $("#submit");
-    if (submit) submit.disabled = Boolean(this.viewing);
+    if (submit) {
+      const testerBlocked = this.myRole === "tester"
+        && (this.meta?.status !== "open" || testerOther);
+      submit.disabled = Boolean(this.viewing) || viewer || testerBlocked;
+    }
     const dim = $("#stage-dim");
     if (dim) dim.hidden = !this.locked;
     if (this.locked) {
@@ -4727,10 +4807,11 @@ class Editor {
         form.append("frames", capture.blob, `${capture.at.toFixed(3)}.${capture.ext}`);
       }
       button.textContent = "Uploading…";
-      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/annotations`, {
-        method: "POST",
-        body: form,
-      });
+      const request = this.myRole === "tester";
+      const result = await api(
+        `/api/sessions/${encodeURIComponent(this.sessionId)}/${this.submitEndpoint()}`,
+        { method: "POST", body: form },
+      );
       if (result?.meta) this.meta = result.meta;
       this.drafts.delete(this.sessionId);
       this.syncDirty();
@@ -4745,7 +4826,7 @@ class Editor {
       this.seenConversation();
       document.activeElement?.blur?.();
       await this.rail.load();
-      button.textContent = "Submitted ✓";
+      button.textContent = request ? "Request sent ✓" : "Submitted ✓";
       setTimeout(() => {
         button.disabled = false;
         this.renderHeader();
@@ -4759,9 +4840,17 @@ class Editor {
     void label;
   }
 
+  /// A tester saves a request; a developer/owner sends it to the agent.
+  submitEndpoint() {
+    return this.myRole === "tester" ? "request-agent" : "annotations";
+  }
+
   async submit() {
     if (this.viewing) return;
-    if (this.meta?.status === "submitted") return this.stop();
+    if (this.meta?.status === "submitted") {
+      if (this.myRole === "tester") return;
+      return this.stop();
+    }
     if (!this.image) return;
     const button = $("#submit");
     const label = button.textContent;
@@ -4790,11 +4879,15 @@ class Editor {
         png: exportCanvas.toDataURL("image/png"),
         note: composer ? composer.value.trim() : "",
       };
-      const result = await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/annotations`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
-      });
+      const request = this.myRole === "tester";
+      const result = await api(
+        `/api/sessions/${encodeURIComponent(this.sessionId)}/${this.submitEndpoint()}`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        },
+      );
       if (result?.meta) this.meta = result.meta;
       this.drafts.delete(this.sessionId);
       this.syncDirty();
@@ -4811,7 +4904,7 @@ class Editor {
       // Hand the keyboard back to the canvas: the review is sent, the next key is a shortcut.
       document.activeElement?.blur?.();
       await this.rail.load();
-      button.textContent = "Submitted ✓";
+      button.textContent = request ? "Request sent ✓" : "Submitted ✓";
       // Re-render instead of hardcoding the next label: the status is `submitted` now, so the
       // button must become the red STOP with its square, not "Submit again".
       setTimeout(() => {
@@ -4893,13 +4986,19 @@ const NewReview = {
     if (!select) return;
     const previous = select.value;
     try {
-      const { projects } = await api("/api/projects");
+      const [{ projects }, me] = await Promise.all([
+        api("/api/projects"),
+        api("/api/auth/me").catch(() => null),
+      ]);
+      const isOwner = Boolean(me?.is_owner);
       const items = projects || [];
       const repos = items.filter((project) => project.repo);
       const others = items.filter(
         (project) => !project.repo && (project.sessions > 0 || project.slug === "inbox"),
       );
-      if (!repos.length && !others.length) {
+      // Inbox is owner-only; a member with no project must ask for access instead of being
+      // offered a project the server will reject.
+      if (!repos.length && !others.length && isOwner) {
         others.push({ slug: "inbox", name: "Inbox", sessions: 0 });
       }
       const options = ['<option value="" disabled>Choose a project…</option>'];
@@ -4920,7 +5019,7 @@ const NewReview = {
         }
         options.push("</optgroup>");
       }
-      options.push('<option value="__new__">+ New project…</option>');
+      if (isOwner) options.push('<option value="__new__">+ New project…</option>');
       select.innerHTML = options.join("");
       const wanted = lastProject.get() || previous;
       select.value = [...select.options].some((option) => option.value === wanted)
@@ -5344,4 +5443,5 @@ document.addEventListener("DOMContentLoaded", () => {
   } else {
     bootList();
   }
+  showPeopleLink();
 });

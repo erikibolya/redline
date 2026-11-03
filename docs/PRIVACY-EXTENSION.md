@@ -1,14 +1,15 @@
 # RedLine Capture — privacy policy
 
-Effective: 2026-11-01
+Effective: 2026-11-03
 
 RedLine Capture is a Chrome/Edge extension that captures a page screenshot or a tab recording and
-sends it to **the RedLine server the user configures**. It has no analytics, no advertising, no
-third-party endpoints and no remote code.
+either exports it locally or sends it to **the RedLine server the user configures**. It has no
+analytics, no advertising, no third-party endpoints and no remote code.
 
 ## What the extension collects
 
-Only after the user explicitly presses **Screenshot & annotate** or **Record flow**:
+Only after the user explicitly presses **Screenshot & annotate**, **Screenshot offline**,
+**Record flow** or **Record offline**:
 
 - the visible tab's screenshot, or the tab's video while recording;
 - the page URL and title;
@@ -24,17 +25,23 @@ the user sees the draft and can discard it before upload.
 
 ## Where the data goes
 
-Captures and annotations are sent only to the RedLine server URL saved in the extension options.
-They are stored in that server's session folder. The extension does not send data anywhere else.
+- **Server mode:** captures and annotations are sent only to the RedLine server URL saved in the
+  extension options and stored in that server's session folder.
+- **Offline mode:** captures and annotations stay in IndexedDB in the browser profile. **Export
+  review** writes a folder or ZIP the user chooses; no data is sent to the extension author or a
+  third party.
 
 ## Local storage
 
 - `chrome.storage.local`: the RedLine server URL, token, selected project and branch. The token is
   not synced to other browsers.
-- `chrome.storage.session`: the active capture, unsent annotation draft and recording state. This
-  is cleared when the browser session ends and is removed on submit/discard.
-- The video, screenshot, trace and annotations live on the RedLine server until the user deletes
-  the review there.
+- `chrome.storage.session`: the active capture pointer, unsent annotation draft and recording
+  state. This is cleared when the browser session ends and is removed on submit/discard.
+- IndexedDB (`redline-local`): offline screenshots, videos, posters, traces and annotations. They
+  stay in the browser profile until the user discards the review; exported files stay in the
+  folder/ZIP until the user deletes them.
+- In server mode, the video, screenshot, trace and annotations live on the RedLine server until the
+  user deletes the review there.
 
 ## Permissions
 
@@ -53,9 +60,11 @@ They are stored in that server's session folder. The extension does not send dat
 ## Sharing and retention
 
 The extension does not share data with the extension author, analytics providers or advertisers.
-The RedLine server owner controls storage and retention. Delete a review in RedLine to remove its
-screenshot/video, trace and annotations; remove the extension (or clear its storage) to remove the
-local configuration and drafts.
+In server mode, the RedLine server owner controls storage and retention; delete a review in RedLine
+to remove its screenshot/video, trace and annotations. Offline captures can be deleted with
+**Discard** in the side panel; remove the extension (or clear its storage) to remove the local
+configuration, drafts and offline captures. Exported folders/ZIPs are ordinary files on the user's
+disk.
 
 ## Contact
 

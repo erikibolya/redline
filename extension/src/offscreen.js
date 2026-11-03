@@ -1,4 +1,5 @@
 import { RedLineApi } from "./lib/api.js";
+import { newLocalId, putCapture } from "./lib/local-store.js";
 
 let active = null;
 
@@ -143,6 +144,37 @@ async function uploadRecording({ config, trace, title, url, note, project, branc
   return created;
 }
 
+async function saveRecordingLocal({ trace, title, url, note = "" }) {
+  const current = stopped;
+  if (!current) throw new Error("No stopped recording to save");
+  const posterBlob = current.poster ? await (await fetch(current.poster)).blob() : null;
+  const id = newLocalId("local-video");
+  await putCapture({
+    id,
+    sessionId: id,
+    mode: "local",
+    kind: "video",
+    title: title || "Browser flow",
+    url: url || "",
+    note,
+    createdAt: new Date().toISOString(),
+    videoBlob: current.videoBlob,
+    posterBlob,
+    trace,
+    durationMs: current.durationMs,
+    width: current.width,
+    height: current.height,
+    annotations: [],
+  });
+  stopped = null;
+  return {
+    id,
+    durationMs: current.durationMs,
+    width: current.width,
+    height: current.height,
+  };
+}
+
 function discard() {
   if (active) {
     try {
@@ -160,6 +192,7 @@ const RECORDER_MESSAGES = new Set([
   "start-recording",
   "stop-recording",
   "upload-recording",
+  "save-recording-local",
   "discard-recording",
 ]);
 
@@ -173,6 +206,8 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ ok: true, ...(await stopRecording()) });
       } else if (message.type === "upload-recording") {
         sendResponse({ ok: true, ...(await uploadRecording(message)) });
+      } else if (message.type === "save-recording-local") {
+        sendResponse({ ok: true, ...(await saveRecordingLocal(message)) });
       } else if (message.type === "discard-recording") {
         discard();
         sendResponse({ ok: true });

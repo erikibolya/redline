@@ -1,5 +1,6 @@
 import { RedLineApi } from "./lib/api.js";
 import { isConfigured, loadConfig } from "./lib/config.js";
+import { newLocalId, putCapture } from "./lib/local-store.js";
 import { consoleText, makeTrace, redactText, redactUrl } from "./lib/trace.js";
 
 const ACTIVE_KEY = "activeCapture";
@@ -54,6 +55,45 @@ async function captureAndCreate({ tabId } = {}) {
   return { capture, meta: created.meta };
 }
 
+/**
+ * Capture the visible tab into local IndexedDB. No server, token, project or host permission is
+ * needed; the side panel exports a folder/ZIP for the human to hand to an agent.
+ */
+async function captureLocal({ tabId } = {}) {
+  const tab = await activeTab(tabId);
+  if (!tab.windowId) throw new Error("The active tab has no window");
+  assertRecordable(tab);
+  const imageDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  const imageBlob = await (await fetch(imageDataUrl)).blob();
+  const id = newLocalId("local-image");
+  const title = tab.title || "Screenshot";
+  const url = tab.url || "";
+  await putCapture({
+    id,
+    sessionId: id,
+    mode: "local",
+    kind: "image",
+    title,
+    url,
+    note: "",
+    createdAt: new Date().toISOString(),
+    imageBlob,
+    annotations: [],
+  });
+  const capture = {
+    sessionId: id,
+    id,
+    mode: "local",
+    kind: "image",
+    title,
+    url,
+    createdAt: new Date().toISOString(),
+  };
+  await chrome.storage.session.set({ [ACTIVE_KEY]: capture });
+  chrome.runtime.sendMessage({ type: "capture-created", capture }).catch(() => {});
+  return { capture };
+}
+
 // ------------------------------------------------------------------ recording
 
 async function ensureRecording() {
@@ -70,10 +110,10 @@ function persistRecordingSoon() {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     if (!recording) return;
-    const { tabId, startedAt, title, url, serverUrl, events, truncated } = recording;
+    const { tabId, startedAt, title, url, serverUrl, local, events, truncated } = recording;
     chrome.storage.session
       .set({
-        [RECORDING_KEY]: { tabId, startedAt, title, url, serverUrl, events, truncated },
+        [RECORDING_KEY]: { tabId, startedAt, title, url, serverUrl, local, events, truncated },
       })
       .catch(() => {});
   }, 500);
@@ -141,12 +181,12 @@ async function injectContent(tabId) {
   }
 }
 
-async function startRecording({ tabId } = {}) {
+async function startRecording({ tabId, local = false } = {}) {
   if (stopInFlight) throw new Error("A recording is being saved");
   const existing = await ensureRecording();
   if (existing) throw new Error("A recording is already running");
-  const config = await loadConfig();
-  if (!isConfigured(config)) {
+  const config = local ? null : await loadConfig();
+  if (!local && !isConfigured(config)) {
     const error = new Error("Connect RedLine in the extension options first");
     error.code = "not-configured";
     throw error;
@@ -171,7 +211,8 @@ async function startRecording({ tabId } = {}) {
     startedAt: started.startedAt,
     title: tab.title || "Browser flow",
     url: tab.url || "",
-    serverUrl: config.serverUrl,
+    serverUrl: local ? null : config.serverUrl,
+    local: Boolean(local),
     events: [],
     truncated: false,
     requests: new Map(),
@@ -183,6 +224,7 @@ async function startRecording({ tabId } = {}) {
       title: recording.title,
       url: recording.url,
       serverUrl: recording.serverUrl,
+      local: recording.local,
       events: [],
       truncated: false,
     },
@@ -194,6 +236,7 @@ async function startRecording({ tabId } = {}) {
     tabId: recording.tabId,
     title: recording.title,
     url: recording.url,
+    local: recording.local,
   };
 }
 
@@ -228,6 +271,7 @@ async function recordingState() {
     url: current.url,
     events: current.events.length,
     truncated: current.truncated,
+    local: Boolean(current.local),
   };
 }
 
@@ -250,7 +294,7 @@ async function debuggerEvent(tabId, method, params) {
     const url = redactUrl(params.request?.url || "");
     if (
       !url ||
-      url.startsWith(current.serverUrl) ||
+      (current.serverUrl && url.startsWith(current.serverUrl)) ||
       url.startsWith("chrome-extension://") ||
       url.startsWith("data:")
     ) {
@@ -313,7 +357,7 @@ async function stopRecording() {
   stopInFlight = (async () => {
     const current = await ensureRecording();
     if (!current) throw new Error("No recording is running");
-    const config = await loadConfig();
+    const config = current.local ? null : await loadConfig();
     await detachDebugger(current.tabId);
     chrome.tabs.sendMessage(current.tabId, { type: "redline-stop" }).catch(() => {});
     const stopped = await offscreen({ type: "stop-recording" });
@@ -324,6 +368,33 @@ async function stopRecording() {
       events: current.events,
       truncated: current.truncated,
     });
+
+    if (current.local) {
+      const saved = await offscreen({
+        type: "save-recording-local",
+        trace,
+        title: current.title,
+        url: current.url,
+        note: "",
+      });
+      const capture = {
+        sessionId: saved.id,
+        id: saved.id,
+        mode: "local",
+        kind: "video",
+        title: current.title,
+        url: current.url,
+        createdAt: new Date().toISOString(),
+      };
+      await chrome.storage.session.set({ [ACTIVE_KEY]: capture });
+      await chrome.storage.session.remove(RECORDING_KEY);
+      recording = null;
+      await chrome.action.setBadgeText({ text: "" });
+      await closeOffscreen();
+      chrome.runtime.sendMessage({ type: "capture-created", capture }).catch(() => {});
+      return { capture, trace: null };
+    }
+
     let created;
     try {
       created = await offscreen({
@@ -417,7 +488,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.target === "offscreen") return false;
   (async () => {
     try {
-      if (message?.type === "capture-and-create") {
+      if (message?.type === "capture-local") {
+        sendResponse({ ok: true, ...(await captureLocal(message)) });
+      } else if (message?.type === "capture-and-create") {
         sendResponse({ ok: true, ...(await captureAndCreate(message)) });
       } else if (message?.type === "get-active-capture") {
         const stored = await chrome.storage.session.get(ACTIVE_KEY);

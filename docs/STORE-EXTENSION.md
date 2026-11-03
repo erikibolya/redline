@@ -17,7 +17,7 @@ creates a Product ID on its first submission. Store APIs cannot create the first
 **Name:** RedLine Capture
 
 **Short description (132 chars max):**
-> Capture a page or tab flow, annotate it, and send it to your own RedLine review server.
+> Capture a page or tab flow, annotate it, and send it to RedLine or export it for your AI.
 
 **Detailed description:**
 
@@ -28,16 +28,20 @@ creates a Product ID on its first submission. Store APIs cannot create the first
 > • **Flow review** — record a tab while collecting console output, network metadata and the
 >   actions you take. Annotate the video at the exact moment, filter the trace, and submit the
 >   clip, annotated frames and trace together.
-> • **Your server** — everything goes to the RedLine server you configure. No account, no cloud,
->   no analytics, no third-party endpoints.
+> • **Offline export** — no server needed. Capture and annotate anyway, then export a review
+>   folder (or a ZIP) with `review.md`, `annotations.json`, the annotated image/video, frames and
+>   trace. Hand it to any AI assistant.
+> • **Your server** — optionally send the same review to the RedLine server you configure. No
+>   account, no cloud, no analytics, no third-party endpoints.
 > • **Redaction** — bearer tokens and common token/key/secret/password query values are removed;
 >   request/response bodies and headers are not captured in this version.
 >
 > RedLine never runs git, deploys or merges. It records the human's annotations and decision; the
 > agent integration performs its own workflow.
 >
-> You need a running RedLine server and its token. Install, open the extension options, paste the
-> server URL and token, then capture.
+> Install the extension, capture a page, and choose **Save locally** for an offline export. To
+> use server mode, open the extension options, paste the RedLine server URL and token, then choose
+> **Send to RedLine**.
 >
 > Permissions: `debugger` is used only while you explicitly record, to read console/network
 > events for the review; it is detached on stop. `tabCapture` records only the tab you start. The
@@ -49,6 +53,24 @@ creates a Product ID on its first submission. Store APIs cannot create the first
 
 **Privacy policy:** <https://github.com/erikibolya/redline/blob/dev/docs/PRIVACY-EXTENSION.md>
 (the `dev` blob is live now; switch the listing to the `main` blob after the next release).
+
+## Testing without a server
+
+The 0.3.0 package supports offline export, so reviewers do not need a RedLine server, account or
+token. Use this text in Chrome **Test instructions** and Edge **Notes for certification**:
+
+```text
+No RedLine server or token is needed to test this extension.
+
+1. Open any http(s) page and click the RedLine Capture toolbar icon.
+2. Choose "Screenshot offline" (or "Record offline" and interact with the page).
+3. Annotate in the side panel and click "Export review".
+4. Choose a folder or download the ZIP. Verify review.md, annotations.json, annotated.png
+   (or video.webm + frames/) and, for a recording, trace.json.
+
+Server mode is optional: open Options, enter a RedLine server URL and token, then use
+"Screenshot & annotate" / "Record flow".
+```
 
 ## Permission justifications
 
@@ -87,8 +109,8 @@ Copy these into the Chrome Web Store / Partner Center fields:
   - `03-video-trace.png` — recorded flow with timeline, trace errors and a timecoded annotation.
 - [ ] Small promo tile 440×280 (optional).
 - [ ] Final privacy-policy URL (use the `dev` blob now; switch to `main` after the next release).
-- [x] Chrome Web Store developer account and verification (created 2026-11-02); Edge account pending.
-- [x] Store ZIP from `python3 extension/scripts/package.py` (`dist/redline-extension-0.2.0.zip`; rebuild after changes).
+- [x] Chrome Web Store and Microsoft Edge developer accounts; submit 0.3.0 with the offline export.
+- [x] Store ZIP from `python3 extension/scripts/package.py` (`dist/redline-extension-0.3.0.zip`; rebuild after changes).
 
 ## Submission steps
 

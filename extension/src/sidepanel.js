@@ -1,5 +1,13 @@
 import { RedLineApi } from "./lib/api.js";
 import { isConfigured, loadConfig } from "./lib/config.js";
+import { deleteCapture, getCapture, putCapture } from "./lib/local-store.js";
+import {
+  AI_PROMPT,
+  buildAnnotationsJson,
+  buildReviewMarkdown,
+  buildZip,
+  frameFileName,
+} from "./lib/package.js";
 import {
   annotationVisibleAt,
   composePng,
@@ -50,6 +58,8 @@ const state = {
   textPoint: null,
   readOnly: false,
   submitted: false,
+  local: false,
+  localData: null,
   saveTimer: null,
 };
 
@@ -141,6 +151,8 @@ function render() {
   $("delete").disabled = state.readOnly || !state.selectedId;
   $("clear").disabled = state.readOnly || state.annotations.length === 0;
   $("submit").disabled = state.readOnly;
+  $("submit").textContent = state.local ? "Export review" : "Submit to RedLine";
+  $("open-redline").hidden = state.local;
   $("discard").disabled = state.submitted;
   noteInput.disabled = state.readOnly;
   for (const button of document.querySelectorAll(".tool")) {
@@ -641,6 +653,8 @@ async function loadCapture(capture) {
     state.traceEvents = [];
     state.bitmap = null;
     state.mediaKind = meta.media?.kind === "video" ? "video" : "image";
+    state.local = false;
+    state.localData = null;
     state.config = config;
     state.capture = capture;
     state.api = api;
@@ -719,12 +733,124 @@ async function loadCapture(capture) {
   }
 }
 
+async function loadLocalCapture(capture) {
+  try {
+    setBusy(true);
+    setStatus("Loading local capture…");
+    const local = await getCapture(capture.id || capture.sessionId);
+    if (!local) throw new Error("Local capture not found");
+    if (state.video) state.video.pause();
+    if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
+    state.videoUrl = null;
+    state.video = null;
+    state.trace = null;
+    state.traceEvents = [];
+    state.bitmap = null;
+    state.local = true;
+    state.localData = local;
+    state.config = null;
+    state.api = null;
+    state.capture = {
+      ...capture,
+      id: local.id,
+      sessionId: local.id,
+      mode: "local",
+      kind: local.kind,
+    };
+    const media =
+      local.kind === "video"
+        ? {
+            kind: "video",
+            width: local.width,
+            height: local.height,
+            duration_ms: Math.round(Number(local.durationMs) || 0),
+            mime: "video/webm",
+          }
+        : null;
+    state.meta = {
+      id: local.id,
+      title: local.title,
+      url: local.url,
+      note: local.note,
+      status: "open",
+      media,
+    };
+    state.mediaKind = local.kind === "video" ? "video" : "image";
+    state.annotations = Array.isArray(local.annotations) ? local.annotations : [];
+    state.selectedId = null;
+    state.undo = [];
+    state.redo = [];
+    state.readOnly = false;
+    state.submitted = false;
+    state.width = Number(local.width) || 0;
+    state.height = Number(local.height) || 0;
+    noteInput.value = local.note || "";
+
+    const stored = await chrome.storage.session.get(draftKey());
+    const draft = stored[draftKey()];
+    if (draft && Array.isArray(draft.annotations)) {
+      state.annotations = draft.annotations;
+      noteInput.value = draft.note || "";
+      setStatus("Restored an unsent draft.");
+    }
+
+    if (state.mediaKind === "video") {
+      if (!local.videoBlob) throw new Error("Local video is missing");
+      state.videoUrl = URL.createObjectURL(local.videoBlob);
+      video.src = state.videoUrl;
+      await new Promise((resolve, reject) => {
+        video.addEventListener("loadedmetadata", resolve, { once: true });
+        video.addEventListener("error", () => reject(new Error("cannot load video")), {
+          once: true,
+        });
+      });
+      state.video = video;
+      state.duration =
+        Number.isFinite(video.duration) && video.duration > 0
+          ? video.duration
+          : (Number(local.durationMs) || 0) / 1000;
+      state.width = video.videoWidth || state.width;
+      state.height = video.videoHeight || state.height;
+      video.currentTime = 0;
+      state.trace = local.trace || null;
+      state.traceEvents = Array.isArray(local.trace?.events) ? local.trace.events : [];
+      $("trace-filter").value = state.traceFilter;
+      $("ghosts").checked = state.ghosts;
+      renderTrace();
+    } else {
+      if (!local.imageBlob) throw new Error("Local image is missing");
+      state.bitmap = await createImageBitmap(local.imageBlob);
+      state.width = state.bitmap.width;
+      state.height = state.bitmap.height;
+    }
+
+    $("title").textContent =
+      local.title || (state.mediaKind === "video" ? "Browser flow" : "Screenshot");
+    $("subtitle").textContent = `${state.width}×${state.height}${
+      state.mediaKind === "video" ? ` · ${formatTime(state.duration)}` : ""
+    } · local`;
+    $("open-capture").hidden = true;
+    showWorkspace();
+    setTool("rect");
+    render();
+    if (!draft) setStatus("Local capture — export a folder or ZIP when done.");
+  } catch (error) {
+    showEmpty(error.message || String(error));
+  } finally {
+    setBusy(false);
+    render();
+  }
+}
+
 async function loadActiveCapture() {
   const response = await chrome.runtime.sendMessage({ type: "get-active-capture" });
-  if (response?.capture) await loadCapture(response.capture);
+  if (response?.capture?.mode === "local") await loadLocalCapture(response.capture);
+  else if (response?.capture) await loadCapture(response.capture);
   else {
     const config = await loadConfig();
-    if (!isConfigured(config)) setStatus("Connect RedLine in the extension options first.", "err");
+    if (!isConfigured(config)) {
+      setStatus("Connect RedLine for server mode, or save a local capture.", "");
+    }
     showEmpty();
   }
 }
@@ -740,7 +866,36 @@ async function captureCurrent() {
     if (!response?.ok) throw new Error(response?.error || "Capture failed");
     await loadCapture(response.capture);
   } catch (error) {
-    setStatus(error.message || String(error), "err");
+    const message = error.message || String(error);
+    setStatus(
+      /activeTab|all_urls/i.test(message)
+        ? "Use the RedLine Capture toolbar icon → Screenshot & annotate."
+        : message,
+      "err",
+    );
+  } finally {
+    setBusy(false);
+  }
+}
+
+async function captureOffline() {
+  if (state.annotations.length && !state.readOnly) {
+    if (!confirm("Discard the unsent annotations and capture the current tab offline?")) return;
+  }
+  try {
+    setBusy(true);
+    setStatus("Capturing offline…");
+    const response = await chrome.runtime.sendMessage({ type: "capture-local" });
+    if (!response?.ok) throw new Error(response?.error || "Capture failed");
+    await loadLocalCapture(response.capture);
+  } catch (error) {
+    const message = error.message || String(error);
+    setStatus(
+      /activeTab|all_urls/i.test(message)
+        ? "Use the RedLine Capture toolbar icon → Screenshot offline."
+        : message,
+      "err",
+    );
   } finally {
     setBusy(false);
   }
@@ -812,7 +967,7 @@ async function contactSheet(frames) {
   return canvasBlob(sheet);
 }
 
-async function submitVideo() {
+async function videoPackageFrames() {
   const times = [
     ...new Set(
       state.annotations.map((annotation) =>
@@ -821,13 +976,18 @@ async function submitVideo() {
     ),
   ].map((value) => value / 1000);
   if (times.length > 20) {
-    throw new Error("A video submit supports at most 20 annotated timestamps");
+    throw new Error("A video export supports at most 20 annotated timestamps");
   }
   setStatus("Capturing annotated frames…");
   state.video.pause();
   const frames = [];
   for (const at of times) frames.push(await captureFrame(at));
   const sheet = await contactSheet(frames);
+  return { frames, sheet };
+}
+
+async function submitVideo() {
+  const { frames, sheet } = await videoPackageFrames();
   await state.api.submitVideo(state.capture.sessionId, {
     annotations: state.annotations,
     width: mediaWidth(),
@@ -838,13 +998,159 @@ async function submitVideo() {
   });
 }
 
+function dataUrlBlob(dataUrl) {
+  return fetch(dataUrl).then((response) => response.blob());
+}
+
+async function writeDirectoryFile(dir, name, data) {
+  const parts = String(name).split("/").filter(Boolean);
+  let handle = dir;
+  for (const part of parts.slice(0, -1)) {
+    handle = await handle.getDirectoryHandle(part, { create: true });
+  }
+  const fileHandle = await handle.getFileHandle(parts[parts.length - 1], { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(data);
+  await writable.close();
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function savePackage(files) {
+  const picker =
+    globalThis.__redlineTestPicker ||
+    (typeof globalThis.showDirectoryPicker === "function"
+      ? globalThis.showDirectoryPicker.bind(globalThis)
+      : null);
+  if (picker) {
+    try {
+      const dir = await picker({ mode: "readwrite", id: "redline-review" });
+      for (const file of files) await writeDirectoryFile(dir, file.name, file.data);
+      return { kind: "folder" };
+    } catch (error) {
+      if (error?.name === "AbortError") return { kind: "canceled" };
+      // The picker is unavailable in this context; fall back to a ZIP download.
+    }
+  }
+  const zip = await buildZip(files);
+  downloadBlob(zip, `redline-review-${state.capture.sessionId}.zip`);
+  return { kind: "zip" };
+}
+
+async function exportLocal() {
+  if (!state.local || !state.localData) throw new Error("No local capture to export");
+  const local = state.localData;
+  const note = noteInput.value.trim();
+  const media =
+    state.mediaKind === "video"
+      ? {
+          kind: "video",
+          width: state.width,
+          height: state.height,
+          duration_ms: Math.round((state.duration || 0) * 1000),
+          mime: "video/webm",
+        }
+      : null;
+  let frames = [];
+  let contact = null;
+  let annotated = null;
+  if (state.mediaKind === "video") {
+    const captured = await videoPackageFrames();
+    frames = captured.frames;
+    contact = captured.sheet;
+  } else {
+    annotated = await dataUrlBlob(composePng(state.bitmap, state.annotations));
+  }
+
+  const trace = local.trace || null;
+  const markdown = buildReviewMarkdown({
+    id: state.capture.sessionId,
+    title: state.meta.title,
+    url: state.meta.url,
+    note,
+    media,
+    width: state.width,
+    height: state.height,
+    annotations: state.annotations,
+    frames,
+    trace,
+  });
+  const annotationsJson = buildAnnotationsJson({
+    id: state.capture.sessionId,
+    title: state.meta.title,
+    url: state.meta.url,
+    note,
+    media,
+    width: state.width,
+    height: state.height,
+    annotations: state.annotations,
+    frames,
+    trace,
+  });
+  if (media && !local.posterBlob) delete annotationsJson.image;
+
+  const files = [
+    { name: "review.md", data: markdown },
+    { name: "annotations.json", data: JSON.stringify(annotationsJson, null, 2) },
+    { name: "AI-PROMPT.md", data: AI_PROMPT },
+  ];
+  if (trace) files.push({ name: "trace.json", data: JSON.stringify(trace, null, 2) });
+  if (annotated) files.push({ name: "annotated.png", data: annotated });
+  if (media) {
+    files.push({ name: "video.webm", data: local.videoBlob });
+    if (local.posterBlob) files.push({ name: "poster.png", data: local.posterBlob });
+    if (contact) files.push({ name: "contact-sheet.png", data: contact });
+    for (const frame of frames) {
+      files.push({ name: frameFileName(frame.at), data: frame.blob });
+    }
+  }
+
+  setStatus("Saving review…");
+  const result = await savePackage(files);
+  if (result.kind === "canceled") {
+    setStatus("Export canceled.");
+    return;
+  }
+  const updated = { ...local, annotations: state.annotations, note };
+  await putCapture(updated);
+  state.localData = updated;
+  await chrome.storage.session.remove(draftKey());
+  setStatus(
+    result.kind === "folder" ? "Exported review folder." : "Downloaded review ZIP.",
+    "ok",
+  );
+  render();
+}
+
 async function submit() {
-  if (state.readOnly || !state.api || !state.capture) return;
+  if (state.readOnly || !state.capture) return;
   if (!state.annotations.length && !noteInput.value.trim()) {
-    if (!confirm("There are no annotations and no note. Send the capture anyway?")) return;
+    if (
+      !confirm(
+        state.local
+          ? "There are no annotations and no note. Export the capture anyway?"
+          : "There are no annotations and no note. Send the capture anyway?",
+      )
+    ) {
+      return;
+    }
   }
   try {
     setBusy(true);
+    if (state.local) {
+      await exportLocal();
+      return;
+    }
+    if (!state.api) throw new Error("Connect RedLine before submitting.");
     setStatus("Submitting…");
     if (state.mediaKind === "video") {
       await submitVideo();
@@ -873,16 +1179,30 @@ async function submit() {
 
 async function discard() {
   if (!state.capture) return;
-  if (!confirm("Delete this review and its screenshot?")) return;
+  const local = state.local;
+  if (!confirm(local ? "Delete this local review and its files?" : "Delete this review and its screenshot?")) {
+    return;
+  }
   try {
     setBusy(true);
-    await state.api.deleteSession(state.capture.sessionId);
+    if (local) {
+      await deleteCapture(state.capture.sessionId);
+    } else {
+      if (!state.api) throw new Error("Connect RedLine first.");
+      await state.api.deleteSession(state.capture.sessionId);
+    }
     await chrome.storage.session.remove(draftKey());
     await chrome.runtime.sendMessage({ type: "clear-active-capture" });
+    if (state.video) state.video.pause();
+    if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
     state.capture = null;
     state.meta = null;
     state.bitmap = null;
+    state.local = false;
+    state.localData = null;
     state.annotations = [];
+    state.video = null;
+    state.videoUrl = null;
     showEmpty();
   } catch (error) {
     setStatus(error.message || String(error), "err");
@@ -892,7 +1212,7 @@ async function discard() {
 }
 
 function openRedLine() {
-  if (!state.capture) return;
+  if (state.local || !state.capture) return;
   const url =
     state.capture.reviewUrl ||
     `${state.config.serverUrl}/s/${encodeURIComponent(state.capture.sessionId)}?t=${encodeURIComponent(
@@ -902,6 +1222,7 @@ function openRedLine() {
 }
 
 $("capture").addEventListener("click", captureCurrent);
+$("capture-offline").addEventListener("click", captureOffline);
 $("open-capture").addEventListener("click", openRedLine);
 $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -911,7 +1232,8 @@ $("open-redline").addEventListener("click", openRedLine);
 
 chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "capture-created" && message.capture) {
-    loadCapture(message.capture);
+    if (message.capture.mode === "local") loadLocalCapture(message.capture);
+    else loadCapture(message.capture);
   }
 });
 

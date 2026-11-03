@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "RedLine Capture",
-  "version": "0.2.0",
-  "description": "Capture a screenshot or tab flow and annotate it in a side panel before sending it to your RedLine server.",
+  "version": "0.3.0",
+  "description": "Capture a page or tab flow, annotate it, and send it to RedLine or export it for your AI.",
   "minimum_chrome_version": "116",
   "permissions": [
     "activeTab",

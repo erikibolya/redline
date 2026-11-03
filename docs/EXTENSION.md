@@ -1,13 +1,14 @@
 # Browser capture extension — design and delivery plan
 
-Status: **Phases 1–5 implemented** (2026-11-01). Screenshots and recorded flows are annotated in
-the side panel; the store ZIP, privacy policy, listing copy and an extension e2e CI job are ready.
-Store accounts and publishing are the only remaining owner actions.
+Status: **Phases 1–6 implemented** (2026-11-03). Screenshots and recorded flows are annotated in
+the side panel; v0.3.0 adds offline export (folder or ZIP) with no server or token. The store ZIP,
+privacy policy, listing copy and an extension e2e CI job are ready. Publishing is the remaining
+owner action.
 
-A Chromium extension that connects to a RedLine server, captures a screenshot or records a flow
-from the current tab, collects the console and network evidence, and lets the human annotate the
-capture in a side panel before submitting it to RedLine as a normal review. The agent reads the
-annotations plus a structured trace.
+A Chromium extension that captures a screenshot or records a flow from the current tab, collects
+the console and network evidence, and lets the human annotate the capture in a side panel. The
+result can be submitted to a RedLine server as a normal review, or exported as a review folder
+for an AI assistant. The agent reads the annotations plus a structured trace.
 
 Decisions from the product owner (2026-11-01): **Chrome + Edge first**, annotation **in the
 extension side panel**, active-tab capture, console/network **metadata + actions**, 5 min / 250 MB,
@@ -586,8 +587,9 @@ Phase 2 (options/popup, screenshot capture, side-panel image editor) is implemen
 - Side panel: select/move, rectangle, arrow, pen, text note, colour/width, undo/redo, delete,
   clear, numbered list, per-session draft, annotated PNG composition and submit.
 - Submitted reviews open read-only; **Open in RedLine** remains available.
-- Eighteen extension unit tests (`node --test`) for annotation geometry, the API request shape,
-  URL/permission config, and trace redaction, wired into the Linux + Windows CI test job.
+- Twenty-two extension unit tests (`node --test`) for annotation geometry, the API request shape,
+  URL/permission config, trace redaction and the offline package, wired into the Linux + Windows
+  CI test job.
 
 Phase 3 (tab recording) is implemented on `feat/extension-recording`:
 
@@ -620,10 +622,26 @@ Phase 5 preparation is in this branch:
 - `docs/PRIVACY-EXTENSION.md` and `docs/STORE-EXTENSION.md` cover the privacy disclosure,
   permission justifications and listing copy.
 - The release workflow attaches the ZIP to every GitHub release.
-- The Chrome Web Store developer account is created; Edge is pending. Publishing is the owner's
-  explicit action.
+- The Chrome Web Store and Microsoft Edge developer accounts are created; publishing is the
+  owner's explicit action.
 - `extension e2e` runs in CI: it loads a temporary host-permitted extension in headless Chromium,
   configures a local RedLine, submits an image annotation, then a video + trace annotation at
   0.5 s, and checks the server payload.
 - Store screenshots are in `extension/store/screenshots/` (1280×800): options, screenshot review,
   video + trace.
+
+Phase 6 (offline export, v0.3.0) is implemented:
+
+- The popup has **Screenshot offline** and **Record offline**; neither needs a server, token or
+  configured project.
+- Captures live in IndexedDB (`redline-local`): image/video blobs, poster, trace, dimensions and
+  annotations. Discard removes them.
+- The side panel's **Export review** writes a folder through the File System Access API, or falls
+  back to a store-only ZIP download. The package contains `review.md`, `annotations.json`,
+  `AI-PROMPT.md`, `annotated.png` (image) or `video.webm` + `poster.png` + `frames/` +
+  `contact-sheet.png` (video), and `trace.json` (recording).
+- `extension/scripts/e2e.mjs` seeds both an image and a video local capture, mocks the folder
+  picker, draws, exports, and asserts the package contents. The unit tests cover the Markdown,
+  RedLine JSON and ZIP writer.
+- Store reviewers can test the extension without a RedLine server; use the **Testing without a
+  server** text in `docs/STORE-EXTENSION.md`.

@@ -57,3 +57,10 @@ button:disabled { opacity: .55; cursor: progress; }
 .mark-button { flex: 0 0 auto; }
 .timer { font-variant-numeric: tabular-nums; color: #fecdd3; min-width: 46px; text-align: right; }
 .hint { color: var(--muted); font-size: 11px; margin: 6px 0 10px; }
+.offline { padding: 10px 14px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+.offline-head {
+  color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .04em; margin-bottom: 7px;
+}
+.offline .record-row { flex-wrap: wrap; }
+.offline .record-button { flex: 1 1 140px; }

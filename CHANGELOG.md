@@ -48,6 +48,15 @@
   trace errors, timecoded annotation). `docs/STORE-EXTENSION.md` marks the Chrome account as
   created and points the privacy policy at the live `dev` blob until the next release.
 
+- **The browser extension can export a review offline (0.3.0).** The popup now has
+  **Screenshot offline** and **Record offline**; neither needs a RedLine server, token or project.
+  Captures live in IndexedDB, and the side panel's **Export review** writes a folder (File System
+  Access API) or downloads a store-only ZIP. The package contains `review.md`, `annotations.json`,
+  `AI-PROMPT.md`, `annotated.png` (image) or `video.webm` + `poster.png` + `frames/` +
+  `contact-sheet.png` (video), and `trace.json` for a recording. The extension e2e exports both an
+  image and a video+trace package with a mocked folder picker; 22 extension unit tests cover the
+  package Markdown/JSON/ZIP. Store reviewers can test the extension without a server.
+
 ## 0.26.1 — 2026-11-01
 
 - **A stopped or timed-out run now kills its process tree, not just `opencode`.** A killed agent

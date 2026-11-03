@@ -459,9 +459,29 @@ const seen = {
   },
 };
 
+function csrfToken() {
+  for (const part of document.cookie.split(";")) {
+    const [name, ...rest] = part.trim().split("=");
+    if (name === "redline_csrf") return rest.join("=");
+  }
+  return "";
+}
+
 async function api(path, options = {}) {
-  const response = await fetch(path, options);
+  const method = (options.method || "GET").toUpperCase();
+  const headers = { ...(options.headers || {}) };
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const csrf = csrfToken();
+    if (csrf && !headers.Authorization && !headers.authorization) {
+      headers["X-CSRF-Token"] = csrf;
+    }
+  }
+  const response = await fetch(path, { ...options, headers });
   const body = await response.json().catch(() => ({}));
+  if (response.status === 401 && location.pathname !== "/login") {
+    const next = encodeURIComponent(location.pathname + location.search);
+    location.replace(`/login?next=${next}`);
+  }
   if (!response.ok) {
     const error = new Error(body.error || `request failed (${response.status})`);
     error.status = response.status;

@@ -9,7 +9,18 @@ use base64::Engine;
 use rand::RngCore;
 
 pub const COOKIE_NAME: &str = "redline_token";
+pub const SESSION_COOKIE_NAME: &str = "redline_session";
+pub const CSRF_COOKIE_NAME: &str = "redline_csrf";
 pub const QUERY_PARAM: &str = "t";
+pub const SESSION_TTL_SECS: u64 = 30 * 24 * 60 * 60;
+
+/// 32 random bytes, base64url without padding. The same shape is used for sessions, CSRF
+/// tokens, PATs and agent tokens; only the server-side hash is stored for the secret ones.
+pub fn random_token() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
 
 #[derive(Clone, Debug)]
 pub struct Auth {
@@ -25,10 +36,8 @@ impl Auth {
 
     /// 32 random bytes, base64url without padding — same shape as a GitHub token, easy to paste.
     pub fn generate() -> Self {
-        let mut bytes = [0u8; 32];
-        rand::rng().fill_bytes(&mut bytes);
         Self {
-            token: base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes),
+            token: random_token(),
         }
     }
 
@@ -52,27 +61,51 @@ impl Auth {
     }
 }
 
-/// Pull the first usable credential out of a request: `Authorization: Bearer`, the cookie set by
-/// the editor redirect, or a `?t=` query parameter (first contact from a copied review URL).
-pub fn credential_from(headers: &axum::http::HeaderMap, query: Option<&str>) -> Option<String> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialSource {
+    Bearer,
+    SessionCookie,
+    LegacyCookie,
+    Query,
+}
+
+#[derive(Debug, Clone)]
+pub struct Credential {
+    pub value: String,
+    pub source: CredentialSource,
+}
+
+/// Pull the first usable credential out of a request: `Authorization: Bearer`, the session
+/// cookie, the legacy token cookie, or a `?t=` query parameter. A session cookie outranks the
+/// legacy cookie so logging in as a member cannot silently fall back to the owner token.
+pub fn credential_detail_from(
+    headers: &axum::http::HeaderMap,
+    query: Option<&str>,
+) -> Option<Credential> {
     if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
         if let Ok(text) = value.to_str() {
             if let Some(token) = text.strip_prefix("Bearer ") {
-                return Some(token.trim().to_string());
-            }
-        }
-    }
-    if let Some(value) = headers.get(axum::http::header::COOKIE) {
-        if let Ok(text) = value.to_str() {
-            for part in text.split(';') {
-                let part = part.trim();
-                if let Some(token) = part.strip_prefix(&format!("{COOKIE_NAME}=")) {
-                    if !token.is_empty() {
-                        return Some(token.to_string());
-                    }
+                let token = token.trim();
+                if !token.is_empty() {
+                    return Some(Credential {
+                        value: token.to_string(),
+                        source: CredentialSource::Bearer,
+                    });
                 }
             }
         }
+    }
+    if let Some(token) = cookie_value(headers, SESSION_COOKIE_NAME) {
+        return Some(Credential {
+            value: token,
+            source: CredentialSource::SessionCookie,
+        });
+    }
+    if let Some(token) = cookie_value(headers, COOKIE_NAME) {
+        return Some(Credential {
+            value: token,
+            source: CredentialSource::LegacyCookie,
+        });
     }
     for (key, value) in query
         .unwrap_or_default()
@@ -80,7 +113,28 @@ pub fn credential_from(headers: &axum::http::HeaderMap, query: Option<&str>) -> 
         .filter_map(|pair| pair.split_once('='))
     {
         if key == QUERY_PARAM && !value.is_empty() {
-            return Some(value.to_string());
+            return Some(Credential {
+                value: value.to_string(),
+                source: CredentialSource::Query,
+            });
+        }
+    }
+    None
+}
+
+pub fn credential_from(headers: &axum::http::HeaderMap, query: Option<&str>) -> Option<String> {
+    credential_detail_from(headers, query).map(|credential| credential.value)
+}
+
+fn cookie_value(headers: &axum::http::HeaderMap, name: &str) -> Option<String> {
+    let value = headers.get(axum::http::header::COOKIE)?;
+    let text = value.to_str().ok()?;
+    for part in text.split(';') {
+        let part = part.trim();
+        if let Some(token) = part.strip_prefix(&format!("{name}=")) {
+            if !token.is_empty() {
+                return Some(token.to_string());
+            }
         }
     }
     None
@@ -88,6 +142,27 @@ pub fn credential_from(headers: &axum::http::HeaderMap, query: Option<&str>) -> 
 
 pub fn cookie_header(token: &str) -> String {
     format!("{COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000")
+}
+
+pub fn session_cookie_header(token: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!(
+        "{SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={SESSION_TTL_SECS}{secure}"
+    )
+}
+
+/// The CSRF cookie is intentionally readable by the page: the UI mirrors it into the
+/// `X-CSRF-Token` header. It is not an authentication credential by itself.
+pub fn csrf_cookie_header(token: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!(
+        "{CSRF_COOKIE_NAME}={token}; Path=/; SameSite=Strict; Max-Age={SESSION_TTL_SECS}{secure}"
+    )
+}
+
+pub fn clear_cookie_header(name: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{name}=; Path=/; SameSite=Strict; Max-Age=0{secure}")
 }
 
 #[cfg(test)]
@@ -130,5 +205,31 @@ mod tests {
             Some("q1")
         );
         assert_eq!(credential_from(&axum::http::HeaderMap::new(), None), None);
+    }
+
+    #[test]
+    fn a_session_cookie_outranks_the_legacy_token_cookie() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            "cookie",
+            "redline_token=owner; redline_session=member"
+                .parse()
+                .unwrap(),
+        );
+        let credential = credential_detail_from(&headers, None).unwrap();
+        assert_eq!(credential.value, "member");
+        assert_eq!(credential.source, CredentialSource::SessionCookie);
+    }
+
+    #[test]
+    fn cookie_headers_are_http_only_and_can_be_secure() {
+        let session = session_cookie_header("s", true);
+        assert!(session.contains("HttpOnly"));
+        assert!(session.contains("SameSite=Strict"));
+        assert!(session.contains("; Secure"));
+        let csrf = csrf_cookie_header("c", false);
+        assert!(!csrf.contains("HttpOnly"));
+        assert!(!csrf.contains("Secure"));
+        assert!(csrf.contains(&format!("{CSRF_COOKIE_NAME}=c")));
     }
 }

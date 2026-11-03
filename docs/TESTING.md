@@ -136,6 +136,24 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   current project and the repo hint, move it to the repo project, assert the chip/server/rail
   grouping and that it survives a reload, then move it back to Inbox.
 
+## Authentication foundation (v0.28, in progress)
+
+- Rust `users.rs`: Argon2id hash/verify, duplicate/weak-password rejection, exactly one owner,
+  transfer moves the owner bit, public user never serializes `password_hash`.
+- Rust `sessions.rs`: create/lookup/revoke, expiry, per-user revoke, CSRF hash check.
+- Rust `auth.rs`: session cookie outranks the legacy cookie, cookie flags, credential sources.
+- Rust `tests/api.rs`: `auth_status_bootstrap_and_session_owner_path_work`,
+  `login_and_logout_use_the_session_cookie`, `a_member_can_sign_in_but_cannot_read_owner_data`,
+  `csrf_is_required_for_session_mutations`, `transfer_ownership_moves_the_single_owner_bit`,
+  `password_change_revokes_old_sessions_and_returns_a_new_one`,
+  `failed_logins_are_throttled`.
+- Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
+  username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
+  revokes the session. 280 checks.
+- **Current gap:** the owner-only gate is intentional until project ACL lands; PAT/agent-token UI,
+  People & access, invite/reset links and comments/notifications still need their tests as they
+  arrive.
+
 ## Handoff after confirmation (v0.23)
 
 - Rust `tests/store.rs` / `tests/api.rs`: confirming with `handoff:true` queues

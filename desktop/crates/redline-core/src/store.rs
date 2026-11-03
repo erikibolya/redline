@@ -468,13 +468,35 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-fn write_json(path: &Path, value: &Value) -> Result<()> {
+pub(crate) fn write_json(path: &Path, value: &Value) -> Result<()> {
     let mut text = serde_json::to_string_pretty(value)?;
     text.push('\n');
     write_atomic(path, text.as_bytes())
 }
 
-fn read_json(path: &Path) -> Option<Value> {
+/// A JSON file that holds credentials (users, sessions, tokens). The write is atomic and the
+/// result is `0600` on Unix; a world-readable password hash is still a password hash.
+pub(crate) fn write_secret_json(path: &Path, value: &Value) -> Result<()> {
+    let mut text = serde_json::to_string_pretty(value)?;
+    text.push('\n');
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| Error::BadRequest(format!("invalid path: {}", path.display())))?;
+    let temp = path.with_file_name(format!(".{file_name}.tmp"));
+    fs::write(&temp, text.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&temp, fs::Permissions::from_mode(0o600))?;
+    }
+    fs::rename(&temp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&temp);
+    })?;
+    Ok(())
+}
+
+pub(crate) fn read_json(path: &Path) -> Option<Value> {
     let text = fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
 }

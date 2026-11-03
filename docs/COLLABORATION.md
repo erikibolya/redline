@@ -1,7 +1,11 @@
 # Kolaborace více uživatelů — zadání
 
-> **Stav:** schválené zadání k implementaci (rozhodnutí 2026-11-03), zatím neimplementováno.
-> Cílový release: **v0.28**, samostatně s migračním guide.
+> **Stav:** schválené zadání k implementaci (rozhodnutí 2026-11-03). Cílový release: **v0.28**,
+> samostatně s migračním guide.
+>
+> **Implementace:** první řez auth foundation je v `feat/auth-foundation` — uživatelé, Argon2id,
+> serverové session/CSRF, login stránka, owner bootstrap a transfer. Projektová ACL, PAT,
+> invite/reset a audit následují.
 > **Cíl:** bezpečně pustit k jedné RedLine instanci více lidí, rozdělit je na role a omezit
 > přístup k projektům, aniž by se rozbila současná cesta agent → review → člověk.
 >

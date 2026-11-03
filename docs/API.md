@@ -8,6 +8,35 @@ session images are served with the original content type. Authenticated data (ev
 `/api/*` plus session images/history) is sent with `Cache-Control: no-store`: a rail poll or a
 dashboard load must never replay a list from before a feature was confirmed, cancelled or deleted.
 
+## Human authentication (v0.28 auth foundation)
+
+The legacy token (`REDLINE_TOKEN` / `/data/token`) still works as an owner credential and as the
+agent credential. Named humans use a server-side session:
+
+- `GET /api/auth/status` — public; `{ "setup_required": true|false }`.
+- `POST /api/auth/bootstrap` — legacy token or owner session; first run only; body
+  `{ "username", "display_name", "password" }`; creates the single owner and signs it in.
+- `POST /api/auth/login` — public; `{ "username", "password" }`; sets the `redline_session`
+  `HttpOnly` cookie and the readable `redline_csrf` cookie.
+- `GET /api/auth/me` — current user, `{ "user", "is_owner", "legacy", "projects" }`.
+- `POST /api/auth/logout` — revokes the session and clears the cookies.
+- `POST /api/auth/password` — `{ "current_password", "new_password" }`; revokes the old sessions
+  and returns a new one.
+- `GET /api/users` / `POST /api/users` — owner only; list/create named users
+  (`{ "username", "display_name", "password" }`).
+- `POST /api/admin/transfer-owner` — owner only; `{ "user_id", "password" }`; atomically moves the
+  single owner bit; the old owner becomes a member.
+
+Session-authenticated state-changing requests must send `X-CSRF-Token` matching the
+`redline_csrf` cookie. Bearer credentials (legacy token or a future PAT) are not cookie-based and
+do not need CSRF. Login is rate-limited (5 failures per username/IP per 15 minutes).
+
+> **Current slice:** the data routes (`/api/sessions`, `/api/projects`, `/api/agent/*`, `/mcp`,
+> media/history) still require an **owner** (legacy token or owner session); a named member can
+> sign in and use `/api/auth/me` but gets `403` on data until the project ACL from
+> [`COLLABORATION.md`](COLLABORATION.md) lands. This is deliberate: no route is opened to a member
+> before it can check project membership.
+
 ## Endpoints
 
 ### `GET /`

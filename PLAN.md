@@ -62,7 +62,8 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 ### M7 — Multi-user collaboration (v0.28, planned)
 
 - [ ] **Auth foundation:** local users/sessions, one owner with transfer, PAT + multiple service
-      tokens, migration from the single token, audit.
+      tokens, migration from the single token, audit. *In progress:* users, Argon2id passwords,
+      server sessions/CSRF, login page, owner bootstrap and transfer are in; PAT/invite/audit next.
 - [ ] **Roles & project ACL:** Developer/Tester/Viewer, per-project memberships, required project,
       tester `Request agent review`, server-side submit permission.
 - [ ] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, revision conflicts.

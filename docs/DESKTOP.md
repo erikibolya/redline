@@ -78,6 +78,10 @@ the machine, and a random web page must not be able to POST annotations to `127.
   (Windows Credential Manager / macOS Keychain / libsecret) with a config-file fallback.
 - Every `/api` and `/mcp` request requires `Authorization: Bearer <token>`, or the
   `redline_token` cookie, or `?t=<token>` on first contact.
+- v0.28 auth foundation adds named accounts: `/login` signs in with username/password and sets
+  `redline_session` + `redline_csrf`; session mutations require `X-CSRF-Token`. The local
+  (This computer) server remains owner-only; a remote profile's webview will redirect to `/login`
+  on 401. Full desktop profile/login UX is part of the multi-user release.
 - Human-facing links carry the token once: `GET /s/<id>?t=…` sets an `HttpOnly; SameSite=Strict`
   cookie and 302s to the clean URL, so the address bar and history stay tidy.
 - Mutating requests additionally require `Sec-Fetch-Site: same-origin|none`, defeating drive-by

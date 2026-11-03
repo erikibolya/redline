@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A token is not a user (auth foundation).** RedLine now has named accounts, Argon2id
+  passwords, server-side sessions with CSRF cookies, a login page, a first-run owner bootstrap,
+  owner-only user management and a single-owner transfer. The legacy token still authenticates
+  the agent bridge and an unmigrated owner. Data routes remain owner-only until the project ACL
+  lands; a named member can sign in but gets 403, not a silently empty queue (2026-11-03).
 - **A project is not a permanent label.** An existing review can now be moved to another project,
   or back to the Inbox, from the editor header. The session folder and `meta.project` move
   together, so the next agent run resolves the new project's repository instead of silently

@@ -628,6 +628,22 @@ section, `Δ` shows the summary inline:
 ~ text “tighten this” (edited)
 ```
 
+## Sign-in and owner bootstrap (v0.28 auth foundation)
+
+- `/login` is public. On a fresh server it shows **Create the owner account** (username, display
+  name, password, server token); after bootstrap it shows **Sign in** with username/password.
+  A `?t=<legacy token>` is used only for the first-run bootstrap and is removed from the address
+  bar; `?stay=1` suppresses the automatic redirect for an existing cookie.
+- Login sets `redline_session` (`HttpOnly`, `SameSite=Strict`, `Secure` on HTTPS) and a readable
+  `redline_csrf` cookie. The UI mirrors the CSRF token into every state-changing request.
+- `app.js` redirects to `/login?next=…` on `401`; the editor/list pages are public HTML and the
+  data API is protected.
+- `POST /api/auth/logout` revokes the session and clears both cookies.
+- The owner bootstrap creates the single owner; ownership transfer is an owner-only API action
+  (`POST /api/admin/transfer-owner`), with a future People & access UI.
+- **Current slice:** named members can sign in but data routes are still owner-only until the
+  project ACL lands; the UI will show the 403 rather than pretending the queue is empty.
+
 ## Verification
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:

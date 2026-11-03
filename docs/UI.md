@@ -661,6 +661,21 @@ section, `Δ` shows the summary inline:
 - The New review project picker is filtered by `/api/projects`; a member with no project cannot
   create a task, and Inbox is offered only to the owner.
 
+## Discussion and notifications (v0.28)
+
+- **Discussion** is its own inspector section above History. It lists human comments (author,
+  relative time, resolved state) and posts with **Comment** or `Ctrl/Cmd+Enter`. Any member who can
+  read the task can post; the author edits their own text, while the author/developer/owner can
+  resolve or delete. Comments are kept separate from the agent conversation — resolving a
+  discussion is not a review round.
+- The **notification bell** appears in the header for any named user (it stays hidden for the
+  legacy agent token). The badge is the unread count, capped at `99+`; opening the panel lists
+  newest first, clicking a row marks it read and follows its `/s/<id>` link, and **Mark all read**
+  clears the badge. It polls every 15 s, independent of the review's 5 s conversation poll.
+- Notification rows name the human action in words (`ready for agent`, `sent to agent`,
+  `mention`, `discussion`), not the raw event kind or a bare timestamp.
+- The panel closes on an outside click; it never covers the composer on a narrow window.
+
 ## Verification
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:

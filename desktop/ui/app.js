@@ -115,6 +115,21 @@ function listNames(names) {
   return `${titled.slice(0, -1).join(", ")} and ${titled[titled.length - 1]}`;
 }
 
+function notificationKindLabel(kind) {
+  return {
+    "review.ready": "ready for agent",
+    "review.submitted": "sent to agent",
+    "review.replied": "agent replied",
+    "review.resolved": "finished",
+    "review.handoff_done": "handoff done",
+    "review.handoff_failed": "handoff failed",
+    "comment.mention": "mention",
+    "comment.reply": "discussion",
+    "comment": "discussion",
+    "owner.transfer": "ownership",
+  }[kind] || kind;
+}
+
 function relativeTime(iso) {
   if (!iso) return "";
   const then = new Date(iso).getTime();
@@ -466,6 +481,103 @@ function csrfToken() {
   }
   return "";
 }
+
+const NotificationCenter = {
+  items: [],
+  unread: 0,
+  timer: null,
+  started: false,
+  bind() {
+    const bell = $("#notifications-link");
+    const panel = $("#notification-panel");
+    if (!bell || !panel || this.bound) return;
+    this.bound = true;
+    bell.addEventListener("click", (event) => {
+      event.stopPropagation();
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) this.refresh();
+    });
+    $("#notifications-read")?.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      try {
+        await api("/api/notifications/read", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        });
+        await this.refresh();
+      } catch { /* the next poll retries */ }
+    });
+    $("#notification-list")?.addEventListener("click", (event) => {
+      const row = event.target.closest("[data-notification-id]");
+      if (!row) return;
+      event.stopPropagation();
+      this.open(row.dataset.notificationId, row.dataset.notificationUrl);
+    });
+    document.addEventListener("click", (event) => {
+      if (panel.hidden) return;
+      if (event.target.closest("#notification-panel, #notifications-link")) return;
+      panel.hidden = true;
+    });
+  },
+  async start() {
+    if (this.started) return;
+    this.started = true;
+    try {
+      const me = await api("/api/auth/me");
+      if (!me.user) return;
+    } catch {
+      return;
+    }
+    const bell = $("#notifications-link");
+    if (!bell) return;
+    bell.hidden = false;
+    this.bind();
+    await this.refresh();
+    clearInterval(this.timer);
+    this.timer = setInterval(() => this.refresh(), 15000);
+  },
+  async refresh() {
+    try {
+      const data = await api("/api/notifications");
+      this.items = data.notifications || [];
+      this.unread = data.unread || 0;
+      this.render();
+    } catch { /* signed out; the api helper redirects */ }
+  },
+  render() {
+    const count = $("#notification-count");
+    if (count) {
+      count.hidden = this.unread === 0;
+      count.textContent = this.unread > 99 ? "99+" : String(this.unread);
+    }
+    const list = $("#notification-list");
+    if (!list) return;
+    if (!this.items.length) {
+      list.innerHTML = '<div class="notification-empty">No notifications yet.</div>';
+      return;
+    }
+    list.innerHTML = this.items
+      .map((item) => `<div class="notification-row${item.read_at ? "" : " unread"}"
+          data-notification-id="${escapeHtml(item.id)}"
+          data-notification-url="${escapeHtml(item.url)}" role="button" tabindex="0">
+        <div class="text">${escapeHtml(item.text)}</div>
+        <div class="meta">${escapeHtml(notificationKindLabel(item.kind))} · ${escapeHtml(relativeTime(item.at))}</div>
+      </div>`)
+      .join("");
+  },
+  async open(id, url) {
+    try {
+      await api("/api/notifications/read", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids: [id] }),
+      });
+    } catch { /* navigating is more important than the read receipt */ }
+    if (url && url.startsWith("/")) location.href = url;
+    else location.reload();
+  },
+};
 
 async function showPeopleLink() {
   const button = $("#people-link");
@@ -1759,6 +1871,7 @@ class Editor {
     this.roundLoad = 0;
     this.live = null;
     this.historyEntries = [];
+    this.comments = [];
     this.draftNotice = null;
     // The conversation poll fills these; until it lands, `renderHeader` must not trip over
     // an undefined list (a fresh load of a submitted session renders the header first).
@@ -1975,6 +2088,7 @@ class Editor {
       this.renderHeader();
       this.loadHistory();
       this.startConversationPolling();
+      this.startCommentsPolling();
       await this.loadMedia(this.meta);
       // The video element only exists after `loadMedia`, and the inspector chooses the grouped
       // timeline layout from `isVideo`. Render it again or a video session opens as a flat list.
@@ -2719,6 +2833,19 @@ class Editor {
       } catch (error) {
         alert(`Could not change the project: ${error.message}`);
       }
+    });
+    $("#comment-submit")?.addEventListener("click", () => this.submitComment());
+    $("#comment-text")?.addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        this.submitComment();
+      }
+    });
+    $("#comments-list")?.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-comment-action]");
+      if (!button) return;
+      event.preventDefault();
+      this.commentAction(button.dataset.commentAction, button.dataset.commentId);
     });
     addEventListener("resize", () => this.resize());
     addEventListener("popstate", () => {
@@ -4273,6 +4400,105 @@ class Editor {
     this.threadTimer = setInterval(() => this.loadConversation({ quiet: true }), 5000);
   }
 
+  /// Human discussion is a separate stream from the agent conversation and polls at its own,
+  /// slower pace; it is not the run's liveness signal.
+  startCommentsPolling() {
+    clearInterval(this.commentsTimer);
+    this.loadComments();
+    this.commentsTimer = setInterval(() => this.loadComments({ quiet: true }), 10000);
+  }
+
+  async loadComments({ quiet = false } = {}) {
+    const sessionId = this.sessionId;
+    try {
+      const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/comments`);
+      if (sessionId !== this.sessionId) return;
+      this.comments = data.comments || [];
+      this.renderComments();
+    } catch {
+      if (!quiet) this.renderComments();
+    }
+  }
+
+  renderComments() {
+    const list = $("#comments-list");
+    const count = $("#comments-count");
+    if (!list) return;
+    if (count) count.textContent = String(this.comments.length);
+    if (!this.comments.length) {
+      list.className = "comments-empty";
+      list.textContent = "No comments yet.";
+      return;
+    }
+    list.className = "";
+    list.innerHTML = this.comments
+      .map((comment) => {
+        const resolved = Boolean(comment.resolved_at);
+        return `<div class="comment-row${resolved ? " resolved" : ""}">
+          <div class="comment-head">
+            <b>${escapeHtml(comment.author_name || comment.author)}</b>
+            <span>${escapeHtml(relativeTime(comment.at))}</span>
+            ${resolved ? '<span class="resolved-mark">resolved</span>' : ""}
+          </div>
+          <p class="comment-body">${escapeHtml(comment.body)}</p>
+          <div class="comment-actions">
+            <button type="button" data-comment-action="${resolved ? "reopen" : "resolve"}"
+                    data-comment-id="${escapeHtml(comment.id)}">${resolved ? "Reopen" : "Resolve"}</button>
+            <button type="button" data-comment-action="delete"
+                    data-comment-id="${escapeHtml(comment.id)}">Delete</button>
+          </div>
+        </div>`;
+      })
+      .join("");
+  }
+
+  async submitComment() {
+    const input = $("#comment-text");
+    const button = $("#comment-submit");
+    if (!input || !button) return;
+    const body = input.value.trim();
+    if (!body) return;
+    button.disabled = true;
+    try {
+      await api(`/api/sessions/${encodeURIComponent(this.sessionId)}/comments`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      input.value = "";
+      await this.loadComments();
+    } catch (error) {
+      alert(`Could not post the comment: ${error.message}`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  async commentAction(action, commentId) {
+    if (!commentId) return;
+    try {
+      if (action === "delete") {
+        if (!confirm("Delete this comment?")) return;
+        await api(
+          `/api/sessions/${encodeURIComponent(this.sessionId)}/comments/${encodeURIComponent(commentId)}`,
+          { method: "DELETE" },
+        );
+      } else {
+        await api(
+          `/api/sessions/${encodeURIComponent(this.sessionId)}/comments/${encodeURIComponent(commentId)}`,
+          {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ resolved: action === "resolve" }),
+          },
+        );
+      }
+      await this.loadComments();
+    } catch (error) {
+      alert(`Could not update the comment: ${error.message}`);
+    }
+  }
+
   async loadConversation({ quiet = false } = {}) {
     const log = $("#conv-log");
     if (!log) return;
@@ -5444,4 +5670,5 @@ document.addEventListener("DOMContentLoaded", () => {
     bootList();
   }
   showPeopleLink();
+  NotificationCenter.start();
 });

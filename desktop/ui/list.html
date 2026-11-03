@@ -26,6 +26,10 @@ try {
         <span class="agent-dot" aria-hidden="true"></span>
         <span class="agent-label">Checking agent…</span>
       </button>
+      <button class="btn icon notification-bell" id="notifications-link" title="Notifications" aria-label="Notifications" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 10-12 0c0 5-2 6-2 6h16s-2-1-2-6"/><path d="M10 20a2 2 0 004 0"/></svg>
+        <span class="notification-count" id="notification-count" hidden></span>
+      </button>
       <button class="btn icon" id="people-link" title="People &amp; access" aria-label="People and access" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><circle cx="17" cy="9" r="2"/><path d="M15.5 20c.2-2.2 2-4 4.2-4 .8 0 1.5.2 2.1.6"/></svg>
       </button>
@@ -177,6 +181,11 @@ Ctrl+Enter submit · [ toggle sessions · ] toggle inspector</div>
       <button type="button" class="btn" data-help-close>Close</button>
     </div>
   </div>
+</div>
+
+<div class="notification-panel" id="notification-panel" role="dialog" aria-label="Notifications" hidden>
+  <div class="notification-head"><b>Notifications</b><button type="button" id="notifications-read">Mark all read</button></div>
+  <div class="notification-list" id="notification-list"></div>
 </div>
 
 </body>

@@ -149,10 +149,9 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `failed_logins_are_throttled`.
 - Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
   username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
-  revokes the session. 285 checks.
-- **Current gap:** the owner-only gate is intentional until project ACL lands; PAT/agent-token UI,
-  People & access, invite/reset links and comments/notifications still need their tests as they
-  arrive.
+  revokes the session. 288 checks.
+- **Current gaps:** PAT/agent-token UI, invite/reset links, audit UI and optimistic revision still
+  need their tests as they arrive.
 
 ## Roles and project ACL (v0.28, in progress)
 
@@ -167,7 +166,21 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   assert a member with no projects sees an empty queue, a foreign task/media is `404`, and the
   old owner loses the Inbox.
 - Browser e2e: the owner-only People & access page creates a user and saves a tester role; the
-  editor/rail role labels are covered by the 285-check suite.
+  editor/rail role labels are covered by the 288-check suite.
+
+## Comments and notifications (v0.28, in progress)
+
+- Rust `notifications.rs`: per-user files, unread count, mark-read by id/all, invalid user ids,
+  and the 90-day retention window drops an old entry.
+- Rust `tests/api.rs`: `comments_notifications_and_moderation_are_project_scoped` — developer
+  comments with a tester mention, the tester's notification is `comment.mention`, mark-read
+  clears unread, a tester cannot edit/delete the developer's comment but can edit their own,
+  a developer resolves it, and an unknown mention is `400`. The tester→developer test also
+  asserts `review.ready` and `review.submitted` notifications.
+- Browser e2e: the tester opens **Discussion**, posts a comment and the API returns it; the owner
+  comments from another context; the tester's bell shows the owner's comment. 288 checks.
+- **Not yet covered:** audit log, notification for handoff done/failed and ownership transfer,
+  comment rate limiting, and the desktop notification surface.
 
 ## Handoff after confirmation (v0.23)
 

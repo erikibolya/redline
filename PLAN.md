@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 151 Rust tests, 22 extension unit tests, 285-check browser E2E in CI on Linux + Windows |
+| Tests | 155 Rust tests, 22 extension unit tests, 288-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -69,6 +69,9 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
       project filtering, read ACL, tester request/developer send and the owner People & access
       matrix are in.
 - [ ] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, revision conflicts.
+      *In progress:* per-task Discussion (comments, mentions, resolve), per-user in-app
+      notifications with the header bell and 90-day retention are in; audit UI and optimistic
+      revision next.
 - [ ] **Integrations:** extension PAT, desktop/CLI login, share links, OIDC/SSO later.
 
 Full spec and permission matrix: `docs/COLLABORATION.md`. Target: standalone v0.28 with a
@@ -142,7 +145,7 @@ migration guide; not part of v0.27.
 - `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 22 extension
   unit tests: annotation geometry/hit-testing/moving, server URL/permission config, offline review
   Markdown/JSON and the ZIP writer.
-- `desktop/scripts/e2e.sh` — 285 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 288 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

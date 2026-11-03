@@ -74,6 +74,37 @@ Owner only. `GET` returns the member list with `user_id`, `username`, `display_n
 Roles are `viewer`, `tester` and `developer`; the owner is global and is not stored as a member.
 The owner can assign a user to several projects with different roles.
 
+### `GET/POST /api/sessions/<id>/comments`
+
+Human discussion, stored in `sessions/<id>/comments.jsonl` and kept separate from the agent's
+`agent-thread.jsonl`. Any member who can read the task can read and add comments:
+
+```json
+{ "body": "Please check the hover state.", "mentions": ["usr_…"] }
+```
+
+Returns `{ "comment": { "id", "author", "author_name", "at", "body", "mentions",
+"resolved_at", "resolved_by" } }`. A mention must be an active member of the task's project (the
+owner is always allowed) or the request is `400`. Typing `@username` in the body is also resolved
+server-side; an unknown handle stays plain text. Max 4000 characters.
+
+### `PATCH/DELETE /api/sessions/<id>/comments/<comment>`
+
+`PATCH` accepts `{ "body": "edited text" }` (author only) and/or `{ "resolved": true|false }`
+(author, developer in the project, or owner). `DELETE` is allowed for the author or a
+developer/owner. A task outside the caller's projects is `404` for every comment route.
+
+### `GET /api/notifications` / `POST /api/notifications/read`
+
+Per-user in-app notifications: `{ "notifications": [ … ], "unread": 2 }`, newest first. Each item
+has `id`, `at`, `kind`, optional `project`/`session`/`actor`/`actor_name`, `text`, `url` and
+`read_at`. Kinds include `review.ready`, `review.submitted`, `comment.mention`, `comment.reply`
+and the handoff/ownership events. Only members of the task's project (or the owner) are notified,
+so a notification never names a project or task the reader cannot open.
+
+`POST` with `{ "ids": ["ntf_…"] }` marks those read; `{}` marks all. Notifications are pruned
+after **90 days** by default; set `REDLINE_NOTIFICATION_RETENTION_DAYS` to override.
+
 ## Endpoints
 
 ### `GET /`

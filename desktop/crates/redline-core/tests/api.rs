@@ -4199,6 +4199,26 @@ async fn project_membership_and_tester_to_developer_flow() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let developer_session = set_cookie(&headers, "redline_session");
     let developer_csrf = set_cookie(&headers, "redline_csrf");
+    let (status, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{notes}");
+    assert!(
+        notes["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["kind"] == "review.ready" && note["session"] == id),
+        "the developer gets the tester request: {notes}"
+    );
 
     let (status, _, submitted) = send(
         &h.app,
@@ -4214,6 +4234,27 @@ async fn project_membership_and_tester_to_developer_flow() {
     assert_eq!(status, StatusCode::OK, "{submitted}");
     assert_eq!(submitted["meta"]["status"], "submitted");
     assert!(submitted["meta"]["agent_requested_at"].is_null());
+
+    let (status, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{notes}");
+    assert!(
+        notes["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["kind"] == "review.submitted" && note["session"] == id),
+        "the task creator gets the developer submit: {notes}"
+    );
 
     let (status, _, _) = send(
         &h.app,
@@ -4341,4 +4382,362 @@ async fn a_tester_cannot_request_a_developer_task_and_members_are_owner_managed(
     )
     .await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn comments_notifications_and_moderation_are_project_scoped() {
+    let h = harness();
+    let (owner_session, owner_csrf) = bootstrap_owner(&h).await;
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Chat" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap().to_string();
+    let (status, _, tester) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({ "username": "tester", "display_name": "Tester", "password": "correct horse battery staple" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{tester}");
+    let tester_id = tester["user"]["id"].as_str().unwrap().to_string();
+    let (status, _, developer) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({ "username": "developer", "display_name": "Developer", "password": "correct horse battery staple" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{developer}");
+    let developer_id = developer["user"]["id"].as_str().unwrap().to_string();
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [
+                { "user_id": tester_id, "role": "tester" },
+                { "user_id": developer_id, "role": "developer" },
+            ] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    let login = |username: &'static str| {
+        let app = h.app.clone();
+        async move {
+            let (status, headers, body) = send(
+                &app,
+                public(
+                    "POST",
+                    "/api/auth/login",
+                    json!({ "username": username, "password": "correct horse battery staple" }),
+                ),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{body}");
+            (
+                set_cookie(&headers, "redline_session"),
+                set_cookie(&headers, "redline_csrf"),
+            )
+        }
+    };
+    let (tester_session, tester_csrf) = login("tester").await;
+    let (developer_session, developer_csrf) = login("developer").await;
+
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "chat task", "image_base64": PNG_B64, "project": "Chat" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["meta"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, comment) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "Please check this", "mentions": [tester_id] }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{comment}");
+    assert_eq!(comment["comment"]["author"], developer_id);
+    let comment_id = comment["comment"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{notes}");
+    let mention_note = notes["notifications"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|note| note["kind"] == "comment.mention" && note["session"] == id)
+        .expect("the mentioned tester gets a comment notification")
+        .clone();
+    let note_id = mention_note["id"].as_str().unwrap().to_string();
+    let (status, _, marked) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/notifications/read",
+            json!({ "ids": [note_id] }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{marked}");
+    assert_eq!(marked["marked"], 1);
+    let (_, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(notes["unread"], 0);
+
+    let (status, _, list) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{id}/comments"),
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{list}");
+    assert_eq!(list["comments"].as_array().unwrap().len(), 1);
+
+    // A tester cannot edit or delete a developer's comment, but can write and edit their own.
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PATCH",
+            &format!("/api/sessions/{id}/comments/{comment_id}"),
+            json!({ "body": "hijack" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _, own) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "Thanks, checking now" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{own}");
+    let own_id = own["comment"]["id"].as_str().unwrap().to_string();
+    let (status, _, edited) = send(
+        &h.app,
+        with_session(
+            "PATCH",
+            &format!("/api/sessions/{id}/comments/{own_id}"),
+            json!({ "body": "Thanks, checking now!" }),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{edited}");
+    assert_eq!(edited["comment"]["body"], "Thanks, checking now!");
+    let (status, _, resolved) = send(
+        &h.app,
+        with_session(
+            "PATCH",
+            &format!("/api/sessions/{id}/comments/{own_id}"),
+            json!({ "resolved": true }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{resolved}");
+    assert!(resolved["comment"]["resolved_at"].is_string());
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/sessions/{id}/comments/{comment_id}"),
+            json!({}),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/sessions/{id}/comments/{comment_id}"),
+            json!({}),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "who?", "mentions": ["usr_missing"] }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // `@username` in the body is a mention without an id list.
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "Please look, @tester" }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert!(
+        notes["notifications"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["kind"] == "comment.mention"
+                && note["session"] == id
+                && note["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("Developer")),
+        "an @handle produces a mention notification: {notes}"
+    );
+
+    // Removing someone from the project must stop new notifications from naming the task.
+    let before = notes["notifications"].as_array().unwrap().len();
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{id}/comments"),
+            json!({ "body": "after removal" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, _, notes) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/notifications",
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(
+        notes["notifications"].as_array().unwrap().len(),
+        before,
+        "a removed member must not receive a task notification: {notes}"
+    );
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/sessions/{id}"),
+            json!(null),
+            &tester_session,
+            &tester_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "removed member loses the task: {body}"
+    );
 }

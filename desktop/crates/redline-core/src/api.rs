@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::{
-    DefaultBodyLimit, Extension, FromRequest, Multipart, Path as RoutePath, Request, State,
+    DefaultBodyLimit, Extension, FromRequest, Multipart, Path as RoutePath, Query, Request, State,
 };
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -20,6 +20,7 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
 use crate::agent::{AgentControl, AgentSettings, ClaimError, ClaimRequest, ClaimState};
+use crate::audit::{AuditEvent, AuditFilter, AuditStore};
 use crate::auth::{self, Auth, CredentialSource};
 use crate::comments::Comment;
 use crate::error::Error;
@@ -79,6 +80,7 @@ pub struct AppState {
     pub sessions: SessionStore,
     pub memberships: MembershipStore,
     pub notifications: NotificationStore,
+    pub audit: AuditStore,
     login: Arc<LoginThrottle>,
     /// Directory holding `index.html` / `list.html`. `None` in tests and in headless mode.
     pub ui: Option<PathBuf>,
@@ -103,6 +105,7 @@ impl AppState {
         let sessions = SessionStore::new(store.data_dir());
         let memberships = MembershipStore::new(store.data_dir());
         let notifications = NotificationStore::new(store.data_dir());
+        let audit = AuditStore::new(store.data_dir());
         Self {
             store,
             auth,
@@ -110,6 +113,7 @@ impl AppState {
             sessions,
             memberships,
             notifications,
+            audit,
             login: Arc::new(LoginThrottle::default()),
             ui: None,
             inline_ui: None,
@@ -177,6 +181,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/bootstrap", post(auth_bootstrap))
         .route("/api/users", get(list_users).post(create_user))
         .route("/api/admin/transfer-owner", post(transfer_owner))
+        .route("/api/audit", get(audit_log))
         .route("/api/config", get(config))
         .route("/api/setup", get(setup_status).post(save_setup))
         .route("/api/setup/disconnect", post(disconnect_setup))
@@ -306,6 +311,7 @@ pub fn router(state: AppState) -> Router {
         .route("/s/{id}", get(editor_page))
         .route("/login", get(login_page))
         .route("/people", get(people_page))
+        .route("/audit", get(audit_page))
         .route("/setup", get(setup_page))
         .route("/servers", get(servers_page))
         .merge(public_auth)
@@ -643,6 +649,83 @@ fn internal_error(error: impl std::fmt::Display) -> Response {
         .into_response()
 }
 
+/// An audit failure is logged, never turned into a failed human action: the review still
+/// submits if the disk is full, but the missing record is visible in the server log.
+fn record_audit(
+    state: &AppState,
+    context: Option<&AuthContext>,
+    action: &str,
+    meta: Option<&Meta>,
+    target: Option<String>,
+    details: Value,
+) {
+    let mut event = match context {
+        Some(context) if context.legacy => AuditEvent::new("legacy", None, "Legacy owner", action),
+        Some(context) => AuditEvent::new(
+            "user",
+            context.user_id.as_deref(),
+            &context.display_name,
+            action,
+        ),
+        None => AuditEvent::new("system", None, "system", action),
+    };
+    if let Some(meta) = meta {
+        event = event.task(meta);
+    }
+    if let Some(target) = target {
+        event = event.target(target);
+    }
+    if let Err(error) = state.audit.record(event.details(details)) {
+        tracing::warn!(action, error = %error, "could not write audit event");
+    }
+}
+
+fn record_project_audit(
+    state: &AppState,
+    context: &AuthContext,
+    action: &str,
+    project: &str,
+    target: Option<String>,
+    details: Value,
+) {
+    let mut event = match context.legacy {
+        true => AuditEvent::new("legacy", None, "Legacy owner", action),
+        false => AuditEvent::new(
+            "user",
+            context.user_id.as_deref(),
+            &context.display_name,
+            action,
+        ),
+    };
+    event.project = Some(project.to_string());
+    if let Some(target) = target {
+        event = event.target(target);
+    }
+    if let Err(error) = state.audit.record(event.details(details)) {
+        tracing::warn!(action, error = %error, "could not write audit event");
+    }
+}
+
+fn record_auth_audit(
+    state: &AppState,
+    actor_type: &str,
+    actor_id: Option<&str>,
+    actor_name: &str,
+    action: &str,
+    headers: &HeaderMap,
+    details: Value,
+) {
+    let event = AuditEvent::new(actor_type, actor_id, actor_name, action)
+        .client(
+            request_ip(headers).as_deref(),
+            request_agent(headers).as_deref(),
+        )
+        .details(details);
+    if let Err(error) = state.audit.record(event) {
+        tracing::warn!(action, error = %error, "could not write audit event");
+    }
+}
+
 /// `chrome-extension://…` / `moz-extension://…` origins are the only cross-site callers allowed
 /// through the CSRF guard. The token is still required; this only distinguishes an extension from
 /// a web page. CORS is echoed only to that origin, never `*`.
@@ -753,15 +836,42 @@ async fn auth_login(
         request_ip(&headers).unwrap_or_else(|| "unknown".to_string())
     );
     if state.login.locked(&key) {
+        record_auth_audit(
+            &state,
+            "anonymous",
+            None,
+            body.username.trim(),
+            "auth.failed",
+            &headers,
+            json!({ "reason": "rate_limited" }),
+        );
         return Err(Error::TooManyRequests(
             "too many failed sign-ins; try again in a few minutes".to_string(),
         ));
     }
     let Some(user) = state.users.verify_login(&body.username, &body.password)? else {
         state.login.fail(&key);
+        record_auth_audit(
+            &state,
+            "anonymous",
+            None,
+            body.username.trim(),
+            "auth.failed",
+            &headers,
+            json!({ "reason": "bad_credentials" }),
+        );
         return Ok(unauthorized());
     };
     state.login.clear(&key);
+    record_auth_audit(
+        &state,
+        "user",
+        Some(&user.id),
+        &user.display_name,
+        "auth.login",
+        &headers,
+        json!({ "username": user.username }),
+    );
     let is_owner = state.users.is_owner(&user.id)?;
     let grant = state.sessions.create(
         &user.id,
@@ -785,6 +895,15 @@ async fn auth_bootstrap(
     let user = state
         .users
         .create_owner(&body.username, &body.display_name, &body.password)?;
+    record_auth_audit(
+        &state,
+        "user",
+        Some(&user.id),
+        &user.display_name,
+        "owner.bootstrap",
+        &headers,
+        json!({ "username": user.username }),
+    );
     let grant = state.sessions.create(
         &user.id,
         request_ip(&headers).as_deref(),
@@ -821,7 +940,17 @@ async fn auth_me(
 async fn auth_logout(
     Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
+    headers: HeaderMap,
 ) -> Response {
+    record_auth_audit(
+        &state,
+        if context.legacy { "legacy" } else { "user" },
+        context.user_id.as_deref(),
+        &context.display_name,
+        "auth.logout",
+        &headers,
+        json!({}),
+    );
     if let Some(raw) = context.raw_session.as_deref() {
         let _ = state.sessions.revoke(raw);
     }
@@ -851,6 +980,15 @@ async fn auth_password(
         ));
     }
     let user = state.users.set_password(&user_id, &body.new_password)?;
+    record_auth_audit(
+        &state,
+        "user",
+        Some(&user.id),
+        &user.display_name,
+        "auth.password",
+        &headers,
+        json!({ "sessions_revoked": true }),
+    );
     state.sessions.revoke_user(&user_id)?;
     let grant = state.sessions.create(
         &user.id,
@@ -891,6 +1029,14 @@ async fn mark_notifications_read(
     let marked = state
         .notifications
         .mark_read(user_id, body.ids.as_deref())?;
+    record_audit(
+        &state,
+        Some(&context),
+        "notification.read",
+        None,
+        None,
+        json!({ "marked": marked }),
+    );
     Ok(Json(json!({ "marked": marked })))
 }
 
@@ -1103,6 +1249,14 @@ async fn add_comment(
         &id,
         Comment::new(&author, &author_name, &body, mentions.clone()),
     )?;
+    record_audit(
+        &state,
+        Some(&context),
+        "comment.create",
+        Some(&meta),
+        Some(comment.id.clone()),
+        json!({ "mentions": mentions.len() }),
+    );
 
     let mut recipients: HashSet<String> = mentions.iter().cloned().collect();
     if let Some(creator) = meta.created_by.as_deref() {
@@ -1180,6 +1334,22 @@ async fn update_comment(
         body.resolved,
         context.user_id.as_deref().unwrap_or("legacy"),
     )?;
+    let action = if body.resolved.is_some() {
+        "comment.resolve"
+    } else {
+        "comment.update"
+    };
+    record_audit(
+        &state,
+        Some(&context),
+        action,
+        Some(&meta),
+        Some(comment_id.clone()),
+        json!({
+            "resolved": updated.resolved_at.is_some(),
+            "body_changed": body_text.is_some(),
+        }),
+    );
     Ok(Json(json!({ "comment": updated })))
 }
 
@@ -1205,6 +1375,14 @@ async fn delete_comment(
         ));
     }
     state.store.delete_comment(&id, &comment_id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "comment.delete",
+        Some(&meta),
+        Some(comment_id.clone()),
+        json!({ "author": comment.author }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1223,16 +1401,26 @@ async fn list_users(State(state): State<AppState>) -> Result<Json<Value>, Error>
 }
 
 async fn create_user(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<CreateUserBody>,
 ) -> Result<Json<Value>, Error> {
     let user = state
         .users
         .create_user(&body.username, &body.display_name, &body.password)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "user.create",
+        None,
+        Some(user.id.clone()),
+        json!({ "username": user.username }),
+    );
     Ok(Json(json!({ "user": user.public(false) })))
 }
 
 async fn transfer_owner(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<TransferOwnerBody>,
 ) -> Result<Json<Value>, Error> {
@@ -1250,7 +1438,61 @@ async fn transfer_owner(
         ));
     }
     let target = state.users.transfer_owner(&body.user_id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "owner.transfer",
+        None,
+        Some(target.id.clone()),
+        json!({ "from": context.user_id, "to": target.id, "username": target.username }),
+    );
     Ok(Json(json!({ "user": target.public(true) })))
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct AuditQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    project: Option<String>,
+    #[serde(default)]
+    session: Option<String>,
+    #[serde(default)]
+    actor: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    since: Option<String>,
+}
+
+async fn audit_log(
+    State(state): State<AppState>,
+    Query(query): Query<AuditQuery>,
+) -> Result<Json<Value>, Error> {
+    let non_empty = |value: Option<String>| {
+        value
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    };
+    let since = match non_empty(query.since) {
+        Some(value) => Some(
+            chrono::DateTime::parse_from_rfc3339(&value)
+                .map_err(|_| Error::BadRequest("since must be an RFC 3339 timestamp".to_string()))?
+                .with_timezone(&chrono::Utc),
+        ),
+        None => None,
+    };
+    let filter = AuditFilter {
+        limit: query.limit.unwrap_or(100).clamp(1, 1000),
+        project: non_empty(query.project),
+        session: non_empty(query.session),
+        actor: non_empty(query.actor),
+        action: non_empty(query.action),
+        since,
+    };
+    let events = state.audit.list(&filter)?;
+    let count = events.len();
+    Ok(Json(json!({ "events": events, "count": count })))
 }
 
 fn auth_response(state: &AppState, user: &User, is_owner: bool, grant: SessionGrant) -> Response {
@@ -1367,6 +1609,10 @@ async fn login_page(State(state): State<AppState>) -> Response {
 
 async fn people_page(State(state): State<AppState>) -> Response {
     serve_ui(&state, "people.html")
+}
+
+async fn audit_page(State(state): State<AppState>) -> Response {
+    serve_ui(&state, "audit.html")
 }
 
 async fn editor_page(
@@ -1703,6 +1949,14 @@ async fn create_project(
         ));
     }
     let project = state.store.ensure_project(&body.name)?;
+    record_project_audit(
+        &state,
+        &context,
+        "project.create",
+        &project.slug,
+        Some(project.slug.clone()),
+        json!({ "name": project.name, "repo": project.repo }),
+    );
     Ok(Json(json!({ "project": project })))
 }
 
@@ -1758,6 +2012,7 @@ async fn project_members(
 }
 
 async fn set_project_members(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(slug): RoutePath<String>,
     Json(body): Json<MembersBody>,
@@ -1767,6 +2022,7 @@ async fn set_project_members(
         .project(&slug)?
         .ok_or_else(|| Error::NotFound(slug.clone()))?;
     let owner_id = state.users.owner_id()?;
+    let previous = state.memberships.members(&project.slug)?;
     let mut members = Vec::<(String, ProjectRole)>::new();
     let mut seen = HashSet::new();
     for entry in body.members {
@@ -1790,6 +2046,24 @@ async fn set_project_members(
         members.push((user.id, role));
     }
     state.memberships.replace_project(&project.slug, &members)?;
+    let details = json!({
+        "previous": previous
+            .iter()
+            .map(|membership| json!({ "user_id": membership.user, "role": membership.role.as_str() }))
+            .collect::<Vec<_>>(),
+        "members": members
+            .iter()
+            .map(|(user_id, role)| json!({ "user_id": user_id, "role": role.as_str() }))
+            .collect::<Vec<_>>(),
+    });
+    record_project_audit(
+        &state,
+        &context,
+        "membership.update",
+        &project.slug,
+        Some(project.slug.clone()),
+        details,
+    );
     Ok(Json(members_payload(&state, &project.slug)?))
 }
 
@@ -1947,6 +2221,7 @@ async fn agent_settings(State(state): State<AppState>) -> Result<Json<Value>, Er
 }
 
 async fn update_agent_settings(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(body): Json<AgentSettingsUpdate>,
 ) -> Result<Json<Value>, Error> {
@@ -2004,6 +2279,19 @@ async fn update_agent_settings(
         agent.set_settings(settings).map_err(Error::BadRequest)?;
     }
 
+    record_audit(
+        &state,
+        Some(&context),
+        "settings.update",
+        None,
+        None,
+        json!({
+            "max_parallel": body.max_parallel,
+            "project_max_parallel": body.project_max_parallel,
+            "lease_seconds": body.lease_seconds,
+            "projects": body.projects,
+        }),
+    );
     agent_settings(State(state)).await
 }
 
@@ -2371,9 +2659,17 @@ async fn set_session_branch(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    Ok(Json(json!({
-        "meta": state.store.set_branch(&id, branch)?,
-    })))
+    let from = meta.branch.clone();
+    let updated = state.store.set_branch(&id, branch)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.branch",
+        Some(&updated),
+        Some(updated.id.clone()),
+        json!({ "from": from, "to": updated.branch }),
+    );
+    Ok(Json(json!({ "meta": updated })))
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -2431,9 +2727,17 @@ async fn set_session_project(
         .map(crate::store::slugify)
         .unwrap_or_else(|| "inbox".to_string());
     require_project(&state, &context, &target, ReviewAction::MoveProject)?;
-    Ok(Json(json!({
-        "meta": state.store.set_project(&id, project)?,
-    })))
+    let from = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
+    let moved = state.store.set_project(&id, project)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.move_project",
+        Some(&moved),
+        Some(moved.id.clone()),
+        json!({ "from": from, "to": target }),
+    );
+    Ok(Json(json!({ "meta": moved })))
 }
 
 async fn create_session(
@@ -2457,6 +2761,14 @@ async fn create_session(
     } else {
         meta
     };
+    record_audit(
+        &state,
+        Some(&context),
+        "review.create",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({ "title": meta.title, "branch": meta.branch }),
+    );
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({
         "meta": meta,
@@ -2611,6 +2923,14 @@ async fn create_video_session(
     } else {
         meta
     };
+    record_audit(
+        &state,
+        Some(&context),
+        "review.create",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({ "title": meta.title, "branch": meta.branch, "kind": "video" }),
+    );
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({
         "meta": meta,
@@ -2829,6 +3149,18 @@ async fn submit(
         state
             .store
             .submit_round(&id, &body, contact_sheet.as_deref(), &frames)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.submit",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({
+            "annotations": annotations.annotations.len(),
+            "frames": annotations.frames.len(),
+            "branch": meta.branch,
+        }),
+    );
     let (actor, actor_name) = comment_author(&context);
     if let Some(creator) = meta.created_by.as_deref() {
         notify_user(
@@ -2884,6 +3216,14 @@ async fn request_agent_review(
         state
             .store
             .request_round(&id, &body, contact_sheet.as_deref(), &frames, user_id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.request_agent",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({ "annotations": annotations.annotations.len() }),
+    );
     let (actor, actor_name) = comment_author(&context);
     notify_project_developers(
         &state,
@@ -2980,10 +3320,20 @@ async fn parse_multipart_submit(
 }
 
 async fn resolve(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    Ok(Json(json!({ "meta": state.store.resolve(&id)? })))
+    let meta = state.store.resolve(&id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.resolve",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({}),
+    );
+    Ok(Json(json!({ "meta": meta })))
 }
 
 async fn cancel(
@@ -2992,7 +3342,16 @@ async fn cancel(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     require_review(&state, &context, &id, ReviewAction::Stop)?;
-    Ok(Json(json!({ "meta": state.store.cancel(&id)? })))
+    let meta = state.store.cancel(&id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.stop",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({ "status": meta.status.as_str() }),
+    );
+    Ok(Json(json!({ "meta": meta })))
 }
 
 async fn reopen(
@@ -3001,7 +3360,16 @@ async fn reopen(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     require_review(&state, &context, &id, ReviewAction::Confirm)?;
-    Ok(Json(json!({ "meta": state.store.reopen(&id)? })))
+    let meta = state.store.reopen(&id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.reopen",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({}),
+    );
+    Ok(Json(json!({ "meta": meta })))
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -3020,9 +3388,16 @@ async fn confirm_feature(
 ) -> Result<Json<Value>, Error> {
     require_review(&state, &context, &id, ReviewAction::Confirm)?;
     let handoff = body.map(|Json(body)| body.handoff).unwrap_or(false);
-    Ok(Json(
-        json!({ "meta": state.store.confirm_feature(&id, handoff)? }),
-    ))
+    let meta = state.store.confirm_feature(&id, handoff)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.confirm",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({ "handoff": handoff }),
+    );
+    Ok(Json(json!({ "meta": meta })))
 }
 
 async fn cancel_feature(
@@ -3031,7 +3406,16 @@ async fn cancel_feature(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     require_review(&state, &context, &id, ReviewAction::Confirm)?;
-    Ok(Json(json!({ "meta": state.store.cancel_feature(&id)? })))
+    let meta = state.store.cancel_feature(&id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.cancel_feature",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({}),
+    );
+    Ok(Json(json!({ "meta": meta })))
 }
 
 /// Queue (or retry) a handoff for a feature the human already confirmed. Used by the rail's
@@ -3042,7 +3426,16 @@ async fn request_handoff(
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
     require_review(&state, &context, &id, ReviewAction::Handoff)?;
-    Ok(Json(json!({ "meta": state.store.request_handoff(&id)? })))
+    let meta = state.store.request_handoff(&id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.handoff",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({ "status": "requested" }),
+    );
+    Ok(Json(json!({ "meta": meta })))
 }
 
 async fn history(
@@ -3215,6 +3608,14 @@ async fn capture_session(
     } else {
         meta
     };
+    record_audit(
+        &state,
+        Some(&context),
+        "review.create",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({ "title": meta.title, "kind": "capture", "url": meta.url }),
+    );
     let review_url = state.review_url(&meta.id);
     Ok(Json(json!({ "meta": meta, "review_url": review_url })))
 }
@@ -3224,8 +3625,16 @@ async fn delete_session(
     State(state): State<AppState>,
     RoutePath(id): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    require_review(&state, &context, &id, ReviewAction::Delete)?;
+    let meta = require_review(&state, &context, &id, ReviewAction::Delete)?;
     let dir = state.store.remove(&id)?;
+    record_audit(
+        &state,
+        Some(&context),
+        "review.delete",
+        Some(&meta),
+        Some(meta.id.clone()),
+        json!({ "title": meta.title }),
+    );
     Ok(Json(
         json!({ "ok": true, "removed": dir.display().to_string() }),
     ))

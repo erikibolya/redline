@@ -676,6 +676,18 @@ section, `Δ` shows the summary inline:
   `mention`, `discussion`), not the raw event kind or a bare timestamp.
 - The panel closes on an outside click; it never covers the composer on a narrow window.
 
+## Audit log (v0.28)
+
+- **Audit log** (`/audit`) is owner-only and linked from **People & access**. It lists newest
+  first with **When**, **Actor**, **Action**, **Project / task** and **Details** columns. Times
+  are formatted with the browser's locale (`toLocaleString`), never sliced from the ISO string;
+  task ids link to the editor.
+- Filters: action prefix (`review.`), project slug, task id and actor user id; the query string
+  is shareable and restored on load. A non-owner sees an explicit owner-only card, not an empty
+  table.
+- The page reads `GET /api/audit`; the server already enforces owner-only, so the UI check is
+  only a clearer message.
+
 ## Verification
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:

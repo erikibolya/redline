@@ -133,9 +133,32 @@ const main = async () => {
       const button = document.querySelector("#submit");
       return button && !button.disabled && button.textContent.trim() === "STOP";
     }, { timeout: 5000 });
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.click("#submit");
-    await page.waitForFunction(() => window.redline.meta?.status === "open", { timeout: 10000 });
+    // A click can be swallowed while the rail is repainting; cancel is idempotent, so retry only
+    // while the server still reports the round as submitted. Then wait for the visible unlock,
+    // not just the field: drawing into a still-locked canvas looks like a lost rectangle.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.click("#submit");
+      try {
+        await page.waitForFunction(
+          () => window.redline.meta?.status === "open" && window.redline.locked === false,
+          { timeout: 5000 },
+        );
+        return;
+      } catch {
+        const state = await page.evaluate(() => ({
+          status: window.redline.meta?.status || null,
+          locked: window.redline.locked,
+          label: document.querySelector("#submit")?.textContent.trim() || "",
+          disabled: Boolean(document.querySelector("#submit")?.disabled),
+        }));
+        if (state.status === "open" && state.locked === false) return;
+        if (state.status !== "submitted") {
+          throw new Error(`STOP left the review open but locked: ${JSON.stringify(state)}`);
+        }
+      }
+    }
+    throw new Error("STOP did not unlock the canvas");
   };
 
   const created = await api("/api/sessions", {
@@ -1048,7 +1071,17 @@ const main = async () => {
 
   // ---- multi-select with shift-click, then align left
   await page.keyboard.press("r");
-  await drag(page, at(620, 430), at(780, 540));
+  const beforeDraw = await page.evaluate(() => window.redline.annotations.length);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await drag(page, at(620, 430), at(780, 540));
+    const count = await page.evaluate(() => window.redline.annotations.length);
+    if (count === beforeDraw + 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  const drawn = await page.evaluate(() => window.redline.annotations.length);
+  if (drawn !== beforeDraw + 1) {
+    throw new Error(`multi-select rectangle was not drawn: ${beforeDraw} -> ${drawn}`);
+  }
   await page.keyboard.press("v");
   const firstRect = at(310, 230); // centre of the first rectangle
   await page.mouse.click(firstRect.x, firstRect.y);
@@ -2218,11 +2251,18 @@ const main = async () => {
   const penBefore = await page.evaluate(() => window.redline.annotations[0].points[0]);
   await page.keyboard.press("v");
   const penGrip = await onScreen({ type: "pen", point: 1 });
-  await drag(page, penGrip, { x: penGrip.x + 30, y: penGrip.y + 20 });
-  const penMoved = await page.evaluate(() => ({
-    point: window.redline.annotations[0].points[0],
-    scale: window.redline.view.scale,
-  }));
+  let penMoved = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    await drag(page, penGrip, { x: penGrip.x + 30, y: penGrip.y + 20 });
+    penMoved = await page.evaluate(() => ({
+      point: window.redline.annotations[0].points[0],
+      scale: window.redline.view.scale,
+    }));
+    const dx = (penMoved.point.x - penBefore.x) * penMoved.scale;
+    const dy = (penMoved.point.y - penBefore.y) * penMoved.scale;
+    if (Math.abs(dx - 30) < 4 && Math.abs(dy - 20) < 4) break;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
   const penDx = (penMoved.point.x - penBefore.x) * penMoved.scale;
   const penDy = (penMoved.point.y - penBefore.y) * penMoved.scale;
   check("dragging a freehand stroke moves its points",
@@ -3952,6 +3992,26 @@ const main = async () => {
       member.username === "e2e-tester" && member.role === "tester"),
     JSON.stringify(projectMembers.members || []));
 
+  // Owner-only audit log: the membership change just made must be visible with a local timestamp.
+  await loginPage.goto(`${BASE}/audit`, { waitUntil: "networkidle2" });
+  await loginPage.waitForSelector("#audit-events", { timeout: 10000 });
+  const auditView = await loginPage.evaluate(() => {
+    const rows = [...document.querySelectorAll("#audit-events tbody tr")];
+    return {
+      rows: rows.length,
+      actions: rows.map((row) => row.querySelector(".action code")?.textContent.trim() || ""),
+      times: rows.slice(0, 3).map((row) => row.querySelector("td.when")?.textContent.trim() || ""),
+      actors: rows.slice(0, 3).map((row) => row.querySelector("td.actor")?.innerText.trim() || ""),
+    };
+  });
+  check("the owner can read the audit log",
+    auditView.rows > 0 && auditView.actions.includes("membership.update"),
+    JSON.stringify(auditView));
+  check("audit rows show a readable local time and actor",
+    auditView.times.every((time) => time.length > 0 && !/^\d{2}:\d{2}$/.test(time))
+      && auditView.actors.every((actor) => actor.length > 0),
+    JSON.stringify({ times: auditView.times, actors: auditView.actors }));
+
   // A tester sees the role in the editor, can create their own task and request an agent review;
   // the server refuses the actual submit/STOP/confirm actions (covered by Rust tests).
   const testerContext = await browser.createBrowserContext();
@@ -4064,6 +4124,12 @@ const main = async () => {
   const notificationText = await testerPage.$eval("#notification-list", (el) => el.textContent.trim());
   check("the tester's bell shows the owner's comment",
     notificationText.includes("Owner commented"), notificationText.slice(0, 120));
+
+  await testerPage.goto(`${BASE}/audit`, { waitUntil: "networkidle2" });
+  await testerPage.waitForSelector(".error-card", { timeout: 10000 });
+  const auditDenied = await testerPage.$eval(".error-card", (el) => el.textContent.trim());
+  check("a member cannot open the audit log",
+    auditDenied.includes("owner-only"), auditDenied);
   await testerContext.close();
 
   // Return to the dashboard so the logout/CSRF checks run in the same context.

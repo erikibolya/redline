@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **A log nobody can read is not an audit trail.** `audit.jsonl` now records authentication
+  (success, failure, logout, password), owner bootstrap/transfer, user creation, membership
+  changes, project creation, agent settings, review create/submit/stop/reopen/branch/move/delete/
+  confirm/cancel-feature/handoff/resolve, comments and notification reads. The owner-only
+  **Audit log** page (`/audit`, linked from People & access) filters by action prefix, project,
+  task and actor; times are localised in the browser. Events are retained for one year
+  (`REDLINE_AUDIT_RETENTION_DAYS`) with `0600` permissions and serialized appends. Tested with
+  62 API tests, 34 core unit tests and 291 browser checks (2026-11-03).
 - **A comment is not a review round.** Tasks now have a human **Discussion** panel separate from
   the agent conversation: any project member can comment, @mention a teammate, resolve a thread
   (author/developer/owner) and delete (author/developer/owner); comments never create a history
@@ -9,7 +17,7 @@
   mark-all-read) and only ever name a project/task the reader can open; they cover tester
   requests, developer submits, mentions and replies, and are retained for 90 days
   (`REDLINE_NOTIFICATION_RETENTION_DAYS` overrides). Tested with 61 API tests, 30 core unit tests
-  and 288 browser checks (2026-11-03).
+  and 291 browser checks (2026-11-03).
 - **A token is not a role (project ACL).** Projects now have owner-managed memberships
   (`viewer` / `tester` / `developer`); the owner-only **People & access** page sets them in a
   user × project matrix. Data, media, history and traces are scoped to the member's projects;

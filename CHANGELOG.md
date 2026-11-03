@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.1 — 2026-11-03
 
 - **A matrix is not a people list.** People & access now lists people, not every repository as a
   table column. Each row shows project chips with roles; **Projects** opens a dialog with a

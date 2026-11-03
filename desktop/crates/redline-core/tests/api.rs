@@ -66,6 +66,68 @@ fn authed(method: &str, uri: &str, body: Value) -> Request<Body> {
         .unwrap()
 }
 
+fn public(method: &str, uri: &str, body: Value) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn with_session(method: &str, uri: &str, body: Value, session: &str, csrf: &str) -> Request<Body> {
+    let mut builder = Request::builder().method(method).uri(uri).header(
+        "cookie",
+        format!("redline_session={session}; redline_csrf={csrf}"),
+    );
+    if method != "GET" && method != "HEAD" {
+        builder = builder.header("x-csrf-token", csrf);
+    }
+    let body = if body.is_null() {
+        Body::empty()
+    } else {
+        builder = builder.header("content-type", "application/json");
+        Body::from(body.to_string())
+    };
+    builder.body(body).unwrap()
+}
+
+fn set_cookie(headers: &axum::http::HeaderMap, name: &str) -> String {
+    headers
+        .get_all(axum::http::header::SET_COOKIE)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .find_map(|value| {
+            value
+                .split(';')
+                .next()
+                .and_then(|pair| pair.strip_prefix(&format!("{name}=")))
+                .map(str::to_string)
+        })
+        .unwrap_or_default()
+}
+
+async fn bootstrap_owner(h: &Harness) -> (String, String) {
+    let (status, headers, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/auth/bootstrap",
+            json!({
+                "username": "anna",
+                "display_name": "Anna",
+                "password": "correct horse battery staple",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    (
+        set_cookie(&headers, "redline_session"),
+        set_cookie(&headers, "redline_csrf"),
+    )
+}
+
 async fn submitted_session(h: &Harness, project: &str, branch: &str) -> String {
     let (status, _, created) = send(
         &h.app,
@@ -3471,4 +3533,371 @@ async fn a_running_handoff_blocks_a_move_but_a_failed_handoff_can_move() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(body["meta"].get("project").is_none());
+}
+
+#[tokio::test]
+async fn auth_status_bootstrap_and_session_owner_path_work() {
+    let h = harness();
+    let (status, _, body) = send(&h.app, get("/api/auth/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["setup_required"], true);
+
+    let (session, csrf) = bootstrap_owner(&h).await;
+    assert!(!session.is_empty(), "bootstrap must set a session cookie");
+    assert!(!csrf.is_empty(), "bootstrap must set a CSRF cookie");
+
+    let (status, _, info) = send(&h.app, get("/api/auth/status")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(info["setup_required"], false);
+
+    let (status, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["username"], "anna");
+    assert_eq!(me["is_owner"], true);
+
+    let (status, _, sessions) = send(
+        &h.app,
+        with_session("GET", "/api/sessions", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "owner session reads data: {sessions}"
+    );
+
+    let (status, _, body) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/auth/bootstrap",
+            json!({
+                "username": "second",
+                "display_name": "Second",
+                "password": "correct horse battery staple",
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+}
+
+#[tokio::test]
+async fn login_and_logout_use_the_session_cookie() {
+    let h = harness();
+    let (_session, _csrf) = bootstrap_owner(&h).await;
+
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "anna", "password": "wrong password" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "anna", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let session = set_cookie(&headers, "redline_session");
+    let csrf = set_cookie(&headers, "redline_csrf");
+    assert!(!session.is_empty());
+    assert!(!csrf.is_empty());
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session("POST", "/api/auth/logout", json!({}), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, _) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "logout revokes the session"
+    );
+}
+
+#[tokio::test]
+async fn a_member_can_sign_in_but_cannot_read_owner_data() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "petr",
+                "display_name": "Petr",
+                "password": "correct horse battery staple",
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "petr", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let member_session = set_cookie(&headers, "redline_session");
+    let member_csrf = set_cookie(&headers, "redline_csrf");
+
+    let (status, _, me) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/auth/me",
+            json!(null),
+            &member_session,
+            &member_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["is_owner"], false);
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/sessions",
+            json!(null),
+            &member_session,
+            &member_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn csrf_is_required_for_session_mutations() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let body = json!({
+        "username": "petr",
+        "display_name": "Petr",
+        "password": "correct horse battery staple",
+    });
+    let without_csrf = Request::builder()
+        .method("POST")
+        .uri("/api/users")
+        .header("cookie", format!("redline_session={session}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, _, response) = send(&h.app, without_csrf).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{response}");
+
+    let (status, _, response) = send(
+        &h.app,
+        with_session("POST", "/api/users", body, &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+}
+
+#[tokio::test]
+async fn transfer_ownership_moves_the_single_owner_bit() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, user) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/users",
+            json!({
+                "username": "petr",
+                "display_name": "Petr",
+                "password": "correct horse battery staple",
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{user}");
+    let petr_id = user["user"]["id"].as_str().unwrap().to_string();
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/admin/transfer-owner",
+            json!({ "user_id": petr_id, "password": "wrong" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+
+    let (status, _, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/admin/transfer-owner",
+            json!({ "user_id": petr_id, "password": "correct horse battery staple" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["user"]["username"], "petr");
+    assert_eq!(body["user"]["role"], "owner");
+
+    let (status, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["is_owner"], false);
+    let (status, _, _) = send(
+        &h.app,
+        with_session("GET", "/api/sessions", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "the old owner loses data access"
+    );
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "petr", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let new_session = set_cookie(&headers, "redline_session");
+    let new_csrf = set_cookie(&headers, "redline_csrf");
+    let (status, _, users) = send(
+        &h.app,
+        with_session("GET", "/api/users", json!(null), &new_session, &new_csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{users}");
+    let (status, _, me) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &new_session, &new_csrf),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{me}");
+    assert_eq!(me["user"]["username"], "petr");
+    assert_eq!(me["is_owner"], true);
+}
+
+#[tokio::test]
+async fn password_change_revokes_old_sessions_and_returns_a_new_one() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, headers, body) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/auth/password",
+            json!({
+                "current_password": "correct horse battery staple",
+                "new_password": "a different correct horse battery",
+            }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let new_session = set_cookie(&headers, "redline_session");
+    assert!(!new_session.is_empty());
+
+    let (status, _, _) = send(
+        &h.app,
+        with_session("GET", "/api/auth/me", json!(null), &session, &csrf),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "the old session is revoked"
+    );
+
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "anna", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "anna", "password": "a different correct horse battery" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn failed_logins_are_throttled() {
+    let h = harness();
+    for _ in 0..5 {
+        let (status, _, _) = send(
+            &h.app,
+            public(
+                "POST",
+                "/api/auth/login",
+                json!({ "username": "nobody", "password": "wrong password" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (status, _, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "nobody", "password": "wrong password" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
 }

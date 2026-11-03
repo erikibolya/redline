@@ -15,6 +15,12 @@ pub enum Error {
     #[error("{0}")]
     Conflict(String),
     #[error("{0}")]
+    Unauthorized(String),
+    #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
+    TooManyRequests(String),
+    #[error("{0}")]
     UnsupportedMediaType(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),
@@ -30,6 +36,9 @@ impl Error {
             Error::InvalidId | Error::NotFound(_) => StatusCode::NOT_FOUND,
             Error::Exists(_) | Error::Conflict(_) => StatusCode::CONFLICT,
             Error::BadRequest(_) => StatusCode::BAD_REQUEST,
+            Error::Unauthorized(_) => StatusCode::UNAUTHORIZED,
+            Error::Forbidden(_) => StatusCode::FORBIDDEN,
+            Error::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Error::UnsupportedMediaType(_) => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Error::Json(_) => StatusCode::BAD_REQUEST,
             Error::Io(_) => StatusCode::INTERNAL_SERVER_ERROR,

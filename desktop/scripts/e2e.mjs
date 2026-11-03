@@ -149,6 +149,25 @@ const main = async () => {
   });
   const id = created.meta.id;
 
+  // First-run auth: the legacy token bootstraps the single owner account. The rest of this
+  // suite keeps using the legacy token so the agent/bridge path stays covered; the login page
+  // gets its own browser context at the end.
+  const ownerPassword = "correct horse battery staple";
+  const bootstrap = await fetch(`${BASE}/api/auth/bootstrap`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${TOKEN}`, "content-type": "application/json" },
+    body: JSON.stringify({
+      username: "owner",
+      display_name: "Owner",
+      password: ownerPassword,
+    }),
+  });
+  const bootstrapBody = await bootstrap.json().catch(() => ({}));
+  check("first-run bootstrap creates the single owner",
+    bootstrap.ok && bootstrapBody.user?.username === "owner"
+      && bootstrapBody.user?.role === "owner",
+    `${bootstrap.status} ${JSON.stringify(bootstrapBody)}`);
+
   // The agent reports repos with portable keys; the UI and sessions use the resulting project.
   const synced = await api("/api/agent/repos", {
     method: "POST",
@@ -3861,6 +3880,60 @@ const main = async () => {
   const movedBack = await api(`/api/sessions/${moveId}`);
   check("moving a review back to Inbox persists too",
     !movedBack.meta.project, String(movedBack.meta.project));
+
+  // ---- owner login page (multi-user auth foundation). Isolated context: its cookies must not
+  // leak into the legacy-token page used by the rest of the suite.
+  const authContext = await browser.createBrowserContext();
+  const loginPage = await authContext.newPage();
+  const authErrors = [];
+  loginPage.on("pageerror", (error) => authErrors.push(error.message));
+  await loginPage.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
+  await loginPage.waitForSelector("#login-form:not([hidden])", { timeout: 5000 });
+  const authShell = await loginPage.evaluate(() => ({
+    title: document.querySelector("#auth-title")?.textContent.trim(),
+    loginVisible: !document.querySelector("#login-form")?.hidden,
+    bootstrapVisible: !document.querySelector("#bootstrap-form")?.hidden,
+  }));
+  check("login page shows the sign-in form when an owner exists",
+    authShell.title === "Sign in" && authShell.loginVisible && !authShell.bootstrapVisible,
+    JSON.stringify(authShell));
+
+  await loginPage.type("#username", "owner");
+  await loginPage.type("#password", ownerPassword);
+  await loginPage.click("#login-submit");
+  await loginPage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await loginPage.waitForSelector("#gallery", { timeout: 15000 });
+  const signedIn = await loginPage.evaluate(async () => {
+    const response = await fetch("/api/auth/me", { cache: "no-store" });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  });
+  check("owner signs in with username and password",
+    signedIn.status === 200 && signedIn.body.user?.username === "owner"
+      && signedIn.body.is_owner === true,
+    `${signedIn.status} ${JSON.stringify(signedIn.body)}`);
+  const csrfCookie = await loginPage.evaluate(() =>
+    document.cookie.split("; ").some((part) => part.startsWith("redline_csrf=")));
+  check("login sets the readable CSRF cookie", csrfCookie);
+
+  const logout = await loginPage.evaluate(async () => {
+    const csrf = document.cookie
+      .split("; ")
+      .find((part) => part.startsWith("redline_csrf="))
+      ?.split("=")[1] || "";
+    const response = await fetch("/api/auth/logout", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-csrf-token": csrf },
+      body: "{}",
+    });
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  });
+  const afterLogout = await loginPage.evaluate(async () =>
+    (await fetch("/api/auth/me", { cache: "no-store" })).status);
+  check("logout revokes the browser session",
+    logout.status === 200 && afterLogout === 401,
+    `${logout.status} / me=${afterLogout}`);
+  check("login page has no uncaught JS errors", authErrors.length === 0, authErrors.join("; "));
+  await authContext.close();
 
   check("no uncaught JS errors", jsErrors.length === 0, jsErrors.join("; "));
 

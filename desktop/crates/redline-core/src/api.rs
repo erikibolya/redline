@@ -1,12 +1,15 @@
 //! HTTP surface. Same routes as v0.1, plus `POST /api/sessions` and `POST /mcp`, all behind a
 //! bearer token (or the editor cookie). The editor itself is unchanged.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, FromRequest, Multipart, Path as RoutePath, Request, State};
+use axum::extract::{
+    DefaultBodyLimit, Extension, FromRequest, Multipart, Path as RoutePath, Request, State,
+};
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -17,17 +20,61 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 
 use crate::agent::{AgentControl, AgentSettings, ClaimError, ClaimRequest, ClaimState};
-use crate::auth::{self, Auth};
+use crate::auth::{self, Auth, CredentialSource};
 use crate::error::Error;
 use crate::mcp::{self, McpContext};
 use crate::model::{HandoffStatus, NewSession, Status, Submission};
+use crate::sessions::{SessionGrant, SessionStore};
 use crate::store::{FrameUpload, Store};
+use crate::users::{User, UserStatus, UserStore};
 use crate::{MAX_BODY_BYTES, MAX_SUBMIT_BYTES, MAX_TRACE_BYTES, MAX_VIDEO_BYTES};
+
+#[derive(Default)]
+struct LoginThrottle {
+    failures: Mutex<HashMap<String, (u32, Instant)>>,
+}
+
+impl LoginThrottle {
+    const MAX_FAILURES: u32 = 5;
+    const WINDOW: Duration = Duration::from_secs(15 * 60);
+
+    fn locked(&self, key: &str) -> bool {
+        let Ok(failures) = self.failures.lock() else {
+            return false;
+        };
+        failures
+            .get(key)
+            .is_some_and(|(count, at)| *count >= Self::MAX_FAILURES && at.elapsed() < Self::WINDOW)
+    }
+
+    fn fail(&self, key: &str) {
+        if let Ok(mut failures) = self.failures.lock() {
+            let entry = failures
+                .entry(key.to_string())
+                .or_insert((0, Instant::now()));
+            if entry.1.elapsed() >= Self::WINDOW {
+                *entry = (0, Instant::now());
+            }
+            entry.0 = entry.0.saturating_add(1);
+            entry.1 = Instant::now();
+        }
+    }
+
+    fn clear(&self, key: &str) {
+        if let Ok(mut failures) = self.failures.lock() {
+            failures.remove(key);
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
+    /// Legacy single token. Still the agent credential and the migration owner.
     pub auth: Auth,
+    pub users: UserStore,
+    pub sessions: SessionStore,
+    login: Arc<LoginThrottle>,
     /// Directory holding `index.html` / `list.html`. `None` in tests and in headless mode.
     pub ui: Option<PathBuf>,
     /// UI compiled into the binary (`include_str!`). The desktop app uses this so it never has
@@ -47,9 +94,14 @@ pub struct AppState {
 impl AppState {
     pub fn new(store: Store, auth: Auth) -> Self {
         let agent = Arc::new(Mutex::new(AgentControl::load(store.data_dir())));
+        let users = UserStore::new(store.data_dir());
+        let sessions = SessionStore::new(store.data_dir());
         Self {
             store,
             auth,
+            users,
+            sessions,
+            login: Arc::new(LoginThrottle::default()),
             ui: None,
             inline_ui: None,
             base_url: "http://127.0.0.1:8788".to_string(),
@@ -95,7 +147,25 @@ impl AppState {
 }
 
 pub fn router(state: AppState) -> Router {
+    let public_auth = Router::new()
+        .route("/api/auth/status", get(auth_status))
+        .route("/api/auth/login", post(auth_login))
+        .layer(middleware::from_fn(no_store));
+
+    let account = Router::new()
+        .route("/api/auth/me", get(auth_me))
+        .route("/api/auth/logout", post(auth_logout))
+        .route("/api/auth/password", post(auth_password))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_user_auth,
+        ))
+        .layer(middleware::from_fn(no_store));
+
     let protected = Router::new()
+        .route("/api/auth/bootstrap", post(auth_bootstrap))
+        .route("/api/users", get(list_users).post(create_user))
+        .route("/api/admin/transfer-owner", post(transfer_owner))
         .route("/api/config", get(config))
         .route("/api/setup", get(setup_status).post(save_setup))
         .route("/api/setup/disconnect", post(disconnect_setup))
@@ -168,7 +238,10 @@ pub fn router(state: AppState) -> Router {
         .route("/sessions/{id}/rounds/{name}", get(round_image))
         .route("/sessions/{id}/review.md", get(review_markdown_route))
         .route("/mcp", post(mcp_post))
-        .route_layer(middleware::from_fn_with_state(state.clone(), require_token))
+        .route_layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_owner_auth,
+        ))
         // The rail polls `/api/sessions`; a browser must never answer a decision with yesterday's
         // list. API/session responses are live data, not documents, so no-store is correct.
         .layer(middleware::from_fn(no_store))
@@ -180,8 +253,11 @@ pub fn router(state: AppState) -> Router {
         .route("/health", get(health))
         .route("/", get(list_page))
         .route("/s/{id}", get(editor_page))
+        .route("/login", get(login_page))
         .route("/setup", get(setup_page))
         .route("/servers", get(servers_page))
+        .merge(public_auth)
+        .merge(account)
         .merge(protected)
         .fallback(static_file)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
@@ -190,61 +266,180 @@ pub fn router(state: AppState) -> Router {
 
 // ---------------------------------------------------------------- auth middleware
 
-async fn require_token(State(state): State<AppState>, request: Request, next: Next) -> Response {
-    let extension_origin = extension_origin(request.headers());
-    let extension_client = extension_origin.is_some()
-        || request
+#[derive(Clone, Debug)]
+struct AuthContext {
+    user_id: Option<String>,
+    username: String,
+    is_owner: bool,
+    raw_session: Option<String>,
+    legacy: bool,
+}
+
+impl AuthContext {
+    fn legacy_owner() -> Self {
+        Self {
+            user_id: None,
+            username: "legacy".to_string(),
+            is_owner: true,
+            raw_session: None,
+            legacy: true,
+        }
+    }
+}
+
+async fn require_user_auth(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let origin = extension_origin(request.headers());
+    match authenticate(&state, &request) {
+        Ok(context) => {
+            request.extensions_mut().insert(context);
+            let mut response = next.run(request).await;
+            if let Some(origin) = origin {
+                add_extension_cors(&mut response, &origin);
+            }
+            response
+        }
+        Err(response) => response,
+    }
+}
+
+async fn require_owner_auth(
+    State(state): State<AppState>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let origin = extension_origin(request.headers());
+    match authenticate(&state, &request) {
+        Ok(context) if context.is_owner => {
+            request.extensions_mut().insert(context);
+            let mut response = next.run(request).await;
+            if let Some(origin) = origin {
+                add_extension_cors(&mut response, &origin);
+            }
+            response
+        }
+        Ok(_) => {
+            let mut response = forbidden("owner access required");
+            if let Some(origin) = origin {
+                add_extension_cors(&mut response, &origin);
+            }
+            response
+        }
+        Err(response) => response,
+    }
+}
+
+/// Resolve a request to one identity. The legacy token is deliberately still an owner: it is
+/// what the agent bridge and an unmigrated installation use, and it can be rotated later.
+fn authenticate(state: &AppState, request: &Request) -> std::result::Result<AuthContext, Response> {
+    public_guard(request.headers())?;
+    let Some(credential) = auth::credential_detail_from(request.headers(), request.uri().query())
+    else {
+        return Err(unauthorized());
+    };
+
+    if state.auth.verify(&credential.value) {
+        return Ok(AuthContext::legacy_owner());
+    }
+
+    let session = state
+        .sessions
+        .lookup(&credential.value)
+        .map_err(internal_error)?;
+    let Some(session) = session else {
+        return Err(unauthorized());
+    };
+    if credential.source == CredentialSource::SessionCookie && !safe_method(request.method()) {
+        let csrf = request
             .headers()
+            .get("x-csrf-token")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        if !SessionStore::verify_csrf(&session, csrf) {
+            return Err(forbidden("csrf token required"));
+        }
+    }
+    let user = state
+        .users
+        .get(&session.user_id)
+        .map_err(internal_error)?
+        .ok_or_else(unauthorized)?;
+    if user.status != UserStatus::Active {
+        return Err(unauthorized());
+    }
+    let is_owner = state.users.is_owner(&user.id).map_err(internal_error)?;
+    Ok(AuthContext {
+        user_id: Some(user.id),
+        username: user.username,
+        is_owner,
+        raw_session: Some(credential.value),
+        legacy: false,
+    })
+}
+
+fn public_guard(headers: &HeaderMap) -> std::result::Result<(), Response> {
+    let extension_client = extension_origin(headers).is_some()
+        || headers
             .get("x-redline-client")
             .and_then(|value| value.to_str().ok())
             == Some("browser-extension");
-
     // Reject drive-by requests from a web page the human happens to have open. Browsers send this
     // header; non-browser agents do not, so absence is not treated as failure. A browser extension
     // is a different origin and cannot be told apart from `cross-site` by this header alone, so it
     // must identify itself with an extension Origin or the explicit client header. A web page
     // cannot forge either (Origin is browser-controlled; the custom header requires a preflight
     // this server does not grant to web origins).
-    if let Some(site) = request.headers().get("sec-fetch-site") {
+    if let Some(site) = headers.get("sec-fetch-site") {
         if site.as_bytes() == b"cross-site" && !extension_client {
-            return (
+            return Err((
                 StatusCode::FORBIDDEN,
                 Json(json!({"error": "cross-site request"})),
             )
-                .into_response();
+                .into_response());
         }
     }
     // A request that carries a body must declare its type; bodyless DELETEs need no header.
-    let has_body = request
-        .headers()
+    let has_body = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u64>().ok())
         .is_some_and(|length| length > 0)
-        || request.headers().contains_key(header::TRANSFER_ENCODING);
-    if has_body && !request.headers().contains_key(header::CONTENT_TYPE) {
-        return (
+        || headers.contains_key(header::TRANSFER_ENCODING);
+    if has_body && !headers.contains_key(header::CONTENT_TYPE) {
+        return Err((
             StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Json(json!({"error": "content-type required"})),
         )
-            .into_response();
+            .into_response());
     }
+    Ok(())
+}
 
-    let credential = auth::credential_from(request.headers(), request.uri().query());
-    match credential {
-        Some(token) if state.auth.verify(&token) => {
-            let mut response = next.run(request).await;
-            if let Some(origin) = extension_origin {
-                add_extension_cors(&mut response, &origin);
-            }
-            response
-        }
-        _ => (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized", "hint": "Authorization: Bearer <token>" })),
-        )
-            .into_response(),
-    }
+fn safe_method(method: &Method) -> bool {
+    matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS)
+}
+
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "unauthorized", "hint": "sign in or use a token" })),
+    )
+        .into_response()
+}
+
+fn forbidden(message: &str) -> Response {
+    (StatusCode::FORBIDDEN, Json(json!({ "error": message }))).into_response()
+}
+
+fn internal_error(error: impl std::fmt::Display) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": error.to_string() })),
+    )
+        .into_response()
 }
 
 /// `chrome-extension://…` / `moz-extension://…` origins are the only cross-site callers allowed
@@ -304,6 +499,273 @@ async fn no_store(request: Request, next: Next) -> Response {
     response
 }
 
+#[derive(Debug, serde::Deserialize)]
+struct LoginBody {
+    username: String,
+    password: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BootstrapBody {
+    username: String,
+    display_name: String,
+    password: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CreateUserBody {
+    username: String,
+    display_name: String,
+    password: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct TransferOwnerBody {
+    user_id: String,
+    password: String,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PasswordBody {
+    current_password: String,
+    new_password: String,
+}
+
+async fn auth_status(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    // Public: say only whether the first-run form is needed. The owner's name is not public.
+    Ok(Json(json!({
+        "setup_required": state.users.owner_id()?.is_none(),
+    })))
+}
+
+async fn auth_login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<LoginBody>,
+) -> Result<Response, Error> {
+    if let Err(response) = public_guard(&headers) {
+        return Ok(response);
+    }
+    let key = format!(
+        "{}|{}",
+        body.username.trim().to_ascii_lowercase(),
+        request_ip(&headers).unwrap_or_else(|| "unknown".to_string())
+    );
+    if state.login.locked(&key) {
+        return Err(Error::TooManyRequests(
+            "too many failed sign-ins; try again in a few minutes".to_string(),
+        ));
+    }
+    let Some(user) = state.users.verify_login(&body.username, &body.password)? else {
+        state.login.fail(&key);
+        return Ok(unauthorized());
+    };
+    state.login.clear(&key);
+    let is_owner = state.users.is_owner(&user.id)?;
+    let grant = state.sessions.create(
+        &user.id,
+        request_ip(&headers).as_deref(),
+        request_agent(&headers).as_deref(),
+    )?;
+    Ok(auth_response(&state, &user, is_owner, grant))
+}
+
+/// First-run path: the legacy token (or an owner session) may create the single owner account.
+async fn auth_bootstrap(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<BootstrapBody>,
+) -> Result<Response, Error> {
+    if state.users.owner_id()?.is_some() {
+        return Err(Error::Conflict(
+            "this server already has an owner".to_string(),
+        ));
+    }
+    let user = state
+        .users
+        .create_owner(&body.username, &body.display_name, &body.password)?;
+    let grant = state.sessions.create(
+        &user.id,
+        request_ip(&headers).as_deref(),
+        request_agent(&headers).as_deref(),
+    )?;
+    Ok(auth_response(&state, &user, true, grant))
+}
+
+async fn auth_me(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
+    if context.legacy {
+        return Ok(Json(json!({
+            "user": null,
+            "is_owner": true,
+            "legacy": true,
+            "projects": [],
+        })));
+    }
+    let user = state
+        .users
+        .get(context.user_id.as_deref().unwrap_or_default())?
+        .ok_or_else(|| Error::Unauthorized("invalid or expired session".to_string()))?;
+    let is_owner = state.users.is_owner(&user.id)?;
+    Ok(Json(json!({
+        "user": user.public(is_owner),
+        "is_owner": is_owner,
+        "legacy": false,
+        "projects": [],
+    })))
+}
+
+async fn auth_logout(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Response {
+    if let Some(raw) = context.raw_session.as_deref() {
+        let _ = state.sessions.revoke(raw);
+    }
+    let mut response = Json(json!({ "ok": true })).into_response();
+    clear_auth_cookies(&state, &mut response);
+    response
+}
+
+async fn auth_password(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<PasswordBody>,
+) -> Result<Response, Error> {
+    let Some(user_id) = context.user_id.clone() else {
+        return Err(Error::BadRequest(
+            "sign in with a user account to change its password".to_string(),
+        ));
+    };
+    if state
+        .users
+        .verify_login(&context.username, &body.current_password)?
+        .is_none()
+    {
+        return Err(Error::Forbidden(
+            "current password is incorrect".to_string(),
+        ));
+    }
+    let user = state.users.set_password(&user_id, &body.new_password)?;
+    state.sessions.revoke_user(&user_id)?;
+    let grant = state.sessions.create(
+        &user.id,
+        request_ip(&headers).as_deref(),
+        request_agent(&headers).as_deref(),
+    )?;
+    let is_owner = state.users.is_owner(&user.id)?;
+    Ok(auth_response(&state, &user, is_owner, grant))
+}
+
+async fn list_users(State(state): State<AppState>) -> Result<Json<Value>, Error> {
+    let owner_id = state.users.owner_id()?;
+    let users: Vec<Value> = state
+        .users
+        .users()?
+        .into_iter()
+        .map(|user| {
+            let is_owner = owner_id.as_deref() == Some(user.id.as_str());
+            serde_json::to_value(user.public(is_owner))
+        })
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(Json(json!({ "users": users })))
+}
+
+async fn create_user(
+    State(state): State<AppState>,
+    Json(body): Json<CreateUserBody>,
+) -> Result<Json<Value>, Error> {
+    let user = state
+        .users
+        .create_user(&body.username, &body.display_name, &body.password)?;
+    Ok(Json(json!({ "user": user.public(false) })))
+}
+
+async fn transfer_owner(
+    State(state): State<AppState>,
+    Json(body): Json<TransferOwnerBody>,
+) -> Result<Json<Value>, Error> {
+    let owner = state
+        .users
+        .owner()?
+        .ok_or_else(|| Error::Conflict("this server has no owner".to_string()))?;
+    if state
+        .users
+        .verify_login(&owner.username, &body.password)?
+        .is_none()
+    {
+        return Err(Error::Forbidden(
+            "the current owner's password is incorrect".to_string(),
+        ));
+    }
+    let target = state.users.transfer_owner(&body.user_id)?;
+    Ok(Json(json!({ "user": target.public(true) })))
+}
+
+fn auth_response(state: &AppState, user: &User, is_owner: bool, grant: SessionGrant) -> Response {
+    let mut response = Json(json!({
+        "user": user.public(is_owner),
+        "csrf_token": grant.csrf,
+    }))
+    .into_response();
+    let secure = state.base_url.starts_with("https://");
+    append_cookie(
+        &mut response,
+        auth::session_cookie_header(&grant.token, secure),
+    );
+    append_cookie(&mut response, auth::csrf_cookie_header(&grant.csrf, secure));
+    // The browser now uses the named session; a stale owner cookie must not silently outrank it
+    // after logout. The legacy token remains valid for agents as a Bearer credential.
+    append_cookie(
+        &mut response,
+        auth::clear_cookie_header(auth::COOKIE_NAME, secure),
+    );
+    response
+}
+
+fn clear_auth_cookies(state: &AppState, response: &mut Response) {
+    let secure = state.base_url.starts_with("https://");
+    for name in [
+        auth::SESSION_COOKIE_NAME,
+        auth::CSRF_COOKIE_NAME,
+        auth::COOKIE_NAME,
+    ] {
+        append_cookie(response, auth::clear_cookie_header(name, secure));
+    }
+}
+
+fn append_cookie(response: &mut Response, value: String) {
+    if let Ok(value) = HeaderValue::from_str(&value) {
+        response.headers_mut().append(header::SET_COOKIE, value);
+    }
+}
+
+fn request_ip(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(',').next())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| {
+            headers
+                .get("x-real-ip")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_string)
+        })
+}
+
+fn request_agent(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+}
+
 /// The human-facing entry point: `GET /s/<id>?t=<token>` trades the token for a cookie so the
 /// address bar, history and shared screenshots stay free of secrets.
 fn trade_token_for_cookie(
@@ -349,6 +811,10 @@ async fn list_page(State(state): State<AppState>, request: Request) -> Response 
         return response;
     }
     serve_ui(&state, "list.html")
+}
+
+async fn login_page(State(state): State<AppState>) -> Response {
+    serve_ui(&state, "login.html")
 }
 
 async fn editor_page(

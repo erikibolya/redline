@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A matrix is not a people list.** People & access now lists people, not every repository as a
+  table column. Each row shows project chips with roles; **Projects** opens a dialog with a
+  checkbox and role per project, a filter, and one save for that person. The API gained
+  `PUT /api/users/{id}/projects` and `GET /api/users` embeds `memberships`, so one save cannot
+  rewrite other members and the page does not make a request per project (2026-11-03).
 - **A legacy cookie is not a signed-in owner.** The v0.27 `redline_token` cookie made
   `/api/auth/me` answer as the legacy owner, so `/login` redirected to the dashboard before it
   checked `setup_required`; a fresh v0.28 install could not create its first owner from a browser

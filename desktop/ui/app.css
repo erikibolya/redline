@@ -204,11 +204,6 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
 .notification-row .text { font-size: 12px; line-height: 1.4; color: var(--text); }
 .notification-row .meta { margin-top: 3px; color: var(--muted); font-size: 10.5px; }
 .notification-empty { padding: 14px 12px; color: var(--muted); font-size: 12px; }
-.notification-foot {
-  padding: 9px 12px; border-top: 1px solid var(--border-soft); font-size: 11px;
-}
-.notification-foot a { color: var(--muted); text-decoration: none; }
-.notification-foot a:hover { color: var(--accent); }
 /* Presence is words plus a dot, never colour alone: "No agent connected" must be readable. */
 .agent-chip {
   display: inline-flex; align-items: center; gap: 7px;

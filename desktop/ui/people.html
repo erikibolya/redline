@@ -283,6 +283,12 @@ async function load() {
     const me = await api("/api/auth/me");
     model.me = me;
     if (!me.is_owner) {
+      // Members have no user administration. The same People icon is their account entry point,
+      // so send it to the Personal tokens interface instead of an owner-only dead end.
+      if (me.user) {
+        location.replace("/tokens");
+        return;
+      }
       peopleList.innerHTML = `<div class="error-card">People &amp; access is owner-only.</div>`;
       document.getElementById("new-user-form").hidden = true;
       return;

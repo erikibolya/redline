@@ -2175,7 +2175,16 @@ fn trade_token_for_cookie(
         .filter_map(|pair| pair.split_once('='))
         .find(|(key, _)| *key == auth::QUERY_PARAM)
         .map(|(_, value)| value)?;
-    if !state.auth.verify(token) {
+    // A PAT is a human credential and may be used in a copied/desktop `?t=` link just like the
+    // legacy token: set the cookie and strip the secret from the URL. Agent tokens are not a
+    // human identity and must not mint a browser cookie.
+    let personal = state
+        .tokens
+        .lookup(token)
+        .ok()
+        .flatten()
+        .is_some_and(|record| record.kind == crate::tokens::TokenKind::Personal);
+    if !state.auth.verify(token) && !personal {
         return None;
     }
     // Keep page-level parameters such as `new=1` or `unreachable=1`, but never echo the token.

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **A people icon is not an owner icon.** Every named user now sees the People icon: the owner
+  gets People & access, a member is taken to **Personal tokens** (and `/people` redirects them
+  there). The tokens link was removed from the notification panel, where it did not belong. A
+  `?t=rl_pat_…` link is now traded for the browser cookie like the legacy token, so a desktop
+  server profile can use a PAT and open signed in; agent tokens still cannot mint a cookie
+  (2026-11-04).
+
 ## 0.28.1 — 2026-11-03
 
 - **A matrix is not a people list.** People & access now lists people, not every repository as a

@@ -705,8 +705,11 @@ section, `Δ` shows the summary inline:
 
 ## Personal and agent tokens (v0.28)
 
-- `/tokens` is linked from the notification panel (and from People & access for the owner).
-  A named user sees **Personal tokens**: name, optional project list, read-only and expiry. The
+- The **People** header icon is visible to every named user. For a member it is titled
+  **Personal tokens** and opens `/tokens` (the People page redirects there too); for the owner it
+  stays **People & access**, with a **Tokens →** link in its header. The notification panel no
+  longer carries a tokens link. A named user sees **Personal tokens**: name, optional project
+  list, read-only and expiry. The
   raw `rl_pat_…` appears once in a copyable field plus **Copy**; the list afterwards shows only
   the prefix, scopes, creation/last-used/expiry and **Revoke**.
 - The owner additionally sees **Agent tokens** (`rl_agt_…`): agent id, name, project allowlist,

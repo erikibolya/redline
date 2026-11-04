@@ -2285,19 +2285,39 @@ const main = async () => {
 
   // The pen has its own move path (`translateAnnotation` shifts `points`) and bounds/hit test.
   const penBefore = await page.evaluate(() => window.redline.annotations[0].points[0]);
-  await page.keyboard.press("v");
-  const penGrip = await onScreen({ type: "pen", point: 1 });
+  // Use the visible tool button and wait for the state; a lost keyboard shortcut used to leave
+  // the pen armed, so the drag drew a second stroke instead of moving the first.
+  await page.click('.tool[data-tool="select"]');
+  await page.waitForFunction(() => window.redline.tool === "select", { timeout: 5000 });
+  const penCount = await page.evaluate(() => window.redline.annotations.length);
   let penMoved = null;
   for (let attempt = 0; attempt < 5; attempt += 1) {
+    const penGrip = await onScreen({ type: "pen", point: Math.min(1 + attempt, 4) });
     await drag(page, penGrip, { x: penGrip.x + 30, y: penGrip.y + 20 });
-    penMoved = await page.evaluate(() => ({
+    const state = await page.evaluate(() => ({
+      count: window.redline.annotations.length,
       point: window.redline.annotations[0].points[0],
       scale: window.redline.view.scale,
     }));
+    if (state.count > penCount) {
+      // A lost select event left the pen armed; undo the extra stroke and try again.
+      await page.keyboard.down("Control");
+      await page.keyboard.press("z");
+      await page.keyboard.up("Control");
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
+    penMoved = { point: state.point, scale: state.scale };
     const dx = (penMoved.point.x - penBefore.x) * penMoved.scale;
     const dy = (penMoved.point.y - penBefore.y) * penMoved.scale;
     if (Math.abs(dx - 30) < 4 && Math.abs(dy - 20) < 4) break;
     await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  if (!penMoved) {
+    penMoved = await page.evaluate(() => ({
+      point: window.redline.annotations[0].points[0],
+      scale: window.redline.view.scale,
+    }));
   }
   const penDx = (penMoved.point.x - penBefore.x) * penMoved.scale;
   const penDy = (penMoved.point.y - penBefore.y) * penMoved.scale;
@@ -4204,6 +4224,30 @@ const main = async () => {
   await testerPage.type("#password", "correct horse battery staple");
   await testerPage.click("#login-submit");
   await testerPage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await testerPage.waitForFunction(
+    () => document.querySelector("#people-link") && !document.querySelector("#people-link").hidden,
+    { timeout: 5000 },
+  );
+  const memberLink = await testerPage.evaluate(() => ({
+    visible: !document.querySelector("#people-link")?.hidden,
+    title: document.querySelector("#people-link")?.title || "",
+  }));
+  check("a member gets the People icon as their tokens entry",
+    memberLink.visible && memberLink.title === "Personal tokens",
+    JSON.stringify(memberLink));
+  await testerPage.click("#people-link");
+  await testerPage.waitForFunction(() => location.pathname === "/tokens", { timeout: 10000 });
+  await testerPage.waitForSelector("#my-tokens-card", { timeout: 10000 });
+  const memberTokens = await testerPage.evaluate(() => ({
+    path: location.pathname,
+    heading: document.querySelector("#my-tokens-card h1")?.textContent.trim() || "",
+    agentHidden: Boolean(document.querySelector("#agent-tokens-card")?.hidden),
+  }));
+  check("a member opens Personal tokens from the People icon",
+    memberTokens.path === "/tokens" && memberTokens.heading === "Personal tokens"
+      && memberTokens.agentHidden,
+    JSON.stringify(memberTokens));
+
   const testerCreated = await testerPage.evaluate(async (png) => {
     const csrf = document.cookie
       .split("; ")

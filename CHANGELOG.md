@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.2 — 2026-11-04
 
 - **A people icon is not an owner icon.** Every named user now sees the People icon: the owner
   gets People & access, a member is taken to **Personal tokens** (and `/people` redirects them

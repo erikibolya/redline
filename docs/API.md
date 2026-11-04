@@ -52,6 +52,10 @@ its own project allowlist and `review`/`handoff` jobs, and never acts as a human
   "agent_token": {…} }`. Jobs default to `review`.
 - `DELETE /api/admin/agent-tokens/{id}` — owner only.
 
+A PAT may also ride in a copied/desktop `?t=rl_pat_…` link: the page routes trade it for the
+`HttpOnly` `redline_token` cookie and strip it from the URL, just like the legacy token. Agent
+tokens are refused there and never mint a browser cookie.
+
 A project outside a token's allowlist answers `404` (never `403`, which would confirm that the
 task exists). A read-only PAT gets `403` on mutations. An agent token on a human route gets `403`;
 a human session or owner on `/api/agent/*` is still accepted for administration, and the legacy

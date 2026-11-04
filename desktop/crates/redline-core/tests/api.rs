@@ -5749,3 +5749,64 @@ async fn user_project_roles_replace_only_that_user() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
 }
+
+#[tokio::test]
+async fn a_pat_query_token_becomes_a_cookie_but_an_agent_token_does_not() {
+    let h = harness();
+    let (session, csrf) = bootstrap_owner(&h).await;
+    let (status, _, pat) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/me/tokens",
+            json!({ "name": "Desktop", "read_only": false }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{pat}");
+    let raw_pat = pat["token"].as_str().unwrap().to_string();
+
+    let (status, headers, _) = send(&h.app, get(&format!("/?t={raw_pat}"))).await;
+    assert_eq!(status, StatusCode::TEMPORARY_REDIRECT);
+    assert_eq!(set_cookie(&headers, "redline_token"), raw_pat);
+    let location = headers
+        .get(axum::http::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        !location.contains(&raw_pat),
+        "the token must leave the URL: {location}"
+    );
+
+    let me = Request::builder()
+        .uri("/api/auth/me")
+        .header("cookie", format!("redline_token={raw_pat}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, me).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["user"]["username"], "anna");
+
+    let (status, _, agent) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/admin/agent-tokens",
+            json!({ "agent": "desk-bot", "name": "Desk" }),
+            &session,
+            &csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{agent}");
+    let raw_agent = agent["token"].as_str().unwrap().to_string();
+    let (status, headers, _) = send(&h.app, get(&format!("/?t={raw_agent}"))).await;
+    assert_ne!(
+        status,
+        StatusCode::TEMPORARY_REDIRECT,
+        "an agent token must not mint a browser cookie"
+    );
+    assert!(set_cookie(&headers, "redline_token").is_empty());
+}

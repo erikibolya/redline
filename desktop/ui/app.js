@@ -584,13 +584,19 @@ async function showPeopleLink() {
   if (!button) return;
   try {
     const me = await api("/api/auth/me");
+    // Legacy owner (no named user) still gets People & access. A member gets the same icon
+    // because it is their account entry point: it opens Personal tokens instead of user admin.
+    if (!me.user && !me.is_owner) return;
+    button.hidden = false;
+    button.title = me.is_owner ? "People & access" : "Personal tokens";
+    button.setAttribute("aria-label", me.is_owner ? "People and access" : "Personal tokens");
+    button.addEventListener("click", () => {
+      location.href = me.is_owner ? "/people" : "/tokens";
+    });
     if (!me.is_owner) {
       // Agent settings are owner-only; a visible gear that always answers 403 is a dead control.
       $$("[data-agent-settings]").forEach((gear) => { gear.hidden = true; });
-      return;
     }
-    button.hidden = false;
-    button.addEventListener("click", () => { location.href = "/people"; });
   } catch { /* signed out; the api helper has already redirected */ }
 }
 

@@ -24,6 +24,10 @@ header {
 .icon { border: 0; background: transparent; color: var(--text); font-size: 16px; cursor: pointer; }
 .empty { padding: 28px 18px; color: var(--muted); }
 .empty p { margin: 0 0 14px; }
+.capture-context {
+  font-size: 11px; margin: 0 0 10px; overflow-wrap: anywhere;
+}
+.capture-context.err { color: #fb7185; }
 .settings-panel { padding: 10px 12px; border-bottom: 1px solid var(--line); }
 .settings-panel[hidden] { display: none; }
 .settings-head {

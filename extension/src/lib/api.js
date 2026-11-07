@@ -72,8 +72,9 @@ export class RedLineApi {
     });
   }
 
-  async submit(id, { annotations, width, height, png, note = "" }) {
-    return this.request(`/api/sessions/${encodeURIComponent(id)}/annotations`, {
+  async submit(id, { annotations, width, height, png, note = "" }, { request = false } = {}) {
+    const endpoint = request ? "request-agent" : "annotations";
+    return this.request(`/api/sessions/${encodeURIComponent(id)}/${endpoint}`, {
       method: "POST",
       body: { annotations, width, height, png, note },
     });
@@ -158,7 +159,8 @@ export class RedLineApi {
     return this.request(`/sessions/${encodeURIComponent(id)}/trace`);
   }
 
-  async submitVideo(id, { annotations, width, height, contactSheet, frames, note = "" }) {
+  async submitVideo(id, { annotations, width, height, contactSheet, frames, note = "" }, { request = false } = {}) {
+    const endpoint = request ? "request-agent" : "annotations";
     const form = new FormData();
     form.append(
       "annotations",
@@ -169,7 +171,7 @@ export class RedLineApi {
       form.append("frames", frame.blob, `${frame.at.toFixed(3)}.png`);
     }
     const response = await fetch(
-      `${this.serverUrl}/api/sessions/${encodeURIComponent(id)}/annotations`,
+      `${this.serverUrl}/api/sessions/${encodeURIComponent(id)}/${endpoint}`,
       { method: "POST", headers: this.headers(), body: form },
     );
     const text = await response.text();

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **A tester button is not a submit button.** The capture extension always called
+  `/api/sessions/{id}/annotations`, which a tester is correctly forbidden from using, so a tester
+  could not queue a capture for a developer. The panel now reads `meta.my_role`: a tester gets
+  **Request agent review** and the same image/video payload goes to `/request-agent`, leaving the
+  task open with **Update request**; developers/owners keep **Submit to RedLine**. The extension
+  e2e now drives the same path with a real tester PAT and a developer hand-off. Extension
+  version 0.3.1 (2026-11-07).
+
 ## 0.28.2 — 2026-11-04
 
 - **A people icon is not an owner icon.** Every named user now sees the People icon: the owner

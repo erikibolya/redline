@@ -95,9 +95,10 @@ Project [ActiUnit / Au.Net]  Branch [feat/checkout-coupon]
 
 The upload uses `POST /api/sessions/video` with `video`, `poster`, `trace`, the form fields and
 the media metadata. The session is created **open**; the side panel loads it for annotation. The
-extension does **not** wake the agent until the human presses **Submit to RedLine**, which uses
-the same annotation API as the web editor. **Open in RedLine** is always available for advanced
-editing.
+action is role-aware: an owner/developer presses **Submit to RedLine** (`/annotations`) and wakes
+the agent; a **tester** presses **Request agent review** (`/request-agent`), which saves the
+round, leaves the task open and queues it for a developer to check and send. A tester can update
+the request from the same panel. **Open in RedLine** is always available for advanced editing.
 
 The Phase 2 screenshot path is shorter: the popup creates the image session immediately with the
 tab title and the configured project, then opens the side panel where the note is edited. An
@@ -139,8 +140,10 @@ A compact editor, not a copy of the full RedLine shell:
 - Trace strip: console errors, failed requests and actions; clicking seeks. The full trace panel
   is a list under the stage, filterable by kind.
 - Submit: image sessions use the existing JSON endpoint with `png`; video sessions use the
-  multipart submit with `annotations`, `png` (contact sheet) and `frames`. After a successful
-  submit, the panel says the review is queued for the agent and offers **Open in RedLine**.
+  multipart submit with `annotations`, `png` (contact sheet) and `frames`. A tester uses the same
+  payload against `request-agent` instead; the panel says it is saved for a developer and keeps
+  the task editable (**Update request**). A developer/owner submit says the review is queued for
+  the agent. Both offer **Open in RedLine**.
 - Drafts: keep an unsent annotation set in `chrome.storage.session` keyed by session id, so a
   service-worker restart or panel close does not lose it. Clear on submit/discard.
 
@@ -161,7 +164,8 @@ A compact editor, not a copy of the full RedLine shell:
                                     ▼
                          RedLine server (Rust/axum)
              POST /api/sessions              POST /api/sessions/video
-             POST /api/sessions/<id>/annotations (image/video submit)
+             POST /api/sessions/<id>/annotations (developer/owner submit)
+             POST /api/sessions/<id>/request-agent (tester request)
              GET  /sessions/<id>/trace       GET /api/sessions/<id> (meta.trace)
                                     │
                                     ▼

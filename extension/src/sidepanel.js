@@ -58,6 +58,8 @@ const state = {
   textPoint: null,
   readOnly: false,
   submitted: false,
+  role: "owner",
+  requested: false,
   local: false,
   localData: null,
   saveTimer: null,
@@ -151,7 +153,18 @@ function render() {
   $("delete").disabled = state.readOnly || !state.selectedId;
   $("clear").disabled = state.readOnly || state.annotations.length === 0;
   $("submit").disabled = state.readOnly;
-  $("submit").textContent = state.local ? "Export review" : "Submit to RedLine";
+  const status = state.meta?.status;
+  $("submit").textContent = state.local
+    ? "Export review"
+    : status === "resolved"
+      ? "Resolved"
+      : status === "submitted"
+        ? "Waiting for agent"
+        : state.role === "viewer"
+          ? "Read-only"
+          : state.role === "tester"
+            ? (state.requested ? "Update request" : "Request agent review")
+            : "Submit to RedLine";
   $("open-redline").hidden = state.local;
   $("discard").disabled = state.submitted;
   noteInput.disabled = state.readOnly;
@@ -665,7 +678,9 @@ async function loadCapture(capture) {
     state.selectedId = null;
     state.undo = [];
     state.redo = [];
-    state.readOnly = meta.status !== "open";
+    state.role = meta.my_role || "owner";
+    state.requested = Boolean(meta.agent_requested_at);
+    state.readOnly = meta.status !== "open" || state.role === "viewer";
     state.submitted = meta.status === "submitted" || meta.status === "resolved";
     state.width = Number(meta.media?.width) || 0;
     state.height = Number(meta.media?.height) || 0;
@@ -748,6 +763,8 @@ async function loadLocalCapture(capture) {
     state.bitmap = null;
     state.local = true;
     state.localData = local;
+    state.role = "owner";
+    state.requested = false;
     state.config = null;
     state.api = null;
     state.capture = {
@@ -986,16 +1003,20 @@ async function videoPackageFrames() {
   return { frames, sheet };
 }
 
-async function submitVideo() {
+async function submitVideo(request = false) {
   const { frames, sheet } = await videoPackageFrames();
-  await state.api.submitVideo(state.capture.sessionId, {
-    annotations: state.annotations,
-    width: mediaWidth(),
-    height: mediaHeight(),
-    contactSheet: sheet,
-    frames,
-    note: noteInput.value.trim(),
-  });
+  await state.api.submitVideo(
+    state.capture.sessionId,
+    {
+      annotations: state.annotations,
+      width: mediaWidth(),
+      height: mediaHeight(),
+      contactSheet: sheet,
+      frames,
+      note: noteInput.value.trim(),
+    },
+    { request },
+  );
 }
 
 function dataUrlBlob(dataUrl) {
@@ -1151,24 +1172,38 @@ async function submit() {
       return;
     }
     if (!state.api) throw new Error("Connect RedLine before submitting.");
-    setStatus("Submitting…");
+    const request = state.role === "tester";
+    setStatus(request ? "Saving for developer review…" : "Submitting…");
     if (state.mediaKind === "video") {
-      await submitVideo();
+      await submitVideo(request);
     } else {
       const png = composePng(state.bitmap, state.annotations);
-      await state.api.submit(state.capture.sessionId, {
-        annotations: state.annotations,
-        width: mediaWidth(),
-        height: mediaHeight(),
-        png,
-        note: noteInput.value.trim(),
-      });
+      await state.api.submit(
+        state.capture.sessionId,
+        {
+          annotations: state.annotations,
+          width: mediaWidth(),
+          height: mediaHeight(),
+          png,
+          note: noteInput.value.trim(),
+        },
+        { request },
+      );
     }
     await chrome.storage.session.remove(draftKey());
-    state.readOnly = true;
-    state.submitted = true;
-    render();
-    setStatus("Submitted to RedLine. The agent queue has it.", "ok");
+    if (request) {
+      // The task stays open so a developer can review and send it; the tester may update it.
+      state.requested = true;
+      state.readOnly = false;
+      state.submitted = false;
+      render();
+      setStatus("Saved for a developer to send to the agent.", "ok");
+    } else {
+      state.readOnly = true;
+      state.submitted = true;
+      render();
+      setStatus("Submitted to RedLine. The agent queue has it.", "ok");
+    }
   } catch (error) {
     setStatus(error.message || String(error), "err");
   } finally {

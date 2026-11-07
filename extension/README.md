@@ -15,6 +15,8 @@ RedLine server or exports it as a folder/ZIP for an AI assistant.
 4. The page freezes under the overlay. Draw directly on the page; the side panel holds the tools,
    annotation list and note. Press **Submit to RedLine** (or **Send to developer** as a tester).
    The overlay closes and the page returns to live.
+   If the panel was opened on another tab, press **Allow capture on this site** once; the
+   extension asks for access to that page and retries.
 5. Video flow moves into the same panel in the next phase. Until then, use the RedLine web editor
    for video reviews; the side-panel video editor remains for captures created by the recording
    pipeline.

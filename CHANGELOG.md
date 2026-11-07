@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A permission prompt is better than a dead capture.** When the side panel is on a web tab
+  that was not opened through the action icon, **Screenshot current tab** now offers **Allow
+  capture on this site**; granting it requests that page origin and retries the capture. Clicking
+  the icon on the page tab still works through `activeTab` without a prompt. Extension 0.4.3
+  (2026-11-07).
 - **A capture button must name its tab.** The empty side panel shows which tab it sees and,
   for `chrome://` or `chrome-extension://` pages, disables **Screenshot current tab** with
   "Switch to the web page tab you want to capture." A missing activeTab grant now says to click

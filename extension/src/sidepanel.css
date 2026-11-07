@@ -61,6 +61,13 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   max-height: 52vh; text-align: center;
 }
 .stage[hidden] { display: none; }
+.local-warning {
+  display: flex; gap: 8px; align-items: flex-start; justify-content: space-between;
+  padding: 8px 12px; border-bottom: 1px solid #92400e;
+  background: #3a2a12; color: #fbbf24; font-size: 11px;
+}
+.local-warning[hidden] { display: none; }
+.local-warning .link { color: #fbbf24; white-space: nowrap; }
 .overlay-banner {
   display: flex; gap: 8px; align-items: center; justify-content: space-between;
   padding: 7px 12px; border-bottom: 1px solid var(--line);

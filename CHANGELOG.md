@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **One capture button.** The empty panel no longer offers a separate Save locally link.
+  **Screenshot current tab** uses the server when connected, otherwise captures locally and the
+  workspace shows an orange "Not connected — this review is saved locally" warning with a
+  **Connect RedLine** link. **Export review** packages the local files. Extension 0.4.6
+  (2026-11-07).
 - **Save locally is the same canvas.** Local image captures now freeze the page under the same
   in-page overlay and keep the controls in the side panel; **Export review** packages the composed
   PNG, annotations and note. Local video keeps the side-panel editor. Extension 0.4.5

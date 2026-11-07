@@ -668,6 +668,11 @@ try {
     "Export review",
   );
   assert.equal(await localPanel.$eval("#open-redline", (element) => element.hidden), true);
+  assert.equal(
+    await localPanel.$eval("#local-warning", (element) => element.hidden),
+    false,
+    "a local capture must show the offline warning",
+  );
   const localOverlay = await waitOverlayFrame(localTarget.page);
   await drawRectInFrame(localTarget.page, localOverlay.frame);
   try {
@@ -848,6 +853,55 @@ try {
   assert.ok(!sent.meta.agent_requested_at, "the developer submit clears the request");
   await testerPanel.close();
   await testerTarget.page.close();
+
+  // One capture button: without a server it captures locally and shows the orange warning.
+  await evaluateInWorker(await serviceWorker(browser), 'chrome.storage.local.remove("redlineConfig")');
+  await evaluateInWorker(await serviceWorker(browser), 'chrome.storage.session.remove("activeCapture")');
+  const localLiveTarget = await createTargetPage(browser);
+  const localLivePanel = await openExtensionPage(browser, "src/sidepanel.html");
+  await localLivePanel.waitForFunction(() => !document.querySelector("#empty")?.hidden);
+  await localLiveTarget.page.bringToFront();
+  await localLivePanel.waitForFunction(
+    () => !document.querySelector("#capture")?.disabled
+      && (document.querySelector("#capture-context")?.textContent || "").includes("Current tab"),
+    { timeout: 10000, polling: 100 },
+  );
+  await clickPanel(localLivePanel, "#capture");
+  await localLiveTarget.page.waitForSelector("#redline-overlay-host", { timeout: 15000 });
+  await localLivePanel.waitForFunction(
+    () => !document.querySelector("#workspace")?.hidden
+      && !document.querySelector("#local-warning")?.hidden,
+    { timeout: 15000, polling: 100 },
+  );
+  const localWarning = await localLivePanel.$eval("#local-warning", (element) => ({
+    text: element.textContent,
+    hidden: element.hidden,
+  }));
+  assert.equal(localWarning.hidden, false);
+  assert.match(localWarning.text, /saved locally/i);
+  const localLiveOverlay = await waitOverlayFrame(localLiveTarget.page);
+  await drawRectInFrame(localLiveTarget.page, localLiveOverlay.frame);
+  await localLivePanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "1",
+    { timeout: 10000, polling: 100 },
+  );
+  assert.equal(
+    (await localLivePanel.$eval("#submit", (element) => element.textContent)).trim(),
+    "Export review",
+  );
+  await installPickerMock(localLivePanel);
+  await clickPanel(localLivePanel, "#submit");
+  await localLivePanel.waitForFunction(
+    () => document.querySelector("#status")?.textContent.includes("Exported"),
+    { timeout: 30000, polling: 100 },
+  );
+  const liveExport = await localLivePanel.evaluate(() => globalThis.__exported);
+  assert.ok(
+    liveExport.length >= 4,
+    `local export files: ${liveExport.map((file) => file.name)}`,
+  );
+  await localLivePanel.close();
+  await localLiveTarget.page.close();
 
   console.log("extension e2e: ok");
 } finally {

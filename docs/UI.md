@@ -667,8 +667,8 @@ section, `Δ` shows the summary inline:
 - The owner-only people icon appears in the header after `/api/auth/me` answers; it is hidden for
   developers/testers/viewers.
 - **Tester:** sees every task in their projects, edits only their own open tasks, and gets
-  **Request agent review** instead of **Send to agent**. The saved request is the current round;
-  the rail says **ready for agent** and the developer can send it. A tester cannot STOP, confirm/
+  **Send to developer** instead of **Send to agent**. The saved request is the current round;
+  the rail says **waiting for developer** and the developer can send it. A tester cannot STOP, confirm/
   cancel a feature or hand off; the server refuses those actions as well as the UI.
 - **Developer:** sees the ready task, edits if needed and sends it with **Send to agent**. The
   tester's request fields clear on submit; the task becomes `submitted` and the agent can claim it.
@@ -687,7 +687,7 @@ section, `Δ` shows the summary inline:
   legacy agent token). The badge is the unread count, capped at `99+`; opening the panel lists
   newest first, clicking a row marks it read and follows its `/s/<id>` link, and **Mark all read**
   clears the badge. It polls every 15 s, independent of the review's 5 s conversation poll.
-- Notification rows name the human action in words (`ready for agent`, `sent to agent`,
+- Notification rows name the human action in words (`waiting for developer`, `sent to agent`,
   `mention`, `discussion`), not the raw event kind or a bare timestamp.
 - The panel closes on an outside click; it never covers the composer on a narrow window.
 

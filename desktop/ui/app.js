@@ -117,7 +117,7 @@ function listNames(names) {
 
 function notificationKindLabel(kind) {
   return {
-    "review.ready": "ready for agent",
+    "review.ready": "waiting for developer",
     "review.submitted": "sent to agent",
     "review.replied": "agent replied",
     "review.resolved": "finished",
@@ -1716,7 +1716,7 @@ class Rail {
           ? `<span class="badge work" title="The agent is working on this review">
             <span class="spin" aria-hidden="true"></span>working</span>`
           : requested
-            ? `<span class="badge ready" title="A tester saved this round; a developer must send it to the agent">ready for agent</span>`
+            ? `<span class="badge ready" title="A tester saved this round; a developer must send it to the agent">waiting for developer</span>`
             : feature === "confirmed"
             ? `<span class="badge confirmed" title="Feature confirmed by the human">confirmed</span>`
             : feature === "cancelled"
@@ -2583,7 +2583,7 @@ class Editor {
       button.textContent = testerOther
         ? "Read-only (another tester)"
         : this.meta.status === "open"
-          ? (requested ? "Update request" : "Request agent review")
+          ? (requested ? "Update request" : "Send to developer")
           : "No action";
     } else {
       button.textContent = this.meta.status === "open" ? "Send to agent" : "Send to agent again";
@@ -5095,7 +5095,7 @@ class Editor {
       this.seenConversation();
       document.activeElement?.blur?.();
       await this.rail.load();
-      button.textContent = request ? "Request sent ✓" : "Submitted ✓";
+      button.textContent = request ? "Sent to developer ✓" : "Submitted ✓";
       setTimeout(() => {
         button.disabled = false;
         this.renderHeader();
@@ -5192,7 +5192,7 @@ class Editor {
       // Hand the keyboard back to the canvas: the review is sent, the next key is a shortcut.
       document.activeElement?.blur?.();
       await this.rail.load();
-      button.textContent = request ? "Request sent ✓" : "Submitted ✓";
+      button.textContent = request ? "Sent to developer ✓" : "Submitted ✓";
       // Re-render instead of hardcoding the next label: the status is `submitted` now, so the
       // button must become the red STOP with its square, not "Submit again".
       setTimeout(() => {

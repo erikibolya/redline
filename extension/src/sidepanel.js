@@ -163,7 +163,7 @@ function render() {
         : state.role === "viewer"
           ? "Read-only"
           : state.role === "tester"
-            ? (state.requested ? "Update request" : "Request agent review")
+            ? (state.requested ? "Update request" : "Send to developer")
             : "Submit to RedLine";
   $("open-redline").hidden = state.local;
   $("discard").disabled = state.submitted;
@@ -1197,7 +1197,7 @@ async function submit() {
       state.readOnly = false;
       state.submitted = false;
       render();
-      setStatus("Saved for a developer to send to the agent.", "ok");
+      setStatus("Sent to a developer for review.", "ok");
     } else {
       state.readOnly = true;
       state.submitted = true;

@@ -602,12 +602,12 @@ try {
     text: element.textContent.trim(),
     disabled: element.disabled,
   }));
-  assert.equal(testerLabel.text, "Request agent review");
+  assert.equal(testerLabel.text, "Send to developer");
   assert.equal(testerLabel.disabled, false);
   await drawRect(testerPage);
   await testerPage.click("#submit");
   await testerPage.waitForFunction(
-    () => document.querySelector("#status")?.textContent.includes("Saved for a developer"),
+    () => document.querySelector("#status")?.textContent.includes("Sent to a developer"),
     { timeout: 30000 },
   );
   const updateLabel = await testerPage.$eval("#submit", (element) => element.textContent.trim());

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **A screenshot cannot depend on activeTab alone.** Chrome's `captureVisibleTab` accepts
+  `activeTab` or `<all_urls>`, not a site-specific permission, so "Allow capture on this site"
+  could be granted and the capture still failed. The background now falls back to the
+  `debugger` permission (already used for recording): it attaches, calls
+  `Page.captureScreenshot`, detaches immediately and continues with the same review. The
+  debugger banner may flash for that capture. Extension 0.4.4 (2026-11-07).
 - **A permission prompt is better than a dead capture.** When the side panel is on a web tab
   that was not opened through the action icon, **Screenshot current tab** now offers **Allow
   capture on this site**; granting it requests that page origin and retries the capture. Clicking

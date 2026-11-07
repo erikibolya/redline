@@ -43,8 +43,9 @@ creates a Product ID on its first submission. Store APIs cannot create the first
 > use server mode, open the extension options, paste the RedLine server URL and token, then choose
 > **Send to RedLine**.
 >
-> Permissions: `debugger` is used only while you explicitly record, to read console/network
-> events for the review; it is detached on stop. `tabCapture` records only the tab you start. The
+> Permissions: `debugger` is used while you explicitly record (console messages/exceptions and
+> network metadata) and, when a screenshot cannot use `activeTab`, briefly for that screenshot;
+> it is detached after the screenshot or on stop. `tabCapture` records only the tab you start. The
 > extension asks for access only to the RedLine server origin you configure.
 
 **Category:** Developer Tools
@@ -84,8 +85,9 @@ Copy these into the Chrome Web Store / Partner Center fields:
 - `scripting` — inject the small action listener into the recorded tab and its frames.
 - `tabCapture` — record the active tab after Record is pressed.
 - `offscreen` — keep MediaRecorder alive while the popup is closed.
-- `debugger` — read console messages/exceptions and network metadata only during an explicit
-  recording; detach immediately on stop. No request/response bodies or headers are read.
+- `debugger` — read console messages/exceptions and network metadata during an explicit
+  recording, and take a screenshot when `activeTab` is unavailable (briefly attached, then
+  detached). Detach immediately on stop. No request/response bodies or headers are read.
 - Optional host permission — access only the RedLine server origin entered by the user.
 
 ## Privacy practices form

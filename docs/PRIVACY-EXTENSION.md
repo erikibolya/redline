@@ -54,7 +54,7 @@ the user sees the draft and can discard it before upload.
 | `scripting` | Inject the action recorder into the recorded page's frames. |
 | `tabCapture` | Record the active tab. |
 | `offscreen` | Run MediaRecorder without keeping a visible page open. |
-| `debugger` | Read console/network events while the user is recording; detached on stop. |
+| `debugger` | Read console/network events while the user is recording; also take the screenshot when `activeTab` is unavailable (attached briefly and detached immediately); detached on stop. |
 | Optional host permission | Access only the RedLine server origin the user configures. |
 
 ## Sharing and retention

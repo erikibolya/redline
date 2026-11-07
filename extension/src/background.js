@@ -24,6 +24,47 @@ function assertRecordable(tab) {
   }
 }
 
+async function captureWithDebugger(tabId) {
+  const recordingOwnsTab = Boolean(recording?.active && recording.tabId === tabId);
+  let attached = false;
+  if (!recordingOwnsTab) {
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+      attached = true;
+    } catch (error) {
+      throw new Error(
+        `Cannot capture this tab: ${error.message || error}. Close DevTools and try again.`,
+      );
+    }
+  }
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Page.enable");
+    const shot = await chrome.debugger.sendCommand(
+      { tabId },
+      "Page.captureScreenshot",
+      { format: "png", fromSurface: true, captureBeyondViewport: false },
+    );
+    if (!shot?.data) throw new Error("The tab returned no screenshot.");
+    return `data:image/png;base64,${shot.data}`;
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
+
+/**
+ * `captureVisibleTab` needs activeTab or <all_urls>; a per-site permission does not satisfy it.
+ * When the side panel was opened on another tab, fall back to the debugger (already used for
+ * recording) instead of leaving the human with a dead capture button.
+ */
+async function captureVisible(tab) {
+  try {
+    return await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  } catch (error) {
+    if (!/activeTab|all_urls/i.test(error?.message || String(error))) throw error;
+    return captureWithDebugger(tab.id);
+  }
+}
+
 async function captureAndCreate({ tabId } = {}) {
   const config = await loadConfig();
   if (!isConfigured(config)) {
@@ -34,7 +75,7 @@ async function captureAndCreate({ tabId } = {}) {
   const tab = await activeTab(tabId);
   if (!tab.windowId) throw new Error("The active tab has no window");
   assertRecordable(tab);
-  const imageDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  const imageDataUrl = await captureVisible(tab);
   const api = new RedLineApi(config);
   const created = await api.createImageSession({
     imageDataUrl,
@@ -64,7 +105,7 @@ async function captureLocal({ tabId } = {}) {
   const tab = await activeTab(tabId);
   if (!tab.windowId) throw new Error("The active tab has no window");
   assertRecordable(tab);
-  const imageDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  const imageDataUrl = await captureVisible(tab);
   const imageBlob = await (await fetch(imageDataUrl)).blob();
   const id = newLocalId("local-image");
   const title = tab.title || "Screenshot";

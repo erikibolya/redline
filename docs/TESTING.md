@@ -417,7 +417,7 @@ same path a human does: upload, play, draw, range, zoom, submit.
   `submitVideo(..., {request:true})` target `/request-agent` for image and video.
 - The extension e2e also drives the tester path end to end: it ensures an `e2e-tester` user and
   project, mints a tester PAT, configures the panel with it, draws a rectangle, asserts the
-  button says **Request agent review**, submits to `/request-agent`, and verifies the task stays
+  button says **Send to developer**, submits to `/request-agent`, and verifies the task stays
   `open` with `agent_requested_at`/`agent_requested_by` and a saved annotation. A developer
   submit through `/annotations` then changes the task to `submitted` and clears the request.
 - It measures the options row before configuring: the Project select and Branch input must share a

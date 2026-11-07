@@ -96,7 +96,7 @@ Project [ActiUnit / Au.Net]  Branch [feat/checkout-coupon]
 The upload uses `POST /api/sessions/video` with `video`, `poster`, `trace`, the form fields and
 the media metadata. The session is created **open**; the side panel loads it for annotation. The
 action is role-aware: an owner/developer presses **Submit to RedLine** (`/annotations`) and wakes
-the agent; a **tester** presses **Request agent review** (`/request-agent`), which saves the
+the agent; a **tester** presses **Send to developer** (`/request-agent`), which saves the
 round, leaves the task open and queues it for a developer to check and send. A tester can update
 the request from the same panel. **Open in RedLine** is always available for advanced editing.
 

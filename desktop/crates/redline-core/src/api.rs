@@ -4037,7 +4037,7 @@ async fn request_agent_review(
         &state,
         &meta,
         "review.ready",
-        &format!("{actor_name} requested agent review for \"{}\"", meta.title),
+        &format!("{actor_name} requested developer review for \"{}\"", meta.title),
         Some(&actor),
         &actor_name,
     )?;

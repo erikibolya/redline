@@ -5,7 +5,7 @@
 >
 > **Implementace:** auth foundation je v `dev` — uživatelé, Argon2id, serverové session/CSRF,
 > login stránka, owner bootstrap a transfer. Navazuje projektová ACL: memberships, filtrování
-> projektů/session/media, tester `Request agent review`, developer `Send to agent` a owner
+> projektů/session/media, tester `Send to developer`, developer `Send to agent` a owner
 > **People & access** matice. Diskuse a notifikace jsou také v `dev`: `comments.jsonl` v tasku,
 > per-user `notifications/<user>.jsonl`, zvonek s unread badge, mentions a resolve; retence
 > notifikací 90 dní (`REDLINE_NOTIFICATION_RETENTION_DAYS`). Audit je v `dev`: `audit.jsonl`,
@@ -20,7 +20,7 @@
 > přístup k projektům, aniž by se rozbila současná cesta agent → review → člověk.
 >
 > **Rozhodnutý MVP:** lokální hesla + session cookie, **jeden Owner s předáním ownershipu**,
-> Developer / Tester, projektová ACL, explicitní „ready for agent“, **komentáře, notifikace**,
+> Developer / Tester, projektová ACL, explicitní „waiting for developer“, **komentáře, notifikace**,
 > audit a optimistická revize. Bez SSO, bez e-mailového serveru a bez real-time CRDT.
 
 ## Shrnutí
@@ -31,7 +31,7 @@
   stopuje run, potvrzuje/zrušuje feature a žádá handoff.
 - **Tester** je člen projektu: **čte všechny tasky projektu**, ale edituje jen **vlastní**
   otevřené tasky. Tasky vytváří a anotuje, ale **nesmí je odeslat agentovi**; klikne
-  **Request agent review** a developer je odešle.
+  **Send to developer** a developer je odešle.
 - **Viewer** je volitelná read-only role; **agent** je servisní identita s allowlistem projektů.
 - Přístup se nastavuje v owner-only **People & access** matici `uživatel × projekt`.
 - Lidé se přihlašují **lokálním username/heslem** (session cookie); extension/CLI používají PAT;
@@ -47,7 +47,7 @@
 | Otázka | Rozhodnutí |
 |---|---|
 | Přihlášení | **Lokální hesla** (OIDC/SSO mimo MVP) |
-| Tester → agent | **Explicitní `Request agent review`** (stav „ready for agent“) |
+| Tester → developer | **Explicitní `Send to developer`** (stav „waiting for developer“) |
 | Tester scope | **Čte všechny tasky projektu, edituje jen vlastní** otevřené |
 | Inbox | **Projekt povinný** pro nový task; Inbox jen owner |
 | Owner | **Přesně jeden**, s možností **předat ownership** jinému uživateli |
@@ -103,11 +103,11 @@ developerovi.
 | **Membership** | Dvojice `(user, project, role)`; uživatel může mít v různých projektech různé role. |
 | **PAT** | Personal Access Token člověka pro CLI/extension/desktop; dědí jeho práva a lze ho dál omezit. |
 | **Service/agent token** | Token pro `redline-agent`/MCP; není to uživatelský účet. |
-| **Ready for agent** | Stav, kdy tester dokončil task a čeká, až ho developer odešle agentovi. |
+| **Waiting for developer** | Stav, kdy tester dokončil task a čeká, až ho developer odešle agentovi. |
 | **Share link** | Volitelný, časově omezený odkaz na jeden task (read-only / annotate), bez přístupu k projektu. |
 
 **Pojmenování (rozhodnuto):** v lidském UI používat **Task** — „New task“, „My tasks“, „Send to
-agent“; pro testera „Request agent review“. Agentní/API vrstva zůstává **review** (`session`,
+agent“; pro testera „Send to developer“. Agentní/API vrstva zůstává **review** (`session`,
 `review_screenshot`, `review.md`, `get_feedback`), aby se nerozbily klienti ani data. Iteraci
 tasku říkáme **Round** (už dnes „Round N“ v History). UI tlačítko pro `POST /annotations` se
 jmenuje **Send to agent** (dnes „Submit review“); endpoint se nemění. Důvod: „task“ je to, co
@@ -131,7 +131,7 @@ texty tlačítek, filtry a dokumentaci, ale ne datové schéma.
 - **Tester** je vždy člen konkrétního projektu. **Čte všechny tasky projektu** a agentovo vlákno
   (read-only), ale **edituje pouze vlastní** otevřené tasky. Může tasky vytvářet, anotovat a
   komentovat, ale **nesmí** submitovat agentovi, zastavit run, potvrdit/zrušit feature ani žádat
-  handoff. Místo submitnutí použije **Request agent review** (viz § 6.3).
+  handoff. Místo submitnutí použije **Send to developer** (viz § 6.3).
 - **Viewer** (volitelný) vidí tasky projektu a vlákno, může komentovat; needituje anotace ani
   nespouští agenta.
 - **Agent** není uživatel v UI. Má service token s volitelným allowlistem projektů a jobů
@@ -160,7 +160,7 @@ právě jeden owner — žádné „dva owneři“ ani dočasné období bez own
 | Editovat anotace otevřeného tasku | ✅ | ✅ | `own` | — | — |
 | Smazat task | ✅ any | `own` ne-submitted | `own` ne-submitted | — | — |
 | **Submit task agentovi** | ✅ | ✅ | **—** | — | — |
-| **Request agent review** (tester → developer) | ✅ | ✅ | ✅ | — | — |
+| **Send to developer** (tester → developer) | ✅ | ✅ | ✅ | — | — |
 | Zastavit běžící agent run (STOP) | ✅ | ✅ | **—** | — | — |
 | Potvrdit / zrušit feature | ✅ | ✅ | **—** | — | — |
 | Žádat / retryovat handoff | ✅ | ✅ | **—** | — | — |
@@ -210,7 +210,7 @@ právě jeden owner — žádné „dva owneři“ ani dočasné období bez own
   2. Agent ohlásí repo přes `POST /api/agent/repos`; projekt vznikne automaticky. Owner dostane
      upozornění „nový repo projekt — přiřaď členy“.
 - Dokud repo projekt nemá žádného developera, agent do něj nesmí být poslán (submit vrátí 409
-  s jasnou zprávou). Tester může task vytvořit, ale zůstane ve frontě „ready for agent“.
+  s jasnou zprávou). Tester může task vytvořit, ale zůstane ve frontě „waiting for developer“.
 - **Inbox (rozhodnuto):** nový task **musí mít projekt**, do kterého má uživatel právo. Inbox
   zůstává jen jako legacy/owner prostor; běžný uživatel ho v pickeru neuvidí. Důvod: Inbox nemá
   repo a bridge dnes tiše padá na default repo; s více uživateli by to byl bezpečnostní a
@@ -276,10 +276,10 @@ Owner-only stránka **People & access** (může být `/admin/people` nebo dialog
 
 1. Tester se přihlásí, v pickeru vidí jen své projekty.
 2. Vytvoří task (screenshot/video), anotuje, napíše prompt.
-3. Místo **Send to agent** vidí **Request agent review**. Klik uloží jeho práci jako „ready“
+3. Místo **Send to agent** vidí **Send to developer**. Klik uloží jeho práci jako „ready“
    (viz § 6.3) a upozorní developery projektu.
 4. Tester může request zrušit nebo upravit, dokud ho developer neodešle.
-5. Developer dostane v railu badge **ready for agent**, otevře task, zkontroluje/upraví anotace
+5. Developer dostane v railu badge **waiting for developer**, otevře task, zkontroluje/upraví anotace
    a klikne **Send to agent**.
 6. Agent pracuje; tester i developer vidí průběh a odpověď. Tester **nesmí** STOP, confirm,
    cancel ani handoff.
@@ -355,7 +355,7 @@ není závislé. Samoregistrace neexistuje — uživatele zakládá owner pozvá
   (`X-CSRF-Token`, hodnota z `GET /api/auth/me` nebo z non-HttpOnly `redline_csrf` cookie).
 - `Referrer-Policy: no-referrer` a `Cache-Control: no-store` na stránkách s tokeny.
 
-### 6.3 Tester „Request agent review“ — stav a data
+### 6.3 Tester „Send to developer“ — stav a data
 
 **Rozhodnutý model:** request **uloží testerskou práci** a označí task jako připravený, ale
 nezmění ho na `submitted` (agent ho nesmí vzít).
@@ -366,7 +366,7 @@ nezmění ho na `submitted` (agent ho nesmí vzít).
   - nastaví `agent_requested_at`, `agent_requested_by`, `agent_request_note` (volitelně),
   - `status` zůstane `open`; agent `next` ho ignoruje,
   - pokud task už má `agent_requested_at`, jde o update requestu.
-- Developer otevře task, uvidí banner „Requested by Jana · ready for agent“, může anotace
+- Developer otevře task, uvidí banner „Requested by Jana · waiting for developer“, může anotace
   upravit a klikne **Send to agent**.
 - Submit musí ověřit, že uživatel má v projektu `developer` (nebo owner) a že projekt má repo.
   Teprve submit nastaví `submitted_at`, `status=submitted` a vytvoří round pro agenta.
@@ -379,7 +379,7 @@ nezmění ho na `submitted` (agent ho nesmí vzít).
 - Tester může request zrušit (`DELETE /request-agent`) a task dál editovat.
 - Tester nemůže submitovat ani kdyby obešel UI: `POST /annotations` s jeho session vrátí 403.
 - Developer může task převzít i bez requestu (otevřený task v jeho projektu), ale badge
-  „ready for agent“ je signál, že na tasku někdo čeká.
+  „waiting for developer“ je signál, že na tasku někdo čeká.
 
 ### 6.4 PAT (Personal Access Token)
 
@@ -716,10 +716,10 @@ struct AuthContext {
 
 - Header: project chip (už máme), branch chip, user menu.
 - Nový task: project picker jen s dostupnými projekty; pro testera submit button
-  **Request agent review**, pro developera **Send to agent**.
+  **Send to developer**, pro developera **Send to agent**.
 - Tester vidí banner „Tento task odešle agentovi developer“ a po requestu „Waiting for a
   developer“.
-- Developer vidí u requestu badge **ready for agent** a tlačítko **Send to agent**.
+- Developer vidí u requestu badge **waiting for developer** a tlačítko **Send to agent**.
 - Pokud je task cizí a uživatel je tester, editor je read-only (anotace i submit composer),
   ale může číst vlákno a **komentovat**.
 - STOP, confirm, cancel, handoff jsou pro testera skryté/disabled s tooltipem „Jen developer“.
@@ -731,11 +731,11 @@ struct AuthContext {
 
 ### 9.3 Rail a dashboard
 
-- Filtry: `All`, `Active`, `Done` + nové `My tasks`, `Ready for agent` (developer).
+- Filtry: `All`, `Active`, `Done` + nové `My tasks`, `Waiting for developer` (developer).
 - Projektové skupiny jen s dostupnými projekty; count respektuje ACL.
-- Testerův task má badge `ready for agent` (amber) nebo `waiting for developer`.
+- Testerův task má badge `waiting for developer` (amber).
 - Owner vidí všechny projekty; cizí projekty v railu nemá.
-- Notifikace: zvonek s unread count; události „nový task v projektu“, „ready for agent“,
+- Notifikace: zvonek s unread count; události „nový task v projektu“, „waiting for developer“,
   „agent odpověděl“, „handoff done/failed“, „mention“.
 - Bulk akce: jen tasky, na které má uživatel právo; server validuje každý.
 
@@ -805,7 +805,7 @@ Login                         People & access
   PAT) + branch.
 - PAT se ukládá jen v extension storage; nikdy se neloguje.
 - Tester: extension umí vytvořit task a anotovat; „Send to agent“ nahradí „Save as ready“ /
-  „Request agent review“; developer dostane notifikaci.
+  „Send to developer“; developer dostane notifikaci.
 - Developer: stejné jako dnes, může submitnout.
 - Offline export zůstává.
 - CORS/extension origin zůstává; PAT v `Authorization`, ne v URL.
@@ -852,7 +852,7 @@ Permisse samy nestačí; více lidí bude editovat stejný task.
 ### 12.4 Notifikace (MVP)
 
 - Per-user `notifications/<user>.jsonl` s `read_at`.
-- Události: nový task v projektu, ready for agent, agent reply/resolve, handoff done/failed,
+- Události: nový task v projektu, waiting for developer, agent reply/resolve, handoff done/failed,
   mention, assignment, access change, owner transfer.
 - UI: zvonek + „Mark all read“; in-app je MVP.
 - Webhook/Slack/e-mail je další fáze; stávající `REDLINE_WEBHOOK_URL` rozšířit o `event` a
@@ -1027,7 +1027,7 @@ migrační guide, rollback a upozornění na legacy token. Nevydávat společně
 
 | Priorita | Funkce | Proč |
 |---|---|---|
-| **P0** | **Request agent review** (tester → developer) | Bez toho tester jen vytvoří task, který nikdo neodešle. |
+| **P0** | **Send to developer** (tester → developer) | Bez toho tester jen vytvoří task, který nikdo neodešle. |
 | **P0** | **Audit log** | U oprávnění je „kdo to udělal“ stejně důležité jako „smí to“. |
 | **P0** | **PAT + service tokeny** | Extension/CLI/agent potřebují identitu, ne root token. |
 | **P0** | **Comments + @mentions** | Rozhodnuto: součást MVP; diskuse tester↔developer. |
@@ -1056,7 +1056,7 @@ migrační guide, rollback a upozornění na legacy token. Nevydávat společně
 | Otázka | Rozhodnutí |
 |---|---|
 | Přihlášení | **Lokální hesla**; OIDC/SSO mimo MVP |
-| Tester → agent | **Explicitní `Request agent review`** |
+| Tester → developer | **Explicitní `Send to developer`** |
 | Tester scope | **Čte všechny tasky projektu, edituje jen vlastní** otevřené |
 | Inbox | **Projekt povinný**; Inbox jen owner |
 | Owner | **Přesně jeden**, s **transfer ownership** |

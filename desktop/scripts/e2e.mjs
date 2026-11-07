@@ -4275,8 +4275,8 @@ const main = async () => {
     button: document.querySelector("#submit")?.textContent.trim(),
     disabled: Boolean(document.querySelector("#submit")?.disabled),
   }));
-  check("a tester gets Request agent review on their own task",
-    testerEditor.role === "tester" && testerEditor.button === "Request agent review"
+  check("a tester gets Send to developer on their own task",
+    testerEditor.role === "tester" && testerEditor.button === "Send to developer"
       && !testerEditor.disabled,
     JSON.stringify(testerEditor));
 
@@ -4289,7 +4289,7 @@ const main = async () => {
     () => Boolean(document.querySelector('.session[aria-current="true"] .badge.ready')),
     { timeout: 5000 },
   );
-  // The transient "Request sent ✓" is replaced by the final label after 1.4 s.
+  // The transient "Sent to developer ✓" is replaced by the final label after 1.4 s.
   await testerPage.waitForFunction(
     () => document.querySelector("#submit")?.textContent.trim() === "Update request",
     { timeout: 3000 },
@@ -4300,10 +4300,10 @@ const main = async () => {
     button: document.querySelector("#submit")?.textContent.trim(),
     badge: document.querySelector(".session[aria-current=\"true\"] .badge.ready")?.textContent.trim() || "",
   }));
-  check("the tester request stays open and is marked ready for agent",
+  check("the tester request stays open and is marked waiting for developer",
     testerRequested.status === "open" && testerRequested.requested
       && testerRequested.button === "Update request"
-      && testerRequested.badge === "ready for agent",
+      && testerRequested.badge === "waiting for developer",
     JSON.stringify(testerRequested));
 
   // Discussion: the tester comments on their own task through the inspector.

@@ -66,7 +66,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
       sessions/CSRF, login page, owner bootstrap/transfer UI, the audit trail, personal tokens,
       scoped agent tokens, invite/reset links and `docs/MIGRATION-v0.28.md`.
 - [x] **Roles & project ACL:** Developer/Tester/Viewer, per-project memberships, required project,
-      tester `Request agent review`, server-side submit permission, owner People & access.
+      tester `Send to developer`, server-side submit permission, owner People & access.
 - [x] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, optimistic
       revision conflicts (server `409`, in-stage Reload theirs / Keep mine).
 - [ ] **Integrations:** desktop/CLI login, share links, OIDC/SSO later. *Done:* extension/CLI PAT

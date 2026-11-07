@@ -552,8 +552,9 @@ store review time.
 
 ## 12. Risks and mitigations
 
-- **`debugger` warning** is scary. Explain it in onboarding; attach only while recording; show a
-  visible REC overlay; detach on stop. Content-script-only mode is a later fallback, not v1.
+- **`debugger` warning** is scary. Explain it in onboarding; attach only while recording or for
+  the short screenshot fallback; show a visible REC overlay; detach on stop. Content-script-only
+  mode is a later fallback, not v1.
 - **Secrets in console/network.** Default to metadata, redact headers/query, bodies opt-in and
   capped; show a pre-upload summary. The video itself can still contain secrets; the user sees
   the draft and can discard.
@@ -630,8 +631,9 @@ Phase 3 (tab recording) is implemented on `feat/extension-recording`:
 
 - `tabCapture` + MediaRecorder in an offscreen document; the video Blob never crosses the
   extension message channel.
-- `chrome.debugger` attaches only while recording and collects console/exceptions, network
-  metadata and navigation; a content script (`all_frames`) records click/change/submit actions.
+- `chrome.debugger` attaches while recording for console/exceptions, network metadata and
+  navigation, and briefly for a screenshot fallback when `activeTab` is unavailable; a content
+  script (`all_frames`) records click/change/submit actions.
 - URL/text redaction, a 5,000-event cap and `chrome.storage.session` persistence for a
   service-worker restart.
 - Stop builds the poster, uploads multipart video + trace, stores the active capture and opens the

@@ -48,7 +48,7 @@ recording. Attach it to an AI assistant; the prompt explains what to read.
 
 - `tabCapture` + MediaRecorder in an offscreen document; the video bytes never cross the extension
   message channel.
-- `chrome.debugger` attaches only after Record and collects console/exceptions, network metadata
+- `chrome.debugger` attaches after Record (console/exceptions, network metadata) and briefly for a screenshot when `activeTab` is unavailable;
   (no headers/bodies) and navigation. A content script records click/change/submit actions.
 - URLs and console text are redacted (Bearer tokens, `token/key/secret/password/code/session`
   query values). The trace is capped at 5,000 events and 10 MB; the video is capped by RedLine.
@@ -94,6 +94,7 @@ credentials; the trace redacts URLs and tokens but the video is a real screen re
 - `storage` — config, active capture and unsent drafts.
 - `sidePanel` — the control deck.
 - `scripting` — injects the full-screen overlay after **Screenshot current tab**.
-- `tabCapture` / `offscreen` / `debugger` — only after an explicit Record click; the debugger is
-  detached on stop (video recording UI is being moved into the panel).
+- `tabCapture` / `offscreen` / `debugger` — recording uses them after an explicit Record click; a
+  screenshot fallback attaches the debugger briefly when `activeTab` is unavailable and detaches
+  immediately (video recording UI is being moved into the panel).
 - Optional host permission — requested for the configured RedLine server origin only.

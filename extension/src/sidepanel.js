@@ -63,6 +63,12 @@ const state = {
   local: false,
   localData: null,
   saveTimer: null,
+  overlayMode: false,
+  overlayActive: false,
+  overlayTabId: null,
+  undoCount: 0,
+  redoCount: 0,
+  submitting: false,
 };
 
 function setStatus(text, kind = "") {
@@ -81,21 +87,173 @@ function setBusy(busy) {
   }
 }
 
-function showEmpty(message = "") {
+function showEmpty(message = "", keepCapture = false) {
   $("workspace").hidden = true;
   $("empty").hidden = false;
   $("open-capture").hidden = true;
   $("video-bar").hidden = true;
   $("trace-panel").hidden = true;
+  $("overlay-banner").hidden = true;
+  $("pause-overlay").hidden = true;
+  $("capture-new").hidden = true;
+  $("resume-overlay").hidden = true;
+  $("stage").hidden = false;
   $("title").textContent = "RedLine Capture";
   $("subtitle").textContent = "No capture yet";
+  $("empty-status").textContent = message || "";
+  $("empty-status").className = `status ${message ? "err" : ""}`.trim();
+  state.overlayMode = false;
+  state.overlayActive = false;
+  state.submitting = false;
+  state.undoCount = 0;
+  state.redoCount = 0;
+  if (!keepCapture) {
+    state.capture = null;
+    state.meta = null;
+    state.annotations = [];
+    state.selectedId = null;
+    state.local = false;
+    state.localData = null;
+  }
   if (state.video) state.video.pause();
   if (message) setStatus(message, "err");
+}
+
+function sendOverlayCommand(command) {
+  if (!state.capture?.sessionId) return;
+  chrome.runtime
+    .sendMessage({
+      type: "redline-overlay-command",
+      sessionId: state.capture.sessionId,
+      command,
+    })
+    .catch(() => {});
+}
+
+async function injectOverlay(capture) {
+  const tabId = capture?.tabId || state.overlayTabId;
+  if (!tabId) throw new Error("This capture has no tab. Screenshot the tab again.");
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["src/overlay-host.js"],
+  });
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: "redline-overlay-open",
+    sessionId: capture.sessionId,
+  });
+  if (!response?.ok) throw new Error("Could not open the annotation overlay.");
+  state.overlayTabId = tabId;
+  state.overlayActive = true;
+  chrome.runtime
+    .sendMessage({
+      type: "redline-overlay-command",
+      sessionId: capture.sessionId,
+      command: { type: "request-state" },
+    })
+    .catch(() => {});
+}
+
+async function closeOverlay(capture = state.capture) {
+  if (!capture?.tabId) return;
+  await chrome.tabs
+    .sendMessage(capture.tabId, {
+      type: "redline-overlay-close",
+      sessionId: capture.sessionId,
+    })
+    .catch(() => {});
+  state.overlayActive = false;
+}
+
+function resumeOverlay() {
+  if (!state.capture || state.submitted) return;
+  injectOverlay(state.capture)
+    .then(() => setStatus("Annotating on the page. Controls are here."))
+    .catch((error) => setStatus(error.message || String(error), "err"));
+}
+
+function overlayCommand(command) {
+  if (!state.capture || !state.overlayActive) return;
+  sendOverlayCommand(command);
+}
+
+function applyOverlayState(message) {
+  const next = message.state || {};
+  if (Array.isArray(next.annotations)) state.annotations = next.annotations;
+  state.selectedId = next.selectedId || null;
+  if (next.tool) state.tool = next.tool;
+  if (next.color) state.color = next.color;
+  if (next.width) state.strokeWidth = Number(next.width) || state.strokeWidth;
+  if (next.widthPx) state.width = Number(next.widthPx) || state.width;
+  if (next.heightPx) state.height = Number(next.heightPx) || state.height;
+  state.undoCount = Number(next.undo) || 0;
+  state.redoCount = Number(next.redo) || 0;
+  state.readOnly = Boolean(next.readOnly);
+  if (next.role) state.role = next.role;
+  state.requested = Boolean(next.requested);
+  state.submitting = Boolean(next.submitting);
+  if (next.status && state.meta) state.meta.status = next.status;
+  if (typeof next.note === "string" && document.activeElement !== noteInput) {
+    noteInput.value = next.note;
+  }
+  if (next.title) $("title").textContent = next.title;
+  if (state.width && state.height) {
+    $("subtitle").textContent = `${state.width}×${state.height}${
+      state.readOnly ? ` · ${state.meta?.status || "read-only"}` : ""
+    }`;
+  }
+
+  if (message.event === "submitted") {
+    state.meta = message.meta || state.meta;
+    state.overlayActive = false;
+    state.submitting = false;
+    state.requested = Boolean(state.meta?.agent_requested_at);
+    state.submitted =
+      state.meta?.status === "submitted" || state.meta?.status === "resolved";
+    state.readOnly = state.submitted || state.role === "viewer";
+    void closeOverlay();
+    chrome.runtime.sendMessage({ type: "clear-active-capture" }).catch(() => {});
+    if (state.meta?.status === "open" && state.role === "tester") {
+      showSent("Sent to a developer.", true);
+      return;
+    }
+    setStatus("Submitted to RedLine. The agent queue has it.", "ok");
+  } else if (message.event === "error") {
+    state.submitting = false;
+    state.overlayActive = true;
+    setStatus(message.error || "Something went wrong.", "err");
+  } else if (message.event === "discarded") {
+    state.submitting = false;
+    void closeOverlay();
+    chrome.runtime.sendMessage({ type: "clear-active-capture" }).catch(() => {});
+    showEmpty("Task discarded.");
+    return;
+  } else if (message.event === "paused") {
+    state.overlayActive = false;
+    state.submitting = false;
+    setStatus("Capture paused. Resume annotating to continue.");
+  } else if (message.event === "ready" || message.event === "sync") {
+    state.overlayActive = true;
+    state.submitting = false;
+    if (!state.readOnly) setStatus("Annotate on the page. Controls are here.");
+  }
+
+  $("overlay-banner").hidden = !state.overlayMode || state.submitted;
+  $("overlay-banner-text").textContent = state.readOnly
+    ? "Read-only review — open it in RedLine to edit."
+    : state.overlayActive
+      ? "Annotating on the page — draw on the frozen screenshot."
+      : "Capture paused — the annotations are saved.";
+  $("resume-overlay").hidden = !state.overlayMode || state.overlayActive || state.submitted;
+  $("pause-overlay").hidden = !(state.overlayActive && !state.submitted);
+  $("capture-new").hidden = !state.submitted;
+  render();
 }
 
 function showWorkspace() {
   $("empty").hidden = true;
   $("workspace").hidden = false;
+  $("empty-status").textContent = "";
+  $("stage").hidden = state.overlayMode;
   updateModeChrome();
 }
 
@@ -133,6 +291,9 @@ async function saveDraft() {
         [draftKey()]: {
           annotations: state.annotations,
           note: noteInput.value,
+          tool: state.tool,
+          color: state.color,
+          width: state.strokeWidth,
           updatedAt: Date.now(),
         },
       })
@@ -141,6 +302,10 @@ async function saveDraft() {
 }
 
 function render() {
+  if (state.overlayMode) {
+    renderOverlayControls();
+    return;
+  }
   if (state.mediaKind === "video") {
     renderVideo();
   } else if (state.bitmap) {
@@ -176,6 +341,51 @@ function render() {
   $("width").disabled = state.readOnly;
   $("ghosts").disabled = false;
   $("timeline").disabled = false;
+}
+
+function renderOverlayControls() {
+  $("stage").hidden = true;
+  $("video-bar").hidden = true;
+  $("trace-panel").hidden = true;
+  $("count").textContent = String(state.annotations.length);
+  renderList();
+  $("undo").disabled = state.readOnly || state.undoCount === 0;
+  $("redo").disabled = state.readOnly || state.redoCount === 0;
+  $("delete").disabled = state.readOnly || !state.selectedId;
+  $("clear").disabled = state.readOnly || state.annotations.length === 0;
+  const paused = !state.overlayActive && !state.submitted;
+  $("submit").disabled = state.readOnly || state.submitting || paused;
+  const status = state.meta?.status;
+  $("submit").textContent = state.submitting
+    ? "Submitting…"
+    : paused
+      ? "Resume to submit"
+      : status === "resolved"
+        ? "Resolved"
+        : status === "submitted"
+          ? "Waiting for agent"
+          : state.role === "viewer"
+            ? "Read-only"
+            : state.role === "tester"
+              ? (state.requested ? "Update request" : "Send to developer")
+              : "Submit to RedLine";
+  $("open-redline").hidden = false;
+  $("discard").disabled = state.submitted || state.submitting || state.role === "viewer";
+  $("pause-overlay").hidden = !state.overlayActive || state.submitted;
+  $("capture-new").hidden = !state.submitted;
+  $("resume-overlay").hidden = state.overlayActive || state.submitted;
+  $("overlay-banner").hidden = state.submitted;
+  noteInput.disabled = state.readOnly || state.submitting;
+  for (const button of document.querySelectorAll(".tool")) {
+    button.classList.toggle("active", button.dataset.tool === state.tool);
+    button.disabled = state.readOnly || state.submitting;
+  }
+  $("color").disabled = state.readOnly || state.submitting;
+  $("width").disabled = state.readOnly || state.submitting;
+  if (/^#[0-9a-f]{6}$/i.test(state.color)) $("color").value = state.color;
+  if ([...$("width").options].some((option) => Number(option.value) === state.strokeWidth)) {
+    $("width").value = String(state.strokeWidth);
+  }
 }
 
 function renderMarkers() {
@@ -324,6 +534,10 @@ function renderList() {
         : typeLabel(annotation);
     row.append(number, text);
     row.addEventListener("click", () => {
+      if (state.overlayMode) {
+        overlayCommand({ type: "select", id: annotation.id });
+        return;
+      }
       state.selectedId = annotation.id;
       if (state.mediaKind === "video" && annotation.at != null) seekVideo(annotation.at);
       else render();
@@ -339,6 +553,10 @@ function snapshot() {
 }
 
 function undo() {
+  if (state.overlayMode) {
+    overlayCommand({ type: "undo" });
+    return;
+  }
   if (state.readOnly || !state.undo.length) return;
   state.redo.push(JSON.stringify(state.annotations));
   state.annotations = JSON.parse(state.undo.pop());
@@ -348,6 +566,10 @@ function undo() {
 }
 
 function redo() {
+  if (state.overlayMode) {
+    overlayCommand({ type: "redo" });
+    return;
+  }
   if (state.readOnly || !state.redo.length) return;
   state.undo.push(JSON.stringify(state.annotations));
   state.annotations = JSON.parse(state.redo.pop());
@@ -357,6 +579,10 @@ function redo() {
 }
 
 function removeSelected() {
+  if (state.overlayMode) {
+    overlayCommand({ type: "delete" });
+    return;
+  }
   if (state.readOnly || !state.selectedId) return;
   snapshot();
   state.annotations = state.annotations.filter((annotation) => annotation.id !== state.selectedId);
@@ -366,6 +592,12 @@ function removeSelected() {
 }
 
 function clearAll() {
+  if (state.overlayMode) {
+    if (state.readOnly || !state.annotations.length) return;
+    if (!confirm("Remove all annotations?")) return;
+    overlayCommand({ type: "clear" });
+    return;
+  }
   if (state.readOnly || !state.annotations.length) return;
   if (!confirm("Remove all annotations?")) return;
   snapshot();
@@ -377,6 +609,12 @@ function clearAll() {
 
 function setTool(tool) {
   if (!TOOLS.includes(tool) || state.readOnly) return;
+  if (state.overlayMode) {
+    state.tool = tool;
+    overlayCommand({ type: "set-tool", tool });
+    renderOverlayControls();
+    return;
+  }
   state.tool = tool;
   canvas.style.cursor = tool === "select" ? "default" : "crosshair";
   render();
@@ -639,11 +877,25 @@ $("delete").addEventListener("click", removeSelected);
 $("clear").addEventListener("click", clearAll);
 $("color").addEventListener("input", (event) => {
   state.color = event.target.value;
+  if (state.overlayMode) overlayCommand({ type: "set-color", color: state.color });
 });
 $("width").addEventListener("change", (event) => {
   state.strokeWidth = Number(event.target.value) || 3;
+  if (state.overlayMode) {
+    overlayCommand({ type: "set-width", width: state.strokeWidth });
+  }
 });
-noteInput.addEventListener("input", saveDraft);
+noteInput.addEventListener("input", () => {
+  if (state.overlayMode) {
+    if (state.overlayActive) {
+      overlayCommand({ type: "set-note", note: noteInput.value });
+    } else {
+      saveDraft();
+    }
+    return;
+  }
+  saveDraft();
+});
 
 async function loadCapture(capture) {
   try {
@@ -666,6 +918,8 @@ async function loadCapture(capture) {
     state.traceEvents = [];
     state.bitmap = null;
     state.mediaKind = meta.media?.kind === "video" ? "video" : "image";
+    state.overlayMode = false;
+    state.overlayActive = false;
     state.local = false;
     state.localData = null;
     state.config = config;
@@ -686,7 +940,7 @@ async function loadCapture(capture) {
     state.height = Number(meta.media?.height) || 0;
     noteInput.value = meta.prompt || "";
 
-    if (!state.readOnly) {
+    if (!state.readOnly && state.mediaKind === "video") {
       const stored = await chrome.storage.session.get(draftKey());
       const draft = stored[draftKey()];
       if (draft && Array.isArray(draft.annotations)) {
@@ -694,6 +948,37 @@ async function loadCapture(capture) {
         noteInput.value = draft.note || "";
         setStatus("Restored an unsent draft.");
       }
+    }
+
+    if (state.mediaKind === "image") {
+      // The page is the canvas: the side panel keeps the controls, the overlay owns the drawing
+      // and the submit payload.
+      state.overlayMode = true;
+      state.overlayActive = false;
+      state.overlayTabId = capture.tabId || null;
+      state.undoCount = 0;
+      state.redoCount = 0;
+      state.bitmap = null;
+      $("title").textContent = meta.title || "Screenshot";
+      $("subtitle").textContent = state.readOnly
+        ? `Screenshot · ${meta.status}`
+        : "Screenshot";
+      showWorkspace();
+      renderOverlayControls();
+      $("overlay-banner").hidden = false;
+      $("overlay-banner-text").textContent = "Opening the page overlay…";
+      setStatus("Opening the page overlay…");
+      try {
+        await injectOverlay(capture);
+        setStatus(
+          state.readOnly
+            ? "This review is already submitted; open it in RedLine."
+            : "Annotate on the page. Controls are here.",
+        );
+      } catch (error) {
+        setStatus(error.message || String(error), "err");
+      }
+      return;
     }
 
     if (state.mediaKind === "video") {
@@ -762,6 +1047,8 @@ async function loadLocalCapture(capture) {
     state.traceEvents = [];
     state.bitmap = null;
     state.local = true;
+    state.overlayMode = false;
+    state.overlayActive = false;
     state.localData = local;
     state.role = "owner";
     state.requested = false;
@@ -865,10 +1152,9 @@ async function loadActiveCapture() {
   else if (response?.capture) await loadCapture(response.capture);
   else {
     const config = await loadConfig();
-    if (!isConfigured(config)) {
-      setStatus("Connect RedLine for server mode, or save a local capture.", "");
-    }
-    showEmpty();
+    showEmpty(
+      isConfigured(config) ? "" : "Connect RedLine for server mode, or save a local capture.",
+    );
   }
 }
 
@@ -886,7 +1172,7 @@ async function captureCurrent() {
     const message = error.message || String(error);
     setStatus(
       /activeTab|all_urls/i.test(message)
-        ? "Use the RedLine Capture toolbar icon → Screenshot & annotate."
+        ? "Open the page tab and click the RedLine icon there; the panel needs that tab."
         : message,
       "err",
     );
@@ -909,7 +1195,7 @@ async function captureOffline() {
     const message = error.message || String(error);
     setStatus(
       /activeTab|all_urls/i.test(message)
-        ? "Use the RedLine Capture toolbar icon → Screenshot offline."
+        ? "Open the page tab and click the RedLine icon there; the panel needs that tab."
         : message,
       "err",
     );
@@ -1152,7 +1438,76 @@ async function exportLocal() {
   render();
 }
 
+function submitOverlay() {
+  if (state.readOnly || state.submitting || !state.capture) return;
+  if (!state.overlayActive) {
+    resumeOverlay();
+    return;
+  }
+  if (!state.annotations.length && !noteInput.value.trim()) {
+    if (!confirm("There are no annotations and no note. Send the capture anyway?")) return;
+  }
+  state.submitting = true;
+  setStatus(
+    state.role === "tester" ? "Saving for developer review…" : "Submitting…",
+  );
+  renderOverlayControls();
+  sendOverlayCommand({ type: "submit", note: noteInput.value });
+}
+
+async function discardOverlay() {
+  if (!state.capture || state.submitting || state.submitted) return;
+  if (!confirm("Delete this review and its screenshot?")) return;
+  if (!state.overlayActive) {
+    try {
+      state.submitting = true;
+      renderOverlayControls();
+      await state.api.deleteSession(state.capture.sessionId);
+      await chrome.storage.session.remove(draftKey());
+      await chrome.runtime.sendMessage({ type: "clear-active-capture" });
+      showEmpty("Task discarded.");
+    } catch (error) {
+      state.submitting = false;
+      setStatus(error.message || String(error), "err");
+      renderOverlayControls();
+    }
+    return;
+  }
+  state.submitting = true;
+  setStatus("Discarding…");
+  renderOverlayControls();
+  sendOverlayCommand({ type: "discard" });
+}
+
+function showSent(message, keepCapture = false) {
+  $("workspace").hidden = true;
+  $("empty").hidden = false;
+  $("open-capture").hidden = !keepCapture || !state.capture;
+  $("video-bar").hidden = true;
+  $("trace-panel").hidden = true;
+  $("overlay-banner").hidden = true;
+  $("pause-overlay").hidden = true;
+  $("capture-new").hidden = true;
+  $("resume-overlay").hidden = true;
+  $("stage").hidden = false;
+  $("title").textContent = "RedLine Capture";
+  $("subtitle").textContent = "No capture yet";
+  $("empty-status").textContent = message;
+  $("empty-status").className = "status ok";
+  state.overlayMode = false;
+  state.overlayActive = false;
+  state.submitting = false;
+  state.submitted = false;
+  state.readOnly = true;
+  state.annotations = [];
+  state.selectedId = null;
+  state.undoCount = 0;
+  state.redoCount = 0;
+  setStatus(message, "ok");
+}
+
 async function submit() {
+  if (state.overlayMode) return submitOverlay();
   if (state.readOnly || !state.capture) return;
   if (!state.annotations.length && !noteInput.value.trim()) {
     if (
@@ -1213,6 +1568,7 @@ async function submit() {
 }
 
 async function discard() {
+  if (state.overlayMode) return discardOverlay();
   if (!state.capture) return;
   const local = state.local;
   if (!confirm(local ? "Delete this local review and its files?" : "Delete this review and its screenshot?")) {
@@ -1258,6 +1614,11 @@ function openRedLine() {
 
 $("capture").addEventListener("click", captureCurrent);
 $("capture-offline").addEventListener("click", captureOffline);
+$("capture-new").addEventListener("click", captureCurrent);
+$("resume-overlay").addEventListener("click", resumeOverlay);
+$("pause-overlay").addEventListener("click", () => {
+  overlayCommand({ type: "close" });
+});
 $("open-capture").addEventListener("click", openRedLine);
 $("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
 $("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
@@ -1266,7 +1627,13 @@ $("discard").addEventListener("click", discard);
 $("open-redline").addEventListener("click", openRedLine);
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "redline-overlay-state") {
+    if (message.sessionId !== state.capture?.sessionId) return;
+    applyOverlayState(message);
+    return;
+  }
   if (message?.type === "capture-created" && message.capture) {
+    if (state.capture?.sessionId === message.capture.sessionId) return;
     if (message.capture.mode === "local") loadLocalCapture(message.capture);
     else loadCapture(message.capture);
   }

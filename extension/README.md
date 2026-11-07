@@ -1,27 +1,29 @@
 # RedLine Capture (browser extension)
 
-A Chrome/Edge MV3 extension that captures the current tab, opens it in a side-panel annotator, and
-either submits the review to a RedLine server or exports it as a folder/ZIP for an AI assistant.
+A Chrome/Edge MV3 extension that captures the current tab, freezes it under a full-screen
+annotation overlay, and keeps the tools in the side panel. It either submits the review to a
+RedLine server or exports it as a folder/ZIP for an AI assistant.
 
 ## Development
 
 1. Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**, choose
    **Load unpacked**, and select this `extension/` directory.
-2. Open the extension options (gear in the popup), paste your RedLine server URL and token, then
-   **Save & request access**. Chrome asks for access to that server origin.
-3. Open an `http(s)` page, click the RedLine Capture toolbar icon, and choose
-   **Screenshot & annotate**.
-4. Draw in the side panel, add a note, and **Submit to RedLine**. The review goes into the normal
-   RedLine queue; the agent reads the annotations and the submitted note.
-5. To record a flow, use **Record flow** in the popup. Chrome shows a debugging bar; click through
-   the app, use **Mark** for a moment, then **Stop & save**. The clip and trace upload together.
-   The side panel opens the recorded flow with a video timeline, trace filters and timecoded
-   annotations.
+2. Click the RedLine Capture toolbar icon. The **side panel** opens; use the gear in its header
+   to open Options, paste your RedLine server URL and token, then **Save & request access**.
+   Chrome asks for access to that server origin.
+3. Open an `http(s)` page, click the RedLine icon, and press **Screenshot current tab**.
+4. The page freezes under the overlay. Draw directly on the page; the side panel holds the tools,
+   annotation list and note. Press **Submit to RedLine** (or **Send to developer** as a tester).
+   The overlay closes and the page returns to live.
+5. Video flow moves into the same panel in the next phase. Until then, use the RedLine web editor
+   for video reviews; the side-panel video editor remains for captures created by the recording
+   pipeline.
 
 ## Offline export (no server)
 
-1. In the popup, use **Screenshot offline** or **Record offline**; no token or server is needed.
-2. Annotate in the side panel and click **Export review**.
+1. In the side panel, use **Save locally (offline)**; no token or server is needed.
+2. Annotate in the side panel (offline captures still use the compact panel canvas) and click
+   **Export review**.
 3. Choose a folder (File System Access API) or let the ZIP fallback download
    `redline-review-<id>.zip`.
 
@@ -33,8 +35,11 @@ recording. Attach it to an AI assistant; the prompt explains what to read.
 
 - Server/token/project/branch configuration with an origin-scoped host permission.
 - Visible-tab screenshot capture and image-session creation.
-- Side-panel canvas editor: select/move, rectangle, arrow, pen, text note, colour/width, undo/redo,
-  delete, clear, per-session draft, annotated PNG composition and submit.
+- **In-page screenshot annotation:** full-screen frozen overlay, direct drawing, side-panel tools,
+  annotation list, note, pause/resume draft, submit/discard.
+- Side-panel canvas editor for video and offline captures: select/move, rectangle, arrow, pen,
+  text note, colour/width, undo/redo, delete, clear, per-session draft, annotated PNG composition
+  and submit.
 - **Open in RedLine** for the full editor; a submitted review is read-only in the panel.
 
 ## Recording
@@ -68,12 +73,12 @@ node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs ex
 The same command runs in CI on Linux and Windows. There is no build step; reload the unpacked
 extension after changing a file.
 
-Manual smoke test: configure a local/test RedLine, capture a page,
-draw a rectangle, arrow, pen and text note, move one, undo/redo, reload the side panel to prove
-the draft survives, submit, then open the review in RedLine and verify the numbered annotations and
-the agent note. Also verify that a submitted review opens read-only. For offline mode, use
-**Screenshot offline** / **Record offline**, annotate, export to a folder, and verify the files; then
-reject the folder picker and verify the ZIP fallback.
+Manual smoke test: configure a local/test RedLine, click the toolbar icon, press
+**Screenshot current tab**, draw a rectangle, arrow, pen and text note on the page, move one,
+undo/redo, pause and resume to prove the draft survives, submit, then open the review in RedLine
+and verify the numbered annotations and the agent note. Also verify that a submitted review opens
+read-only. For offline mode, use **Save locally (offline)**, annotate in the panel, export to a
+folder, and verify the files; then reject the folder picker and verify the ZIP fallback.
 
 Recording smoke test: start Record on a local page, trigger a click, a console error and a failed
 fetch, press Mark, stop, then verify the video plays in RedLine, `trace.json` has action/console/
@@ -85,7 +90,8 @@ credentials; the trace redacts URLs and tokens but the video is a real screen re
 - `activeTab` — capture only after the human clicks the action.
 - `tabs` — read the current tab's title/URL and open the RedLine review.
 - `storage` — config, active capture and unsent drafts.
-- `sidePanel` — the annotator.
-- `scripting` / `tabCapture` / `offscreen` / `debugger` — only after an explicit Record click;
-  the debugger is detached on stop.
+- `sidePanel` — the control deck.
+- `scripting` — injects the full-screen overlay after **Screenshot current tab**.
+- `tabCapture` / `offscreen` / `debugger` — only after an explicit Record click; the debugger is
+  detached on stop (video recording UI is being moved into the panel).
 - Optional host permission — requested for the configured RedLine server origin only.

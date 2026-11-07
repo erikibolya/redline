@@ -36,6 +36,14 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   position: relative; padding: 8px; background: #080f1d; overflow: auto;
   max-height: 52vh; text-align: center;
 }
+.stage[hidden] { display: none; }
+.overlay-banner {
+  display: flex; gap: 8px; align-items: center; justify-content: space-between;
+  padding: 7px 12px; border-bottom: 1px solid var(--line);
+  color: var(--muted); font-size: 11px;
+}
+.overlay-banner[hidden] { display: none; }
+.overlay-banner .link { font-size: 11px; white-space: nowrap; }
 #canvas { max-width: 100%; height: auto; display: block; margin: 0 auto; cursor: crosshair; background: #111827; }
 .text-editor {
   position: absolute; z-index: 3; min-width: 150px; max-width: 240px;

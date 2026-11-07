@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Save locally is the same canvas.** Local image captures now freeze the page under the same
+  in-page overlay and keep the controls in the side panel; **Export review** packages the composed
+  PNG, annotations and note. Local video keeps the side-panel editor. Extension 0.4.5
+  (2026-11-07).
 - **A screenshot cannot depend on activeTab alone.** Chrome's `captureVisibleTab` accepts
   `activeTab` or `<all_urls>`, not a site-specific permission, so "Allow capture on this site"
   could be granted and the capture still failed. The background now falls back to the

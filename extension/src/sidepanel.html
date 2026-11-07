@@ -16,14 +16,19 @@
     </header>
 
     <section id="empty" class="empty">
-      <p>Capture the current tab, then annotate it here.</p>
-      <button id="capture" class="primary" type="button">Capture current tab</button>
+      <p>Screenshot the current tab, then draw on the frozen page. The controls stay in this panel.</p>
+      <button id="capture" class="primary" type="button">Screenshot current tab</button>
       <button id="capture-offline" class="link" type="button">Save locally (offline)</button>
       <button id="open-capture" class="link" type="button" hidden>Open captured review</button>
       <button id="open-options" class="link" type="button">Connect RedLine</button>
+      <p id="empty-status" class="status" role="status" aria-live="polite"></p>
     </section>
 
     <section id="workspace" hidden>
+      <div id="overlay-banner" class="overlay-banner" hidden>
+        <span id="overlay-banner-text">Annotating on the page — draw on the frozen screenshot.</span>
+        <button id="resume-overlay" class="link" type="button" hidden>Resume</button>
+      </div>
       <div id="stage" class="stage">
         <video id="video" hidden playsinline muted></video>
         <canvas id="canvas"></canvas>
@@ -94,6 +99,8 @@
       </div>
       <div class="footer secondary-row">
         <button id="open-redline" class="link" type="button">Open in RedLine</button>
+        <button id="pause-overlay" class="link" type="button" hidden>Pause annotation</button>
+        <button id="capture-new" class="link" type="button" hidden>New capture</button>
         <span id="status" class="status" role="status"></span>
       </div>
     </section>

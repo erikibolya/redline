@@ -437,6 +437,75 @@ async function drawRect(page) {
   await page.waitForFunction(() => document.querySelector("#count")?.textContent === "1");
 }
 
+async function clickPanel(page, selector) {
+  await page.evaluate((value) => {
+    const element = document.querySelector(value);
+    if (!element) throw new Error(`missing ${value}`);
+    element.click();
+  }, selector);
+}
+
+async function createTargetPage(browser) {
+  const marker = `e2e-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const page = await browser.newPage();
+  await page.goto(`${BASE}/health?e2e=${marker}`, { waitUntil: "domcontentloaded" });
+  const worker = await serviceWorker(browser);
+  const tabs = await evaluateInWorker(worker, "chrome.tabs.query({})");
+  const tab = tabs.result.value.find((entry) => entry.url.includes(marker));
+  if (!tab) throw new Error("target tab not found");
+  return { page, tabId: tab.id, marker };
+}
+
+async function waitOverlayFrame(page) {
+  await page.bringToFront();
+  for (let attempt = 0; attempt < 60; attempt += 1) {
+    const frame = page.frames().find((candidate) => candidate.url().includes("/src/overlay.html"));
+    if (frame) {
+      const box = await frame
+        .$eval("#canvas", (canvas) => {
+          const rect = canvas.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        })
+        .catch(() => null);
+      if (box && box.width > 0 && box.height > 0) return { frame, box };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error("overlay canvas did not lay out");
+}
+
+async function openOverlayCapture(browser, sessionId, tabId, title = "Extension image e2e") {
+  const capture = {
+    sessionId,
+    tabId,
+    serverUrl: BASE,
+    reviewUrl: `${BASE}/s/${sessionId}`,
+    title,
+    kind: "image",
+    createdAt: new Date().toISOString(),
+  };
+  const page = await openExtensionPage(browser, "src/sidepanel.html");
+  await page.waitForFunction(() => document.querySelector("#workspace"));
+  await page.evaluate(async ({ value }) => {
+    await chrome.storage.session.set({ activeCapture: value });
+  }, { value: capture });
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.waitForFunction(() => !document.querySelector("#workspace")?.hidden, { timeout: 15000 });
+  return page;
+}
+
+async function drawRectInFrame(page, frame) {
+  await page.bringToFront();
+  const box = await frame.$eval("#canvas", (canvas) => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+  await page.mouse.move(box.x + box.width * 0.2, box.y + box.height * 0.2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width * 0.7, box.y + box.height * 0.7, { steps: 5 });
+  await page.mouse.up();
+}
+
 async function submit(page) {
   await page.click("#submit");
   await page.waitForFunction(
@@ -450,20 +519,67 @@ try {
   const id = await extensionId(browser);
   await configure(browser, id);
 
+  const target = await createTargetPage(browser);
   const imageId = await createImageSession();
-  const imagePage = await openCapture(browser, id, imageId, "image");
+  const imagePanel = await openOverlayCapture(browser, imageId, target.tabId);
   assert.equal(
-    await imagePage.$eval("#video-bar", (element) => getComputedStyle(element).display),
+    await imagePanel.$eval("#video-bar", (element) => getComputedStyle(element).display),
     "none",
     "an image review must not show the video timeline",
   );
-  await drawRect(imagePage);
-  await submit(imagePage);
-  await imagePage.close();
+  const overlay = await waitOverlayFrame(target.page);
+  await clickPanel(imagePanel, '[data-tool="arrow"]');
+  await imagePanel.waitForFunction(
+    () => document.querySelector('[data-tool="arrow"]')?.classList.contains("active"),
+    { timeout: 5000 },
+  );
+  await overlay.frame.waitForFunction(
+    () => document.body.dataset.tool === "arrow",
+    { timeout: 5000 },
+  );
+  await drawRectInFrame(target.page, overlay.frame);
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "1",
+    { timeout: 10000 },
+  );
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#list .ann-row")?.textContent.includes("Arrow"),
+    { timeout: 5000 },
+  );
+  // Closing the panel must not lose the round: pause, resume from the draft, then submit.
+  await clickPanel(imagePanel, "#pause-overlay");
+  await target.page.waitForFunction(
+    () => !document.querySelector("#redline-overlay-host"),
+    { timeout: 10000 },
+  );
+  await imagePanel.waitForFunction(
+    () => !document.querySelector("#resume-overlay")?.hidden,
+    { timeout: 10000 },
+  );
+  await clickPanel(imagePanel, "#resume-overlay");
+  const resumed = await waitOverlayFrame(target.page);
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "1",
+    { timeout: 10000 },
+  );
+  await resumed.frame.waitForFunction(
+    () => document.body.dataset.tool === "arrow",
+    { timeout: 5000 },
+  );
+  await imagePanel.type("#note", "overlay note");
+  await clickPanel(imagePanel, "#submit");
+  await target.page.waitForFunction(
+    () => !document.querySelector("#redline-overlay-host"),
+    { timeout: 20000 },
+  );
   const image = await json(`/api/sessions/${imageId}`);
   assert.equal(image.meta.status, "submitted");
   assert.equal(image.annotations.annotations.length, 1);
+  assert.equal(image.annotations.annotations[0].type, "arrow");
   assert.equal(image.annotations.annotations[0].width, 3);
+  assert.equal(image.meta.prompt, "overlay note");
+  await imagePanel.close();
+  await target.page.close();
 
   const videoId = await createVideoSession();
   const videoPage = await openCapture(browser, id, videoId, "video");
@@ -593,25 +709,44 @@ try {
   // A tester's capture must not wake the agent: it is saved as a request for a developer.
   const tester = await createTesterToken();
   await configure(browser, id, tester.token);
+  const testerTarget = await createTargetPage(browser);
   const testerTask = await createImageSession(tester.token, {
     title: "Extension tester e2e",
     project: "e2e-repo",
   });
-  const testerPage = await openCapture(browser, id, testerTask, "image");
-  const testerLabel = await testerPage.$eval("#submit", (element) => ({
+  const testerPanel = await openOverlayCapture(
+    browser,
+    testerTask,
+    testerTarget.tabId,
+    "Extension tester e2e",
+  );
+  const testerLabel = await testerPanel.$eval("#submit", (element) => ({
     text: element.textContent.trim(),
     disabled: element.disabled,
   }));
   assert.equal(testerLabel.text, "Send to developer");
   assert.equal(testerLabel.disabled, false);
-  await drawRect(testerPage);
-  await testerPage.click("#submit");
-  await testerPage.waitForFunction(
-    () => document.querySelector("#status")?.textContent.includes("Sent to a developer"),
+  const testerOverlay = await waitOverlayFrame(testerTarget.page);
+  await drawRectInFrame(testerTarget.page, testerOverlay.frame);
+  await testerPanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "1",
+    { timeout: 10000 },
+  );
+  await clickPanel(testerPanel, "#submit");
+  await testerTarget.page.waitForFunction(
+    () => !document.querySelector("#redline-overlay-host"),
+    { timeout: 20000 },
+  );
+  await testerPanel.waitForFunction(
+    () => !document.querySelector("#empty")?.hidden
+      && document.querySelector("#empty-status")?.textContent.includes("Sent to a developer"),
     { timeout: 30000 },
   );
-  const updateLabel = await testerPage.$eval("#submit", (element) => element.textContent.trim());
-  assert.equal(updateLabel, "Update request");
+  assert.equal(
+    await testerPanel.$eval("#open-capture", (element) => element.hidden),
+    false,
+    "the tester can open the requested task in RedLine",
+  );
   const requested = await json(`/api/sessions/${testerTask}`);
   assert.equal(requested.meta.status, "open");
   assert.ok(requested.meta.agent_requested_at, "the tester request must be stamped");
@@ -630,7 +765,8 @@ try {
   });
   assert.equal(sent.meta.status, "submitted");
   assert.ok(!sent.meta.agent_requested_at, "the developer submit clears the request");
-  await testerPage.close();
+  await testerPanel.close();
+  await testerTarget.page.close();
 
   console.log("extension e2e: ok");
 } finally {

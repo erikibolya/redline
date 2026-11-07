@@ -45,6 +45,7 @@ async function captureAndCreate({ tabId } = {}) {
   });
   const capture = {
     sessionId: created.meta.id,
+    tabId: tab.id,
     serverUrl: config.serverUrl,
     reviewUrl: created.review_url,
     title: created.meta.title,
@@ -83,6 +84,7 @@ async function captureLocal({ tabId } = {}) {
   const capture = {
     sessionId: id,
     id,
+    tabId: tab.id,
     mode: "local",
     kind: "image",
     title,
@@ -380,6 +382,7 @@ async function stopRecording() {
       const capture = {
         sessionId: saved.id,
         id: saved.id,
+        tabId: current.tabId,
         mode: "local",
         kind: "video",
         title: current.title,
@@ -413,6 +416,7 @@ async function stopRecording() {
     }
     const capture = {
       sessionId: created.meta.id,
+      tabId: current.tabId,
       serverUrl: config.serverUrl,
       reviewUrl: created.review_url,
       title: created.meta.title,
@@ -495,6 +499,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       } else if (message?.type === "get-active-capture") {
         const stored = await chrome.storage.session.get(ACTIVE_KEY);
         sendResponse({ ok: true, capture: stored[ACTIVE_KEY] || null });
+      } else if (message?.type === "redline-overlay-request-close") {
+        // The overlay iframe cannot remove its own host; the content script owns the DOM node.
+        // The background is the only long-lived router when the side panel is closed.
+        const stored = await chrome.storage.session.get(ACTIVE_KEY);
+        const capture = stored[ACTIVE_KEY];
+        if (capture?.tabId && (!message.sessionId || capture.sessionId === message.sessionId)) {
+          await chrome.tabs
+            .sendMessage(capture.tabId, {
+              type: "redline-overlay-close",
+              sessionId: capture.sessionId,
+            })
+            .catch(() => {});
+        }
+        sendResponse({ ok: true });
       } else if (message?.type === "clear-active-capture") {
         await chrome.storage.session.remove(ACTIVE_KEY);
         sendResponse({ ok: true });
@@ -539,12 +557,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+// The action icon is the RedLine door: it opens the control panel, never a popup. The setting
+// persists, but calling it on startup and install keeps older profiles in sync.
+function openPanelOnActionClick() {
   try {
-    chrome.sidePanel
-      ?.setPanelBehavior?.({ openPanelOnActionClick: false })
-      ?.catch?.(() => {});
+    chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })?.catch?.(() => {});
   } catch {
-    // Older Chromium builds do not expose sidePanel; the popup falls back to a review tab.
+    // Older Chromium builds do not expose sidePanel.
   }
-});
+}
+
+openPanelOnActionClick();
+chrome.runtime.onInstalled.addListener(openPanelOnActionClick);
+chrome.runtime.onStartup?.addListener(openPanelOnActionClick);

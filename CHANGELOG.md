@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The side panel is a control deck, not the canvas.** The extension action now opens the side
+  panel (`openPanelOnActionClick`, no popup). **Screenshot current tab** freezes the viewport
+  under a full-screen overlay; tools, annotation list, note, submit and pause stay in the panel,
+  and the page returns to live after submit/discard. Pause/resume restores the draft, tool and
+  colour. Extension 0.4.0 (2026-11-07). Video moves into the same panel in the next phase.
 - **A tester button is not a submit button.** The capture extension always called
   `/api/sessions/{id}/annotations`, which a tester is correctly forbidden from using, so a tester
   could not queue a capture for a developer. The panel now reads `meta.my_role`: a tester gets

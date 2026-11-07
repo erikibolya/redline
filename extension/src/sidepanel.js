@@ -313,6 +313,7 @@ function showEmpty(message = "", keepCapture = false) {
   $("video-bar").hidden = true;
   $("trace-panel").hidden = true;
   $("overlay-banner").hidden = true;
+  $("local-warning").hidden = true;
   $("pause-overlay").hidden = true;
   $("capture-new").hidden = true;
   $("resume-overlay").hidden = true;
@@ -560,6 +561,7 @@ function render() {
             ? (state.requested ? "Update request" : "Send to developer")
             : "Submit to RedLine";
   $("open-redline").hidden = state.local;
+  $("local-warning").hidden = !state.local;
   $("discard").disabled = state.submitted;
   noteInput.disabled = state.readOnly;
   for (const button of document.querySelectorAll(".tool")) {
@@ -606,6 +608,7 @@ function renderOverlayControls() {
   $("capture-new").hidden = !state.submitted;
   $("resume-overlay").hidden = state.overlayActive || state.submitted;
   $("overlay-banner").hidden = state.submitted;
+  $("local-warning").hidden = !state.local;
   noteInput.disabled = state.readOnly || state.submitting;
   for (const button of document.querySelectorAll(".tool")) {
     button.classList.toggle("active", button.dataset.tool === state.tool);
@@ -1428,9 +1431,9 @@ async function loadActiveCapture() {
 async function captureCurrent() {
   const config = await loadConfig().catch(() => null);
   if (!isConfigured(config)) {
-    await openSettings();
-    setSettingsStatus("Connect RedLine first, then click Screenshot current tab.", "err");
-    return;
+    // One capture button: without a server, the same screenshot becomes a local review and the
+    // workspace shows the orange warning with a Connect link.
+    return captureOffline();
   }
   if (state.annotations.length && !state.readOnly) {
     if (!confirm("Discard the unsent annotations and capture the current tab?")) return;
@@ -1829,6 +1832,7 @@ function showSent(message, keepCapture = false) {
   $("video-bar").hidden = true;
   $("trace-panel").hidden = true;
   $("overlay-banner").hidden = true;
+  $("local-warning").hidden = true;
   $("pause-overlay").hidden = true;
   $("capture-new").hidden = true;
   $("resume-overlay").hidden = true;
@@ -1960,7 +1964,7 @@ $("capture").addEventListener("click", captureCurrent);
 $("allow-capture").addEventListener("click", () => {
   allowCaptureSite().catch((error) => setStatus(error.message || String(error), "err"));
 });
-$("capture-offline").addEventListener("click", captureOffline);
+$("connect-local").addEventListener("click", openSettings);
 $("capture-new").addEventListener("click", captureCurrent);
 $("resume-overlay").addEventListener("click", resumeOverlay);
 $("pause-overlay").addEventListener("click", () => {

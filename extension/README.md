@@ -23,8 +23,9 @@ RedLine server or exports it as a folder/ZIP for an AI assistant.
 
 ## Offline export (no server)
 
-1. In the side panel, use **Save locally (offline)**; no token or server is needed. The page
-   freezes under the same in-page overlay.
+1. Do not configure a server (or use a fresh profile) and press **Screenshot current tab**. The
+   page freezes under the same in-page overlay; no token or server is needed. The workspace shows
+   the orange local-save warning.
 2. Draw on the page, then click **Export review** in the side panel. The folder/ZIP contains the
    composed PNG and annotations. Local video still uses the side-panel editor.
 3. Choose a folder (File System Access API) or let the ZIP fallback download
@@ -80,8 +81,9 @@ Manual smoke test: configure a local/test RedLine, click the toolbar icon, press
 **Screenshot current tab**, draw a rectangle, arrow, pen and text note on the page, move one,
 undo/redo, pause and resume to prove the draft survives, submit, then open the review in RedLine
 and verify the numbered annotations and the agent note. Also verify that a submitted review opens
-read-only. For offline mode, use **Save locally (offline)**, annotate in the panel, export to a
-folder, and verify the files; then reject the folder picker and verify the ZIP fallback.
+read-only. For offline mode, remove the server config and press **Screenshot current tab**,
+annotate on the page, confirm the orange warning, export to a folder and verify the files; then
+reject the folder picker and verify the ZIP fallback.
 
 Recording smoke test: start Record on a local page, trigger a click, a console error and a failed
 fetch, press Mark, stop, then verify the video plays in RedLine, `trace.json` has action/console/

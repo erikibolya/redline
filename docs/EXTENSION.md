@@ -73,10 +73,13 @@ hint. The token is never rendered unmasked after saving; **Replace** and **Forge
 Clicking the toolbar icon opens the **side panel**; there is no popup
 (`chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`, no `default_popup`).
 
-The empty panel shows the current tab and **Screenshot current tab**. Clicking it captures the
-visible tab, creates an image review and injects the overlay into that tab. The panel then shows
-the controls for the round: tools, colour/width, undo/redo/delete, the annotation list, the note,
-**Send to developer** / **Submit to RedLine**, pause and discard.
+The empty panel shows the current tab, **Screenshot current tab** and **Connect RedLine**. One
+button covers both modes: with a saved server it creates an image review and injects the overlay;
+without one it saves the same screenshot locally and the workspace shows an orange **Not
+connected — this review is saved locally** warning with a Connect link. The panel then shows the
+controls for the round: tools, colour/width, undo/redo/delete, the annotation list, the note,
+**Export review** (local) or **Send to developer** / **Submit to RedLine** (server), pause and
+discard.
 
 The gear and **Connect RedLine** open an inline server/token/project form in the panel; they do
 not open the options page in a new tab. A missing configuration opens that form and says so. The

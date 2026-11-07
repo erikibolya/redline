@@ -423,6 +423,9 @@ same path a human does: upload, play, draw, range, zoom, submit.
 - The extension e2e opens the side panel with the gear, asserts the inline connection form is
   populated, saves it without opening the options tab, and checks that the empty panel names the
   extension tab, disables **Screenshot current tab** and explains that a web page tab is needed.
+- The extension e2e clears the server config, presses **Screenshot current tab**, verifies the
+  page overlay and the orange local warning, then exports the local review through the picker
+  mock.
 - The extension e2e also drives the tester path end to end: it ensures an `e2e-tester` user and
   project, mints a tester PAT, configures the panel with it, opens the overlay, draws a rectangle,
   asserts the button says **Send to developer**, submits to `/request-agent`, and verifies the

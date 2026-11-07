@@ -51,13 +51,16 @@
       <p id="capture-context" class="capture-context">Checking the current tab…</p>
       <button id="capture" class="primary" type="button">Screenshot current tab</button>
       <button id="allow-capture" class="link" type="button" hidden>Allow capture on this site</button>
-      <button id="capture-offline" class="link" type="button">Save locally (offline)</button>
       <button id="open-capture" class="link" type="button" hidden>Open captured review</button>
       <button id="open-options" class="link" type="button">Connect RedLine</button>
       <p id="empty-status" class="status" role="status" aria-live="polite"></p>
     </section>
 
     <section id="workspace" hidden>
+      <div id="local-warning" class="local-warning" hidden>
+        <span>Not connected — this review is saved locally.</span>
+        <button id="connect-local" class="link" type="button">Connect RedLine</button>
+      </div>
       <div id="overlay-banner" class="overlay-banner" hidden>
         <span id="overlay-banner-text">Annotating on the page — draw on the frozen screenshot.</span>
         <button id="resume-overlay" class="link" type="button" hidden>Resume</button>

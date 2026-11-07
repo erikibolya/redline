@@ -79,8 +79,10 @@ the controls for the round: tools, colour/width, undo/redo/delete, the annotatio
 **Send to developer** / **Submit to RedLine**, pause and discard.
 
 The gear and **Connect RedLine** open an inline server/token/project form in the panel; they do
-not open the options page in a new tab. A missing configuration opens that form and says so, and
-a non-http active tab reports that it cannot be captured instead of failing silently.
+not open the options page in a new tab. A missing configuration opens that form and says so. The
+empty panel also names the active tab; on `chrome://` or `chrome-extension://` pages it disables
+**Screenshot current tab** and asks the human to switch to the web page tab. If the tab was not
+opened through the action icon, the activeTab error says to click the icon on that page tab.
 
 Video flow moves into this panel in the next phase. The existing side-panel video editor remains
 in the code and is covered by the extension e2e; the old popup file is no longer reachable from

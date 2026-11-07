@@ -543,14 +543,18 @@ try {
       && !document.querySelector("#empty")?.hidden,
     { timeout: 10000 },
   );
-  // A failed capture must say why instead of looking like a dead button (2026-11-07).
-  await clickPanel(configuredPanel, "#capture");
+  // An extension/options tab is not capturable: say which tab is visible and disable the button
+  // instead of looking like a dead action (2026-11-07).
   await configuredPanel.waitForFunction(
-    () => document.querySelector("#empty-status")?.textContent.includes("http"),
+    () => {
+      const context = document.querySelector("#capture-context")?.textContent || "";
+      return context.includes("Switch to the web page") &&
+        Boolean(document.querySelector("#capture")?.disabled);
+    },
     { timeout: 10000 },
   );
-  const captureError = await configuredPanel.$eval("#empty-status", (element) => element.textContent.trim());
-  assert.match(captureError, /http/);
+  const captureContext = await configuredPanel.$eval("#capture-context", (element) => element.textContent.trim());
+  assert.match(captureContext, /Switch to the web page/);
   await configuredPanel.close();
 
   const target = await createTargetPage(browser);

@@ -34,6 +34,7 @@ const textEditor = $("text-editor");
 const noteInput = $("note");
 const statusEl = $("status");
 const emptyStatusEl = $("empty-status");
+const captureContextEl = $("capture-context");
 const settingsStatusEl = $("settings-status");
 const video = $("video");
 let settingsReturn = null;
@@ -78,6 +79,7 @@ const state = {
   undoCount: 0,
   redoCount: 0,
   submitting: false,
+  captureAllowed: false,
 };
 
 function setStatus(text, kind = "") {
@@ -222,11 +224,42 @@ async function testSettings() {
 function setBusy(busy) {
   for (const element of document.querySelectorAll("button, input, select, textarea")) {
     if (element.id === "settings") continue;
+    if (element.id === "capture") {
+      element.disabled = busy || !state.captureAllowed;
+      continue;
+    }
     element.disabled = busy || (state.readOnly && !["open-redline", "settings"].includes(element.id));
   }
   if (!busy && state.readOnly) {
     $("open-redline").disabled = false;
     $("settings").disabled = false;
+  }
+}
+
+async function refreshCaptureContext() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) {
+      state.captureAllowed = false;
+      captureContextEl.textContent = "No active tab.";
+      captureContextEl.className = "capture-context err";
+      $("capture").disabled = true;
+      return;
+    }
+    const url = tab.url || tab.pendingUrl || "";
+    const capturable = /^https?:/i.test(url);
+    state.captureAllowed = capturable;
+    captureContextEl.textContent = capturable
+      ? `Current tab: ${tab.title || url}`
+      : `This is ${tab.title || url}. Switch to the web page tab you want to capture.`;
+    captureContextEl.className = `capture-context ${capturable ? "" : "err"}`.trim();
+    $("capture").disabled = !capturable;
+    $("capture").title = capturable ? "" : "Switch to an http(s) page tab first.";
+  } catch (error) {
+    state.captureAllowed = false;
+    captureContextEl.textContent = error.message || String(error);
+    captureContextEl.className = "capture-context err";
+    $("capture").disabled = true;
   }
 }
 
@@ -260,6 +293,7 @@ function showEmpty(message = "", keepCapture = false) {
   }
   if (state.video) state.video.pause();
   if (message) setStatus(message, "err");
+  refreshCaptureContext().catch(() => {});
 }
 
 function sendOverlayCommand(command) {
@@ -1321,7 +1355,7 @@ async function captureCurrent() {
     const message = error.message || String(error);
     setStatus(
       /activeTab|all_urls/i.test(message)
-        ? "Open the page tab and click the RedLine icon there; the panel needs that tab."
+        ? "This tab was not opened through the RedLine icon. Click the icon on the page tab, then press Screenshot again."
         : message,
       "err",
     );
@@ -1344,7 +1378,7 @@ async function captureOffline() {
     const message = error.message || String(error);
     setStatus(
       /activeTab|all_urls/i.test(message)
-        ? "Open the page tab and click the RedLine icon there; the panel needs that tab."
+        ? "This tab was not opened through the RedLine icon. Click the icon on the page tab, then press Screenshot again."
         : message,
       "err",
     );
@@ -1653,6 +1687,7 @@ function showSent(message, keepCapture = false) {
   state.undoCount = 0;
   state.redoCount = 0;
   setStatus(message, "ok");
+  refreshCaptureContext().catch(() => {});
 }
 
 async function submit() {
@@ -1796,6 +1831,13 @@ chrome.runtime.onMessage.addListener((message) => {
     if (message.capture.mode === "local") loadLocalCapture(message.capture);
     else loadCapture(message.capture);
   }
+});
+
+chrome.tabs.onActivated.addListener(() => {
+  refreshCaptureContext().catch(() => {});
+});
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+  if (changeInfo.status || changeInfo.url) refreshCaptureContext().catch(() => {});
 });
 
 loadActiveCapture().catch((error) => showEmpty(error.message || String(error)));

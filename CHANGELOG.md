@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **A capture button must name its tab.** The empty side panel shows which tab it sees and,
+  for `chrome://` or `chrome-extension://` pages, disables **Screenshot current tab** with
+  "Switch to the web page tab you want to capture." A missing activeTab grant now says to click
+  the RedLine icon on the page tab. Extension 0.4.2 (2026-11-07).
 - **A connection form is not a new tab.** The side panel gear and **Connect RedLine** now open
   an inline server/token/project form; the full options page stays available from
   `chrome://extensions`. A missing configuration or a non-http active tab now explains why

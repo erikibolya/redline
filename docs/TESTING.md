@@ -419,6 +419,9 @@ same path a human does: upload, play, draw, range, zoom, submit.
   are web-accessible.
 - Extension API unit tests assert that `submit(..., {request:true})` and
   `submitVideo(..., {request:true})` target `/request-agent` for image and video.
+- The extension e2e opens the side panel with the gear, asserts the inline connection form is
+  populated, saves it without opening the options tab, and clicks **Screenshot current tab** on
+  the extension page to prove the failure is reported in `#empty-status`.
 - The extension e2e also drives the tester path end to end: it ensures an `e2e-tester` user and
   project, mints a tester PAT, configures the panel with it, opens the overlay, draws a rectangle,
   asserts the button says **Send to developer**, submits to `/request-agent`, and verifies the

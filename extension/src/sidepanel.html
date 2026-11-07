@@ -15,6 +15,37 @@
       <button id="settings" class="icon" type="button" title="Options" aria-label="Options">⚙</button>
     </header>
 
+    <section id="settings-panel" class="settings-panel" hidden>
+      <div class="settings-head">
+        <strong>Connection</strong>
+        <button id="settings-close" class="icon" type="button" title="Close" aria-label="Close">✕</button>
+      </div>
+      <label class="field">
+        Server URL
+        <input id="settings-server" type="url" placeholder="https://redline.ibolya.cz" autocomplete="url" />
+      </label>
+      <label class="field">
+        Token
+        <input id="settings-token" type="password" placeholder="rl_pat_… or the server token" autocomplete="off" />
+      </label>
+      <p class="settings-hint">
+        Stored only in this browser profile; sent only to the server URL above.
+      </p>
+      <label class="field">
+        Project
+        <select id="settings-project"><option value="">Inbox</option></select>
+      </label>
+      <label class="field">
+        Branch <span class="muted">(optional)</span>
+        <input id="settings-branch" type="text" placeholder="feat/my-feature" />
+      </label>
+      <div class="settings-actions">
+        <button id="settings-save" class="primary" type="button">Save &amp; request access</button>
+        <button id="settings-test" type="button">Test</button>
+      </div>
+      <p id="settings-status" class="status" role="status" aria-live="polite"></p>
+    </section>
+
     <section id="empty" class="empty">
       <p>Screenshot the current tab, then draw on the frozen page. The controls stay in this panel.</p>
       <button id="capture" class="primary" type="button">Screenshot current tab</button>

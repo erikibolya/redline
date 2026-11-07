@@ -78,6 +78,10 @@ visible tab, creates an image review and injects the overlay into that tab. The 
 the controls for the round: tools, colour/width, undo/redo/delete, the annotation list, the note,
 **Send to developer** / **Submit to RedLine**, pause and discard.
 
+The gear and **Connect RedLine** open an inline server/token/project form in the panel; they do
+not open the options page in a new tab. A missing configuration opens that form and says so, and
+a non-http active tab reports that it cannot be captured instead of failing silently.
+
 Video flow moves into this panel in the next phase. The existing side-panel video editor remains
 in the code and is covered by the extension e2e; the old popup file is no longer reachable from
 the action.

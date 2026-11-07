@@ -1,5 +1,11 @@
 import { RedLineApi } from "./lib/api.js";
-import { isConfigured, loadConfig } from "./lib/config.js";
+import {
+  ensurePermission,
+  isConfigured,
+  loadConfig,
+  normalizeServerUrl,
+  saveConfig,
+} from "./lib/config.js";
 import { deleteCapture, getCapture, putCapture } from "./lib/local-store.js";
 import {
   AI_PROMPT,
@@ -27,7 +33,10 @@ const ctx = canvas.getContext("2d");
 const textEditor = $("text-editor");
 const noteInput = $("note");
 const statusEl = $("status");
+const emptyStatusEl = $("empty-status");
+const settingsStatusEl = $("settings-status");
 const video = $("video");
+let settingsReturn = null;
 
 const state = {
   config: null,
@@ -74,6 +83,140 @@ const state = {
 function setStatus(text, kind = "") {
   statusEl.textContent = text;
   statusEl.className = `status ${kind}`.trim();
+  // The empty view has its own status line; without this a failed capture looked like a dead
+  // button (2026-11-07).
+  if (!$("empty").hidden) {
+    emptyStatusEl.textContent = text;
+    emptyStatusEl.className = `status ${kind}`.trim();
+  }
+}
+
+function setSettingsStatus(text, kind = "") {
+  settingsStatusEl.textContent = text;
+  settingsStatusEl.className = `status ${kind}`.trim();
+}
+
+async function loadSettingsProjects(config) {
+  const api = new RedLineApi(config);
+  const data = await api.projects();
+  const current = settingsProjectValue();
+  const select = $("settings-project");
+  select.innerHTML = '<option value="">Inbox</option>';
+  for (const project of data.projects || []) {
+    const option = document.createElement("option");
+    option.value = project.slug;
+    option.textContent = project.name || project.slug;
+    select.append(option);
+  }
+  if (current && [...select.options].some((option) => option.value === current)) {
+    select.value = current;
+  }
+}
+
+function settingsProjectValue() {
+  return $("settings-project").value || "";
+}
+
+async function openSettings() {
+  if (!$("settings-panel").hidden) return;
+  settingsReturn = {
+    empty: !$("empty").hidden,
+    workspace: !$("workspace").hidden,
+  };
+  $("empty").hidden = true;
+  $("workspace").hidden = true;
+  $("settings-panel").hidden = false;
+  const config = await loadConfig();
+  $("settings-server").value = config.serverUrl || "";
+  $("settings-token").value = config.token || "";
+  $("settings-branch").value = config.branch || "";
+  const select = $("settings-project");
+  select.innerHTML = '<option value="">Inbox</option>';
+  if (config.project) {
+    const option = document.createElement("option");
+    option.value = config.project;
+    option.textContent = config.project;
+    select.append(option);
+    select.value = config.project;
+  }
+  setSettingsStatus("");
+  if (isConfigured(config)) {
+    try {
+      await loadSettingsProjects(config);
+      select.value = config.project || "";
+    } catch {
+      // An invalid token should not block editing the form; Save/Test reports the error.
+    }
+  }
+  $("settings-server").focus();
+}
+
+function closeSettings() {
+  if ($("settings-panel").hidden) return;
+  $("settings-panel").hidden = true;
+  const back = settingsReturn || { empty: true, workspace: false };
+  settingsReturn = null;
+  $("empty").hidden = !back.empty;
+  $("workspace").hidden = !back.workspace;
+  if (back.workspace) {
+    render();
+    return;
+  }
+  loadConfig()
+    .then((config) => {
+      if (!isConfigured(config) && $("empty").hidden === false) {
+        setStatus("Connect RedLine for server mode, or save a local capture.", "");
+      }
+    })
+    .catch(() => {});
+}
+
+async function saveSettings() {
+  const config = {
+    serverUrl: normalizeServerUrl($("settings-server").value),
+    token: $("settings-token").value.trim(),
+    project: settingsProjectValue(),
+    branch: $("settings-branch").value.trim(),
+  };
+  if (!config.token) throw new Error("Token is required");
+  setSettingsStatus("Saving…");
+  if (!(await ensurePermission(config.serverUrl))) {
+    throw new Error("Access to the RedLine server was not granted");
+  }
+  const saved = await saveConfig(config);
+  let projectsOk = true;
+  await loadSettingsProjects(saved).catch(() => {
+    projectsOk = false;
+  });
+  setSettingsStatus(
+    projectsOk
+      ? "Saved. You can capture a page now."
+      : "Saved, but the server rejected the token or URL. Check them and press Test.",
+    projectsOk ? "ok" : "err",
+  );
+  if (!state.capture && projectsOk) {
+    settingsReturn = { empty: true, workspace: false };
+    closeSettings();
+    setStatus("Connected. Click Screenshot current tab.", "ok");
+  }
+}
+
+async function testSettings() {
+  const config = {
+    serverUrl: normalizeServerUrl($("settings-server").value),
+    token: $("settings-token").value.trim(),
+    project: settingsProjectValue(),
+    branch: $("settings-branch").value.trim(),
+  };
+  if (!config.token) throw new Error("Token is required");
+  setSettingsStatus("Testing…");
+  if (!(await ensurePermission(config.serverUrl))) {
+    throw new Error("Access to the RedLine server was not granted");
+  }
+  const api = new RedLineApi(config);
+  const health = await api.health();
+  await loadSettingsProjects(config);
+  setSettingsStatus(`Connected to RedLine ${health.version || ""}`.trim(), "ok");
 }
 
 function setBusy(busy) {
@@ -1159,6 +1302,12 @@ async function loadActiveCapture() {
 }
 
 async function captureCurrent() {
+  const config = await loadConfig().catch(() => null);
+  if (!isConfigured(config)) {
+    await openSettings();
+    setSettingsStatus("Connect RedLine first, then click Screenshot current tab.", "err");
+    return;
+  }
   if (state.annotations.length && !state.readOnly) {
     if (!confirm("Discard the unsent annotations and capture the current tab?")) return;
   }
@@ -1620,8 +1769,18 @@ $("pause-overlay").addEventListener("click", () => {
   overlayCommand({ type: "close" });
 });
 $("open-capture").addEventListener("click", openRedLine);
-$("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
-$("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("open-options").addEventListener("click", openSettings);
+$("settings").addEventListener("click", () => {
+  if ($("settings-panel").hidden) openSettings();
+  else closeSettings();
+});
+$("settings-close").addEventListener("click", closeSettings);
+$("settings-save").addEventListener("click", () => {
+  saveSettings().catch((error) => setSettingsStatus(error.message || String(error), "err"));
+});
+$("settings-test").addEventListener("click", () => {
+  testSettings().catch((error) => setSettingsStatus(error.message || String(error), "err"));
+});
 $("submit").addEventListener("click", submit);
 $("discard").addEventListener("click", discard);
 $("open-redline").addEventListener("click", openRedLine);

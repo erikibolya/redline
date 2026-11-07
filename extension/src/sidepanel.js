@@ -4,6 +4,7 @@ import {
   isConfigured,
   loadConfig,
   normalizeServerUrl,
+  originPattern,
   saveConfig,
 } from "./lib/config.js";
 import { deleteCapture, getCapture, putCapture } from "./lib/local-store.js";
@@ -80,6 +81,8 @@ const state = {
   redoCount: 0,
   submitting: false,
   captureAllowed: false,
+  activeTabUrl: "",
+  captureRetry: null,
 };
 
 function setStatus(text, kind = "") {
@@ -247,8 +250,14 @@ async function refreshCaptureContext() {
       return;
     }
     const url = tab.url || tab.pendingUrl || "";
-    const capturable = /^https?:/i.test(url);
-    state.captureAllowed = capturable;
+    const changed = state.activeTabUrl !== url;
+    state.activeTabUrl = url;
+    state.captureAllowed = /^https?:/i.test(url);
+    if (changed) {
+      $("allow-capture").hidden = true;
+      state.captureRetry = null;
+    }
+    const capturable = state.captureAllowed;
     captureContextEl.textContent = capturable
       ? `Current tab: ${tab.title || url}`
       : `This is ${tab.title || url}. Switch to the web page tab you want to capture.`;
@@ -260,6 +269,40 @@ async function refreshCaptureContext() {
     captureContextEl.textContent = error.message || String(error);
     captureContextEl.className = "capture-context err";
     $("capture").disabled = true;
+  }
+}
+
+function captureFailure(error, retry) {
+  const message = error.message || String(error);
+  if (/activeTab|all_urls/i.test(message)) {
+    state.captureRetry = retry;
+    $("allow-capture").hidden = !/^https?:/i.test(state.activeTabUrl || "");
+    setStatus(
+      "This tab was not opened through the RedLine icon. Click the icon on this page tab, or allow this site once.",
+      "err",
+    );
+    return;
+  }
+  setStatus(message, "err");
+}
+
+async function allowCaptureSite() {
+  const url = state.activeTabUrl;
+  if (!/^https?:/i.test(url || "")) {
+    setStatus("Switch to the web page tab you want to capture.", "err");
+    return;
+  }
+  try {
+    const granted = await chrome.permissions.request({ origins: [originPattern(url)] });
+    if (!granted) throw new Error("Site access was not granted.");
+    $("allow-capture").hidden = true;
+    setStatus("Site allowed. Capturing…", "ok");
+    const retry = state.captureRetry;
+    state.captureRetry = null;
+    if (retry === "offline") await captureOffline();
+    else await captureCurrent();
+  } catch (error) {
+    setStatus(error.message || String(error), "err");
   }
 }
 
@@ -1352,13 +1395,7 @@ async function captureCurrent() {
     if (!response?.ok) throw new Error(response?.error || "Capture failed");
     await loadCapture(response.capture);
   } catch (error) {
-    const message = error.message || String(error);
-    setStatus(
-      /activeTab|all_urls/i.test(message)
-        ? "This tab was not opened through the RedLine icon. Click the icon on the page tab, then press Screenshot again."
-        : message,
-      "err",
-    );
+    captureFailure(error, "server");
   } finally {
     setBusy(false);
   }
@@ -1375,13 +1412,7 @@ async function captureOffline() {
     if (!response?.ok) throw new Error(response?.error || "Capture failed");
     await loadLocalCapture(response.capture);
   } catch (error) {
-    const message = error.message || String(error);
-    setStatus(
-      /activeTab|all_urls/i.test(message)
-        ? "This tab was not opened through the RedLine icon. Click the icon on the page tab, then press Screenshot again."
-        : message,
-      "err",
-    );
+    captureFailure(error, "offline");
   } finally {
     setBusy(false);
   }
@@ -1797,6 +1828,9 @@ function openRedLine() {
 }
 
 $("capture").addEventListener("click", captureCurrent);
+$("allow-capture").addEventListener("click", () => {
+  allowCaptureSite().catch((error) => setStatus(error.message || String(error), "err"));
+});
 $("capture-offline").addEventListener("click", captureOffline);
 $("capture-new").addEventListener("click", captureCurrent);
 $("resume-overlay").addEventListener("click", resumeOverlay);

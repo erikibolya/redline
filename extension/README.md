@@ -23,9 +23,10 @@ RedLine server or exports it as a folder/ZIP for an AI assistant.
 
 ## Offline export (no server)
 
-1. In the side panel, use **Save locally (offline)**; no token or server is needed.
-2. Annotate in the side panel (offline captures still use the compact panel canvas) and click
-   **Export review**.
+1. In the side panel, use **Save locally (offline)**; no token or server is needed. The page
+   freezes under the same in-page overlay.
+2. Draw on the page, then click **Export review** in the side panel. The folder/ZIP contains the
+   composed PNG and annotations. Local video still uses the side-panel editor.
 3. Choose a folder (File System Access API) or let the ZIP fallback download
    `redline-review-<id>.zip`.
 

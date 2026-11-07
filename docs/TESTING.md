@@ -411,8 +411,9 @@ same path a human does: upload, play, draw, range, zoom, submit.
 - The browser e2e job also builds a temporary extension copy with host
   permission for `127.0.0.1:8788`, launches headless Chromium with `--load-extension`, configures
   the options page, opens a target tab, injects the full-screen overlay, selects an arrow in the
-  side panel, draws on the page, pauses/resumes, types a note and submits. It then submits a
-  video + trace rectangle at `0.5 s` through the side-panel video editor.
+  side panel, draws on the page, pauses/resumes, types a note and submits. It then exports a local
+  image through the overlay and submits a video + trace rectangle at `0.5 s` through the
+  side-panel video editor.
 - It asserts the server payload: image annotation type `arrow`, width 3 and the note in
   `meta.prompt`; video `meta.trace.kind=browser-flow`, `annotations[0].at=0.5`, and at least one
   annotated frame. The manifest unit test asserts the action has no popup and the overlay files

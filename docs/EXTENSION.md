@@ -138,7 +138,8 @@ The panel keeps the round when it is paused or closed: the overlay saves its ann
 tool and colour in `chrome.storage.session`; **Resume** re-injects the overlay and restores the
 draft. Submitting or discarding closes the overlay and clears the active capture.
 
-The old compact editor is still used for video and offline local captures:
+The old compact editor is still used for local video and legacy local image captures without a
+tab id:
 
 ```
 ┌──────────────────────────────────────────────┐

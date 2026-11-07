@@ -325,12 +325,13 @@ async function openLocalCapture(
     width = 0,
     height = 0,
     durationMs = 0,
+    tabId = null,
   },
 ) {
   const page = await openExtensionPage(browser, "src/sidepanel.html");
   await page.waitForFunction(() => document.querySelector("#workspace"));
   await page.evaluate(
-    async ({ id, kind, title, url, imageBase64, videoBase64, posterBase64, trace, width, height, durationMs }) => {
+    async ({ id, kind, title, url, tabId, imageBase64, videoBase64, posterBase64, trace, width, height, durationMs }) => {
       const bytes = (base64) => {
         const binary = atob(base64);
         const out = new Uint8Array(binary.length);
@@ -375,10 +376,10 @@ async function openLocalCapture(
         tx.onerror = () => reject(tx.error);
       });
       await chrome.storage.session.set({
-        activeCapture: { id, sessionId: id, mode: "local", kind, title, url },
+        activeCapture: { id, sessionId: id, tabId, mode: "local", kind, title, url },
       });
     },
-    { id, kind, title, url, imageBase64, videoBase64, posterBase64, trace, width, height, durationMs },
+    { id, kind, title, url, tabId, imageBase64, videoBase64, posterBase64, trace, width, height, durationMs },
   );
   await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForSelector("#workspace:not([hidden])", { timeout: 15000 });
@@ -518,6 +519,9 @@ const browser = await puppeteer.connect({ browserURL: CHROME, defaultViewport: n
 try {
   const id = await extensionId(browser);
   await configure(browser, id);
+  // A previous local e2e run can leave an active capture in this profile; start the control-deck
+  // checks from the empty state.
+  await evaluateInWorker(await serviceWorker(browser), 'chrome.storage.session.remove("activeCapture")');
 
   // The side panel owns the connection form; the gear must not open a separate options tab.
   const configuredPanel = await openExtensionPage(browser, "src/sidepanel.html");
@@ -649,26 +653,63 @@ try {
   const iconBase64 = fs
     .readFileSync(path.join(repo, "desktop/app/icons/128x128.png"))
     .toString("base64");
-  const localPage = await openLocalCapture(browser, {
-    id: "local-e2e-image",
+  const localTarget = await createTargetPage(browser);
+  const localImageId = `local-e2e-image-${Date.now()}`;
+  const localPanel = await openLocalCapture(browser, {
+    id: localImageId,
     kind: "image",
     title: "Local image e2e",
     url: "https://app.test/local",
     imageBase64: iconBase64,
+    tabId: localTarget.tabId,
   });
   assert.equal(
-    (await localPage.$eval("#submit", (element) => element.textContent)).trim(),
+    (await localPanel.$eval("#submit", (element) => element.textContent)).trim(),
     "Export review",
   );
-  assert.equal(await localPage.$eval("#open-redline", (element) => element.hidden), true);
-  await drawRect(localPage);
-  await installPickerMock(localPage);
-  await localPage.click("#submit");
-  await localPage.waitForFunction(
-    () => document.querySelector("#status")?.textContent.includes("Exported"),
-    { timeout: 15000 },
-  );
-  const exported = await localPage.evaluate(() => globalThis.__exported);
+  assert.equal(await localPanel.$eval("#open-redline", (element) => element.hidden), true);
+  const localOverlay = await waitOverlayFrame(localTarget.page);
+  await drawRectInFrame(localTarget.page, localOverlay.frame);
+  try {
+    await localPanel.waitForFunction(
+      () => document.querySelector("#count")?.textContent === "1",
+      { timeout: 10000, polling: 100 },
+    );
+  } catch (error) {
+    console.log("local count panel", await localPanel.evaluate(() => ({
+      status: document.querySelector("#status")?.textContent,
+      emptyStatus: document.querySelector("#empty-status")?.textContent,
+      count: document.querySelector("#count")?.textContent,
+      subtitle: document.querySelector("#subtitle")?.textContent,
+      title: document.querySelector("#title")?.textContent,
+    })));
+    console.log("local count overlay", await localOverlay.frame
+      .$eval("#status", (element) => element.textContent)
+      .catch(() => "no overlay status"));
+    throw error;
+  }
+  await installPickerMock(localPanel);
+  await clickPanel(localPanel, "#submit");
+  try {
+    await localPanel.waitForFunction(
+      () => document.querySelector("#status")?.textContent.includes("Exported"),
+      { timeout: 30000, polling: 100 },
+    );
+  } catch (error) {
+    console.log("local panel state", await localPanel.evaluate(() => ({
+      status: document.querySelector("#status")?.textContent,
+      emptyStatus: document.querySelector("#empty-status")?.textContent,
+      submit: document.querySelector("#submit")?.textContent,
+      count: document.querySelector("#count")?.textContent,
+      workspace: document.querySelector("#workspace")?.hidden,
+      exported: globalThis.__exported?.length || 0,
+    })));
+    console.log("local overlay state", await localOverlay.frame
+      .$eval("#status", (element) => element.textContent)
+      .catch(() => "no overlay status"));
+    throw error;
+  }
+  const exported = await localPanel.evaluate(() => globalThis.__exported);
   const names = exported.map((file) => file.name);
   assert.ok(names.includes("review.md"), `missing review.md: ${names}`);
   assert.ok(names.includes("annotations.json"), `missing annotations.json: ${names}`);
@@ -678,11 +719,12 @@ try {
   assert.match(review, /Local image e2e/);
   assert.match(review, /Rectangle/);
   const payload = JSON.parse(exported.find((file) => file.name === "annotations.json").text);
-  assert.equal(payload.session, "local-e2e-image");
+  assert.equal(payload.session, localImageId);
   assert.equal(payload.annotations.length, 1);
   assert.equal(payload.image.file, "annotated.png");
   assert.ok(exported.find((file) => file.name === "annotated.png").bytes > 0);
-  await localPage.close();
+  await localPanel.close();
+  await localTarget.page.close();
 
   const videoBase64 = fs
     .readFileSync(path.join(repo, "extension/tests/fixtures/flow.webm"))
@@ -690,8 +732,9 @@ try {
   const trace = JSON.parse(
     fs.readFileSync(path.join(repo, "extension/tests/fixtures/trace.json"), "utf8"),
   );
+  const localVideoId = `local-e2e-video-${Date.now()}`;
   const localVideo = await openLocalCapture(browser, {
-    id: "local-e2e-video",
+    id: localVideoId,
     kind: "video",
     title: "Local video e2e",
     url: "https://app.test/flow",

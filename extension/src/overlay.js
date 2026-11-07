@@ -1,5 +1,6 @@
 import { RedLineApi } from "./lib/api.js";
 import { isConfigured, loadConfig } from "./lib/config.js";
+import { deleteCapture, getCapture, putCapture } from "./lib/local-store.js";
 import {
   composePng,
   createAnnotation,
@@ -43,6 +44,8 @@ const state = {
   requested: false,
   note: "",
   saveTimer: null,
+  local: false,
+  localData: null,
 };
 
 function setStatus(text, kind = "") {
@@ -81,6 +84,7 @@ function summary() {
     status: state.meta?.status || "open",
     title: state.meta?.title || "",
     submitting: state.submitting,
+    local: state.local,
   };
 }
 
@@ -429,8 +433,47 @@ chrome.runtime.onMessage.addListener((message) => {
   command(message.command);
 });
 
+async function prepareExport(note) {
+  if (state.readOnly || state.submitting) return;
+  state.note = String(note ?? state.note ?? "");
+  state.submitting = true;
+  setStatus("Preparing export…");
+  publish("submitting");
+  try {
+    const png = composePng(state.bitmap, state.annotations);
+    const updated = {
+      ...state.localData,
+      annotations: state.annotations,
+      note: state.note,
+    };
+    await putCapture(updated);
+    state.localData = updated;
+    await chrome.storage.session.remove(draftKey());
+    state.submitting = false;
+    setStatus("Prepared for export.", "ok");
+    publish("export-data", {
+      exportData: {
+        id: state.sessionId,
+        title: state.meta?.title || state.localData?.title || "Local screenshot",
+        url: state.meta?.url || state.localData?.url || "",
+        width: state.width,
+        height: state.height,
+        annotations: state.annotations,
+        note: state.note,
+        png,
+      },
+    });
+  } catch (error) {
+    state.submitting = false;
+    const message = error.message || String(error);
+    setStatus(message, "err");
+    publish("error", { error: message });
+  }
+}
+
 async function submit(note) {
   if (state.readOnly || state.submitting) return;
+  if (state.local) return prepareExport(note);
   state.note = String(note ?? state.note ?? "");
   state.submitting = true;
   setStatus("Submitting…");
@@ -467,6 +510,13 @@ async function submit(note) {
 
 async function discard() {
   if (state.submitting) return;
+  if (state.local) {
+    await deleteCapture(state.sessionId).catch(() => {});
+    await chrome.storage.session.remove(draftKey());
+    publish("discarded");
+    closeOverlay();
+    return;
+  }
   try {
     await state.api.deleteSession(state.sessionId);
     await chrome.storage.session.remove(draftKey());
@@ -492,13 +542,63 @@ function closeOverlay() {
     .catch(() => {});
 }
 
+async function restoreDraft() {
+  if (state.readOnly) return;
+  const stored = await chrome.storage.session.get(draftKey());
+  const draft = stored[draftKey()];
+  if (!draft || !Array.isArray(draft.annotations)) return;
+  state.annotations = draft.annotations;
+  state.note = draft.note || state.note;
+  if (TOOLS.includes(draft.tool)) state.tool = draft.tool;
+  if (/^#[0-9a-f]{6}$/i.test(draft.color || "")) state.color = draft.color;
+  if (Number.isFinite(Number(draft.width)) && Number(draft.width) > 0) {
+    state.strokeWidth = Number(draft.width);
+  }
+  setStatus("Restored an unsent draft.");
+}
+
+async function loadLocalCapture() {
+  const record = await getCapture(state.sessionId);
+  if (!record) throw new Error("Local capture not found.");
+  if (record.kind === "video") {
+    throw new Error("Local video opens in the side-panel editor.");
+  }
+  state.local = true;
+  state.localData = record;
+  state.meta = {
+    id: record.id,
+    title: record.title || "Local screenshot",
+    url: record.url || "",
+    status: "open",
+    media: { kind: "image", width: record.width || 0, height: record.height || 0 },
+    prompt: record.note || "",
+  };
+  state.role = "owner";
+  state.requested = false;
+  state.readOnly = false;
+  state.note = record.note || "";
+  state.annotations = Array.isArray(record.annotations) ? record.annotations : [];
+  await restoreDraft();
+  state.bitmap = await createImageBitmap(record.imageBlob);
+  state.width = state.bitmap.width;
+  state.height = state.bitmap.height;
+  canvas.style.cursor = state.tool === "select" ? "default" : "crosshair";
+  document.body.dataset.tool = state.tool;
+  render();
+  canvas.focus();
+  publish("ready");
+}
+
 async function load() {
   try {
-    if (!state.sessionId) {
-      const stored = await chrome.storage.session.get("activeCapture");
-      state.sessionId = stored.activeCapture?.sessionId || "";
-    }
+    const stored = await chrome.storage.session.get("activeCapture");
+    const active = stored.activeCapture;
+    if (!state.sessionId) state.sessionId = active?.sessionId || "";
     if (!state.sessionId) throw new Error("No active capture.");
+    if (active?.mode === "local" && active.sessionId === state.sessionId) {
+      await loadLocalCapture();
+      return;
+    }
     const config = await loadConfig();
     if (!isConfigured(config)) {
       throw new Error("Connect RedLine in the extension options first.");
@@ -518,20 +618,7 @@ async function load() {
       ? payload.annotations.annotations
       : [];
 
-    if (!state.readOnly) {
-      const stored = await chrome.storage.session.get(draftKey());
-      const draft = stored[draftKey()];
-      if (draft && Array.isArray(draft.annotations)) {
-        state.annotations = draft.annotations;
-        state.note = draft.note || state.note;
-        if (TOOLS.includes(draft.tool)) state.tool = draft.tool;
-        if (/^#[0-9a-f]{6}$/i.test(draft.color || "")) state.color = draft.color;
-        if (Number.isFinite(Number(draft.width)) && Number(draft.width) > 0) {
-          state.strokeWidth = Number(draft.width);
-        }
-        setStatus("Restored an unsent draft.");
-      }
-    }
+    await restoreDraft();
 
     const blob = await state.api.imageBlob(state.sessionId);
     state.bitmap = await createImageBitmap(blob);

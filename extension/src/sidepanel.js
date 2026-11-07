@@ -409,6 +409,7 @@ function applyOverlayState(message) {
   state.redoCount = Number(next.redo) || 0;
   state.readOnly = Boolean(next.readOnly);
   if (next.role) state.role = next.role;
+  if (next.local) state.local = true;
   state.requested = Boolean(next.requested);
   state.submitting = Boolean(next.submitting);
   if (next.status && state.meta) state.meta.status = next.status;
@@ -457,11 +458,19 @@ function applyOverlayState(message) {
     if (!state.readOnly) setStatus("Annotate on the page. Controls are here.");
   }
 
+  if (message.event === "export-data" && message.exportData) {
+    state.submitting = true;
+    renderOverlayControls();
+    void exportLocalData(message.exportData);
+  }
+
   $("overlay-banner").hidden = !state.overlayMode || state.submitted;
   $("overlay-banner-text").textContent = state.readOnly
     ? "Read-only review — open it in RedLine to edit."
     : state.overlayActive
-      ? "Annotating on the page — draw on the frozen screenshot."
+      ? (state.local
+        ? "Local capture — draw on the frozen page. Export when done."
+        : "Annotating on the page — draw on the frozen screenshot.")
       : "Capture paused — the annotations are saved.";
   $("resume-overlay").hidden = !state.overlayMode || state.overlayActive || state.submitted;
   $("pause-overlay").hidden = !(state.overlayActive && !state.submitted);
@@ -577,19 +586,21 @@ function renderOverlayControls() {
   $("submit").disabled = state.readOnly || state.submitting || paused;
   const status = state.meta?.status;
   $("submit").textContent = state.submitting
-    ? "Submitting…"
+    ? (state.local ? "Preparing…" : "Submitting…")
     : paused
-      ? "Resume to submit"
-      : status === "resolved"
-        ? "Resolved"
-        : status === "submitted"
-          ? "Waiting for agent"
-          : state.role === "viewer"
-            ? "Read-only"
-            : state.role === "tester"
-              ? (state.requested ? "Update request" : "Send to developer")
-              : "Submit to RedLine";
-  $("open-redline").hidden = false;
+      ? (state.local ? "Resume to export" : "Resume to submit")
+      : state.local
+        ? "Export review"
+        : status === "resolved"
+          ? "Resolved"
+          : status === "submitted"
+            ? "Waiting for agent"
+            : state.role === "viewer"
+              ? "Read-only"
+              : state.role === "tester"
+                ? (state.requested ? "Update request" : "Send to developer")
+                : "Submit to RedLine";
+  $("open-redline").hidden = state.local;
   $("discard").disabled = state.submitted || state.submitting || state.role === "viewer";
   $("pause-overlay").hidden = !state.overlayActive || state.submitted;
   $("capture-new").hidden = !state.submitted;
@@ -1176,6 +1187,7 @@ async function loadCapture(capture) {
       state.overlayMode = true;
       state.overlayActive = false;
       state.overlayTabId = capture.tabId || null;
+      state.tool = "rect";
       state.undoCount = 0;
       state.redoCount = 0;
       state.bitmap = null;
@@ -1281,6 +1293,41 @@ async function loadLocalCapture(capture) {
       mode: "local",
       kind: local.kind,
     };
+    if (local.kind === "image" && state.capture.tabId) {
+      state.overlayMode = true;
+      state.overlayTabId = state.capture.tabId;
+      state.local = true;
+      state.localData = local;
+      state.role = "owner";
+      state.requested = false;
+      state.config = null;
+      state.api = null;
+      state.readOnly = false;
+      state.submitted = false;
+      state.mediaKind = "image";
+      state.annotations = Array.isArray(local.annotations) ? local.annotations : [];
+      state.selectedId = null;
+      state.tool = "rect";
+      state.undoCount = 0;
+      state.redoCount = 0;
+      state.width = Number(local.width) || 0;
+      state.height = Number(local.height) || 0;
+      noteInput.value = local.note || "";
+      $("title").textContent = local.title || "Local screenshot";
+      $("subtitle").textContent = "Local · offline";
+      showWorkspace();
+      renderOverlayControls();
+      $("overlay-banner").hidden = false;
+      $("overlay-banner-text").textContent = "Opening the page overlay…";
+      setStatus("Opening the page overlay…");
+      try {
+        await injectOverlay(state.capture);
+        setStatus("Annotate on the page. Export when done.");
+      } catch (error) {
+        setStatus(error.message || String(error), "err");
+      }
+      return;
+    }
     const media =
       local.kind === "video"
         ? {
@@ -1652,6 +1699,64 @@ async function exportLocal() {
   render();
 }
 
+async function exportLocalData(data) {
+  try {
+    const annotated = await dataUrlBlob(data.png);
+    const markdown = buildReviewMarkdown({
+      id: data.id,
+      title: data.title,
+      url: data.url,
+      note: data.note,
+      media: null,
+      width: data.width,
+      height: data.height,
+      annotations: data.annotations,
+      frames: [],
+      trace: null,
+    });
+    const annotationsJson = buildAnnotationsJson({
+      id: data.id,
+      title: data.title,
+      url: data.url,
+      note: data.note,
+      media: null,
+      width: data.width,
+      height: data.height,
+      annotations: data.annotations,
+      frames: [],
+      trace: null,
+    });
+    const files = [
+      { name: "review.md", data: markdown },
+      { name: "annotations.json", data: JSON.stringify(annotationsJson, null, 2) },
+      { name: "AI-PROMPT.md", data: AI_PROMPT },
+      { name: "annotated.png", data: annotated },
+    ];
+    setStatus("Saving review…");
+    const result = await savePackage(files);
+    if (result.kind === "canceled") {
+      setStatus("Export canceled.");
+      return;
+    }
+    const updated = {
+      ...state.localData,
+      annotations: data.annotations,
+      note: data.note,
+    };
+    await putCapture(updated);
+    state.localData = updated;
+    setStatus(
+      result.kind === "folder" ? "Exported review folder." : "Downloaded review ZIP.",
+      "ok",
+    );
+  } catch (error) {
+    setStatus(error.message || String(error), "err");
+  } finally {
+    state.submitting = false;
+    renderOverlayControls();
+  }
+}
+
 function submitOverlay() {
   if (state.readOnly || state.submitting || !state.capture) return;
   if (!state.overlayActive) {
@@ -1659,11 +1764,23 @@ function submitOverlay() {
     return;
   }
   if (!state.annotations.length && !noteInput.value.trim()) {
-    if (!confirm("There are no annotations and no note. Send the capture anyway?")) return;
+    if (
+      !confirm(
+        state.local
+          ? "There are no annotations and no note. Export the capture anyway?"
+          : "There are no annotations and no note. Send the capture anyway?",
+      )
+    ) {
+      return;
+    }
   }
   state.submitting = true;
   setStatus(
-    state.role === "tester" ? "Saving for developer review…" : "Submitting…",
+    state.local
+      ? "Preparing export…"
+      : state.role === "tester"
+        ? "Saving for developer review…"
+        : "Submitting…",
   );
   renderOverlayControls();
   sendOverlayCommand({ type: "submit", note: noteInput.value });
@@ -1671,15 +1788,27 @@ function submitOverlay() {
 
 async function discardOverlay() {
   if (!state.capture || state.submitting || state.submitted) return;
-  if (!confirm("Delete this review and its screenshot?")) return;
+  if (
+    !confirm(
+      state.local
+        ? "Delete this local review and its files?"
+        : "Delete this review and its screenshot?",
+    )
+  ) {
+    return;
+  }
   if (!state.overlayActive) {
     try {
       state.submitting = true;
       renderOverlayControls();
-      await state.api.deleteSession(state.capture.sessionId);
+      if (state.local) {
+        await deleteCapture(state.capture.sessionId);
+      } else {
+        await state.api.deleteSession(state.capture.sessionId);
+      }
       await chrome.storage.session.remove(draftKey());
       await chrome.runtime.sendMessage({ type: "clear-active-capture" });
-      showEmpty("Task discarded.");
+      showEmpty(state.local ? "Local review deleted." : "Task discarded.");
     } catch (error) {
       state.submitting = false;
       setStatus(error.message || String(error), "err");

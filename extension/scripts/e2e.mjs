@@ -33,6 +33,19 @@ async function json(pathname, init = {}) {
   return data;
 }
 
+async function jsonWith(token, pathname, init = {}) {
+  const response = await fetch(`${BASE}${pathname}`, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      ...(init.headers || {}),
+    },
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(`${init.method || "GET"} ${pathname}: ${response.status} ${JSON.stringify(data)}`);
+  return data;
+}
+
 const EXTENSION_NAME = "RedLine Capture";
 // Chrome ships built-in background service workers (both named background.js). Matching the exact
 // path from this manifest is the difference between testing the extension and testing Chrome.
@@ -52,7 +65,10 @@ async function evaluateInWorker(worker, expression) {
         if (message.id !== 1) return;
         clearTimeout(timer);
         if (message.error) reject(new Error(JSON.stringify(message.error)));
-        else resolve(message.result);
+        else if (message.result?.exceptionDetails) {
+          const details = message.result.exceptionDetails;
+          reject(new Error(details.exception?.description || details.text));
+        } else resolve(message.result);
       });
       ws.send(
         JSON.stringify({
@@ -111,9 +127,19 @@ async function extensionId(browser) {
 async function openExtensionPage(browser, pathname) {
   const worker = await serviceWorker(browser);
   const url = `${pathname}?e2e=${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  // Some headless builds start with no normal browser window, so `chrome.tabs.create` answers
+  // "No current window"; creating the window with the URL is the same destination.
   await evaluateInWorker(
     worker,
-    `chrome.tabs.create({url: chrome.runtime.getURL(${JSON.stringify(url)})})`,
+    `(async () => {
+      const target = chrome.runtime.getURL(${JSON.stringify(url)});
+      try {
+        await chrome.tabs.create({ url: target });
+      } catch (error) {
+        if (!String(error).includes("No current window")) throw error;
+        await chrome.windows.create({ url: target });
+      }
+    })()`,
   );
   const target = await browser.waitForTarget(
     (candidate) => candidate.type() === "page" && candidate.url().endsWith(url),
@@ -124,7 +150,7 @@ async function openExtensionPage(browser, pathname) {
   return page;
 }
 
-async function configure(browser, id) {
+async function configure(browser, id, token = TOKEN) {
   const page = await openExtensionPage(browser, "src/options.html");
   await page.waitForFunction(() => document.body.dataset.ready === "1");
   // The Project select and Branch input share one row. "(optional)" is a hint on the Branch line,
@@ -154,7 +180,7 @@ async function configure(browser, id) {
   await page.evaluate(({ base, token }) => {
     document.querySelector("#server-url").value = base;
     document.querySelector("#token").value = token;
-  }, { base: BASE, token: TOKEN });
+  }, { base: BASE, token });
   await page.click("#save");
   await page.waitForFunction(
     () => document.querySelector("#status")?.textContent.includes("Saved"),
@@ -163,15 +189,16 @@ async function configure(browser, id) {
   await page.close();
 }
 
-async function createImageSession() {
+async function createImageSession(token = TOKEN, { title = "Extension image e2e", project } = {}) {
   const image = fs.readFileSync(path.join(repo, "desktop/app/icons/128x128.png")).toString("base64");
-  const created = await json("/api/sessions", {
+  const created = await jsonWith(token, "/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      title: "Extension image e2e",
+      title,
       url: "https://app.test/checkout",
       image_base64: `data:image/png;base64,${image}`,
+      ...(project ? { project } : {}),
     }),
   });
   return created.meta.id;
@@ -190,6 +217,76 @@ async function createVideoSession() {
   form.append("trace", new Blob([trace], { type: "application/json" }), "trace.json");
   const created = await json("/api/sessions/video", { method: "POST", body: form });
   return created.meta.id;
+}
+
+const TESTER_USERNAME = "e2e-tester";
+const TESTER_PASSWORD = "correct horse battery staple";
+
+/** The browser e2e normally creates this user; keep the extension e2e runnable on its own. */
+async function ensureTester() {
+  const users = await json("/api/users");
+  let user = users.users.find((entry) => entry.username === TESTER_USERNAME);
+  if (!user) {
+    const created = await json("/api/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: TESTER_USERNAME,
+        display_name: "E2E Tester",
+        password: TESTER_PASSWORD,
+      }),
+    });
+    user = created.user;
+  }
+  await json("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "e2e-repo" }),
+  });
+  const members = await json("/api/projects/e2e-repo/members");
+  const next = members.members
+    .filter((entry) => entry.user_id !== user.id)
+    .map((entry) => ({ user_id: entry.user_id, role: entry.role }));
+  next.push({ user_id: user.id, role: "tester" });
+  await json("/api/projects/e2e-repo/members", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ members: next }),
+  });
+  return user;
+}
+
+/** A PAT belongs to the tester, not the legacy server token: the side panel must see `tester`. */
+async function createTesterToken() {
+  const user = await ensureTester();
+  const login = await fetch(`${BASE}/api/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ username: TESTER_USERNAME, password: TESTER_PASSWORD }),
+  });
+  if (!login.ok) {
+    throw new Error(`tester login: ${login.status} ${await login.text()}`);
+  }
+  const cookie = login.headers
+    .getSetCookie()
+    .map((value) => value.split(";")[0])
+    .join("; ");
+  const csrf = /(?:^|; )redline_csrf=([^;]+)/.exec(cookie)?.[1];
+  if (!csrf) throw new Error("tester login did not set the CSRF cookie");
+  const response = await fetch(`${BASE}/api/me/tokens`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrf,
+      Cookie: cookie,
+    },
+    body: JSON.stringify({ name: "Extension tester e2e", projects: ["e2e-repo"] }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(`tester PAT: ${response.status} ${JSON.stringify(data)}`);
+  }
+  return { user, token: data.token };
 }
 
 async function openCapture(browser, id, sessionId, kind) {
@@ -492,6 +589,48 @@ try {
   assert.equal(videoPayload.trace.kind, "browser-flow");
   assert.ok(videoExport.find((file) => file.name === "video.webm").bytes > 0);
   await localVideo.close();
+
+  // A tester's capture must not wake the agent: it is saved as a request for a developer.
+  const tester = await createTesterToken();
+  await configure(browser, id, tester.token);
+  const testerTask = await createImageSession(tester.token, {
+    title: "Extension tester e2e",
+    project: "e2e-repo",
+  });
+  const testerPage = await openCapture(browser, id, testerTask, "image");
+  const testerLabel = await testerPage.$eval("#submit", (element) => ({
+    text: element.textContent.trim(),
+    disabled: element.disabled,
+  }));
+  assert.equal(testerLabel.text, "Request agent review");
+  assert.equal(testerLabel.disabled, false);
+  await drawRect(testerPage);
+  await testerPage.click("#submit");
+  await testerPage.waitForFunction(
+    () => document.querySelector("#status")?.textContent.includes("Saved for a developer"),
+    { timeout: 30000 },
+  );
+  const updateLabel = await testerPage.$eval("#submit", (element) => element.textContent.trim());
+  assert.equal(updateLabel, "Update request");
+  const requested = await json(`/api/sessions/${testerTask}`);
+  assert.equal(requested.meta.status, "open");
+  assert.ok(requested.meta.agent_requested_at, "the tester request must be stamped");
+  assert.equal(requested.meta.agent_requested_by, tester.user.id);
+  assert.equal(requested.annotations.annotations.length, 1);
+  // A developer sends the saved round to the agent; the request stamp clears.
+  const sent = await json(`/api/sessions/${testerTask}/annotations`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      annotations: requested.annotations.annotations,
+      width: requested.annotations.width,
+      height: requested.annotations.height,
+      note: "developer approved",
+    }),
+  });
+  assert.equal(sent.meta.status, "submitted");
+  assert.ok(!sent.meta.agent_requested_at, "the developer submit clears the request");
+  await testerPage.close();
 
   console.log("extension e2e: ok");
 } finally {

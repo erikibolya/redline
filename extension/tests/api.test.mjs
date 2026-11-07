@@ -59,6 +59,32 @@ test("submit sends annotations, dimensions, png and note", async () => {
   }
 });
 
+test("a tester request uses request-agent for image and video", async () => {
+  const calls = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url, init });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  };
+  try {
+    const api = new RedLineApi({ serverUrl: "https://redline.test", token: "tok" });
+    await api.submit(
+      "s1",
+      { annotations: [], width: 10, height: 10, png: "data:image/png;base64,AAA", note: "" },
+      { request: true },
+    );
+    await api.submitVideo(
+      "v1",
+      { annotations: [], width: 10, height: 10, contactSheet: null, frames: [], note: "" },
+      { request: true },
+    );
+    assert.equal(calls[0].url, "https://redline.test/api/sessions/s1/request-agent");
+    assert.equal(calls[1].url, "https://redline.test/api/sessions/v1/request-agent");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("API errors keep the status and server message", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () =>

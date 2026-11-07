@@ -413,6 +413,13 @@ same path a human does: upload, play, draw, range, zoom, submit.
   the options page, submits an image rectangle, then a video + trace rectangle at `0.5 s`.
 - It asserts the server payload: image annotation width 3; video `meta.trace.kind=browser-flow`,
   `annotations[0].at=0.5`, and at least one annotated frame.
+- Extension API unit tests assert that `submit(..., {request:true})` and
+  `submitVideo(..., {request:true})` target `/request-agent` for image and video.
+- The extension e2e also drives the tester path end to end: it ensures an `e2e-tester` user and
+  project, mints a tester PAT, configures the panel with it, draws a rectangle, asserts the
+  button says **Request agent review**, submits to `/request-agent`, and verifies the task stays
+  `open` with `agent_requested_at`/`agent_requested_by` and a saved annotation. A developer
+  submit through `/annotations` then changes the task to `submitted` and clears the request.
 - It measures the options row before configuring: the Project select and Branch input must share a
   top, and the “(optional)” hint must stay on the Branch line (a bare flex item pushed the input
   a row down; 2026-11-03).

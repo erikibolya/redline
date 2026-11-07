@@ -519,6 +519,40 @@ try {
   const id = await extensionId(browser);
   await configure(browser, id);
 
+  // The side panel owns the connection form; the gear must not open a separate options tab.
+  const configuredPanel = await openExtensionPage(browser, "src/sidepanel.html");
+  await configuredPanel.waitForFunction(() => !document.querySelector("#empty")?.hidden);
+  await clickPanel(configuredPanel, "#settings");
+  await configuredPanel.waitForFunction(
+    () => !document.querySelector("#settings-panel")?.hidden,
+    { timeout: 10000 },
+  );
+  const settings = await configuredPanel.evaluate(() => ({
+    server: document.querySelector("#settings-server").value,
+    token: document.querySelector("#settings-token").value,
+  }));
+  assert.equal(settings.server, BASE);
+  assert.equal(settings.token, TOKEN);
+  await clickPanel(configuredPanel, "#settings-save");
+  await configuredPanel.waitForFunction(
+    () => document.querySelector("#settings-status")?.textContent.includes("Saved"),
+    { timeout: 10000 },
+  );
+  await configuredPanel.waitForFunction(
+    () => document.querySelector("#settings-panel")?.hidden
+      && !document.querySelector("#empty")?.hidden,
+    { timeout: 10000 },
+  );
+  // A failed capture must say why instead of looking like a dead button (2026-11-07).
+  await clickPanel(configuredPanel, "#capture");
+  await configuredPanel.waitForFunction(
+    () => document.querySelector("#empty-status")?.textContent.includes("http"),
+    { timeout: 10000 },
+  );
+  const captureError = await configuredPanel.$eval("#empty-status", (element) => element.textContent.trim());
+  assert.match(captureError, /http/);
+  await configuredPanel.close();
+
   const target = await createTargetPage(browser);
   const imageId = await createImageSession();
   const imagePanel = await openOverlayCapture(browser, imageId, target.tabId);

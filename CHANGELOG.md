@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A connection form is not a new tab.** The side panel gear and **Connect RedLine** now open
+  an inline server/token/project form; the full options page stays available from
+  `chrome://extensions`. A missing configuration or a non-http active tab now explains why
+  **Screenshot current tab** did nothing instead of leaving the button silent. Extension 0.4.1
+  (2026-11-07).
 - **The side panel is a control deck, not the canvas.** The extension action now opens the side
   panel (`openPanelOnActionClick`, no popup). **Screenshot current tab** freezes the viewport
   under a full-screen overlay; tools, annotation list, note, submit and pause stay in the panel,

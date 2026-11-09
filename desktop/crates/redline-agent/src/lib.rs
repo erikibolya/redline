@@ -448,6 +448,171 @@ fn ensure_worktree(config: &AgentConfig, repo: &Path, work_key: &str) -> Result<
     Ok(path)
 }
 
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct PruneReport {
+    pub candidates: usize,
+    pub removed: usize,
+    pub failed: usize,
+}
+
+#[derive(Debug, Default)]
+struct WorktreeEntry {
+    path: PathBuf,
+    branch: Option<String>,
+    detached: bool,
+    bare: bool,
+    prunable: bool,
+}
+
+fn parse_worktree_list(output: &str) -> Vec<WorktreeEntry> {
+    let mut entries = Vec::new();
+    let mut current: Option<WorktreeEntry> = None;
+    for line in output.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            if let Some(entry) = current.take() {
+                entries.push(entry);
+            }
+            current = Some(WorktreeEntry {
+                path: PathBuf::from(path),
+                ..WorktreeEntry::default()
+            });
+        } else if let Some(entry) = current.as_mut() {
+            if let Some(branch) = line.strip_prefix("branch ") {
+                entry.branch = Some(
+                    branch
+                        .strip_prefix("refs/heads/")
+                        .unwrap_or(branch)
+                        .to_string(),
+                );
+            } else if line == "detached" {
+                entry.detached = true;
+            } else if line == "bare" {
+                entry.bare = true;
+            } else if line.starts_with("prunable") {
+                entry.prunable = true;
+            }
+        }
+    }
+    if let Some(entry) = current {
+        entries.push(entry);
+    }
+    entries
+}
+
+/// Remove clean worktrees under `.redline-worktrees` whose branch is fully merged into the
+/// repository's base branch. Branches are never deleted. Without `apply` this is a dry run.
+pub fn prune_worktrees(config: &AgentConfig, apply: bool) -> Result<PruneReport, String> {
+    let repo = &config.repo;
+    if !git_ok(repo, &["rev-parse", "--is-inside-work-tree"]) {
+        return Err(format!("{} is not a git repository", repo.display()));
+    }
+    let output = git(repo, &["worktree", "list", "--porcelain"])?;
+    if !output.status.success() {
+        return Err(format!(
+            "git worktree list failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let base = worktree_base(repo);
+    let base_output = git(
+        repo,
+        &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
+    )?;
+    if !base_output.status.success() {
+        return Err(format!("cannot resolve base branch {base}"));
+    }
+    let base_commit = String::from_utf8_lossy(&base_output.stdout)
+        .trim()
+        .to_string();
+    let base_name = base.rsplit('/').next().unwrap_or(base);
+    let listing = String::from_utf8_lossy(&output.stdout);
+    let mut report = PruneReport::default();
+    // The first entry is the main worktree; only linked worktrees are candidates.
+    for entry in parse_worktree_list(&listing).into_iter().skip(1) {
+        let Some(branch) = entry.branch.as_deref() else {
+            continue;
+        };
+        if entry.bare || entry.detached || entry.prunable {
+            continue;
+        }
+        if branch == base_name || branch == "dev" || branch == "main" {
+            continue;
+        }
+        let path_text = entry.path.to_string_lossy().replace('\\', "/");
+        if !path_text.contains("/.redline-worktrees/") {
+            continue;
+        }
+        let clean = git(
+            &entry.path,
+            &["status", "--porcelain", "--untracked-files=normal"],
+        )
+        .map(|status| status.status.success() && status.stdout.is_empty())
+        .unwrap_or(false);
+        if !clean {
+            continue;
+        }
+        if !git_ok(
+            &entry.path,
+            &["merge-base", "--is-ancestor", "HEAD", &base_commit],
+        ) {
+            continue;
+        }
+        report.candidates += 1;
+        if !apply {
+            println!("would remove {branch} at {}", entry.path.display());
+            continue;
+        }
+        // Run the removal from the main repository, not from inside the worktree: Windows
+        // refuses to delete the current working directory of the git process.
+        let owner = git(
+            &entry.path,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
+        .map(|common| {
+            let common = if common.is_absolute() {
+                common
+            } else {
+                entry.path.join(common)
+            };
+            if common.file_name().and_then(|name| name.to_str()) == Some(".git") {
+                common
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| repo.clone())
+            } else {
+                common
+            }
+        })
+        .unwrap_or_else(|| repo.clone());
+        let path_arg = entry.path.to_string_lossy().to_string();
+        match git(&owner, &["worktree", "remove", &path_arg]) {
+            Ok(result) if result.status.success() => {
+                report.removed += 1;
+                println!("removed {branch} at {}", entry.path.display());
+            }
+            Ok(result) => {
+                report.failed += 1;
+                eprintln!(
+                    "could not remove {branch} at {}: {}",
+                    entry.path.display(),
+                    String::from_utf8_lossy(&result.stderr).trim()
+                );
+            }
+            Err(err) => {
+                report.failed += 1;
+                eprintln!(
+                    "could not remove {branch} at {}: {err}",
+                    entry.path.display()
+                );
+            }
+        }
+    }
+    Ok(report)
+}
+
 /// Remove a clean worktree after the feature is resolved. Dirty work is left for inspection.
 fn release_worktree(config: &AgentConfig, repo: &Path, work_key: &str) {
     let path = worktree_path(config, repo, work_key);
@@ -1779,6 +1944,50 @@ mod tests {
             .output()
             .unwrap();
         assert!(branch.status.success());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn prune_removes_only_clean_merged_worktrees() {
+        if !git_available() {
+            eprintln!("git not installed; skipping worktree prune test");
+            return;
+        }
+        let root = temp_root("prune");
+        let repo = init_repo(&root);
+        let mut config = AgentConfig::new("http://127.0.0.1:8788", "t", &repo);
+        config.repo_root = root.clone();
+
+        let merged = ensure_worktree(&config, &repo, "feat/merged").unwrap();
+        std::fs::write(merged.join("merged.txt"), "merged\n").unwrap();
+        git_in(&merged, &["add", "."]);
+        git_in(&merged, &["commit", "-qm", "merged"]);
+        git_in(&repo, &["merge", "--no-ff", "-qm", "merge", "feat/merged"]);
+
+        let unmerged = ensure_worktree(&config, &repo, "feat/unmerged").unwrap();
+        std::fs::write(unmerged.join("unmerged.txt"), "unmerged\n").unwrap();
+        git_in(&unmerged, &["add", "."]);
+        git_in(&unmerged, &["commit", "-qm", "unmerged"]);
+
+        let dirty = ensure_worktree(&config, &repo, "feat/dirty").unwrap();
+        std::fs::write(dirty.join("README.md"), "dirty\n").unwrap();
+
+        let dry_run = prune_worktrees(&config, false).unwrap();
+        assert_eq!(dry_run.candidates, 1);
+        assert_eq!(dry_run.removed, 0);
+        assert!(merged.exists(), "a dry run must not remove anything");
+
+        let applied = prune_worktrees(&config, true).unwrap();
+        assert_eq!(applied.candidates, 1);
+        assert_eq!(applied.removed, 1);
+        assert_eq!(applied.failed, 0);
+        assert!(!merged.exists(), "the merged worktree must be gone");
+        assert!(unmerged.exists(), "an unmerged worktree must be kept");
+        assert!(dirty.exists(), "a dirty worktree must be kept");
+        assert!(
+            git_ok(&repo, &["rev-parse", "--verify", "--quiet", "feat/merged"]),
+            "pruning a worktree must keep its branch"
+        );
         let _ = std::fs::remove_dir_all(&root);
     }
 

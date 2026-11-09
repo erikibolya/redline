@@ -42,6 +42,21 @@ the Docker builder.
 
 Needs `opencode` with provider auth configured (`opencode auth list`).
 
+## Prune stale worktrees
+
+The bridge removes a clean worktree when a round is resolved. If the round was resolved outside
+the bridge, or the agent stopped before it could release the claim, a merged worktree can remain
+under `.redline-worktrees/`. `prune` removes only worktrees there that are clean and whose branch
+is fully merged into the base branch; branches are never deleted.
+
+```bash
+redline-agent prune          # dry-run, prints what would be removed
+redline-agent prune --yes    # remove them
+```
+
+Run it as the user that owns the worktrees. A worktree created by a root-run agent needs root (or
+a `chown`) before it can be removed.
+
 ## Desktop app
 
 The Tauri shell embeds this crate. Tray menu:

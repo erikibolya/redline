@@ -562,8 +562,33 @@ pub fn prune_worktrees(config: &AgentConfig, apply: bool) -> Result<PruneReport,
             println!("would remove {branch} at {}", entry.path.display());
             continue;
         }
+        // Run the removal from the main repository, not from inside the worktree: Windows
+        // refuses to delete the current working directory of the git process.
+        let owner = git(
+            &entry.path,
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )
+        .ok()
+        .filter(|output| output.status.success())
+        .map(|output| PathBuf::from(String::from_utf8_lossy(&output.stdout).trim()))
+        .map(|common| {
+            let common = if common.is_absolute() {
+                common
+            } else {
+                entry.path.join(common)
+            };
+            if common.file_name().and_then(|name| name.to_str()) == Some(".git") {
+                common
+                    .parent()
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| repo.clone())
+            } else {
+                common
+            }
+        })
+        .unwrap_or_else(|| repo.clone());
         let path_arg = entry.path.to_string_lossy().to_string();
-        match git(&entry.path, &["worktree", "remove", &path_arg]) {
+        match git(&owner, &["worktree", "remove", &path_arg]) {
             Ok(result) if result.status.success() => {
                 report.removed += 1;
                 println!("removed {branch} at {}", entry.path.display());

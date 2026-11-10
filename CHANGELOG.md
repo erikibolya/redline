@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **One connection form, in the panel.** Removed the standalone options page and its manifest
+  entry; the gear in the side panel is the only connection surface. The store set now leads with
+  the capture screen, then a live review and an offline export. Extension 0.7.3 (2026-11-10).
 - **Connect once, choose the destination while annotating.** The connection form now owns only
   the server URL and token, with **Test** and **Connect**; project and branch moved to the capture
   panel, where they describe the round being annotated. The extension remembers the project chosen

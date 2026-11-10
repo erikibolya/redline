@@ -84,7 +84,10 @@ async function init() {
 }
 
 async function openOptions() {
-  await chrome.runtime.openOptionsPage();
+  // The connection form lives in the side panel; there is no standalone options page.
+  if (activeTabId) {
+    await chrome.sidePanel.open({ tabId: activeTabId }).catch(() => {});
+  }
   window.close();
 }
 

@@ -2183,7 +2183,7 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
   if (changeInfo.status || changeInfo.url) refreshCaptureContext().catch(() => {});
 });
 
-// The e2e and the options page use this marker; it also tells a human the panel is wired.
+// The e2e uses this marker; it also tells a human the panel is wired.
 renderThemeButton();
 watchTheme(() => renderThemeButton());
 document.body.dataset.ready = "1";

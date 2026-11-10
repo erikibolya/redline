@@ -410,8 +410,8 @@ same path a human does: upload, play, draw, range, zoom, submit.
 
 - The browser e2e job also builds a temporary extension copy with host
   permission for `127.0.0.1:8788`, launches headless Chromium with `--load-extension`, configures
-  the options page, opens a target tab, injects the full-screen overlay, selects an arrow in the
-  side panel, draws on the page, closes and reopens the panel to check the draft, types a note and
+  the connection form in the side panel, opens a target tab, injects the full-screen overlay,
+  selects an arrow in the side panel, draws on the page, closes and reopens the panel to check the draft, types a note and
   submits. It then exports a local
   image through the overlay and submits a video + trace rectangle at `0.5 s` through the
   side-panel video editor.

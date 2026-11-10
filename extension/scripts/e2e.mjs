@@ -159,18 +159,26 @@ async function openExtensionPage(browser, pathname) {
 }
 
 async function configure(browser, id, token = TOKEN) {
-  const page = await openExtensionPage(browser, "src/options.html");
-  await page.waitForFunction(() => document.body.dataset.ready === "1");
-  assert.equal(await page.$("#project"), null, "the connection page does not own the project");
-  assert.equal(await page.$("#branch"), null, "the connection page does not own the branch");
+  // The side panel owns the connection form; there is no standalone options page.
+  const page = await openExtensionPage(browser, "src/sidepanel.html");
+  await page.waitForFunction(() => !document.querySelector("#empty")?.hidden, {
+    timeout: 10000,
+    polling: 100,
+  });
+  await clickPanel(page, "#settings");
+  await page.waitForFunction(() => !document.querySelector("#settings-panel")?.hidden, {
+    timeout: 10000,
+    polling: 100,
+  });
   await page.evaluate(({ base, token }) => {
-    document.querySelector("#server-url").value = base;
-    document.querySelector("#token").value = token;
+    document.querySelector("#settings-server").value = base;
+    document.querySelector("#settings-token").value = token;
   }, { base: BASE, token });
-  await page.click("#save");
+  // A real click keeps the host-permission request a user gesture.
+  await page.click("#settings-save");
   await page.waitForFunction(
-    () => document.querySelector("#status")?.textContent.includes("Saved"),
-    { timeout: 10000 },
+    () => document.querySelector("#settings-status")?.textContent.includes("Saved"),
+    { timeout: 15000, polling: 100 },
   );
   await page.close();
 }

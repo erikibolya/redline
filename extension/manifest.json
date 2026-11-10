@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "RedLine Capture",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Capture a page or tab flow, annotate it, and send it to RedLine or export it for your AI.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -31,7 +31,6 @@
       "128": "icons/128.png"
     }
   },
-  "options_page": "src/options.html",
   "side_panel": {
     "default_path": "src/sidepanel.html"
   },

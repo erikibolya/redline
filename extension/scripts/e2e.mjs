@@ -162,19 +162,42 @@ async function configure(browser, id, token = TOKEN) {
   // The side panel owns the connection form; there is no standalone options page.
   const page = await openExtensionPage(browser, "src/sidepanel.html");
   const emptyVisible = () => !document.querySelector("#empty")?.hidden;
-  if (!(await page.evaluate(emptyVisible))) {
-    // A profile can still hold an active capture from an interrupted run; clear it and reload
-    // instead of failing the first configuration step.
+  // A profile can still hold an active capture, or a previous manual run can leave the settings
+  // drawer open. Put the panel back on the empty state instead of failing the first step.
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (await page.evaluate(emptyVisible)) break;
+    const state = await page.evaluate(() => ({
+      settings: !document.querySelector("#settings-panel")?.hidden,
+      workspace: !document.querySelector("#workspace")?.hidden,
+    }));
+    if (state.settings) {
+      await clickPanel(page, "#settings-close");
+      continue;
+    }
     await page.evaluate(async () => {
       await chrome.storage.session.remove("activeCapture");
     });
     await page.reload({ waitUntil: "domcontentloaded" });
     await page.waitForFunction(() => document.body.dataset.ready === "1", { timeout: 10000 });
   }
-  await page.waitForFunction(emptyVisible, {
-    timeout: 10000,
-    polling: 100,
-  });
+  try {
+    await page.waitForFunction(emptyVisible, {
+      timeout: 10000,
+      polling: 100,
+    });
+  } catch (error) {
+    console.log("configure panel state", await page.evaluate(async () => ({
+      url: location.href,
+      emptyHidden: document.querySelector("#empty")?.hidden,
+      settingsHidden: document.querySelector("#settings-panel")?.hidden,
+      workspaceHidden: document.querySelector("#workspace")?.hidden,
+      title: document.querySelector("#title")?.textContent,
+      status: document.querySelector("#status")?.textContent,
+      emptyStatus: document.querySelector("#empty-status")?.textContent,
+      activeCapture: (await chrome.storage.session.get("activeCapture")).activeCapture || null,
+    })));
+    throw error;
+  }
   await clickPanel(page, "#settings");
   await page.waitForFunction(() => !document.querySelector("#settings-panel")?.hidden, {
     timeout: 10000,

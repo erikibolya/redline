@@ -48,10 +48,9 @@ recording. Attach it to an AI assistant; the prompt explains what to read.
 - Side-panel canvas editor for video and offline captures: select/move, rectangle, arrow, pen,
   ellipse, colour/width, undo/redo, delete (selected and per row), clear, per-session draft,
   annotated PNG composition and submit.
-- **Theme and panel controls:** a dark/light toggle next to the settings gear, shared with the
-  page overlay; the adjacent panel-side button names Chrome's side-panel side and opens the
-  browser setting that changes it (Chrome exposes `getLayout()`, not a setter). The toolbar
-  wraps its groups as units in a narrow panel.
+- **Theme and layout:** a dark/light toggle next to the settings gear, shared with the page
+  overlay. The panel uses the desktop editor's palette, buttons, inputs and annotation-row
+  styling, and the toolbar wraps its groups as units in a narrow panel.
 - **Open in RedLine** for the full editor; a submitted review is read-only in the panel.
 
 ## Recording

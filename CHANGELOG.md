@@ -2,14 +2,16 @@
 
 ## Unreleased
 
-- **A narrow side panel wraps the toolbar as groups, not as loose controls.** Colour + width
-  slider + the `3px` label stay together, and undo/redo/delete stay together; both groups move to
-  a new line as units. The header gains a desktop-style theme toggle (dark/light, shared with the
-  page overlay) and a panel-side control that names the current side and opens Chrome's
-  **Settings → Appearance** page, because Chrome exposes `getLayout()` but no setter. Every
-  annotation row now has its own red trash button on the right, like the desktop inspector. The
-  overlay theme follows the panel and the hint no longer mentions the removed Pause control.
-  Extension 0.7.0 (2026-11-10).
+- **The capture panel is the desktop editor, not a separate theme.** It now uses the desktop
+  palette and component shapes: panel / panel-2 / panel-3 surfaces, the same border pair, the blue
+  accent, transparent toolbar tools with a blue active state, a white header in light theme and the
+  desktop's solid-red destructive buttons. Inputs, annotation rows, dividers and the note field
+  follow the same treatment, and annotation numbers use the annotation's own colour instead of the
+  UI accent. Toolbar groups wrap as units (colour + slider + px label, undo/redo/delete), the
+  dark/light toggle is shared with the page overlay, and every annotation row keeps its red trash
+  button. The panel-side button from the 0.7.0 test build is removed: Chrome exposes
+  `getLayout()` but no setter, so it could only open a settings page. Extension 0.7.1
+  (2026-11-10).
 - **The extension toolbar is the RedLine toolbar.** Removed the text-only tool; the extension now
   uses the desktop tools and icons: select, rectangle, arrow, pen, ellipse, colour and a width
   slider. The settings gear uses the desktop cog. Undo/redo stay and are added to the desktop

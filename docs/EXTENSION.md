@@ -74,12 +74,11 @@ Clicking the toolbar icon opens the **side panel**; there is no popup
 (`chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`, no `default_popup`).
 
 The empty panel shows the current tab and **Screenshot current tab**; the header gear opens the
-connection form. Next to it are a **theme** toggle (dark/light, shared with the page overlay) and a
-**panel-side** control. Chrome lets an extension read the side-panel side (`sidePanel.getLayout()`)
-but not set it, so that control names the current side and opens Chrome's **Settings →
-Appearance** page, where the side panel position is the browser-level choice. The gear, theme and
-panel-side controls stay usable while a capture is loading and while a submitted round is
-read-only. The first click asks Chrome for access to that page origin (the permission request
+connection form, with a **theme** toggle (dark/light, shared with the page overlay) beside it. The
+panel deliberately uses the desktop editor's design tokens and component shapes: the same
+panel/panel-2/panel-3 surfaces, border pair, blue accent, transparent toolbar tools, solid-red
+destructive buttons and annotation-row treatment. The gear and theme stay usable while a capture
+is loading and while a submitted round is read-only. The first click asks Chrome for access to that page origin (the permission request
 needs the click);
 after it is granted the capture and overlay use that site, and later captures do not prompt. One
 button covers both modes: with a saved server it creates an image review and injects the overlay;
@@ -442,8 +441,8 @@ Tests: web cross-site → `403`; extension origin + token → `200`; extension o
 - **Stage**: a canvas at the screenshot/video's natural pixel size; zoom/pan/fit. For a video,
   the current frame is drawn into the canvas; drawing pauses playback.
 - **Tools**: select/move, rectangle, arrow, pen, ellipse; colour/width; delete (selected and
-  per row); undo/redo; dark/light theme. Groups, align/distribute and ranges stay in the RedLine
-  tab for v1.
+  per row); undo/redo; dark/light theme. The palette and button/row styling match the desktop
+  editor. Groups, align/distribute and ranges stay in the RedLine tab for v1.
 - **Coordinates**: RedLine annotation schema, canvas pixels relative to the natural media size
   (the same model as `docs/API.md` § Annotation schema). The extension reuses the existing
   `{type,start,end,points,color,width,at}` fields; no new annotation format.

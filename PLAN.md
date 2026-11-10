@@ -6,8 +6,8 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.28.2` on holly — `https://redline.ibolya.cz`, container
-`ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`. Multi-user release deployed 2026-11-03; upgrade notes in `docs/MIGRATION-v0.28.md`.
+**Shipped and in production:** `v0.28.3` on holly — `https://redline.ibolya.cz`, container
+`ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`. Multi-user release deployed 2026-11-03; v0.28.3 deployed 2026-11-10; upgrade notes in `docs/MIGRATION-v0.28.md`.
 
 ## What exists today
 

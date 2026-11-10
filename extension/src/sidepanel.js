@@ -347,10 +347,8 @@ function showEmpty(message = "", keepCapture = false) {
   $("trace-panel").hidden = true;
   $("overlay-banner").hidden = true;
   $("local-warning").hidden = true;
-  $("pause-overlay").hidden = true;
   $("allow-overlay").hidden = true;
   $("capture-new").hidden = true;
-  $("resume-overlay").hidden = true;
   $("stage").hidden = false;
   $("title").textContent = "RedLine Capture";
   $("subtitle").textContent = "No capture yet";
@@ -419,17 +417,6 @@ async function closeOverlay(capture = state.capture) {
   state.overlayActive = false;
 }
 
-function resumeOverlay() {
-  if (!state.capture || state.submitted) return;
-  injectOverlay(state.capture)
-    .then(() => {
-      state.overlayNeedsPermission = false;
-      renderOverlayControls();
-      setStatus("Annotating on the page. Controls are here.");
-    })
-    .catch((error) => overlayFailure(error));
-}
-
 function overlayCommand(command) {
   if (!state.capture || !state.overlayActive) return;
   sendOverlayCommand(command);
@@ -487,10 +474,6 @@ function applyOverlayState(message) {
     chrome.runtime.sendMessage({ type: "clear-active-capture" }).catch(() => {});
     showEmpty("Task discarded.");
     return;
-  } else if (message.event === "paused") {
-    state.overlayActive = false;
-    state.submitting = false;
-    setStatus("Capture paused. Resume annotating to continue.");
   } else if (message.event === "ready" || message.event === "sync") {
     state.overlayActive = true;
     state.overlayNeedsPermission = false;
@@ -504,16 +487,13 @@ function applyOverlayState(message) {
     void exportLocalData(message.exportData);
   }
 
-  $("overlay-banner").hidden = !state.overlayMode || state.submitted;
+  $("overlay-banner").hidden =
+    !state.overlayMode || state.submitted || !state.overlayActive;
   $("overlay-banner-text").textContent = state.readOnly
     ? "Read-only review — open it in RedLine to edit."
-    : state.overlayActive
-      ? (state.local
-        ? "Local capture — draw on the frozen page. Export when done."
-        : "Annotating on the page — draw on the frozen screenshot.")
-      : "Capture paused — the annotations are saved.";
-  $("resume-overlay").hidden = !state.overlayMode || state.overlayActive || state.submitted;
-  $("pause-overlay").hidden = !(state.overlayActive && !state.submitted);
+    : state.local
+      ? "Local capture — draw on the frozen page. Export when done."
+      : "Annotating on the page — draw on the frozen screenshot.";
   $("capture-new").hidden = !state.submitted;
   render();
 }
@@ -623,30 +603,26 @@ function renderOverlayControls() {
   $("redo").disabled = state.readOnly || state.redoCount === 0;
   $("delete").disabled = state.readOnly || !state.selectedId;
   $("clear").disabled = state.readOnly || state.annotations.length === 0;
-  const paused = !state.overlayActive && !state.submitted;
-  $("submit").disabled = state.readOnly || state.submitting || paused;
+  $("submit").disabled =
+    state.readOnly || state.submitting || !state.overlayActive;
   const status = state.meta?.status;
   $("submit").textContent = state.submitting
     ? (state.local ? "Preparing…" : "Submitting…")
-    : paused
-      ? (state.local ? "Resume to export" : "Resume to submit")
-      : state.local
-        ? "Export review"
-        : status === "resolved"
-          ? "Resolved"
-          : status === "submitted"
-            ? "Waiting for agent"
-            : state.role === "viewer"
-              ? "Read-only"
-              : state.role === "tester"
-                ? (state.requested ? "Update request" : "Send to developer")
-                : "Submit to RedLine";
+    : state.local
+      ? "Export review"
+      : status === "resolved"
+        ? "Resolved"
+        : status === "submitted"
+          ? "Waiting for agent"
+          : state.role === "viewer"
+            ? "Read-only"
+            : state.role === "tester"
+              ? (state.requested ? "Update request" : "Send to developer")
+              : "Submit to RedLine";
   $("open-redline").hidden = state.local;
   $("discard").disabled = state.submitted || state.submitting || state.role === "viewer";
-  $("pause-overlay").hidden = !state.overlayActive || state.submitted;
   $("capture-new").hidden = !state.submitted;
-  $("resume-overlay").hidden = state.overlayActive || state.submitted;
-  $("overlay-banner").hidden = state.submitted;
+  $("overlay-banner").hidden = state.submitted || !state.overlayActive;
   $("local-warning").hidden = !state.local;
   $("allow-overlay").hidden = !state.overlayNeedsPermission;
   noteInput.disabled = state.readOnly || state.submitting;
@@ -1827,11 +1803,7 @@ async function exportLocalData(data) {
 }
 
 function submitOverlay() {
-  if (state.readOnly || state.submitting || !state.capture) return;
-  if (!state.overlayActive) {
-    resumeOverlay();
-    return;
-  }
+  if (state.readOnly || state.submitting || !state.capture || !state.overlayActive) return;
   if (!state.annotations.length && !noteInput.value.trim()) {
     if (
       !confirm(
@@ -1899,10 +1871,8 @@ function showSent(message, keepCapture = false) {
   $("trace-panel").hidden = true;
   $("overlay-banner").hidden = true;
   $("local-warning").hidden = true;
-  $("pause-overlay").hidden = true;
   $("allow-overlay").hidden = true;
   $("capture-new").hidden = true;
-  $("resume-overlay").hidden = true;
   $("stage").hidden = false;
   $("title").textContent = "RedLine Capture";
   $("subtitle").textContent = "No capture yet";
@@ -2036,10 +2006,6 @@ $("allow-overlay").addEventListener("click", () => {
   allowCaptureSite().catch((error) => overlayFailure(error));
 });
 $("capture-new").addEventListener("click", captureCurrent);
-$("resume-overlay").addEventListener("click", resumeOverlay);
-$("pause-overlay").addEventListener("click", () => {
-  overlayCommand({ type: "close" });
-});
 $("open-capture").addEventListener("click", openRedLine);
 $("open-options").addEventListener("click", openSettings);
 $("settings").addEventListener("click", () => {

@@ -366,9 +366,6 @@ document.addEventListener("keydown", (event) => {
   } else if (event.key === "Delete" || event.key === "Backspace") {
     event.preventDefault();
     removeSelected();
-  } else if (event.key === "Escape") {
-    event.preventDefault();
-    void closePaused();
   }
 });
 
@@ -412,19 +409,12 @@ async function command(command) {
     case "discard":
       await discard();
       break;
-    case "close":
-      await closePaused();
-      break;
     default:
       break;
   }
 }
 
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "redline-overlay-escape") {
-    if (message.sessionId === state.sessionId) closePaused();
-    return;
-  }
   if (message?.type !== "redline-overlay-command") return;
   if (message.sessionId !== state.sessionId) return;
   command(message.command);
@@ -524,13 +514,6 @@ async function discard() {
     setStatus(message, "err");
     publish("error", { error: message });
   }
-}
-
-async function closePaused() {
-  if (state.submitting) return;
-  await saveDraftNow();
-  publish("paused");
-  closeOverlay();
 }
 
 function closeOverlay() {

@@ -1,5 +1,5 @@
 import { RedLineApi } from "./lib/api.js";
-import { isConfigured, loadConfig } from "./lib/config.js";
+import { isConfigured, loadConfig, projectForCapture, rememberProject } from "./lib/config.js";
 import { newLocalId, putCapture } from "./lib/local-store.js";
 import { consoleText, makeTrace, redactText, redactUrl } from "./lib/trace.js";
 
@@ -114,19 +114,32 @@ async function captureAndCreate({ tabId } = {}) {
   assertRecordable(tab);
   const imageDataUrl = await capturePage(tab);
   const api = new RedLineApi(config);
-  const created = await api.createImageSession({
-    imageDataUrl,
-    title: tab.title || "Screenshot",
-    url: tab.url || "",
-    project: config.project,
-    branch: config.branch,
-  });
+  const remembered = await projectForCapture(tab.url || "");
+  const project = remembered === null ? (config.project || "") : remembered;
+  const create = (target) =>
+    api.createImageSession({
+      imageDataUrl,
+      title: tab.title || "Screenshot",
+      url: tab.url || "",
+      project: target,
+    });
+  let created;
+  try {
+    created = await create(project);
+  } catch (error) {
+    // A remembered project can disappear after a membership change. File the capture in the
+    // Inbox and let the human choose again instead of leaving a dead capture button.
+    if (!project || (error.status !== 404 && error.status !== 403)) throw error;
+    await rememberProject(tab.url || "", "");
+    created = await create("");
+  }
   const capture = {
     sessionId: created.meta.id,
     tabId: tab.id,
     serverUrl: config.serverUrl,
     reviewUrl: created.review_url,
     title: created.meta.title,
+    url: tab.url || "",
     createdAt: new Date().toISOString(),
   };
   await chrome.storage.session.set({ [ACTIVE_KEY]: capture });
@@ -476,6 +489,8 @@ async function stopRecording() {
       return { capture, trace: null };
     }
 
+    const remembered = await projectForCapture(current.url);
+    const project = remembered === null ? (config.project || "") : remembered;
     let created;
     try {
       created = await offscreen({
@@ -485,8 +500,7 @@ async function stopRecording() {
         title: current.title,
         url: current.url,
         note: "",
-        project: config.project,
-        branch: config.branch,
+        project,
       });
     } catch (error) {
       // Keep the stopped clip in the offscreen document for a later retry.
@@ -498,6 +512,7 @@ async function stopRecording() {
       serverUrl: config.serverUrl,
       reviewUrl: created.review_url,
       title: created.meta.title,
+      url: current.url,
       kind: "video",
       createdAt: new Date().toISOString(),
     };

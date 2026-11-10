@@ -37,16 +37,11 @@
       <p class="settings-hint">
         Stored only in this browser profile; sent only to the server URL above.
       </p>
-      <label class="field">
-        Project
-        <select id="settings-project"><option value="">Inbox</option></select>
-      </label>
-      <label class="field">
-        Branch <span class="muted">(optional)</span>
-        <input id="settings-branch" type="text" placeholder="feat/my-feature" />
-      </label>
+      <p class="settings-hint">
+        Project and branch are chosen on the capture panel after the screenshot.
+      </p>
       <div class="settings-actions">
-        <button id="settings-save" class="primary" type="button">Save &amp; request access</button>
+        <button id="settings-save" class="primary" type="button">Connect</button>
         <button id="settings-test" type="button">Test</button>
       </div>
       <p id="settings-status" class="status" role="status" aria-live="polite"></p>
@@ -144,6 +139,18 @@
         <button id="clear" class="link" type="button">Clear all</button>
       </div>
       <div id="list" class="list"></div>
+
+      <div id="destination" class="destination" hidden>
+        <label class="destination-field">
+          Project
+          <select id="project"><option value="">Inbox</option></select>
+        </label>
+        <label class="destination-field">
+          Branch
+          <input id="branch" type="text" placeholder="feat/my-feature" />
+        </label>
+        <p id="destination-hint" class="destination-hint" hidden></p>
+      </div>
 
       <label class="note-label">
         Note for the agent

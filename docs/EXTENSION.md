@@ -61,11 +61,17 @@ The options page stores one RedLine server profile:
 |---|---|
 | Server URL | `https://redline.ibolya.cz` or `http://127.0.0.1:8788` |
 | Token | a personal access token (`rl_pat_…`, created on `/tokens`; the legacy server token still works); stored in `chrome.storage.local`, never synced |
-| Project | optional; loaded from `GET /api/projects` |
-| Branch | optional; the server derives `feat/<title-slug>-<id-tail>` when empty |
 | Redaction | header/query patterns; request bodies off by default |
 
-**Test connection** calls `/health` and `/api/sessions`; a `401` opens the token field with a
+Project and branch are **not connection settings**. They are chosen on the capture panel after the
+screenshot, where they describe that round: the project select is filled from
+`GET /api/projects`, and the branch starts as the server-derived `feat/<title-slug>-<id-tail>`.
+The last project is remembered per page origin (and as a global fallback), so the next capture on
+that page is filed there and preselects it. Changing the project moves the open session
+(`PUT /api/sessions/{id}/project`); changing the branch renames it
+(`PUT /api/sessions/{id}/branch`). Both controls disable once the round is submitted.
+
+**Test connection** calls `/health` and `/api/projects`; a `401` opens the token field with a
 hint. The token is never rendered unmasked after saving; **Replace** and **Forget** are explicit.
 
 ### 3.2 Action and control panel
@@ -84,15 +90,17 @@ after it is granted the capture and overlay use that site, and later captures do
 button covers both modes: with a saved server it creates an image review and injects the overlay;
 without one it saves the same screenshot locally and the workspace shows an orange **Not
 connected — this review is saved locally** warning with a Connect link. The panel then shows the
-controls for the round: tools, colour/width, undo/redo/delete, the annotation list, the note,
-**Export review** (local) or **Send to developer** / **Submit to RedLine** (server), and
-**Discard**. The toolbar groups wrap as units in a narrow panel: the drawing tools stay together,
+controls for the round: tools, colour/width, undo/redo/delete, the annotation list, the
+destination (project + branch), the note, **Export review** (local) or **Send to developer** /
+**Submit to RedLine** (server), and **Discard**. The toolbar groups wrap as units in a narrow panel: the drawing tools stay together,
 colour + slider + `px` label stay together, and undo/redo/delete stay together. Each annotation
 row also has its own red trash button on the right (like the desktop inspector); the toolbar
 delete still acts on the current selection.
 
 The header gear (and the **Connect RedLine** link in the local warning) opens an inline
-server/token/project form in the panel; it does not open the options page in a new tab. A missing configuration opens that form and says so. If
+server/token form in the panel; it does not open the options page in a new tab. A missing
+configuration opens that form and says so. Project and branch stay out of it and appear only once
+there is a capture to annotate. If
 the overlay cannot be injected because the extension has no access to that page, the workspace
 offers **Allow access to this page**, requests the page origin and retries; this also covers a
 local capture on a site that was not opened through the action icon. The
@@ -453,6 +461,9 @@ Tests: web cross-site → `403`; extension origin + token → `200`; extension o
   default is errors + failed requests, so the panel is useful without noise.
 - **Annotation list**: compact rows with timecode (for video) and note; click seeks/selects; a
   row-level red trash button deletes that annotation (with undo).
+- **Destination**: the project select and branch field below the list. The project comes from the
+  page's remembered choice; the branch starts as the session's generated branch. Changes update
+  the session immediately and are locked while submitted.
 - **Note**: one note per selected shape (the RedLine `note` field) plus an overall review note
   (the submission `note`). The full editor's per-shape inspector is still available via **Open in
   RedLine**.

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Connect once, choose the destination while annotating.** The connection form now owns only
+  the server URL and token, with **Test** and **Connect**; project and branch moved to the capture
+  panel, where they describe the round being annotated. The extension remembers the project chosen
+  for a page origin, with the last chosen project as the global fallback, so the next capture is
+  filed there and the select is preset; moving the open round or renaming its branch updates the
+  session through `PUT /api/sessions/{id}/project|branch`, and both lock once the round is
+  submitted. A stale remembered project falls back to the Inbox instead of a dead capture button.
+  Extension 0.7.2 (2026-11-10).
 - **The capture panel is the desktop editor, not a separate theme.** It now uses the desktop
   palette and component shapes: panel / panel-2 / panel-3 surfaces, the same border pair, the blue
   accent, transparent toolbar tools with a blue active state, a white header in light theme and the

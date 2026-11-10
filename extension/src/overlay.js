@@ -10,10 +10,14 @@ import {
   moveAnnotation,
   TOOLS,
 } from "./lib/annotations.js";
+import { applyTheme, initTheme, watchTheme } from "./lib/theme.js";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
 const statusEl = $("status");
+
+initTheme();
+watchTheme();
 
 const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
 const state = {
@@ -160,6 +164,17 @@ function removeSelected() {
   snapshot();
   state.annotations = state.annotations.filter((annotation) => annotation.id !== state.selectedId);
   state.selectedId = null;
+  render();
+  saveDraft();
+  publish();
+}
+
+function removeById(id) {
+  if (state.readOnly || state.submitting || !id) return;
+  if (!state.annotations.some((annotation) => annotation.id === id)) return;
+  snapshot();
+  state.annotations = state.annotations.filter((annotation) => annotation.id !== id);
+  if (state.selectedId === id) state.selectedId = null;
   render();
   saveDraft();
   publish();
@@ -330,7 +345,11 @@ async function command(command) {
       redo();
       break;
     case "delete":
-      removeSelected();
+      if (command.id) removeById(command.id);
+      else removeSelected();
+      break;
+    case "set-theme":
+      applyTheme(command.theme, { persist: false });
       break;
     case "clear":
       clearAll();

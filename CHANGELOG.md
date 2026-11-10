@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **A narrow side panel wraps the toolbar as groups, not as loose controls.** Colour + width
+  slider + the `3px` label stay together, and undo/redo/delete stay together; both groups move to
+  a new line as units. The header gains a desktop-style theme toggle (dark/light, shared with the
+  page overlay) and a panel-side control that names the current side and opens Chrome's
+  **Settings → Appearance** page, because Chrome exposes `getLayout()` but no setter. Every
+  annotation row now has its own red trash button on the right, like the desktop inspector. The
+  overlay theme follows the panel and the hint no longer mentions the removed Pause control.
+  Extension 0.7.0 (2026-11-10).
 - **The extension toolbar is the RedLine toolbar.** Removed the text-only tool; the extension now
   uses the desktop tools and icons: select, rectangle, arrow, pen, ellipse, colour and a width
   slider. The settings gear uses the desktop cog. Undo/redo stay and are added to the desktop

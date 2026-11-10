@@ -582,6 +582,103 @@ try {
   assert.equal(await imagePanel.$('[data-tool="text"]'), null, "the text tool is gone");
   assert.equal(await imagePanel.$eval("#width-value", (element) => element.textContent.trim()), "3px");
   assert.ok(await imagePanel.$("#settings svg"), "the settings gear is the desktop icon");
+  assert.ok(await imagePanel.$("#theme svg"), "the theme toggle has an icon");
+  assert.ok(await imagePanel.$("#dock svg"), "the docking control has an icon");
+
+  // The header says the truth about the browser-owned side panel position; the button opens the
+  // one Chrome setting that can move it (Chrome exposes getLayout, not a setter).
+  const dock = await imagePanel.evaluate(async () => {
+    const button = document.querySelector("#dock");
+    const original = chrome.tabs.create;
+    let opened = null;
+    chrome.tabs.create = (options) => {
+      opened = options.url;
+      return Promise.resolve({ id: 1 });
+    };
+    try {
+      button.click();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } finally {
+      chrome.tabs.create = original;
+    }
+    return { opened, side: button.dataset.side, title: button.title };
+  });
+  assert.equal(dock.opened, "chrome://settings/appearance");
+  assert.ok(["left", "right", ""].includes(dock.side), `unexpected side ${dock.side}`);
+  assert.match(dock.title, /side panel/i);
+
+  // Theme: the panel and the live overlay change together, and the choice survives a reopen.
+  const initialTheme = await imagePanel.evaluate(() => document.documentElement.dataset.theme);
+  assert.ok(["light", "dark"].includes(initialTheme), `unexpected theme ${initialTheme}`);
+  const initialThemeIcon = await imagePanel.$eval("#theme", (element) => element.innerHTML);
+  const nextTheme = initialTheme === "light" ? "dark" : "light";
+  await clickPanel(imagePanel, "#theme");
+  await imagePanel.waitForFunction(
+    (theme) => document.documentElement.dataset.theme === theme,
+    { timeout: 5000 },
+    nextTheme,
+  );
+  await overlay.frame.waitForFunction(
+    (theme) => document.documentElement.dataset.theme === theme,
+    { timeout: 5000 },
+    nextTheme,
+  );
+  assert.deepEqual(
+    await imagePanel.evaluate(() => JSON.parse(localStorage.getItem("redline:theme"))),
+    nextTheme,
+  );
+  assert.notEqual(
+    await imagePanel.$eval("#theme", (element) => element.innerHTML),
+    initialThemeIcon,
+    "the theme button shows the theme it switches to",
+  );
+  await clickPanel(imagePanel, "#theme");
+  await imagePanel.waitForFunction(
+    (theme) => document.documentElement.dataset.theme === theme,
+    { timeout: 5000 },
+    initialTheme,
+  );
+  await overlay.frame.waitForFunction(
+    (theme) => document.documentElement.dataset.theme === theme,
+    { timeout: 5000 },
+    initialTheme,
+  );
+
+  // A narrow side panel wraps whole groups: colour + slider + label and undo/redo/delete never
+  // split across lines. The side panel can be dragged down to ~280 px in Chrome.
+  await imagePanel.setViewport({ width: 280, height: 900 });
+  const groups = await imagePanel.evaluate(() => {
+    const toolbar = document.querySelector(".toolbar");
+    return {
+      wrap: getComputedStyle(toolbar).flexWrap,
+      overflow: toolbar.scrollWidth - toolbar.clientWidth,
+      groups: [...toolbar.querySelectorAll(".tool-group")].map((group) => {
+        const children = [...group.children].map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { centre: Math.round(rect.top + rect.height / 2), type: element.tagName };
+        });
+        const rect = group.getBoundingClientRect();
+        return {
+          top: Math.round(rect.top),
+          height: Math.round(rect.height),
+          centres: children.map((child) => child.centre),
+          types: children.map((child) => child.type),
+        };
+      }),
+    };
+  });
+  assert.equal(groups.wrap, "wrap");
+  assert.ok(groups.overflow <= 0, `the toolbar overflows by ${groups.overflow} px`);
+  assert.equal(groups.groups.length, 3);
+  for (const group of groups.groups) {
+    assert.ok(
+      Math.max(...group.centres) - Math.min(...group.centres) <= 1,
+      `a group split across lines: ${JSON.stringify(group)}`,
+    );
+    assert.ok(group.height <= 34, `a group grew into a second line: ${JSON.stringify(group)}`);
+  }
+  await imagePanel.setViewport({ width: 1280, height: 900 });
+
   await clickPanel(imagePanel, '[data-tool="arrow"]');
   await imagePanel.waitForFunction(
     () => document.querySelector('[data-tool="arrow"]')?.classList.contains("active"),
@@ -628,6 +725,22 @@ try {
   });
   assert.equal(deleteButton.disabled, false);
   assert.ok(deleteButton.danger && deleteButton.svg, "delete is a red trash button");
+  const rowDelete = await imagePanel.evaluate(() => {
+    const row = document.querySelectorAll("#list .ann-row")[1];
+    const button = row?.querySelector(".del");
+    const rowRect = row?.getBoundingClientRect();
+    const buttonRect = button?.getBoundingClientRect();
+    return {
+      exists: Boolean(button),
+      svg: Boolean(button?.querySelector("svg")),
+      last: row?.lastElementChild === button,
+      rightGap: rowRect && buttonRect ? Math.round(rowRect.right - buttonRect.right) : null,
+    };
+  });
+  assert.ok(rowDelete.exists && rowDelete.svg, "every annotation row has a trash button");
+  assert.ok(rowDelete.last && rowDelete.rightGap <= 8, JSON.stringify(rowDelete));
+
+  // The toolbar delete removes the selection; undo restores it but clears the selection.
   await clickPanel(imagePanel, "#delete");
   await imagePanel.waitForFunction(
     () => document.querySelector("#count")?.textContent === "1",
@@ -635,6 +748,24 @@ try {
   );
   assert.equal(await imagePanel.$eval("#delete", (element) => element.disabled), true);
   assert.equal(await imagePanel.$eval("#undo", (element) => element.disabled), false);
+  await clickPanel(imagePanel, "#undo");
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "2",
+    { timeout: 10000 },
+  );
+
+  // The row-level trash removes that one annotation, not just the selected one.
+  await clickPanel(imagePanel, "#list .ann-row:nth-child(2)");
+  await imagePanel.waitForFunction(
+    () => !document.querySelector("#delete")?.disabled,
+    { timeout: 5000 },
+  );
+  await clickPanel(imagePanel, "#list .ann-row:nth-child(2) .del");
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "1",
+    { timeout: 10000 },
+  );
+  assert.equal(await imagePanel.$eval("#delete", (element) => element.disabled), true);
   await clickPanel(imagePanel, "#undo");
   await imagePanel.waitForFunction(
     () => document.querySelector("#count")?.textContent === "2",

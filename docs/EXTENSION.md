@@ -32,8 +32,8 @@ Store / Edge Add-ons**. Video uses the same control deck in the next phase.
   - user actions (click, input/change, submit, navigation) with stable-ish selectors;
   - manual markers the human drops while recording.
 - **The panel is the deck, the page is the canvas.** The side panel holds the tools, colour,
-  undo/redo, annotation list, note, submit and pause; the overlay owns the frozen screenshot and
-  the drawing. The full RedLine editor remains one click away for advanced work.
+  undo/redo, annotation list, note and submit; the overlay owns the frozen screenshot and the
+  drawing. The full RedLine editor remains one click away for advanced work.
 - **Agent-ready evidence.** `review.md` gets a compact trace summary; `get_feedback` exposes the
   trace metadata and URL; the raw `trace.json` is available as an MCP resource.
 - **Local and private.** The token, video and trace stay on the user's RedLine server. No third
@@ -74,15 +74,23 @@ Clicking the toolbar icon opens the **side panel**; there is no popup
 (`chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`, no `default_popup`).
 
 The empty panel shows the current tab and **Screenshot current tab**; the header gear opens the
-connection form. The first click asks Chrome for access to that page origin (the permission request
+connection form. Next to it are a **theme** toggle (dark/light, shared with the page overlay) and a
+**panel-side** control. Chrome lets an extension read the side-panel side (`sidePanel.getLayout()`)
+but not set it, so that control names the current side and opens Chrome's **Settings →
+Appearance** page, where the side panel position is the browser-level choice. The gear, theme and
+panel-side controls stay usable while a capture is loading and while a submitted round is
+read-only. The first click asks Chrome for access to that page origin (the permission request
 needs the click);
 after it is granted the capture and overlay use that site, and later captures do not prompt. One
 button covers both modes: with a saved server it creates an image review and injects the overlay;
 without one it saves the same screenshot locally and the workspace shows an orange **Not
 connected — this review is saved locally** warning with a Connect link. The panel then shows the
 controls for the round: tools, colour/width, undo/redo/delete, the annotation list, the note,
-**Export review** (local) or **Send to developer** / **Submit to RedLine** (server), pause and
-discard.
+**Export review** (local) or **Send to developer** / **Submit to RedLine** (server), and
+**Discard**. The toolbar groups wrap as units in a narrow panel: the drawing tools stay together,
+colour + slider + `px` label stay together, and undo/redo/delete stay together. Each annotation
+row also has its own red trash button on the right (like the desktop inspector); the toolbar
+delete still acts on the current selection.
 
 The header gear (and the **Connect RedLine** link in the local warning) opens an inline
 server/token/project form in the panel; it does not open the options page in a new tab. A missing configuration opens that form and says so. If
@@ -139,9 +147,11 @@ The screenshot path has two surfaces:
   selection, draft) and composes/submits the PNG. The iframe is an extension origin,
   so page CSS and page scripts cannot read the token or the canvas.
 - `sidepanel.html/.js` is the control deck. It sends `redline-overlay-command` messages
-  (`set-tool`, `set-color`, `set-width`, `undo`, `redo`, `delete`, `clear`, `select`, `submit`,
-  `discard`, `close`, `request-state`) and renders the annotation list from
-  `redline-overlay-state` messages. The overlay publishes its state after every mutation.
+  (`set-tool`, `set-color`, `set-width`, `set-theme`, `undo`, `redo`, `delete`, `clear`, `select`,
+  `submit`, `discard`, `close`, `request-state`) and renders the annotation list from
+  `redline-overlay-state` messages. A row's trash button sends `delete` with the annotation id;
+  the toolbar button sends `delete` for the current selection. The overlay publishes its state
+  after every mutation.
 
 Closing the side panel does not lose the round: the overlay stays in the tab, and reopening the
 panel reconnects to the same annotations, note, tool and colour. If the page is navigated away,
@@ -160,7 +170,7 @@ tab id:
 │ │            canvas (image/frame)          │ │
 │ │                                          │ │
 │ └──────────────────────────────────────────┘ │
-│ [V] [▭] [↗] [✎] [◯]   color  width  [undo]  │
+│ [V] [▭] [↗] [✎] [◯]  [color ▬ 3px]  [↶ ↷ 🗑] │
 │ [▶] 00:02.340 / 00:42.000  [◀ frame] [▶]    │
 │ [trace: errors ▾]  ● 00:01.700 console error │
 │ ──────────────────────────────────────────── │
@@ -431,8 +441,9 @@ Tests: web cross-site → `403`; extension origin + token → `200`; extension o
 
 - **Stage**: a canvas at the screenshot/video's natural pixel size; zoom/pan/fit. For a video,
   the current frame is drawn into the canvas; drawing pauses playback.
-- **Tools**: select/move, rectangle, arrow, pen, ellipse; colour/width; delete; undo/redo.
-  Ellipse, groups, align/distribute and ranges stay in the RedLine tab for v1.
+- **Tools**: select/move, rectangle, arrow, pen, ellipse; colour/width; delete (selected and
+  per row); undo/redo; dark/light theme. Groups, align/distribute and ranges stay in the RedLine
+  tab for v1.
 - **Coordinates**: RedLine annotation schema, canvas pixels relative to the natural media size
   (the same model as `docs/API.md` § Annotation schema). The extension reuses the existing
   `{type,start,end,points,color,width,at}` fields; no new annotation format.
@@ -441,7 +452,8 @@ Tests: web cross-site → `403`; extension origin + token → `200`; extension o
 - **Trace strip**: under the stage, filter `Errors / All / Console / Network / Actions /
   Markers`; each row shows timecode + compact label; click seeks; expanding shows details. The
   default is errors + failed requests, so the panel is useful without noise.
-- **Annotation list**: compact rows with timecode (for video) and note; click seeks/selects.
+- **Annotation list**: compact rows with timecode (for video) and note; click seeks/selects; a
+  row-level red trash button deletes that annotation (with undo).
 - **Note**: one note per selected shape (the RedLine `note` field) plus an overall review note
   (the submission `note`). The full editor's per-shape inspector is still available via **Open in
   RedLine**.
@@ -479,7 +491,7 @@ extension/
     content.js             action events (all frames), Mark
     overlay-host.js        injects and removes the full-viewport annotation iframe
     overlay.html/.js/.css  frozen screenshot + drawing + submit inside the page
-    sidepanel.html/.js     control deck: tools, list, note, submit, pause, video editor
+    sidepanel.html/.js     control deck: tools, list, note, submit, video editor
     popup.html/.js         legacy recording popup, no longer linked from the action
     options.html/.js       server/token/project/redaction
     lib/
@@ -555,8 +567,8 @@ store review time.
   the read-only trace summary, and that `get_feedback` includes `trace`; no extension needed.
 - **Extension e2e**: load the unpacked extension in Chromium, configure the test server, open the
   side panel with an active image capture, wait for the overlay iframe in the target tab, select
-  an arrow in the panel, draw on the page, assert the panel list/number, pause/resume and check
-  the draft, submit and assert the session image + annotation + note. A second round configures a
+  an arrow in the panel, draw on the page, assert the panel list/number, close and reopen the
+  panel to check the draft, submit and assert the session image + annotation + note. A second round configures a
   tester PAT, verifies **Send to developer**, submits to `/request-agent`, then proves a developer
   submit clears the request. Video and local export remain covered by the existing side-panel
   path; the recording-driven capture is a manual checklist until the video phase lands.

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -149,4 +150,16 @@ test("the ZIP fallback is a readable store-only archive", async () => {
   assert.equal(new TextDecoder().decode(files.get("review.md").data), "# Review\n");
   assert.deepEqual([...files.get("frames/0.500.png").data], [1, 2, 3]);
   assert.equal(files.get("review.md").crc, 0xb67b0ceb);
+});
+
+test("the action opens the side panel and exposes the overlay to the page", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8"),
+  );
+  assert.equal(manifest.action.default_popup, undefined);
+  assert.equal(manifest.options_page, undefined, "the side panel owns the connection form");
+  assert.equal(manifest.side_panel.default_path, "src/sidepanel.html");
+  const resources = (manifest.web_accessible_resources || []).flatMap((entry) => entry.resources);
+  assert.ok(resources.includes("src/overlay.html"));
+  assert.ok(resources.includes("src/overlay.js"));
 });

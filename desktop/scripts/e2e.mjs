@@ -807,6 +807,48 @@ const main = async () => {
     `${state[0].start.x} vs ${rect.start.x}`,
   );
 
+  // The toolbar buttons are the same history and selection paths as the keyboard.
+  const redoReady = await page.$eval("#tool-redo", (element) => !element.disabled);
+  await page.click("#tool-redo");
+  const redone = await page.evaluate(() => window.redline.annotations);
+  check(
+    "the redo button restores the moved geometry",
+    redoReady && Math.abs(redone[0].start.x - moved.start.x) < 0.001,
+    `${redone[0].start.x} vs ${moved.start.x}`,
+  );
+  await page.click("#tool-undo");
+  const undone = await page.evaluate(() => window.redline.annotations);
+  check(
+    "the undo button restores the previous geometry",
+    Math.abs(undone[0].start.x - rect.start.x) < 0.001,
+    `${undone[0].start.x} vs ${rect.start.x}`,
+  );
+
+  // The red delete button is armed by a selection and disarmed after removing it.
+  await page.keyboard.press("v");
+  await page.mouse.click(centre.x, centre.y);
+  const deleteReady = await page.$eval("#tool-delete", (element) => ({
+    disabled: element.disabled,
+    danger: element.classList.contains("danger"),
+  }));
+  check(
+    "the delete button is armed for a selected annotation",
+    deleteReady.disabled === false && deleteReady.danger,
+    JSON.stringify(deleteReady),
+  );
+  await page.click("#tool-delete");
+  await page.waitForFunction(() => window.redline.annotations.length === 0, { timeout: 5000 });
+  const deleteAfter = await page.$eval("#tool-delete", (element) => element.disabled);
+  check("the delete button removes the selection and disarms", deleteAfter, String(deleteAfter));
+  await page.click("#tool-undo");
+  await page.waitForFunction(() => window.redline.annotations.length === 1, { timeout: 5000 });
+  const deleteRestored = await page.evaluate(() => window.redline.annotations[0]?.type);
+  check(
+    "undo restores the annotation removed by the delete button",
+    deleteRestored === "rect",
+    deleteRestored,
+  );
+
   // ---- the note lives in the panel, attached to the shape
   await page.keyboard.press("v");
   await page.mouse.click(centre.x, centre.y);
@@ -2650,6 +2692,15 @@ const main = async () => {
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
   check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
+  // The presence fetch is asynchronous; reading the chip while it still says "Checking agent…"
+  // made this check flake (2026-11-10). Wait for the first real answer, then assert it.
+  await page.waitForFunction(
+    () => {
+      const label = document.querySelector("#agent-status .agent-label")?.textContent || "";
+      return label.length > 0 && !label.includes("Checking");
+    },
+    { timeout: 15000 },
+  );
   const listAgent = await page.evaluate(() => ({
     chip: Boolean(document.querySelector("#agent-status")),
     online: document.querySelector("#agent-status")?.classList.contains("online") || false,
@@ -4275,8 +4326,8 @@ const main = async () => {
     button: document.querySelector("#submit")?.textContent.trim(),
     disabled: Boolean(document.querySelector("#submit")?.disabled),
   }));
-  check("a tester gets Request agent review on their own task",
-    testerEditor.role === "tester" && testerEditor.button === "Request agent review"
+  check("a tester gets Send to developer on their own task",
+    testerEditor.role === "tester" && testerEditor.button === "Send to developer"
       && !testerEditor.disabled,
     JSON.stringify(testerEditor));
 
@@ -4289,7 +4340,7 @@ const main = async () => {
     () => Boolean(document.querySelector('.session[aria-current="true"] .badge.ready')),
     { timeout: 5000 },
   );
-  // The transient "Request sent ✓" is replaced by the final label after 1.4 s.
+  // The transient "Sent to developer ✓" is replaced by the final label after 1.4 s.
   await testerPage.waitForFunction(
     () => document.querySelector("#submit")?.textContent.trim() === "Update request",
     { timeout: 3000 },
@@ -4300,10 +4351,10 @@ const main = async () => {
     button: document.querySelector("#submit")?.textContent.trim(),
     badge: document.querySelector(".session[aria-current=\"true\"] .badge.ready")?.textContent.trim() || "",
   }));
-  check("the tester request stays open and is marked ready for agent",
+  check("the tester request stays open and is marked waiting for developer",
     testerRequested.status === "open" && testerRequested.requested
       && testerRequested.button === "Update request"
-      && testerRequested.badge === "ready for agent",
+      && testerRequested.badge === "waiting for developer",
     JSON.stringify(testerRequested));
 
   // Discussion: the tester comments on their own task through the inspector.

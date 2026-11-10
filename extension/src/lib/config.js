@@ -1,4 +1,5 @@
 const KEY = "redlineConfig";
+const PROJECT_MEMORY_KEY = "redlineProjectMemory";
 
 export const DEFAULT_CONFIG = Object.freeze({
   serverUrl: "https://redline.ibolya.cz",
@@ -46,4 +47,47 @@ export async function ensurePermission(serverUrl) {
 
 export function isConfigured(config) {
   return Boolean(config && config.serverUrl && config.token);
+}
+
+/* The last destination is a per-page choice, not a global connection setting. The page origin
+   wins; a new origin falls back to the project chosen last anywhere. The Inbox is an explicit
+   empty string, so a human who chose Inbox is not silently moved back to an old project. */
+function pageOrigin(pageUrl) {
+  try {
+    const url = new URL(String(pageUrl || ""));
+    return /^https?:$/.test(url.protocol) ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+export async function projectForCapture(pageUrl) {
+  const stored = await chrome.storage.local.get(PROJECT_MEMORY_KEY);
+  const memory = stored[PROJECT_MEMORY_KEY];
+  if (!memory || typeof memory !== "object") return null;
+  const byOrigin = memory.byOrigin && typeof memory.byOrigin === "object" ? memory.byOrigin : {};
+  const origin = pageOrigin(pageUrl);
+  if (origin && Object.prototype.hasOwnProperty.call(byOrigin, origin)) {
+    return typeof byOrigin[origin] === "string" ? byOrigin[origin] : "";
+  }
+  return typeof memory.last === "string" ? memory.last : null;
+}
+
+export async function rememberProject(pageUrl, project) {
+  const stored = await chrome.storage.local.get(PROJECT_MEMORY_KEY);
+  const previous = stored[PROJECT_MEMORY_KEY];
+  const memory = previous && typeof previous === "object" ? { ...previous } : {};
+  const byOrigin =
+    memory.byOrigin && typeof memory.byOrigin === "object" ? { ...memory.byOrigin } : {};
+  const slug = String(project || "").trim();
+  const origin = pageOrigin(pageUrl);
+  if (origin) {
+    // Re-insert so the most recently used origins are the ones kept when the map is capped.
+    delete byOrigin[origin];
+    byOrigin[origin] = slug;
+  }
+  const entries = Object.entries(byOrigin);
+  memory.byOrigin = Object.fromEntries(entries.slice(-50));
+  memory.last = slug;
+  await chrome.storage.local.set({ [PROJECT_MEMORY_KEY]: memory });
 }

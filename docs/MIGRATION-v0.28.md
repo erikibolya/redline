@@ -97,7 +97,7 @@ Then check in the UI:
 
 - the owner signs in and sees the old reviews,
 - a member sees only the projects assigned to them,
-- a tester gets **Request agent review**, a developer gets **Send to agent**,
+- a tester gets **Send to developer**, a developer gets **Send to agent**,
 - the header bell shows notifications and the **Audit log** contains `owner.bootstrap`,
   `user.create`, `membership.update`, `auth.login` and `token.create`,
 - the bridge is **connected** (header chip) and can pick up one test review,

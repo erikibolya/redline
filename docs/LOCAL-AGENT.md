@@ -103,7 +103,11 @@ The bridge runs `REDLINE_AGENT_WORKERS` claim workers (default 4) and asks the s
 The server's **Agent settings** caps actual parallelism (default 2 global, 1 per project). Each
 claim gets a git worktree under `<REDLINE_AGENT_REPO_ROOT>/.redline-worktrees/`; the OpenCode
 server must see that directory just like the repositories themselves. Worktrees on resolved
-rounds are removed when clean; dirty ones are left for inspection.
+rounds are removed when clean; dirty ones are left for inspection. If a round was resolved outside
+the bridge or the agent stopped before releasing it, a clean merged worktree can remain:
+`redline-agent prune` is a dry run and `redline-agent prune --yes` removes only clean worktrees
+under `.redline-worktrees/` whose branch is fully merged into the base branch. Branches are never
+deleted; dirty or unmerged worktrees are left alone.
 
 ## What RedLine does *not* do
 

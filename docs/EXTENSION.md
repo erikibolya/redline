@@ -1,33 +1,39 @@
 # Browser capture extension — design and delivery plan
 
-Status: **Phases 1–6 implemented** (2026-11-03). Screenshots and recorded flows are annotated in
-the side panel; v0.3.0 adds offline export (folder or ZIP) with no server or token. The store ZIP,
-privacy policy, listing copy and an extension e2e CI job are ready. Publishing is the remaining
-owner action.
+Status: **Phases 1–7 implemented** (2026-11-07). v0.4.0 moves screenshot annotation onto the
+page: the action icon opens the side panel as a control deck, the current viewport freezes under
+a full-screen annotation overlay, and the overlay closes after submit. v0.3.0 added offline
+export (folder or ZIP) with no server or token. Video flow moves into the same control deck in
+the next phase; the existing side-panel video editor remains available for video captures. The
+store ZIP, privacy policy, listing copy and an extension e2e CI job are ready. Publishing is the
+remaining owner action.
 
 A Chromium extension that captures a screenshot or records a flow from the current tab, collects
-the console and network evidence, and lets the human annotate the capture in a side panel. The
-result can be submitted to a RedLine server as a normal review, or exported as a review folder
-for an AI assistant. The agent reads the annotations plus a structured trace.
+the console and network evidence, and lets the human annotate the capture. For screenshots the
+page itself is the canvas: the side panel owns the controls, the page stays frozen underneath the
+annotation overlay, and submitting returns the page to live. The result can be submitted to a
+RedLine server as a normal review, or exported as a review folder for an AI assistant. The agent
+reads the annotations plus a structured trace.
 
-Decisions from the product owner (2026-11-01): **Chrome + Edge first**, annotation **in the
-extension side panel**, active-tab capture, console/network **metadata + actions**, 5 min / 250 MB,
-and distribution through the **Chrome Web Store / Edge Add-ons**.
+Decisions from the product owner (2026-11-07): **Chrome + Edge first**, screenshot annotation
+**directly on the frozen page with the side panel as the control deck**, active-tab capture,
+console/network **metadata + actions**, 5 min / 250 MB, and distribution through the **Chrome Web
+Store / Edge Add-ons**. Video uses the same control deck in the next phase.
 
 ## 1. Goals
 
 - **One click from the page to a RedLine review.** The extension knows the current tab, the
   RedLine server and the project; the human does not paste URLs or files.
-- **Screenshot review.** Capture the visible tab (and later full page), open it in the side-panel
-  editor, annotate, and submit.
+- **Screenshot review.** Capture the visible viewport, freeze it under a full-screen overlay,
+  annotate directly on the page while the controls stay in the side panel, and submit.
 - **Flow review.** Record the tab as WebM while collecting:
   - console messages, uncaught exceptions and browser log entries;
   - network requests and responses (method, URL, status, timing, resource type, failure);
   - user actions (click, input/change, submit, navigation) with stable-ish selectors;
   - manual markers the human drops while recording.
-- **Annotate in the side panel.** A compact canvas editor over the screenshot or video frame,
-  with a timeline and the trace events, then **Submit to RedLine** (the same API the web editor
-  uses). The full RedLine editor remains one click away for advanced work.
+- **The panel is the deck, the page is the canvas.** The side panel holds the tools, colour,
+  undo/redo, annotation list, note and submit; the overlay owns the frozen screenshot and the
+  drawing. The full RedLine editor remains one click away for advanced work.
 - **Agent-ready evidence.** `review.md` gets a compact trace summary; `get_feedback` exposes the
   trace metadata and URL; the raw `trace.json` is available as an MCP resource.
 - **Local and private.** The token, video and trace stay on the user's RedLine server. No third
@@ -49,34 +55,64 @@ and distribution through the **Chrome Web Store / Edge Add-ons**.
 
 ### 3.1 Connect
 
-The options page stores one RedLine server profile:
+The connection form in the side panel stores one RedLine server profile:
 
 | Field | Meaning |
 |---|---|
 | Server URL | `https://redline.ibolya.cz` or `http://127.0.0.1:8788` |
 | Token | a personal access token (`rl_pat_…`, created on `/tokens`; the legacy server token still works); stored in `chrome.storage.local`, never synced |
-| Project | optional; loaded from `GET /api/projects` |
-| Branch | optional; the server derives `feat/<title-slug>-<id-tail>` when empty |
 | Redaction | header/query patterns; request bodies off by default |
 
-**Test connection** calls `/health` and `/api/sessions`; a `401` opens the token field with a
+Project and branch are **not connection settings**. They are chosen on the capture panel after the
+screenshot, where they describe that round: the project select is filled from
+`GET /api/projects`, and the branch starts as the server-derived `feat/<title-slug>-<id-tail>`.
+The last project is remembered per page origin (and as a global fallback), so the next capture on
+that page is filed there and preselects it. Changing the project moves the open session
+(`PUT /api/sessions/{id}/project`); changing the branch renames it
+(`PUT /api/sessions/{id}/branch`). Both controls disable once the round is submitted.
+
+**Test connection** calls `/health` and `/api/projects`; a `401` opens the token field with a
 hint. The token is never rendered unmasked after saving; **Replace** and **Forget** are explicit.
 
-### 3.2 Popup
+### 3.2 Action and control panel
 
-The toolbar popup shows the current tab's title/URL and four actions:
+Clicking the toolbar icon opens the **side panel**; there is no popup
+(`chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`, no `default_popup`).
 
-- **Screenshot & annotate** — visible-tab capture; creates an image review and opens it in the
-  **side-panel editor**.
-- **Record flow** — asks for the capture options (console, network, actions), shows a countdown,
-  then records. While recording the popup shows elapsed time and a **Mark** button.
-- **Stop & review** — stops recording, shows the draft form (title, note, project, branch,
-  capture counts, redaction summary), then opens the side-panel editor on the video.
-- **Open RedLine** — the server dashboard.
+The empty panel shows the current tab and **Screenshot current tab**; the header gear opens the
+connection form, with a **theme** toggle (dark/light, shared with the page overlay) beside it. The
+panel deliberately uses the desktop editor's design tokens and component shapes: the same
+panel/panel-2/panel-3 surfaces, border pair, blue accent, transparent toolbar tools, solid-red
+destructive buttons and annotation-row treatment. The gear and theme stay usable while a capture
+is loading and while a submitted round is read-only. The first click asks Chrome for access to that page origin (the permission request
+needs the click);
+after it is granted the capture and overlay use that site, and later captures do not prompt. One
+button covers both modes: with a saved server it creates an image review and injects the overlay;
+without one it saves the same screenshot locally and the workspace shows an orange **Not
+connected — this review is saved locally** warning with a Connect link. The panel then shows the
+controls for the round: tools, colour/width, undo/redo/delete, the annotation list, the
+destination (project + branch), the note, **Export review** (local) or **Send to developer** /
+**Submit to RedLine** (server), and **Discard**. The toolbar groups wrap as units in a narrow panel: the drawing tools stay together,
+colour + slider + `px` label stay together, and undo/redo/delete stay together. Each annotation
+row also has its own red trash button on the right (like the desktop inspector); the toolbar
+delete still acts on the current selection.
 
-The popup may be closed while recording; the toolbar badge shows `REC` and the elapsed minute.
-Keyboard shortcuts: `Alt+Shift+S` screenshot, `Alt+Shift+R` start/stop recording,
-`Alt+Shift+M` mark the current moment.
+The header gear (and the **Connect RedLine** link in the local warning) opens an inline
+server/token form in the panel; it does not open a separate page. A missing configuration opens
+that form and says so. Project and branch stay out of it and appear only once
+there is a capture to annotate. If
+the overlay cannot be injected because the extension has no access to that page, the workspace
+offers **Allow access to this page**, requests the page origin and retries; this also covers a
+local capture on a site that was not opened through the action icon. The
+empty panel also names the active tab; on `chrome://` or `chrome-extension://` pages it disables
+**Screenshot current tab** and asks the human to switch to the web page tab. If the tab was not
+opened through the action icon, the activeTab error offers **Allow capture on this site**: that
+requests the page origin, retries the capture (server or offline) and avoids the icon dance on
+later visits. Clicking the icon on the page tab still works without granting a site permission.
+
+Video flow moves into this panel in the next phase. The existing side-panel video editor remains
+in the code and is covered by the extension e2e; the old popup file is no longer reachable from
+the action.
 
 ### 3.3 Draft and upload
 
@@ -95,9 +131,10 @@ Project [ActiUnit / Au.Net]  Branch [feat/checkout-coupon]
 
 The upload uses `POST /api/sessions/video` with `video`, `poster`, `trace`, the form fields and
 the media metadata. The session is created **open**; the side panel loads it for annotation. The
-extension does **not** wake the agent until the human presses **Submit to RedLine**, which uses
-the same annotation API as the web editor. **Open in RedLine** is always available for advanced
-editing.
+action is role-aware: an owner/developer presses **Submit to RedLine** (`/annotations`) and wakes
+the agent; a **tester** presses **Send to developer** (`/request-agent`), which saves the
+round, leaves the task open and queues it for a developer to check and send. A tester can update
+the request from the same panel. **Open in RedLine** is always available for advanced editing.
 
 The Phase 2 screenshot path is shorter: the popup creates the image session immediately with the
 tab title and the configured project, then opens the side panel where the note is edited. An
@@ -108,9 +145,30 @@ The Phase 3 recording path also uses the tab title and configured project; the n
 RedLine until the phase-4 video panel lands. The draft form above is the target UX, not a claim
 that every field is editable today.
 
-### 3.4 Side-panel annotator
+### 3.4 Overlay annotator and side-panel controls
 
-A compact editor, not a copy of the full RedLine shell:
+The screenshot path has two surfaces:
+
+- `overlay.html/.js` is a full-viewport iframe injected into the captured tab by
+  `overlay-host.js`. It draws the frozen screenshot, owns the annotation state (tools, undo,
+  selection, draft) and composes/submits the PNG. The iframe is an extension origin,
+  so page CSS and page scripts cannot read the token or the canvas.
+- `sidepanel.html/.js` is the control deck. It sends `redline-overlay-command` messages
+  (`set-tool`, `set-color`, `set-width`, `set-theme`, `undo`, `redo`, `delete`, `clear`, `select`,
+  `submit`, `discard`, `close`, `request-state`) and renders the annotation list from
+  `redline-overlay-state` messages. A row's trash button sends `delete` with the annotation id;
+  the toolbar button sends `delete` for the current selection. The overlay publishes its state
+  after every mutation.
+
+Closing the side panel does not lose the round: the overlay stays in the tab, and reopening the
+panel reconnects to the same annotations, note, tool and colour. If the page is navigated away,
+the draft in `chrome.storage.session` restores on the next open. Submitting or exporting closes
+the overlay; **Discard** is the only destructive action. The overlay has no close or pause button
+of its own. The background hides the page scrollbar during the screenshot and restores it, so the
+frozen image does not contain a scrollbar.
+
+The old compact editor is still used for local video and legacy local image captures without a
+tab id:
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -119,7 +177,7 @@ A compact editor, not a copy of the full RedLine shell:
 │ │            canvas (image/frame)          │ │
 │ │                                          │ │
 │ └──────────────────────────────────────────┘ │
-│ [V] [▭] [↗] [✎] [T]   color  width  [undo]  │
+│ [V] [▭] [↗] [✎] [◯]  [color ▬ 3px]  [↶ ↷ 🗑] │
 │ [▶] 00:02.340 / 00:42.000  [◀ frame] [▶]    │
 │ [trace: errors ▾]  ● 00:01.700 console error │
 │ ──────────────────────────────────────────── │
@@ -129,7 +187,7 @@ A compact editor, not a copy of the full RedLine shell:
 └──────────────────────────────────────────────┘
 ```
 
-- Tools: select/move, rectangle, arrow, pen, text note. Colour/width; undo/redo; delete.
+- Tools: select/move, rectangle, arrow, pen, ellipse. Colour/width slider; undo/redo; red delete armed by a selection.
   Ellipse, groups, align/distribute and ranges (`until`) stay in the RedLine tab for v1.
 - Screenshot canvas: natural pixel coordinates, zoom/pan, fit; compose the annotated PNG on
   submit.
@@ -139,8 +197,10 @@ A compact editor, not a copy of the full RedLine shell:
 - Trace strip: console errors, failed requests and actions; clicking seeks. The full trace panel
   is a list under the stage, filterable by kind.
 - Submit: image sessions use the existing JSON endpoint with `png`; video sessions use the
-  multipart submit with `annotations`, `png` (contact sheet) and `frames`. After a successful
-  submit, the panel says the review is queued for the agent and offers **Open in RedLine**.
+  multipart submit with `annotations`, `png` (contact sheet) and `frames`. A tester uses the same
+  payload against `request-agent` instead; the panel says it is saved for a developer and keeps
+  the task editable (**Update request**). A developer/owner submit says the review is queued for
+  the agent. Both offer **Open in RedLine**.
 - Drafts: keep an unsent annotation set in `chrome.storage.session` keyed by session id, so a
   service-worker restart or panel close does not lose it. Clear on submit/discard.
 
@@ -148,8 +208,8 @@ A compact editor, not a copy of the full RedLine shell:
 
 ```
 ┌────────────────────────────── Chrome / Edge ──────────────────────────────┐
-│ popup / options / side-panel annotator (plain HTML+JS)                    │
-│        │ chrome.runtime messages                                           │
+│ options / side-panel control deck / overlay iframe (plain HTML+JS)        │
+│        │ chrome.runtime messages        │ chrome.scripting + overlay-host    │
 │ background service worker ── chrome.debugger ── CDP: Network, Runtime, Log  │
 │        │                         │                                         │
 │        │                         └─ console, exceptions, requests          │
@@ -161,7 +221,8 @@ A compact editor, not a copy of the full RedLine shell:
                                     ▼
                          RedLine server (Rust/axum)
              POST /api/sessions              POST /api/sessions/video
-             POST /api/sessions/<id>/annotations (image/video submit)
+             POST /api/sessions/<id>/annotations (developer/owner submit)
+             POST /api/sessions/<id>/request-agent (tester request)
              GET  /sessions/<id>/trace       GET /api/sessions/<id> (meta.trace)
                                     │
                                     ▼
@@ -171,7 +232,8 @@ A compact editor, not a copy of the full RedLine shell:
 
 The extension is a **capture client plus a compact annotator**. RedLine remains the source of
 truth: it owns the session store, the full editor, the review status and the agent queue. The
-side panel is a focused editing surface; advanced work is one click away in the RedLine tab.
+side panel is the control deck, the frozen page is the screenshot canvas, and advanced work is
+one click away in the RedLine tab.
 
 ## 5. Capture pipeline
 
@@ -386,8 +448,9 @@ Tests: web cross-site → `403`; extension origin + token → `200`; extension o
 
 - **Stage**: a canvas at the screenshot/video's natural pixel size; zoom/pan/fit. For a video,
   the current frame is drawn into the canvas; drawing pauses playback.
-- **Tools**: select/move, rectangle, arrow, pen, text note; colour/width; delete; undo/redo.
-  Ellipse, groups, align/distribute and ranges stay in the RedLine tab for v1.
+- **Tools**: select/move, rectangle, arrow, pen, ellipse; colour/width; delete (selected and
+  per row); undo/redo; dark/light theme. The palette and button/row styling match the desktop
+  editor. Groups, align/distribute and ranges stay in the RedLine tab for v1.
 - **Coordinates**: RedLine annotation schema, canvas pixels relative to the natural media size
   (the same model as `docs/API.md` § Annotation schema). The extension reuses the existing
   `{type,start,end,points,color,width,at}` fields; no new annotation format.
@@ -396,7 +459,11 @@ Tests: web cross-site → `403`; extension origin + token → `200`; extension o
 - **Trace strip**: under the stage, filter `Errors / All / Console / Network / Actions /
   Markers`; each row shows timecode + compact label; click seeks; expanding shows details. The
   default is errors + failed requests, so the panel is useful without noise.
-- **Annotation list**: compact rows with timecode (for video) and note; click seeks/selects.
+- **Annotation list**: compact rows with timecode (for video) and note; click seeks/selects; a
+  row-level red trash button deletes that annotation (with undo).
+- **Destination**: the project select and branch field below the list. The project comes from the
+  page's remembered choice; the branch starts as the session's generated branch. Changes update
+  the session immediately and are locked while submitted.
 - **Note**: one note per selected shape (the RedLine `note` field) plus an overall review note
   (the submission `note`). The full editor's per-shape inspector is still available via **Open in
   RedLine**.
@@ -431,10 +498,11 @@ extension/
   src/
     background.js          service worker: state, debugger, upload orchestration
     offscreen.html/.js     tabCapture + MediaRecorder + poster
-    content.js             action events (all frames), overlay, Mark
-    sidepanel.html/.js     annotator shell, tools, timeline, trace, submit
-    popup.html/.js         connect status, screenshot, record, draft
-    options.html/.js       server/token/project/redaction
+    content.js             action events (all frames), Mark
+    overlay-host.js        injects and removes the full-viewport annotation iframe
+    overlay.html/.js/.css  frozen screenshot + drawing + submit inside the page
+    sidepanel.html/.js     control deck: tools, list, note, submit, video editor
+    popup.html/.js         legacy recording popup, no longer linked from the action
     lib/
       api.js               auth fetch, multipart, project list, submit
       editor.js            canvas engine, tools, annotations, undo
@@ -503,22 +571,25 @@ store review time.
   denied; existing video tests remain green.
 - **Extension unit (`node --test`)**: trace normalization, redaction (headers/query/body),
   selector generation, cap/truncation, duration formatting, canvas annotation serialization,
-  undo/redo and draft invalidation.
+  undo/redo, draft invalidation, the destination PUTs and the per-page project memory.
 - **Browser e2e (RedLine)**: seed a session with a small trace; assert the rail `flow` chip,
   the read-only trace summary, and that `get_feedback` includes `trace`; no extension needed.
-- **Extension e2e**: load the unpacked extension in headful Chromium (Xvfb in the e2e image or a
-  separate job), open a local page with a console error and a failing fetch, record 2–3 s, upload
-  to the test server, open the side panel, draw a rectangle, submit, and assert the session has
-  video + trace + annotation + the expected `get_feedback` fields. If browser automation of
-  `tabCapture` proves unreliable, keep the unit tests and a documented manual checklist as the
-  gate, and add the automation as a follow-up — do not claim coverage that does not run.
+- **Extension e2e**: load the unpacked extension in Chromium, configure the test server, open the
+  side panel with an active image capture, wait for the overlay iframe in the target tab, select
+  an arrow in the panel, draw on the page, assert the panel list/number, close and reopen the
+  panel to check the draft, move the round to a project, rename its branch, submit and assert the
+  session image + annotation + note; a second real capture proves the remembered project is used.
+  A second round configures a tester PAT, verifies **Send to developer**, submits to
+  `/request-agent`, then proves a developer submit clears the request. Video and local export remain covered by the existing side-panel
+  path; the recording-driven capture is a manual checklist until the video phase lands.
 - **Manual**: install the store build in Chrome and Edge; capture a real app flow; verify
   console/network redaction; annotate and submit; verify the agent sees the trace.
 
 ## 12. Risks and mitigations
 
-- **`debugger` warning** is scary. Explain it in onboarding; attach only while recording; show a
-  visible REC overlay; detach on stop. Content-script-only mode is a later fallback, not v1.
+- **`debugger` warning** is scary. Explain it in onboarding; attach only while recording or for
+  the short screenshot fallback; show a visible REC overlay; detach on stop. Content-script-only
+  mode is a later fallback, not v1.
 - **Secrets in console/network.** Default to metadata, redact headers/query, bodies opt-in and
   capped; show a pre-upload summary. The video itself can still contain secrets; the user sees
   the draft and can discard.
@@ -551,7 +622,7 @@ Taken after the review:
 
 | Decision | Choice |
 |---|---|
-| Annotator tools | v1 core: select/move, rectangle, arrow, pen, text note, timecoded point annotations, undo/redo, draft, submit; advanced tools stay in RedLine |
+| Annotator tools | v1 core: select/move, rectangle, arrow, pen, ellipse, timecoded point annotations, undo/redo, draft, submit; advanced tools stay in RedLine |
 | Project/branch | choose a project in the popup; leave branch empty so the server derives it; allow an override |
 
 Still open:
@@ -580,11 +651,11 @@ Phase 1 (server trace foundation) is on `feat/browser-extension`:
 Phase 2 (options/popup, screenshot capture, side-panel image editor) is implemented on
 `feat/extension-panel`:
 
-- MV3 options page with server/token/project/branch, origin-scoped host permission request and a
+- MV3 connection form with server/token, origin-scoped host permission request and a
   connection test; token in `chrome.storage.local` only.
 - Popup capture flow: visible-tab PNG, create an image session, open the side panel, fall back to
   a normal review tab when the side panel is unavailable.
-- Side panel: select/move, rectangle, arrow, pen, text note, colour/width, undo/redo, delete,
+- Side panel: select/move, rectangle, arrow, pen, ellipse, colour/width, undo/redo, delete,
   clear, numbered list, per-session draft, annotated PNG composition and submit.
 - Submitted reviews open read-only; **Open in RedLine** remains available.
 - Twenty-two extension unit tests (`node --test`) for annotation geometry, the API request shape,
@@ -595,8 +666,9 @@ Phase 3 (tab recording) is implemented on `feat/extension-recording`:
 
 - `tabCapture` + MediaRecorder in an offscreen document; the video Blob never crosses the
   extension message channel.
-- `chrome.debugger` attaches only while recording and collects console/exceptions, network
-  metadata and navigation; a content script (`all_frames`) records click/change/submit actions.
+- `chrome.debugger` attaches while recording for console/exceptions, network metadata and
+  navigation, and briefly for a screenshot fallback when `activeTab` is unavailable; a content
+  script (`all_frames`) records click/change/submit actions.
 - URL/text redaction, a 5,000-event cap and `chrome.storage.session` persistence for a
   service-worker restart.
 - Stop builds the poster, uploads multipart video + trace, stores the active capture and opens the

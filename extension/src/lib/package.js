@@ -80,10 +80,11 @@ function annotationLine(annotation, index) {
       start.y || 0,
     )}) → (${Math.round(end.x || 0)}, ${Math.round(end.y || 0)})`;
   }
-  if (annotation.type === "rect") {
+  if (annotation.type === "rect" || annotation.type === "ellipse") {
     const start = annotation.start || {};
     const end = annotation.end || {};
-    return `${index}. **Rectangle**${at} — (${Math.round(start.x || 0)}, ${Math.round(
+    const label = annotation.type === "ellipse" ? "Ellipse" : "Rectangle";
+    return `${index}. **${label}**${at} — (${Math.round(start.x || 0)}, ${Math.round(
       start.y || 0,
     )}) → (${Math.round(end.x || 0)}, ${Math.round(end.y || 0)})`;
   }

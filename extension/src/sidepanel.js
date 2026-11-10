@@ -1,5 +1,13 @@
 import { RedLineApi } from "./lib/api.js";
-import { isConfigured, loadConfig } from "./lib/config.js";
+import {
+  ensurePermission,
+  isConfigured,
+  loadConfig,
+  normalizeServerUrl,
+  originPattern,
+  rememberProject,
+  saveConfig,
+} from "./lib/config.js";
 import { deleteCapture, getCapture, putCapture } from "./lib/local-store.js";
 import {
   AI_PROMPT,
@@ -20,14 +28,20 @@ import {
   moveAnnotation,
   TOOLS,
 } from "./lib/annotations.js";
+import { THEME_ICONS, initTheme, toggleTheme, watchTheme } from "./lib/theme.js";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
 const ctx = canvas.getContext("2d");
-const textEditor = $("text-editor");
 const noteInput = $("note");
 const statusEl = $("status");
+const emptyStatusEl = $("empty-status");
+const captureContextEl = $("capture-context");
+const settingsStatusEl = $("settings-status");
 const video = $("video");
+let settingsReturn = null;
+
+initTheme();
 
 const state = {
   config: null,
@@ -55,45 +69,570 @@ const state = {
   drawing: null,
   preview: null,
   drag: null,
-  textPoint: null,
   readOnly: false,
   submitted: false,
+  role: "owner",
+  requested: false,
   local: false,
   localData: null,
   saveTimer: null,
+  overlayMode: false,
+  overlayActive: false,
+  overlayTabId: null,
+  undoCount: 0,
+  redoCount: 0,
+  submitting: false,
+  busy: false,
+  destinationBusy: false,
+  captureAllowed: false,
+  activeTabUrl: "",
+  captureRetry: null,
+  overlayNeedsPermission: false,
 };
 
 function setStatus(text, kind = "") {
   statusEl.textContent = text;
   statusEl.className = `status ${kind}`.trim();
+  // The empty view has its own status line; without this a failed capture looked like a dead
+  // button (2026-11-07).
+  if (!$("empty").hidden) {
+    emptyStatusEl.textContent = text;
+    emptyStatusEl.className = `status ${kind}`.trim();
+  }
+}
+
+function setSettingsStatus(text, kind = "") {
+  settingsStatusEl.textContent = text;
+  settingsStatusEl.className = `status ${kind}`.trim();
+}
+
+function renderThemeButton() {
+  const button = $("theme");
+  if (!button) return;
+  const theme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  button.innerHTML = THEME_ICONS[theme === "light" ? "light" : "dark"];
+  button.title = theme === "light" ? "Switch to dark theme" : "Switch to light theme";
+  button.setAttribute("aria-label", button.title);
+}
+
+async function openSettings() {
+  if (!$("settings-panel").hidden) return;
+  settingsReturn = {
+    empty: !$("empty").hidden,
+    workspace: !$("workspace").hidden,
+  };
+  $("empty").hidden = true;
+  $("workspace").hidden = true;
+  $("settings-panel").hidden = false;
+  const config = await loadConfig();
+  $("settings-server").value = config.serverUrl || "";
+  $("settings-token").value = config.token || "";
+  setSettingsStatus("");
+  $("settings-server").focus();
+}
+
+function closeSettings() {
+  if ($("settings-panel").hidden) return;
+  $("settings-panel").hidden = true;
+  const back = settingsReturn || { empty: true, workspace: false };
+  settingsReturn = null;
+  $("empty").hidden = !back.empty;
+  $("workspace").hidden = !back.workspace;
+  if (back.workspace) {
+    render();
+    return;
+  }
+}
+
+function projectValue(project) {
+  const value = String(project || "").trim();
+  return value === "inbox" ? "" : value;
+}
+
+function seedProjectOptions(current) {
+  const select = $("project");
+  if (!select) return;
+  const value = projectValue(current);
+  select.innerHTML = '<option value="">Inbox</option>';
+  if (value) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    select.append(option);
+  }
+  select.value = value;
+}
+
+function setDestinationHint(text, reason = "") {
+  const hint = $("destination-hint");
+  if (!hint) return;
+  hint.textContent = text || "";
+  hint.hidden = !text;
+  if (text) hint.dataset.reason = reason;
+  else delete hint.dataset.reason;
+}
+
+function destinationLocked() {
+  return Boolean(
+    state.busy ||
+    state.destinationBusy ||
+    state.readOnly ||
+    state.submitting ||
+    state.role === "tester" ||
+    state.role === "viewer"
+  );
+}
+
+/// The capture panel owns the destination now. The project select is prefilled from the session
+/// (which the background created with the page's remembered project); changing it moves the open
+/// round, and the choice becomes the default for this page.
+function syncDestination() {
+  const destination = $("destination");
+  if (!destination) return;
+  const visible = Boolean(state.capture && state.api && !state.local && state.meta);
+  destination.hidden = !visible;
+  if (!visible) return;
+  const currentProject = projectValue(state.meta?.project);
+  const currentBranch = state.meta?.branch || "";
+  const select = $("project");
+  const branch = $("branch");
+  if (document.activeElement !== select) select.value = currentProject;
+  if (document.activeElement !== branch) branch.value = currentBranch;
+  if (currentProject && ![...select.options].some((option) => option.value === currentProject)) {
+    const option = document.createElement("option");
+    option.value = currentProject;
+    option.textContent = currentProject;
+    select.append(option);
+    select.value = currentProject;
+  }
+  const locked = destinationLocked();
+  select.disabled = locked;
+  branch.disabled = locked;
+  destination.dataset.project = currentProject;
+  destination.dataset.branch = currentBranch;
+  if (locked) {
+    const why = state.role === "tester" || state.role === "viewer"
+      ? "Your role cannot change this task's project or branch."
+      : state.readOnly
+        ? "This round is submitted; the project and branch are locked."
+        : "Saving the destination…";
+    setDestinationHint(why, "lock");
+    select.title = why;
+    branch.title = why;
+  } else {
+    select.title = "Choose the project this review belongs to.";
+    branch.title = "Rename the feature branch for this review.";
+    if ($("destination-hint")?.dataset.reason === "lock") setDestinationHint("");
+  }
+}
+
+async function loadWorkspaceProjects() {
+  if (state.local || !state.api || !state.meta) return;
+  try {
+    const data = await state.api.projects();
+    const select = $("project");
+    select.innerHTML = '<option value="">Inbox</option>';
+    for (const project of data.projects || []) {
+      const value = projectValue(project.slug);
+      // The server also exposes the virtual Inbox project; the local empty option represents it.
+      if ([...select.options].some((option) => option.value === value)) continue;
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = project.name || project.slug;
+      select.append(option);
+    }
+    // The human may have moved the round while the list was in flight; use the live value.
+    const current = projectValue(state.meta.project);
+    if (current && ![...select.options].some((option) => option.value === current)) {
+      const option = document.createElement("option");
+      option.value = current;
+      option.textContent = current;
+      select.append(option);
+    }
+    select.value = current || "";
+    if ($("destination-hint")?.dataset.reason === "error") setDestinationHint("");
+  } catch (error) {
+    setDestinationHint(`Projects could not be loaded: ${error.message || String(error)}`, "error");
+  }
+}
+
+async function updateProject(project) {
+  if (!state.meta || !state.api || destinationLocked()) return;
+  const select = $("project");
+  const previous = projectValue(state.meta.project);
+  const next = projectValue(project);
+  state.destinationBusy = true;
+  syncDestination();
+  try {
+    const result = await state.api.setSessionProject(state.meta.id, next);
+    state.meta = { ...state.meta, ...(result.meta || {}) };
+    await rememberProject(state.meta.url || state.capture?.url || "", next).catch(() => {});
+    select.value = projectValue(state.meta.project);
+    setStatus(next ? `Project set to ${next}.` : "Project set to Inbox.", "ok");
+  } catch (error) {
+    select.value = previous;
+    setStatus(error.message || String(error), "err");
+  } finally {
+    state.destinationBusy = false;
+    syncDestination();
+  }
+}
+
+async function updateBranch(branch) {
+  if (!state.meta || !state.api || destinationLocked()) return;
+  const input = $("branch");
+  const previous = state.meta.branch || "";
+  state.destinationBusy = true;
+  syncDestination();
+  try {
+    const result = await state.api.setSessionBranch(state.meta.id, branch);
+    state.meta = {
+      ...state.meta,
+      ...(result.meta || { branch: String(branch || "").trim() }),
+    };
+    input.value = state.meta.branch || "";
+    setStatus(`Branch set to ${state.meta.branch}.`, "ok");
+  } catch (error) {
+    input.value = previous;
+    setStatus(error.message || String(error), "err");
+  } finally {
+    state.destinationBusy = false;
+    syncDestination();
+  }
+}
+
+async function saveSettings() {
+  const existing = await loadConfig();
+  const config = {
+    serverUrl: normalizeServerUrl($("settings-server").value),
+    token: $("settings-token").value.trim(),
+    project: existing.project || "",
+    branch: existing.branch || "",
+  };
+  if (!config.token) throw new Error("Token is required");
+  setSettingsStatus("Saving…");
+  if (!(await ensurePermission(config.serverUrl))) {
+    throw new Error("Access to the RedLine server was not granted");
+  }
+  const saved = await saveConfig(config);
+  const projectsOk = await new RedLineApi(saved).projects().then(
+    () => true,
+    () => false,
+  );
+  setSettingsStatus(
+    projectsOk
+      ? "Saved. You can capture a page now."
+      : "Saved, but the server rejected the token or URL. Check them and press Test.",
+    projectsOk ? "ok" : "err",
+  );
+  if (!state.capture && projectsOk) {
+    settingsReturn = { empty: true, workspace: false };
+    closeSettings();
+    setStatus("Connected. Click Screenshot current tab.", "ok");
+  }
+}
+
+async function testSettings() {
+  const existing = await loadConfig();
+  const config = {
+    serverUrl: normalizeServerUrl($("settings-server").value),
+    token: $("settings-token").value.trim(),
+    project: existing.project || "",
+    branch: existing.branch || "",
+  };
+  if (!config.token) throw new Error("Token is required");
+  setSettingsStatus("Testing…");
+  if (!(await ensurePermission(config.serverUrl))) {
+    throw new Error("Access to the RedLine server was not granted");
+  }
+  const api = new RedLineApi(config);
+  const health = await api.health();
+  await api.projects();
+  setSettingsStatus(`Connected to RedLine ${health.version || ""}`.trim(), "ok");
 }
 
 function setBusy(busy) {
+  state.busy = busy;
+  const always = new Set(["settings", "theme"]);
   for (const element of document.querySelectorAll("button, input, select, textarea")) {
-    if (element.id === "settings") continue;
-    element.disabled = busy || (state.readOnly && !["open-redline", "settings"].includes(element.id));
+    if (always.has(element.id)) continue;
+    if (element.id === "capture") {
+      element.disabled = busy || !state.captureAllowed;
+      continue;
+    }
+    element.disabled =
+      busy || (state.readOnly && !["open-redline", "settings", "theme"].includes(element.id));
   }
   if (!busy && state.readOnly) {
-    $("open-redline").disabled = false;
-    $("settings").disabled = false;
+    for (const id of ["open-redline", "settings", "theme"]) $(id).disabled = false;
   }
 }
 
-function showEmpty(message = "") {
+async function refreshCaptureContext() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab) {
+      state.captureAllowed = false;
+      captureContextEl.textContent = "No active tab.";
+      captureContextEl.className = "capture-context err";
+      $("capture").disabled = true;
+      return;
+    }
+    const url = tab.url || tab.pendingUrl || "";
+    const changed = state.activeTabUrl !== url;
+    state.activeTabUrl = url;
+    state.captureAllowed = /^https?:/i.test(url);
+    if (changed) {
+      $("allow-capture").hidden = true;
+      $("allow-overlay").hidden = true;
+      state.captureRetry = null;
+      state.overlayNeedsPermission = false;
+    }
+    const capturable = state.captureAllowed;
+    captureContextEl.textContent = capturable
+      ? `Current tab: ${tab.title || url}`
+      : `This is ${tab.title || url}. Switch to the web page tab you want to capture.`;
+    captureContextEl.className = `capture-context ${capturable ? "" : "err"}`.trim();
+    $("capture").disabled = !capturable;
+    $("capture").title = capturable ? "" : "Switch to an http(s) page tab first.";
+  } catch (error) {
+    state.captureAllowed = false;
+    captureContextEl.textContent = error.message || String(error);
+    captureContextEl.className = "capture-context err";
+    $("capture").disabled = true;
+  }
+}
+
+function pageUrlForPermission() {
+  return state.capture?.url || state.meta?.url || state.activeTabUrl || "";
+}
+
+function overlayFailure(error) {
+  const message = error.message || String(error);
+  if (
+    /^https?:/i.test(pageUrlForPermission())
+    && /Cannot access contents|manifest must request permission/i.test(message)
+  ) {
+    state.overlayNeedsPermission = true;
+    state.captureRetry = "overlay";
+    $("allow-overlay").hidden = false;
+    setStatus(
+      "This page needs site access for the annotation overlay. Click Allow access to this page.",
+      "err",
+    );
+    return;
+  }
+  setStatus(message, "err");
+}
+
+function captureFailure(error, retry) {
+  const message = error.message || String(error);
+  if (/activeTab|all_urls/i.test(message)) {
+    state.captureRetry = retry;
+    $("allow-capture").hidden = !/^https?:/i.test(state.activeTabUrl || "");
+    setStatus(
+      "This tab was not opened through the RedLine icon. Click the icon on this page tab, or allow this site once.",
+      "err",
+    );
+    return;
+  }
+  setStatus(message, "err");
+}
+
+async function allowCaptureSite() {
+  const url = pageUrlForPermission();
+  if (!/^https?:/i.test(url || "")) {
+    setStatus("Switch to the web page tab you want to capture.", "err");
+    return;
+  }
+  try {
+    const granted = await chrome.permissions.request({ origins: [originPattern(url)] });
+    if (!granted) throw new Error("Site access was not granted.");
+    $("allow-capture").hidden = true;
+    setStatus("Site allowed. Capturing…", "ok");
+    const retry = state.captureRetry;
+    state.captureRetry = null;
+    state.overlayNeedsPermission = false;
+    $("allow-overlay").hidden = true;
+    if (retry === "overlay") {
+      await injectOverlay(state.capture);
+      setStatus("Annotate on the page. Controls are here.", "ok");
+    } else if (retry === "offline") {
+      await captureOffline();
+    } else {
+      await captureCurrent();
+    }
+  } catch (error) {
+    setStatus(error.message || String(error), "err");
+  }
+}
+
+function showEmpty(message = "", keepCapture = false) {
   $("workspace").hidden = true;
+  if ($("destination")) $("destination").hidden = true;
+  setDestinationHint("");
   $("empty").hidden = false;
   $("open-capture").hidden = true;
   $("video-bar").hidden = true;
   $("trace-panel").hidden = true;
+  $("overlay-banner").hidden = true;
+  $("local-warning").hidden = true;
+  $("allow-overlay").hidden = true;
+  $("capture-new").hidden = true;
+  $("stage").hidden = false;
   $("title").textContent = "RedLine Capture";
   $("subtitle").textContent = "No capture yet";
+  $("empty-status").textContent = message || "";
+  $("empty-status").className = `status ${message ? "err" : ""}`.trim();
+  state.overlayMode = false;
+  state.overlayActive = false;
+  state.submitting = false;
+  state.undoCount = 0;
+  state.redoCount = 0;
+  if (!keepCapture) {
+    state.capture = null;
+    state.meta = null;
+    state.annotations = [];
+    state.selectedId = null;
+    state.local = false;
+    state.localData = null;
+  }
   if (state.video) state.video.pause();
   if (message) setStatus(message, "err");
+  refreshCaptureContext().catch(() => {});
+}
+
+function sendOverlayCommand(command) {
+  if (!state.capture?.sessionId) return;
+  chrome.runtime
+    .sendMessage({
+      type: "redline-overlay-command",
+      sessionId: state.capture.sessionId,
+      command,
+    })
+    .catch(() => {});
+}
+
+async function injectOverlay(capture) {
+  const tabId = capture?.tabId || state.overlayTabId;
+  if (!tabId) throw new Error("This capture has no tab. Screenshot the tab again.");
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["src/overlay-host.js"],
+  });
+  const response = await chrome.tabs.sendMessage(tabId, {
+    type: "redline-overlay-open",
+    sessionId: capture.sessionId,
+  });
+  if (!response?.ok) throw new Error("Could not open the annotation overlay.");
+  state.overlayTabId = tabId;
+  state.overlayActive = true;
+  chrome.runtime
+    .sendMessage({
+      type: "redline-overlay-command",
+      sessionId: capture.sessionId,
+      command: { type: "request-state" },
+    })
+    .catch(() => {});
+}
+
+async function closeOverlay(capture = state.capture) {
+  if (!capture?.tabId) return;
+  await chrome.tabs
+    .sendMessage(capture.tabId, {
+      type: "redline-overlay-close",
+      sessionId: capture.sessionId,
+    })
+    .catch(() => {});
+  state.overlayActive = false;
+}
+
+function overlayCommand(command) {
+  if (!state.capture || !state.overlayActive) return;
+  sendOverlayCommand(command);
+}
+
+function applyOverlayState(message) {
+  const next = message.state || {};
+  if (Array.isArray(next.annotations)) state.annotations = next.annotations;
+  state.selectedId = next.selectedId || null;
+  if (next.tool) state.tool = next.tool;
+  if (next.color) state.color = next.color;
+  if (next.width) state.strokeWidth = Number(next.width) || state.strokeWidth;
+  if (next.widthPx) state.width = Number(next.widthPx) || state.width;
+  if (next.heightPx) state.height = Number(next.heightPx) || state.height;
+  state.undoCount = Number(next.undo) || 0;
+  state.redoCount = Number(next.redo) || 0;
+  state.readOnly = Boolean(next.readOnly);
+  if (next.role) state.role = next.role;
+  if (next.local) state.local = true;
+  state.requested = Boolean(next.requested);
+  state.submitting = Boolean(next.submitting);
+  if (next.status && state.meta) state.meta.status = next.status;
+  if (typeof next.note === "string" && document.activeElement !== noteInput) {
+    noteInput.value = next.note;
+  }
+  if (next.title) $("title").textContent = next.title;
+  if (state.width && state.height) {
+    $("subtitle").textContent = `${state.width}×${state.height}${
+      state.readOnly ? ` · ${state.meta?.status || "read-only"}` : ""
+    }`;
+  }
+
+  if (message.event === "submitted") {
+    state.meta = message.meta || state.meta;
+    state.overlayActive = false;
+    state.submitting = false;
+    state.requested = Boolean(state.meta?.agent_requested_at);
+    state.submitted =
+      state.meta?.status === "submitted" || state.meta?.status === "resolved";
+    state.readOnly = state.submitted || state.role === "viewer";
+    void closeOverlay();
+    chrome.runtime.sendMessage({ type: "clear-active-capture" }).catch(() => {});
+    if (state.meta?.status === "open" && state.role === "tester") {
+      showSent("Sent to a developer.", true);
+      return;
+    }
+    setStatus("Submitted to RedLine. The agent queue has it.", "ok");
+  } else if (message.event === "error") {
+    state.submitting = false;
+    state.overlayActive = true;
+    setStatus(message.error || "Something went wrong.", "err");
+  } else if (message.event === "discarded") {
+    state.submitting = false;
+    void closeOverlay();
+    chrome.runtime.sendMessage({ type: "clear-active-capture" }).catch(() => {});
+    showEmpty();
+    return;
+  } else if (message.event === "ready" || message.event === "sync") {
+    state.overlayActive = true;
+    state.overlayNeedsPermission = false;
+    state.submitting = false;
+    if (!state.readOnly) setStatus("Annotate on the page. Controls are here.");
+  }
+
+  if (message.event === "export-data" && message.exportData) {
+    state.submitting = true;
+    renderOverlayControls();
+    void exportLocalData(message.exportData);
+  }
+
+  $("overlay-banner").hidden =
+    !state.overlayMode || state.submitted || !state.overlayActive;
+  $("overlay-banner-text").textContent = state.readOnly
+    ? "Read-only review — open it in RedLine to edit."
+    : state.local
+      ? "Local capture — draw on the frozen page. Export when done."
+      : "Annotating on the page — draw on the frozen screenshot.";
+  $("capture-new").hidden = !state.submitted;
+  render();
 }
 
 function showWorkspace() {
   $("empty").hidden = true;
   $("workspace").hidden = false;
+  $("empty-status").textContent = "";
+  $("stage").hidden = state.overlayMode;
   updateModeChrome();
 }
 
@@ -131,6 +670,9 @@ async function saveDraft() {
         [draftKey()]: {
           annotations: state.annotations,
           note: noteInput.value,
+          tool: state.tool,
+          color: state.color,
+          width: state.strokeWidth,
           updatedAt: Date.now(),
         },
       })
@@ -139,11 +681,16 @@ async function saveDraft() {
 }
 
 function render() {
+  if (state.overlayMode) {
+    renderOverlayControls();
+    return;
+  }
   if (state.mediaKind === "video") {
     renderVideo();
   } else if (state.bitmap) {
     drawScene(canvas, state.bitmap, state.annotations, state.selectedId, state.preview);
   }
+  syncDestination();
   $("count").textContent = String(state.annotations.length);
   renderList();
   $("undo").disabled = state.readOnly || state.undo.length === 0;
@@ -151,18 +698,77 @@ function render() {
   $("delete").disabled = state.readOnly || !state.selectedId;
   $("clear").disabled = state.readOnly || state.annotations.length === 0;
   $("submit").disabled = state.readOnly;
-  $("submit").textContent = state.local ? "Export review" : "Submit to RedLine";
+  const status = state.meta?.status;
+  $("submit").textContent = state.local
+    ? "Export review"
+    : status === "resolved"
+      ? "Resolved"
+      : status === "submitted"
+        ? "Waiting for agent"
+        : state.role === "viewer"
+          ? "Read-only"
+          : state.role === "tester"
+            ? (state.requested ? "Update request" : "Send to developer")
+            : "Submit to RedLine";
   $("open-redline").hidden = state.local;
+  $("local-warning").hidden = !state.local;
   $("discard").disabled = state.submitted;
   noteInput.disabled = state.readOnly;
-  for (const button of document.querySelectorAll(".tool")) {
+  for (const button of document.querySelectorAll(".tool[data-tool]")) {
     button.classList.toggle("active", button.dataset.tool === state.tool);
     button.disabled = state.readOnly;
   }
   $("color").disabled = state.readOnly;
   $("width").disabled = state.readOnly;
+  $("width").value = String(state.strokeWidth);
+  $("width-value").textContent = `${state.strokeWidth}px`;
   $("ghosts").disabled = false;
   $("timeline").disabled = false;
+}
+
+function renderOverlayControls() {
+  syncDestination();
+  $("stage").hidden = true;
+  $("video-bar").hidden = true;
+  $("trace-panel").hidden = true;
+  $("count").textContent = String(state.annotations.length);
+  renderList();
+  $("undo").disabled = state.readOnly || state.undoCount === 0;
+  $("redo").disabled = state.readOnly || state.redoCount === 0;
+  $("delete").disabled = state.readOnly || !state.selectedId;
+  $("clear").disabled = state.readOnly || state.annotations.length === 0;
+  $("submit").disabled =
+    state.readOnly || state.submitting || !state.overlayActive;
+  const status = state.meta?.status;
+  $("submit").textContent = state.submitting
+    ? (state.local ? "Preparing…" : "Submitting…")
+    : state.local
+      ? "Export review"
+      : status === "resolved"
+        ? "Resolved"
+        : status === "submitted"
+          ? "Waiting for agent"
+          : state.role === "viewer"
+            ? "Read-only"
+            : state.role === "tester"
+              ? (state.requested ? "Update request" : "Send to developer")
+              : "Submit to RedLine";
+  $("open-redline").hidden = state.local;
+  $("discard").disabled = state.submitted || state.submitting || state.role === "viewer";
+  $("capture-new").hidden = !state.submitted;
+  $("overlay-banner").hidden = state.submitted || !state.overlayActive;
+  $("local-warning").hidden = !state.local;
+  $("allow-overlay").hidden = !state.overlayNeedsPermission;
+  noteInput.disabled = state.readOnly || state.submitting;
+  for (const button of document.querySelectorAll(".tool[data-tool]")) {
+    button.classList.toggle("active", button.dataset.tool === state.tool);
+    button.disabled = state.readOnly || state.submitting;
+  }
+  $("color").disabled = state.readOnly || state.submitting;
+  $("width").disabled = state.readOnly || state.submitting;
+  if (/^#[0-9a-f]{6}$/i.test(state.color)) $("color").value = state.color;
+  $("width").value = String(state.strokeWidth);
+  $("width-value").textContent = `${state.strokeWidth}px`;
 }
 
 function renderMarkers() {
@@ -286,23 +892,42 @@ function renderTrace() {
 
 function typeLabel(annotation) {
   if (annotation.type === "rect") return "Rectangle";
+  if (annotation.type === "ellipse") return "Ellipse";
   if (annotation.type === "arrow") return "Arrow";
   if (annotation.type === "pen") return "Pen";
   if (annotation.type === "text") return annotation.text || "Note";
   return annotation.type;
 }
 
+function removeAnnotation(annotation) {
+  if (state.readOnly || state.submitting) return;
+  if (state.overlayMode) {
+    overlayCommand({ type: "delete", id: annotation.id });
+    return;
+  }
+  snapshot();
+  state.annotations = state.annotations.filter((item) => item.id !== annotation.id);
+  if (state.selectedId === annotation.id) state.selectedId = null;
+  render();
+  saveDraft();
+}
+
 function renderList() {
   const list = $("list");
   list.innerHTML = "";
   state.annotations.forEach((annotation, index) => {
-    const row = document.createElement("button");
-    row.type = "button";
+    // A row contains its own delete button, so it is a div with a button role rather than a
+    // <button> (nested buttons are invalid and the inner click becomes unreliable).
+    const row = document.createElement("div");
     row.className = "ann-row";
+    row.dataset.index = String(index);
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
     if (annotation.id === state.selectedId) row.classList.add("selected");
     const number = document.createElement("span");
     number.className = "ann-num";
     number.textContent = String(index + 1);
+    number.style.background = annotation.color || "#e11d48";
     const text = document.createElement("span");
     text.className = "ann-text";
     text.textContent =
@@ -310,10 +935,37 @@ function renderList() {
         ? `${formatTime(annotation.at)} · ${typeLabel(annotation)}`
         : typeLabel(annotation);
     row.append(number, text);
-    row.addEventListener("click", () => {
+    if (!state.readOnly && !state.submitting) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "del";
+      remove.title = "Delete annotation";
+      remove.setAttribute("aria-label", `Delete annotation ${index + 1}`);
+      remove.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13M10 11v6M14 11v6"/></svg>';
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        removeAnnotation(annotation);
+      });
+      row.append(remove);
+    }
+    const select = () => {
+      if (state.overlayMode) {
+        overlayCommand({ type: "select", id: annotation.id });
+        return;
+      }
       state.selectedId = annotation.id;
       if (state.mediaKind === "video" && annotation.at != null) seekVideo(annotation.at);
       else render();
+    };
+    row.addEventListener("click", (event) => {
+      if (event.target.closest(".del")) return;
+      select();
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.target !== row || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      select();
     });
     list.append(row);
   });
@@ -326,6 +978,10 @@ function snapshot() {
 }
 
 function undo() {
+  if (state.overlayMode) {
+    overlayCommand({ type: "undo" });
+    return;
+  }
   if (state.readOnly || !state.undo.length) return;
   state.redo.push(JSON.stringify(state.annotations));
   state.annotations = JSON.parse(state.undo.pop());
@@ -335,6 +991,10 @@ function undo() {
 }
 
 function redo() {
+  if (state.overlayMode) {
+    overlayCommand({ type: "redo" });
+    return;
+  }
   if (state.readOnly || !state.redo.length) return;
   state.undo.push(JSON.stringify(state.annotations));
   state.annotations = JSON.parse(state.redo.pop());
@@ -344,6 +1004,10 @@ function redo() {
 }
 
 function removeSelected() {
+  if (state.overlayMode) {
+    overlayCommand({ type: "delete" });
+    return;
+  }
   if (state.readOnly || !state.selectedId) return;
   snapshot();
   state.annotations = state.annotations.filter((annotation) => annotation.id !== state.selectedId);
@@ -353,6 +1017,12 @@ function removeSelected() {
 }
 
 function clearAll() {
+  if (state.overlayMode) {
+    if (state.readOnly || !state.annotations.length) return;
+    if (!confirm("Remove all annotations?")) return;
+    overlayCommand({ type: "clear" });
+    return;
+  }
   if (state.readOnly || !state.annotations.length) return;
   if (!confirm("Remove all annotations?")) return;
   snapshot();
@@ -364,6 +1034,12 @@ function clearAll() {
 
 function setTool(tool) {
   if (!TOOLS.includes(tool) || state.readOnly) return;
+  if (state.overlayMode) {
+    state.tool = tool;
+    overlayCommand({ type: "set-tool", tool });
+    renderOverlayControls();
+    return;
+  }
   state.tool = tool;
   canvas.style.cursor = tool === "select" ? "default" : "crosshair";
   render();
@@ -460,56 +1136,11 @@ $("trace-filter").addEventListener("change", (event) => {
   renderTrace();
 });
 
-function openTextEditor(point) {
-  state.textPoint = point;
-  const canvasRect = canvas.getBoundingClientRect();
-  const stageRect = $("stage").getBoundingClientRect();
-  const left = canvasRect.left - stageRect.left + (point.x * canvasRect.width) / canvas.width;
-  const top = canvasRect.top - stageRect.top + (point.y * canvasRect.height) / canvas.height;
-  textEditor.style.left = `${Math.max(4, left)}px`;
-  textEditor.style.top = `${Math.max(4, top - 12)}px`;
-  textEditor.value = "";
-  textEditor.hidden = false;
-  textEditor.focus();
-}
-
-let textCommitInFlight = false;
-function commitTextEditor() {
-  if (textEditor.hidden || textCommitInFlight) return;
-  textCommitInFlight = true;
-  const text = textEditor.value.trim();
-  if (text && state.textPoint) {
-    snapshot();
-    const annotation = createAnnotation("text", state.textPoint, {
-      color: state.color,
-      width: state.strokeWidth,
-    });
-    annotation.text = text;
-    if (state.mediaKind === "video" && state.video) annotation.at = state.video.currentTime;
-    state.annotations.push(annotation);
-    state.selectedId = annotation.id;
-  }
-  textEditor.hidden = true;
-  state.textPoint = null;
-  render();
-  saveDraft();
-  textCommitInFlight = false;
-}
-
-function cancelTextEditor() {
-  textEditor.hidden = true;
-  state.textPoint = null;
-}
-
 canvas.addEventListener("pointerdown", (event) => {
   if (state.readOnly || !mediaWidth()) return;
   event.preventDefault();
   const point = pointFromEvent(event);
   if (state.mediaKind === "video" && state.video) state.video.pause();
-  if (state.tool === "text") {
-    openTextEditor(point);
-    return;
-  }
   canvas.setPointerCapture(event.pointerId);
   if (state.tool === "select") {
     const hit = hitTest(state.annotations, point);
@@ -565,10 +1196,9 @@ function finishDrawing() {
   const bounds = annotation.start
     ? Math.abs(annotation.end.x - annotation.start.x) + Math.abs(annotation.end.y - annotation.start.y)
     : 0;
-  const valid =
-    annotation.type === "pen"
-      ? (annotation.points || []).length > 1
-      : annotation.type === "text" || bounds > 4;
+  const valid = annotation.type === "pen"
+    ? (annotation.points || []).length > 1
+    : bounds > 4;
   if (valid) {
     state.annotations.push(annotation);
     state.selectedId = annotation.id;
@@ -581,17 +1211,6 @@ function finishDrawing() {
 
 canvas.addEventListener("pointerup", () => finishDrawing());
 canvas.addEventListener("pointercancel", () => finishDrawing());
-
-textEditor.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    cancelTextEditor();
-  } else if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    commitTextEditor();
-  }
-});
-textEditor.addEventListener("blur", commitTextEditor);
 
 document.addEventListener("keydown", (event) => {
   const target = event.target;
@@ -607,7 +1226,7 @@ document.addEventListener("keydown", (event) => {
     }
     return;
   }
-  const map = { v: "select", r: "rect", a: "arrow", p: "pen", t: "text" };
+  const map = { v: "select", r: "rect", e: "ellipse", a: "arrow", p: "pen" };
   if (map[event.key.toLowerCase()]) {
     event.preventDefault();
     setTool(map[event.key.toLowerCase()]);
@@ -617,7 +1236,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-for (const button of document.querySelectorAll(".tool")) {
+for (const button of document.querySelectorAll(".tool[data-tool]")) {
   button.addEventListener("click", () => setTool(button.dataset.tool));
 }
 $("undo").addEventListener("click", undo);
@@ -626,11 +1245,26 @@ $("delete").addEventListener("click", removeSelected);
 $("clear").addEventListener("click", clearAll);
 $("color").addEventListener("input", (event) => {
   state.color = event.target.value;
+  if (state.overlayMode) overlayCommand({ type: "set-color", color: state.color });
 });
-$("width").addEventListener("change", (event) => {
+$("width").addEventListener("input", (event) => {
   state.strokeWidth = Number(event.target.value) || 3;
+  $("width-value").textContent = `${state.strokeWidth}px`;
+  if (state.overlayMode) {
+    overlayCommand({ type: "set-width", width: state.strokeWidth });
+  }
 });
-noteInput.addEventListener("input", saveDraft);
+noteInput.addEventListener("input", () => {
+  if (state.overlayMode) {
+    if (state.overlayActive) {
+      overlayCommand({ type: "set-note", note: noteInput.value });
+    } else {
+      saveDraft();
+    }
+    return;
+  }
+  saveDraft();
+});
 
 async function loadCapture(capture) {
   try {
@@ -653,6 +1287,8 @@ async function loadCapture(capture) {
     state.traceEvents = [];
     state.bitmap = null;
     state.mediaKind = meta.media?.kind === "video" ? "video" : "image";
+    state.overlayMode = false;
+    state.overlayActive = false;
     state.local = false;
     state.localData = null;
     state.config = config;
@@ -665,13 +1301,16 @@ async function loadCapture(capture) {
     state.selectedId = null;
     state.undo = [];
     state.redo = [];
-    state.readOnly = meta.status !== "open";
+    state.role = meta.my_role || "owner";
+    state.requested = Boolean(meta.agent_requested_at);
+    state.readOnly = meta.status !== "open" || state.role === "viewer";
     state.submitted = meta.status === "submitted" || meta.status === "resolved";
     state.width = Number(meta.media?.width) || 0;
     state.height = Number(meta.media?.height) || 0;
     noteInput.value = meta.prompt || "";
+    seedProjectOptions(meta.project || "");
 
-    if (!state.readOnly) {
+    if (!state.readOnly && state.mediaKind === "video") {
       const stored = await chrome.storage.session.get(draftKey());
       const draft = stored[draftKey()];
       if (draft && Array.isArray(draft.annotations)) {
@@ -679,6 +1318,40 @@ async function loadCapture(capture) {
         noteInput.value = draft.note || "";
         setStatus("Restored an unsent draft.");
       }
+    }
+
+    if (state.mediaKind === "image") {
+      // The page is the canvas: the side panel keeps the controls, the overlay owns the drawing
+      // and the submit payload.
+      state.overlayMode = true;
+      state.overlayActive = false;
+      state.overlayTabId = capture.tabId || null;
+      state.tool = "rect";
+      state.undoCount = 0;
+      state.redoCount = 0;
+      state.bitmap = null;
+      $("title").textContent = meta.title || "Screenshot";
+      $("subtitle").textContent = state.readOnly
+        ? `Screenshot · ${meta.status}`
+        : "Screenshot";
+      showWorkspace();
+      renderOverlayControls();
+      loadWorkspaceProjects().catch(() => {});
+      $("overlay-banner").hidden = false;
+      $("overlay-banner-text").textContent = "Opening the page overlay…";
+      setStatus("Opening the page overlay…");
+      try {
+        await injectOverlay(capture);
+        state.overlayNeedsPermission = false;
+        setStatus(
+          state.readOnly
+            ? "This review is already submitted; open it in RedLine."
+            : "Annotate on the page. Controls are here.",
+        );
+      } catch (error) {
+        overlayFailure(error);
+      }
+      return;
     }
 
     if (state.mediaKind === "video") {
@@ -724,6 +1397,7 @@ async function loadCapture(capture) {
     showWorkspace();
     setTool("rect");
     render();
+    loadWorkspaceProjects().catch(() => {});
     setStatus(state.readOnly ? "This review is already submitted; open it in RedLine." : "");
   } catch (error) {
     showEmpty(error.message || String(error));
@@ -747,7 +1421,11 @@ async function loadLocalCapture(capture) {
     state.traceEvents = [];
     state.bitmap = null;
     state.local = true;
+    state.overlayMode = false;
+    state.overlayActive = false;
     state.localData = local;
+    state.role = "owner";
+    state.requested = false;
     state.config = null;
     state.api = null;
     state.capture = {
@@ -757,6 +1435,42 @@ async function loadLocalCapture(capture) {
       mode: "local",
       kind: local.kind,
     };
+    if (local.kind === "image" && state.capture.tabId) {
+      state.overlayMode = true;
+      state.overlayTabId = state.capture.tabId;
+      state.local = true;
+      state.localData = local;
+      state.role = "owner";
+      state.requested = false;
+      state.config = null;
+      state.api = null;
+      state.readOnly = false;
+      state.submitted = false;
+      state.mediaKind = "image";
+      state.annotations = Array.isArray(local.annotations) ? local.annotations : [];
+      state.selectedId = null;
+      state.tool = "rect";
+      state.undoCount = 0;
+      state.redoCount = 0;
+      state.width = Number(local.width) || 0;
+      state.height = Number(local.height) || 0;
+      noteInput.value = local.note || "";
+      $("title").textContent = local.title || "Local screenshot";
+      $("subtitle").textContent = "Local · offline";
+      showWorkspace();
+      renderOverlayControls();
+      $("overlay-banner").hidden = false;
+      $("overlay-banner-text").textContent = "Opening the page overlay…";
+      setStatus("Opening the page overlay…");
+      try {
+        await injectOverlay(state.capture);
+        state.overlayNeedsPermission = false;
+        setStatus("Annotate on the page. Export when done.");
+      } catch (error) {
+        overlayFailure(error);
+      }
+      return;
+    }
     const media =
       local.kind === "video"
         ? {
@@ -847,15 +1561,41 @@ async function loadActiveCapture() {
   if (response?.capture?.mode === "local") await loadLocalCapture(response.capture);
   else if (response?.capture) await loadCapture(response.capture);
   else {
-    const config = await loadConfig();
-    if (!isConfigured(config)) {
-      setStatus("Connect RedLine for server mode, or save a local capture.", "");
-    }
     showEmpty();
   }
 }
 
 async function captureCurrent() {
+  // Chrome only grants site access from a user gesture. Ask here, before the capture, so a
+  // missing activeTab does not turn into a screenshot that cannot show its overlay (2026-11-10).
+  const pageUrl = state.activeTabUrl || "";
+  if (/^https?:/i.test(pageUrl)) {
+    try {
+      const granted = await chrome.permissions.request({
+        origins: [originPattern(pageUrl)],
+      });
+      if (!granted) {
+        state.captureRetry = null;
+        $("allow-capture").hidden = false;
+        setStatus(
+          "Site access was not granted. Click Allow capture on this site, or click the RedLine icon on the page tab.",
+          "err",
+        );
+        return;
+      }
+    } catch (error) {
+      state.captureRetry = null;
+      $("allow-capture").hidden = false;
+      setStatus(error.message || String(error), "err");
+      return;
+    }
+  }
+  const config = await loadConfig().catch(() => null);
+  if (!isConfigured(config)) {
+    // One capture button: without a server, the same screenshot becomes a local review and the
+    // workspace shows the orange warning with a Connect link.
+    return captureOffline();
+  }
   if (state.annotations.length && !state.readOnly) {
     if (!confirm("Discard the unsent annotations and capture the current tab?")) return;
   }
@@ -866,13 +1606,7 @@ async function captureCurrent() {
     if (!response?.ok) throw new Error(response?.error || "Capture failed");
     await loadCapture(response.capture);
   } catch (error) {
-    const message = error.message || String(error);
-    setStatus(
-      /activeTab|all_urls/i.test(message)
-        ? "Use the RedLine Capture toolbar icon → Screenshot & annotate."
-        : message,
-      "err",
-    );
+    captureFailure(error, "server");
   } finally {
     setBusy(false);
   }
@@ -889,13 +1623,7 @@ async function captureOffline() {
     if (!response?.ok) throw new Error(response?.error || "Capture failed");
     await loadLocalCapture(response.capture);
   } catch (error) {
-    const message = error.message || String(error);
-    setStatus(
-      /activeTab|all_urls/i.test(message)
-        ? "Use the RedLine Capture toolbar icon → Screenshot offline."
-        : message,
-      "err",
-    );
+    captureFailure(error, "offline");
   } finally {
     setBusy(false);
   }
@@ -986,16 +1714,20 @@ async function videoPackageFrames() {
   return { frames, sheet };
 }
 
-async function submitVideo() {
+async function submitVideo(request = false) {
   const { frames, sheet } = await videoPackageFrames();
-  await state.api.submitVideo(state.capture.sessionId, {
-    annotations: state.annotations,
-    width: mediaWidth(),
-    height: mediaHeight(),
-    contactSheet: sheet,
-    frames,
-    note: noteInput.value.trim(),
-  });
+  await state.api.submitVideo(
+    state.capture.sessionId,
+    {
+      annotations: state.annotations,
+      width: mediaWidth(),
+      height: mediaHeight(),
+      contactSheet: sheet,
+      frames,
+      note: noteInput.value.trim(),
+    },
+    { request },
+  );
 }
 
 function dataUrlBlob(dataUrl) {
@@ -1131,7 +1863,155 @@ async function exportLocal() {
   render();
 }
 
+async function exportLocalData(data) {
+  try {
+    const annotated = await dataUrlBlob(data.png);
+    const markdown = buildReviewMarkdown({
+      id: data.id,
+      title: data.title,
+      url: data.url,
+      note: data.note,
+      media: null,
+      width: data.width,
+      height: data.height,
+      annotations: data.annotations,
+      frames: [],
+      trace: null,
+    });
+    const annotationsJson = buildAnnotationsJson({
+      id: data.id,
+      title: data.title,
+      url: data.url,
+      note: data.note,
+      media: null,
+      width: data.width,
+      height: data.height,
+      annotations: data.annotations,
+      frames: [],
+      trace: null,
+    });
+    const files = [
+      { name: "review.md", data: markdown },
+      { name: "annotations.json", data: JSON.stringify(annotationsJson, null, 2) },
+      { name: "AI-PROMPT.md", data: AI_PROMPT },
+      { name: "annotated.png", data: annotated },
+    ];
+    setStatus("Saving review…");
+    const result = await savePackage(files);
+    if (result.kind === "canceled") {
+      setStatus("Export canceled.");
+      return;
+    }
+    const updated = {
+      ...state.localData,
+      annotations: data.annotations,
+      note: data.note,
+    };
+    await putCapture(updated);
+    state.localData = updated;
+    setStatus(
+      result.kind === "folder" ? "Exported review folder." : "Downloaded review ZIP.",
+      "ok",
+    );
+  } catch (error) {
+    setStatus(error.message || String(error), "err");
+  } finally {
+    state.submitting = false;
+    renderOverlayControls();
+  }
+}
+
+function submitOverlay() {
+  if (state.readOnly || state.submitting || !state.capture || !state.overlayActive) return;
+  if (!state.annotations.length && !noteInput.value.trim()) {
+    if (
+      !confirm(
+        state.local
+          ? "There are no annotations and no note. Export the capture anyway?"
+          : "There are no annotations and no note. Send the capture anyway?",
+      )
+    ) {
+      return;
+    }
+  }
+  state.submitting = true;
+  setStatus(
+    state.local
+      ? "Preparing export…"
+      : state.role === "tester"
+        ? "Saving for developer review…"
+        : "Submitting…",
+  );
+  renderOverlayControls();
+  sendOverlayCommand({ type: "submit", note: noteInput.value });
+}
+
+async function discardOverlay() {
+  if (!state.capture || state.submitting || state.submitted) return;
+  if (
+    !confirm(
+      state.local
+        ? "Delete this local review and its files?"
+        : "Delete this review and its screenshot?",
+    )
+  ) {
+    return;
+  }
+  if (!state.overlayActive) {
+    try {
+      state.submitting = true;
+      renderOverlayControls();
+      if (state.local) {
+        await deleteCapture(state.capture.sessionId);
+      } else {
+        await state.api.deleteSession(state.capture.sessionId);
+      }
+      await chrome.storage.session.remove(draftKey());
+      await chrome.runtime.sendMessage({ type: "clear-active-capture" });
+      showEmpty();
+    } catch (error) {
+      state.submitting = false;
+      setStatus(error.message || String(error), "err");
+      renderOverlayControls();
+    }
+    return;
+  }
+  state.submitting = true;
+  setStatus("Discarding…");
+  renderOverlayControls();
+  sendOverlayCommand({ type: "discard" });
+}
+
+function showSent(message, keepCapture = false) {
+  $("workspace").hidden = true;
+  $("empty").hidden = false;
+  $("open-capture").hidden = !keepCapture || !state.capture;
+  $("video-bar").hidden = true;
+  $("trace-panel").hidden = true;
+  $("overlay-banner").hidden = true;
+  $("local-warning").hidden = true;
+  $("allow-overlay").hidden = true;
+  $("capture-new").hidden = true;
+  $("stage").hidden = false;
+  $("title").textContent = "RedLine Capture";
+  $("subtitle").textContent = "No capture yet";
+  $("empty-status").textContent = message;
+  $("empty-status").className = "status ok";
+  state.overlayMode = false;
+  state.overlayActive = false;
+  state.submitting = false;
+  state.submitted = false;
+  state.readOnly = true;
+  state.annotations = [];
+  state.selectedId = null;
+  state.undoCount = 0;
+  state.redoCount = 0;
+  setStatus(message, "ok");
+  refreshCaptureContext().catch(() => {});
+}
+
 async function submit() {
+  if (state.overlayMode) return submitOverlay();
   if (state.readOnly || !state.capture) return;
   if (!state.annotations.length && !noteInput.value.trim()) {
     if (
@@ -1151,24 +2031,38 @@ async function submit() {
       return;
     }
     if (!state.api) throw new Error("Connect RedLine before submitting.");
-    setStatus("Submitting…");
+    const request = state.role === "tester";
+    setStatus(request ? "Saving for developer review…" : "Submitting…");
     if (state.mediaKind === "video") {
-      await submitVideo();
+      await submitVideo(request);
     } else {
       const png = composePng(state.bitmap, state.annotations);
-      await state.api.submit(state.capture.sessionId, {
-        annotations: state.annotations,
-        width: mediaWidth(),
-        height: mediaHeight(),
-        png,
-        note: noteInput.value.trim(),
-      });
+      await state.api.submit(
+        state.capture.sessionId,
+        {
+          annotations: state.annotations,
+          width: mediaWidth(),
+          height: mediaHeight(),
+          png,
+          note: noteInput.value.trim(),
+        },
+        { request },
+      );
     }
     await chrome.storage.session.remove(draftKey());
-    state.readOnly = true;
-    state.submitted = true;
-    render();
-    setStatus("Submitted to RedLine. The agent queue has it.", "ok");
+    if (request) {
+      // The task stays open so a developer can review and send it; the tester may update it.
+      state.requested = true;
+      state.readOnly = false;
+      state.submitted = false;
+      render();
+      setStatus("Sent to a developer for review.", "ok");
+    } else {
+      state.readOnly = true;
+      state.submitted = true;
+      render();
+      setStatus("Submitted to RedLine. The agent queue has it.", "ok");
+    }
   } catch (error) {
     setStatus(error.message || String(error), "err");
   } finally {
@@ -1178,6 +2072,7 @@ async function submit() {
 }
 
 async function discard() {
+  if (state.overlayMode) return discardOverlay();
   if (!state.capture) return;
   const local = state.local;
   if (!confirm(local ? "Delete this local review and its files?" : "Delete this review and its screenshot?")) {
@@ -1222,19 +2117,79 @@ function openRedLine() {
 }
 
 $("capture").addEventListener("click", captureCurrent);
-$("capture-offline").addEventListener("click", captureOffline);
+$("allow-capture").addEventListener("click", () => {
+  allowCaptureSite().catch((error) => setStatus(error.message || String(error), "err"));
+});
+$("connect-local").addEventListener("click", openSettings);
+$("allow-overlay").addEventListener("click", () => {
+  allowCaptureSite().catch((error) => overlayFailure(error));
+});
+$("capture-new").addEventListener("click", captureCurrent);
 $("open-capture").addEventListener("click", openRedLine);
-$("open-options").addEventListener("click", () => chrome.runtime.openOptionsPage());
-$("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("theme").addEventListener("click", () => {
+  const theme = toggleTheme();
+  renderThemeButton();
+  if (state.overlayMode) overlayCommand({ type: "set-theme", theme });
+});
+$("project").addEventListener("change", (event) => {
+  updateProject(event.target.value).catch((error) =>
+    setStatus(error.message || String(error), "err"),
+  );
+});
+$("branch").addEventListener("change", (event) => {
+  updateBranch(event.target.value).catch((error) =>
+    setStatus(error.message || String(error), "err"),
+  );
+});
+$("branch").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  updateBranch(event.target.value).catch((error) =>
+    setStatus(error.message || String(error), "err"),
+  );
+});
+$("settings").addEventListener("click", () => {
+  if ($("settings-panel").hidden) openSettings();
+  else closeSettings();
+});
+$("settings-close").addEventListener("click", closeSettings);
+$("settings-save").addEventListener("click", () => {
+  saveSettings().catch((error) => setSettingsStatus(error.message || String(error), "err"));
+});
+$("settings-test").addEventListener("click", () => {
+  testSettings().catch((error) => setSettingsStatus(error.message || String(error), "err"));
+});
 $("submit").addEventListener("click", submit);
 $("discard").addEventListener("click", discard);
 $("open-redline").addEventListener("click", openRedLine);
 
 chrome.runtime.onMessage.addListener((message) => {
+  if (message?.type === "redline-overlay-state") {
+    if (message.sessionId !== state.capture?.sessionId) return;
+    applyOverlayState(message);
+    return;
+  }
   if (message?.type === "capture-created" && message.capture) {
+    if (state.capture?.sessionId === message.capture.sessionId) return;
     if (message.capture.mode === "local") loadLocalCapture(message.capture);
     else loadCapture(message.capture);
   }
 });
 
-loadActiveCapture().catch((error) => showEmpty(error.message || String(error)));
+chrome.tabs.onActivated.addListener(() => {
+  refreshCaptureContext().catch(() => {});
+});
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+  if (changeInfo.status || changeInfo.url) refreshCaptureContext().catch(() => {});
+});
+
+// The e2e uses this marker; it also tells a human the panel is wired.
+renderThemeButton();
+watchTheme(() => renderThemeButton());
+// `ready` means the panel has settled, not just that the module ran: tests (and a human) must
+// not see the default empty HTML for a frame before an active capture replaces it.
+loadActiveCapture()
+  .catch((error) => showEmpty(error.message || String(error)))
+  .finally(() => {
+    document.body.dataset.ready = "1";
+  });

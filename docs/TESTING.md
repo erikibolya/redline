@@ -149,7 +149,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `failed_logins_are_throttled`.
 - Browser e2e: first-run bootstrap creates the owner; the login page shows the sign-in form;
   username/password login sets the CSRF cookie and reaches `/api/auth/me` as owner; logout
-  revokes the session. 310 checks.
+  revokes the session. 315 checks.
 - **Current gaps:** PAT/agent-token UI, invite/reset links, audit UI and optimistic revision still
   need their tests as they arrive.
 
@@ -170,7 +170,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   another member, and unknown projects, invalid roles and the owner target are refused.
 - Browser e2e: People & access renders a user list (no project matrix); **Projects** opens the
   dialog with the project list, a role is saved and appears as a project chip; invite and reset
-  flows remain covered. The editor/rail role labels are in the 310-check suite.
+  flows remain covered. The editor/rail role labels are in the 315-check suite.
 
 ## Invite and reset links (v0.28, in progress)
 
@@ -185,7 +185,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   transfer test also asserts the `owner.transfer` notification.
 - Browser e2e: invite checkbox hidden-password mode, copy-once invite URL, the invited page greets
   the person, accepting the link signs them in as an active member, and **Reset link** generates a
-  `/reset/rl_rst_…` URL from the people list. 310 checks.
+  `/reset/rl_rst_…` URL from the people list. 315 checks.
 - **Not yet covered:** accepting a reset link in Chromium, transfer ownership through the UI
   (covered by Rust), and invite-link expiry through the browser.
 
@@ -205,7 +205,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: the owner creates a personal token in `/tokens`, uses the raw value for
   `/api/auth/me`, revokes it and gets `401`; creates an agent token with a project/job scope and
   sees it listed. A tester sees the People icon titled **Personal tokens**, opens it, and gets the
-  personal-token page without the owner's agent-token card. 310 checks.
+  personal-token page without the owner's agent-token card. 315 checks.
 - **Not yet covered:** the extension/CLI using a PAT in its own e2e, `last_used_at` display
   refreshed after use, and token expiry through the browser.
 
@@ -221,7 +221,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: fresh task at revision 0; an agent `post_round` behind the canvas makes the UI
   submit stale, the conflict banner names revision 1, **Reload theirs** discards the local draft
   and loads the newer round; a second agent round names revision 2 and **Keep mine** submits the
-  local ellipse as revision 3. 310 checks.
+  local ellipse as revision 3. 315 checks.
 - **Not yet covered:** a tester request conflict through the UI, video-round conflicts in the
   browser, and multi-tab edits on the same machine (the server guard is covered by Rust).
 
@@ -236,7 +236,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer gets `403`.
 - Browser e2e: the owner opens **Audit log** from People & access, sees the `membership.update`
   row just written, and the row shows a locale-formatted time and actor; a tester sees the
-  owner-only card. 310 checks.
+  owner-only card. 315 checks.
 - **Not yet covered:** MCP/agent actions in the audit stream, audit for handoff results and
   notification delivery, and audit-log rotation beyond the file-size compaction.
 
@@ -250,7 +250,7 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   a developer resolves it, and an unknown mention is `400`. The tester→developer test also
   asserts `review.ready` and `review.submitted` notifications.
 - Browser e2e: the tester opens **Discussion**, posts a comment and the API returns it; the owner
-  comments from another context; the tester's bell shows the owner's comment. 310 checks.
+  comments from another context; the tester's bell shows the owner's comment. 315 checks.
 - **Not yet covered:** audit log, notification for handoff done/failed and ownership transfer,
   comment rate limiting, and the desktop notification surface.
 
@@ -410,9 +410,40 @@ same path a human does: upload, play, draw, range, zoom, submit.
 
 - The browser e2e job also builds a temporary extension copy with host
   permission for `127.0.0.1:8788`, launches headless Chromium with `--load-extension`, configures
-  the options page, submits an image rectangle, then a video + trace rectangle at `0.5 s`.
-- It asserts the server payload: image annotation width 3; video `meta.trace.kind=browser-flow`,
-  `annotations[0].at=0.5`, and at least one annotated frame.
+  the connection form in the side panel, opens a target tab, injects the full-screen overlay,
+  selects an arrow in the side panel, draws on the page, closes and reopens the panel to check the draft, types a note and
+  submits. It then exports a local
+  image through the overlay and submits a video + trace rectangle at `0.5 s` through the
+  side-panel video editor.
+- It asserts the server payload: image annotations `arrow` + `ellipse`, width 3 and the note in
+  `meta.prompt`; video `meta.trace.kind=browser-flow`, `annotations[0].at=0.5`, and at least one
+  annotated frame. It also asserts the toolbar order/icons (no text tool), the width label, the
+  desktop gear, the red delete button armed only by a selection and undo; the panel uses the
+  desktop light/dark tokens (panel/panel-2/panel-3, border pair, blue accent, transparent tools,
+  solid-red danger) rather than a separate scheme; the theme toggle changes the panel and the live
+  overlay and persists in `localStorage`; a 280 px panel keeps each toolbar group on one line with
+  no horizontal overflow; and a row-level trash deletes one annotation with undo. The connection
+  form has no project or branch; the capture panel starts the round in the Inbox, moves it to
+  `e2e-repo`, renames its branch, stores the choice in the project memory and locks both controls
+  after submit; a real second capture on the same page is filed in `e2e-repo` by the background.
+  The row number uses the annotation colour, not the UI accent. The overlay has no close or pause
+  button (Discard lives in the panel), and the manifest unit test asserts the
+  action has no popup and the overlay files are web-accessible.
+- Extension API unit tests assert that `submit(..., {request:true})` and
+  `submitVideo(..., {request:true})` target `/request-agent` for image and video.
+- The extension e2e opens the side panel with the gear, asserts the inline connection form is
+  populated, saves it without opening the options tab, and checks that the empty panel names the
+  extension tab, disables **Screenshot current tab** and explains that a web page tab is needed.
+- The extension e2e clears the server config, presses **Screenshot current tab**, verifies the
+  page overlay and the orange local warning, then exports the local review through the picker
+  mock. The overlay-injection permission failure is manual on a third-party site (the e2e target
+  origin is already granted); **Allow access to this page** requests that origin and retries.
+- The extension e2e also drives the tester path end to end: it ensures an `e2e-tester` user and
+  project, mints a tester PAT, configures the panel with it, opens the overlay, draws a rectangle,
+  asserts the button says **Send to developer**, submits to `/request-agent`, and verifies the
+  task stays `open` with `agent_requested_at`/`agent_requested_by` and a saved annotation. The
+  panel then shows **Open captured review** for the requested task. A developer submit through
+  `/annotations` changes the task to `submitted` and clears the request.
 - It measures the options row before configuring: the Project select and Branch input must share a
   top, and the “(optional)” hint must stay on the Branch line (a bare flex item pushed the input
   a row down; 2026-11-03).

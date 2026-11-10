@@ -6,7 +6,7 @@ A zero-friction visual feedback loop: the agent produces a screenshot, the human
 the agent receives a precise, machine-readable description of what to change. Offline, no
 accounts, runs where the agents run.
 
-**Shipped and in production:** `v0.28.1` on holly — `https://redline.ibolya.cz`, container
+**Shipped and in production:** `v0.28.2` on holly — `https://redline.ibolya.cz`, container
 `ghcr.io/erikibolya/redline:browser`, MCP at `/mcp`, data in `/mnt/user/appdata/redline`. Multi-user release deployed 2026-11-03; upgrade notes in `docs/MIGRATION-v0.28.md`.
 
 ## What exists today
@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 176 Rust tests, 22 extension unit tests, 310-check browser E2E in CI on Linux + Windows |
+| Tests | 176 Rust tests, 27 extension unit tests, 315-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -66,7 +66,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
       sessions/CSRF, login page, owner bootstrap/transfer UI, the audit trail, personal tokens,
       scoped agent tokens, invite/reset links and `docs/MIGRATION-v0.28.md`.
 - [x] **Roles & project ACL:** Developer/Tester/Viewer, per-project memberships, required project,
-      tester `Request agent review`, server-side submit permission, owner People & access.
+      tester `Send to developer`, server-side submit permission, owner People & access.
 - [x] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, optimistic
       revision conflicts (server `409`, in-stage Reload theirs / Keep mine).
 - [ ] **Integrations:** desktop/CLI login, share links, OIDC/SSO later. *Done:* extension/CLI PAT
@@ -97,10 +97,11 @@ migration guide; not part of v0.27.
 ## Next (ordered)
 
 0. **Browser capture extension** — `docs/EXTENSION.md`: server trace foundation (Phase 1),
-   screenshot + side-panel image editor (Phase 2), tab recording with console/network/action trace
-   (Phase 3), the side-panel video annotator/trace panel (Phase 4), the store package/privacy copy
-   and extension e2e (Phase 5), and offline folder/ZIP export (Phase 6) are done; store publishing
-   remains.
+   tab recording with console/network/action trace (Phase 3), the side-panel video
+   annotator/trace panel (Phase 4), the store package/privacy copy and extension e2e (Phase 5),
+   and offline folder/ZIP export (Phase 6) are done. Phase 7 (v0.4.0) moves screenshot annotation
+   onto the frozen page with the side panel as the control deck; video in the same deck and store
+   publishing remain.
 1. **Video reviews** — phases 1–3 are in (`docs/VIDEO.md`): media core, browser upload, canvas
    playback, timecoded annotations and ranges, ghosts, zoomable timeline, contact sheet + full
    frames, new video rounds, history playback and `post_round` video. Phase 4 is the release
@@ -140,10 +141,10 @@ migration guide; not part of v0.27.
   capture error paths, history archival, diff semantics, feature confirmation/cancel, agent
   settings/claims/leases/limits/next, parallel bridge claims in separate worktrees, path/config
   helpers, video media/limits/frames/rounds/timecodes, browser trace validation/summary/history/feedback/resource, CLI end-to-end.
-- `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 22 extension
+- `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 27 extension
   unit tests: annotation geometry/hit-testing/moving, server URL/permission config, offline review
   Markdown/JSON and the ZIP writer.
-- `desktop/scripts/e2e.sh` — 310 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 315 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

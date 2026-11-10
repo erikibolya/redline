@@ -1,5 +1,103 @@
 # Changelog
 
+## 0.28.3 — 2026-11-10
+
+- **One connection form, in the panel.** Removed the standalone options page and its manifest
+  entry; the gear in the side panel is the only connection surface. The store set now leads with
+  the capture screen, then a live review and an offline export. Extension 0.7.3 (2026-11-10).
+- **Connect once, choose the destination while annotating.** The connection form now owns only
+  the server URL and token, with **Test** and **Connect**; project and branch moved to the capture
+  panel, where they describe the round being annotated. The extension remembers the project chosen
+  for a page origin, with the last chosen project as the global fallback, so the next capture is
+  filed there and the select is preset; moving the open round or renaming its branch updates the
+  session through `PUT /api/sessions/{id}/project|branch`, and both lock once the round is
+  submitted. A stale remembered project falls back to the Inbox instead of a dead capture button.
+  The standalone connection page (and its store screenshot) uses the desktop palette and the same
+  server/token-only form. Extension 0.7.2 (2026-11-10).
+- **The capture panel is the desktop editor, not a separate theme.** It now uses the desktop
+  palette and component shapes: panel / panel-2 / panel-3 surfaces, the same border pair, the blue
+  accent, transparent toolbar tools with a blue active state, a white header in light theme and the
+  desktop's solid-red destructive buttons. Inputs, annotation rows, dividers and the note field
+  follow the same treatment, and annotation numbers use the annotation's own colour instead of the
+  UI accent. Toolbar groups wrap as units (colour + slider + px label, undo/redo/delete), the
+  dark/light toggle is shared with the page overlay, and every annotation row keeps its red trash
+  button. The panel-side button from the 0.7.0 test build is removed: Chrome exposes
+  `getLayout()` but no setter, so it could only open a settings page. Extension 0.7.1
+  (2026-11-10).
+- **The extension toolbar is the RedLine toolbar.** Removed the text-only tool; the extension now
+  uses the desktop tools and icons: select, rectangle, arrow, pen, ellipse, colour and a width
+  slider. The settings gear uses the desktop cog. Undo/redo stay and are added to the desktop
+  toolbar too; delete is a red trash button armed only by a selection. Extension 0.6.0; desktop
+  UI updated (2026-11-10).
+- **A first page should not carry a setup link or a stale deletion notice.** Removed the blue
+  **Connect RedLine** link from the empty panel (the header gear opens the connection form) and
+  stopped printing "Task discarded" / "Local review deleted" after a successful discard.
+  Extension 0.5.1 (2026-11-10).
+- **A pause button is not a cancel button.** Removed the Pause/Resume control and the pause
+  path: the overlay stays open until **Submit**/**Export review** or **Discard**, and closing and
+  reopening the side panel reconnects to the same round. **Discard** is the only destructive
+  action. Extension 0.5.0 (2026-11-10).
+- **Ask for page access before the capture, not after it failed.** The **Screenshot current
+  tab** click now requests the active page origin first and continues only after it is granted.
+  The existing **Allow capture on this site** and **Allow access to this page** remain as
+  fallbacks if the prompt is denied or an overlay injection is refused later. Extension 0.4.9
+  (2026-11-10).
+- **A scrollbar is part of the page, not the overlay.** The background now hides the page
+  scrollbar while it takes the screenshot and restores it afterwards (`insertCSS` for the
+  activeTab path, `Emulation.setScrollbarsHidden` for the debugger fallback). The overlay no
+  longer has its own ✕ button; use **Discard** (or **Pause**) in the side panel. Extension 0.4.8
+  (2026-11-10).
+- **A capture can succeed before the overlay has permission.** On Facebook the screenshot was
+  saved locally, but `chrome.scripting` could not inject the overlay because the manifest did not
+  have access to that host. The workspace now offers **Allow access to this page**, requests the
+  page origin and retries the overlay instead of leaving only the raw error. Extension 0.4.7
+  (2026-11-10).
+- **One capture button.** The empty panel no longer offers a separate Save locally link.
+  **Screenshot current tab** uses the server when connected, otherwise captures locally and the
+  workspace shows an orange "Not connected — this review is saved locally" warning with a
+  **Connect RedLine** link. **Export review** packages the local files. Extension 0.4.6
+  (2026-11-07).
+- **Save locally is the same canvas.** Local image captures now freeze the page under the same
+  in-page overlay and keep the controls in the side panel; **Export review** packages the composed
+  PNG, annotations and note. Local video keeps the side-panel editor. Extension 0.4.5
+  (2026-11-07).
+- **A screenshot cannot depend on activeTab alone.** Chrome's `captureVisibleTab` accepts
+  `activeTab` or `<all_urls>`, not a site-specific permission, so "Allow capture on this site"
+  could be granted and the capture still failed. The background now falls back to the
+  `debugger` permission (already used for recording): it attaches, calls
+  `Page.captureScreenshot`, detaches immediately and continues with the same review. The
+  debugger banner may flash for that capture. Extension 0.4.4 (2026-11-07).
+- **A permission prompt is better than a dead capture.** When the side panel is on a web tab
+  that was not opened through the action icon, **Screenshot current tab** now offers **Allow
+  capture on this site**; granting it requests that page origin and retries the capture. Clicking
+  the icon on the page tab still works through `activeTab` without a prompt. Extension 0.4.3
+  (2026-11-07).
+- **A capture button must name its tab.** The empty side panel shows which tab it sees and,
+  for `chrome://` or `chrome-extension://` pages, disables **Screenshot current tab** with
+  "Switch to the web page tab you want to capture." A missing activeTab grant now says to click
+  the RedLine icon on the page tab. Extension 0.4.2 (2026-11-07).
+- **A connection form is not a new tab.** The side panel gear and **Connect RedLine** now open
+  an inline server/token/project form; the full options page stays available from
+  `chrome://extensions`. A missing configuration or a non-http active tab now explains why
+  **Screenshot current tab** did nothing instead of leaving the button silent. Extension 0.4.1
+  (2026-11-07).
+- **The side panel is a control deck, not the canvas.** The extension action now opens the side
+  panel (`openPanelOnActionClick`, no popup). **Screenshot current tab** freezes the viewport
+  under a full-screen overlay; tools, annotation list, note, submit and pause stay in the panel,
+  and the page returns to live after submit/discard. Pause/resume restores the draft, tool and
+  colour. Extension 0.4.0 (2026-11-07). Video moves into the same panel in the next phase.
+- **A tester button is not a submit button.** The capture extension always called
+  `/api/sessions/{id}/annotations`, which a tester is correctly forbidden from using, so a tester
+  could not queue a capture for a developer. The panel now reads `meta.my_role`: a tester gets
+  **Send to developer** and the same image/video payload goes to `/request-agent`, leaving the
+  task open with **Update request**; developers/owners keep **Submit to RedLine**. The extension
+  e2e now drives the same path with a real tester PAT and a developer hand-off. Extension
+  version 0.3.2 (2026-11-07).
+- **A developer queue is not an agent queue.** The tester action now says **Send to developer**
+  and the rail badge says **waiting for developer** (web and extension), so a tester is not led to
+  believe the round goes straight to the agent. The developer still sends it with **Send to
+  agent**; the endpoint and audit kind keep `request-agent` for compatibility.
+
 ## 0.28.2 — 2026-11-04
 
 - **A people icon is not an owner icon.** Every named user now sees the People icon: the owner

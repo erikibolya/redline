@@ -1,27 +1,37 @@
 # RedLine Capture (browser extension)
 
-A Chrome/Edge MV3 extension that captures the current tab, opens it in a side-panel annotator, and
-either submits the review to a RedLine server or exports it as a folder/ZIP for an AI assistant.
+A Chrome/Edge MV3 extension that captures the current tab, freezes it under a full-screen
+annotation overlay, and keeps the tools in the side panel. It either submits the review to a
+RedLine server or exports it as a folder/ZIP for an AI assistant.
 
 ## Development
 
 1. Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**, choose
    **Load unpacked**, and select this `extension/` directory.
-2. Open the extension options (gear in the popup), paste your RedLine server URL and token, then
-   **Save & request access**. Chrome asks for access to that server origin.
-3. Open an `http(s)` page, click the RedLine Capture toolbar icon, and choose
-   **Screenshot & annotate**.
-4. Draw in the side panel, add a note, and **Submit to RedLine**. The review goes into the normal
-   RedLine queue; the agent reads the annotations and the submitted note.
-5. To record a flow, use **Record flow** in the popup. Chrome shows a debugging bar; click through
-   the app, use **Mark** for a moment, then **Stop & save**. The clip and trace upload together.
-   The side panel opens the recorded flow with a video timeline, trace filters and timecoded
-   annotations.
+2. Click the RedLine Capture toolbar icon. The **side panel** opens; use the gear in its header
+   to open the connection form, paste your RedLine server URL and token, then **Connect**.
+   Chrome asks for access to that server origin.
+3. Open an `http(s)` page, click the RedLine icon, and press **Screenshot current tab**. The
+   first capture asks for access to that page (Chrome needs the click); later captures do not.
+4. The page freezes under the overlay (without its scrollbar). Draw directly on the page; the side
+   panel holds the tools, annotation list and note. Press **Submit to RedLine** (or **Send to
+   developer** as a tester). The overlay closes and the page returns to live. Use **Discard** to
+   cancel; there is no close or pause button in the overlay. Closing the side panel keeps the
+   overlay, and reopening the panel reconnects to the same round.
+   If the panel was opened on another tab, press **Allow capture on this site** once; the
+   extension asks for access to that page and retries. If the screenshot succeeds but the overlay
+   cannot be injected, press **Allow access to this page** in the workspace footer.
+5. Video flow moves into the same panel in the next phase. Until then, use the RedLine web editor
+   for video reviews; the side-panel video editor remains for captures created by the recording
+   pipeline.
 
 ## Offline export (no server)
 
-1. In the popup, use **Screenshot offline** or **Record offline**; no token or server is needed.
-2. Annotate in the side panel and click **Export review**.
+1. Do not configure a server (or use a fresh profile) and press **Screenshot current tab**. The
+   page freezes under the same in-page overlay; no token or server is needed. The workspace shows
+   the orange local-save warning.
+2. Draw on the page, then click **Export review** in the side panel. The folder/ZIP contains the
+   composed PNG and annotations. Local video still uses the side-panel editor.
 3. Choose a folder (File System Access API) or let the ZIP fallback download
    `redline-review-<id>.zip`.
 
@@ -31,17 +41,24 @@ recording. Attach it to an AI assistant; the prompt explains what to read.
 
 ## What is implemented
 
-- Server/token/project/branch configuration with an origin-scoped host permission.
+- Server/token connection with an origin-scoped host permission. Project and branch are chosen
+  on the capture panel; the last project is remembered per page origin.
 - Visible-tab screenshot capture and image-session creation.
-- Side-panel canvas editor: select/move, rectangle, arrow, pen, text note, colour/width, undo/redo,
-  delete, clear, per-session draft, annotated PNG composition and submit.
+- **In-page screenshot annotation:** full-screen frozen overlay, direct drawing, side-panel tools,
+  annotation list, note, submit/discard.
+- Side-panel canvas editor for video and offline captures: select/move, rectangle, arrow, pen,
+  ellipse, colour/width, undo/redo, delete (selected and per row), clear, per-session draft,
+  annotated PNG composition and submit.
+- **Theme and layout:** a dark/light toggle next to the settings gear, shared with the page
+  overlay. The panel uses the desktop editor's palette, buttons, inputs and annotation-row
+  styling, and the toolbar wraps its groups as units in a narrow panel.
 - **Open in RedLine** for the full editor; a submitted review is read-only in the panel.
 
 ## Recording
 
 - `tabCapture` + MediaRecorder in an offscreen document; the video bytes never cross the extension
   message channel.
-- `chrome.debugger` attaches only after Record and collects console/exceptions, network metadata
+- `chrome.debugger` attaches after Record (console/exceptions, network metadata) and briefly for a screenshot when `activeTab` is unavailable;
   (no headers/bodies) and navigation. A content script records click/change/submit actions.
 - URLs and console text are redacted (Bearer tokens, `token/key/secret/password/code/session`
   query values). The trace is capped at 5,000 events and 10 MB; the video is capped by RedLine.
@@ -68,11 +85,16 @@ node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs ex
 The same command runs in CI on Linux and Windows. There is no build step; reload the unpacked
 extension after changing a file.
 
-Manual smoke test: configure a local/test RedLine, capture a page,
-draw a rectangle, arrow, pen and text note, move one, undo/redo, reload the side panel to prove
-the draft survives, submit, then open the review in RedLine and verify the numbered annotations and
-the agent note. Also verify that a submitted review opens read-only. For offline mode, use
-**Screenshot offline** / **Record offline**, annotate, export to a folder, and verify the files; then
+Manual smoke test: configure a local/test RedLine, click the toolbar icon, press
+**Screenshot current tab**, draw a rectangle, arrow, pen and ellipse on the page, move one,
+undo/redo, close and reopen the panel to prove the draft survives, submit, then open the review in RedLine
+and verify the numbered annotations and the agent note. Also narrow the panel until the toolbar
+wraps (the colour/slider/label and undo/redo/delete groups must stay whole), toggle the theme and
+verify the overlay follows it, change the project and branch on the capture panel, capture the
+same page again and verify the project is preselected, and delete a single annotation from its
+own row trash button. Also verify that a submitted review opens
+read-only. For offline mode, remove the server config and press **Screenshot current tab**,
+annotate on the page, confirm the orange warning, export to a folder and verify the files; then
 reject the folder picker and verify the ZIP fallback.
 
 Recording smoke test: start Record on a local page, trigger a click, a console error and a failed
@@ -85,7 +107,9 @@ credentials; the trace redacts URLs and tokens but the video is a real screen re
 - `activeTab` — capture only after the human clicks the action.
 - `tabs` — read the current tab's title/URL and open the RedLine review.
 - `storage` — config, active capture and unsent drafts.
-- `sidePanel` — the annotator.
-- `scripting` / `tabCapture` / `offscreen` / `debugger` — only after an explicit Record click;
-  the debugger is detached on stop.
+- `sidePanel` — the control deck.
+- `scripting` — injects the full-screen overlay after **Screenshot current tab**.
+- `tabCapture` / `offscreen` / `debugger` — recording uses them after an explicit Record click; a
+  screenshot fallback attaches the debugger briefly when `activeTab` is unavailable and detaches
+  immediately (video recording UI is being moved into the panel).
 - Optional host permission — requested for the configured RedLine server origin only.

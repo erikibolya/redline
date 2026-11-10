@@ -40,7 +40,7 @@ fn dirs_token() -> Option<PathBuf> {
     Some(PathBuf::from(home).join(".config/redline/token"))
 }
 
-fn main() {
+fn build_config(require_token: bool) -> AgentConfig {
     let repo = env("REDLINE_AGENT_REPO").unwrap_or_else(|| {
         std::env::current_dir()
             .map(|path| path.display().to_string())
@@ -48,7 +48,11 @@ fn main() {
     });
     let mut config = AgentConfig::new(
         env("REDLINE_URL").unwrap_or_else(|| "http://127.0.0.1:8788".to_string()),
-        token(),
+        if require_token {
+            token()
+        } else {
+            String::new()
+        },
         repo,
     );
     if let Some(model) = env("REDLINE_AGENT_MODEL") {
@@ -86,7 +90,41 @@ fn main() {
     {
         config.workers = workers.clamp(1, 32);
     }
+    config
+}
 
+fn main() {
+    let mut args = std::env::args().skip(1);
+    let command = args.next();
+    if command.as_deref() == Some("prune") {
+        let apply = args.any(|arg| arg == "--yes" || arg == "-y");
+        let config = build_config(false);
+        if !config.repo.is_dir() {
+            eprintln!(
+                "redline-agent: repository does not exist: {}",
+                config.repo.display()
+            );
+            std::process::exit(2);
+        }
+        match redline_agent::prune_worktrees(&config, apply) {
+            Ok(report) => {
+                println!(
+                    "redline-agent: {} candidate(s), {} removed, {} failed",
+                    report.candidates, report.removed, report.failed
+                );
+                if report.failed > 0 {
+                    std::process::exit(1);
+                }
+            }
+            Err(err) => {
+                eprintln!("redline-agent: {err}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    let config = build_config(true);
     if !config.repo.is_dir() {
         eprintln!(
             "redline-agent: repository does not exist: {}",

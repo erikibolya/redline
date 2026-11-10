@@ -1,4 +1,4 @@
-export const TOOLS = ["select", "rect", "arrow", "pen", "text"];
+export const TOOLS = ["select", "rect", "ellipse", "arrow", "pen"];
 
 export function newId() {
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -167,6 +167,20 @@ export function drawAnnotation(ctx, annotation, number, selected = false) {
   if (annotation.type === "rect") {
     const { start, end } = annotation;
     ctx.strokeRect(start.x, start.y, end.x - start.x, end.y - start.y);
+    drawBadge(ctx, start.x, start.y, number);
+  } else if (annotation.type === "ellipse") {
+    const { start, end } = annotation;
+    ctx.beginPath();
+    ctx.ellipse(
+      (start.x + end.x) / 2,
+      (start.y + end.y) / 2,
+      Math.abs(end.x - start.x) / 2,
+      Math.abs(end.y - start.y) / 2,
+      0,
+      0,
+      Math.PI * 2,
+    );
+    ctx.stroke();
     drawBadge(ctx, start.x, start.y, number);
   } else if (annotation.type === "arrow") {
     const { start, end } = annotation;

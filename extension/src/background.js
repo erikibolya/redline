@@ -1,5 +1,5 @@
 import { RedLineApi } from "./lib/api.js";
-import { isConfigured, loadConfig } from "./lib/config.js";
+import { isConfigured, loadConfig, projectForCapture, rememberProject } from "./lib/config.js";
 import { newLocalId, putCapture } from "./lib/local-store.js";
 import { consoleText, makeTrace, redactText, redactUrl } from "./lib/trace.js";
 
@@ -24,6 +24,84 @@ function assertRecordable(tab) {
   }
 }
 
+const SCROLLBAR_CSS =
+  "html,body{overflow:hidden !important;scrollbar-width:none !important;}"
+  + "html::-webkit-scrollbar,body::-webkit-scrollbar{display:none !important;width:0 !important;}";
+
+async function setPageScrollbarsHidden(tabId, hidden) {
+  try {
+    if (hidden) {
+      await chrome.scripting.insertCSS({ target: { tabId }, css: SCROLLBAR_CSS });
+    } else {
+      await chrome.scripting.removeCSS({ target: { tabId }, css: SCROLLBAR_CSS });
+    }
+    return true;
+  } catch {
+    // No host permission: the debugger fallback hides scrollbars through CDP instead.
+    return false;
+  }
+}
+
+async function capturePage(tab) {
+  const hidden = await setPageScrollbarsHidden(tab.id, true);
+  if (hidden) await new Promise((resolve) => setTimeout(resolve, 60));
+  try {
+    return await captureVisible(tab);
+  } finally {
+    if (hidden) await setPageScrollbarsHidden(tab.id, false);
+  }
+}
+
+async function captureWithDebugger(tabId) {
+  const recordingOwnsTab = Boolean(recording?.active && recording.tabId === tabId);
+  let attached = false;
+  if (!recordingOwnsTab) {
+    try {
+      await chrome.debugger.attach({ tabId }, "1.3");
+      attached = true;
+    } catch (error) {
+      throw new Error(
+        `Cannot capture this tab: ${error.message || error}. Close DevTools and try again.`,
+      );
+    }
+  }
+  try {
+    await chrome.debugger.sendCommand({ tabId }, "Page.enable");
+    await chrome.debugger
+      .sendCommand({ tabId }, "Emulation.setScrollbarsHidden", { hidden: true })
+      .catch(() => {});
+    try {
+      const shot = await chrome.debugger.sendCommand(
+        { tabId },
+        "Page.captureScreenshot",
+        { format: "png", fromSurface: true, captureBeyondViewport: false },
+      );
+      if (!shot?.data) throw new Error("The tab returned no screenshot.");
+      return `data:image/png;base64,${shot.data}`;
+    } finally {
+      await chrome.debugger
+        .sendCommand({ tabId }, "Emulation.setScrollbarsHidden", { hidden: false })
+        .catch(() => {});
+    }
+  } finally {
+    if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
+}
+
+/**
+ * `captureVisibleTab` needs activeTab or <all_urls>; a per-site permission does not satisfy it.
+ * When the side panel was opened on another tab, fall back to the debugger (already used for
+ * recording) instead of leaving the human with a dead capture button.
+ */
+async function captureVisible(tab) {
+  try {
+    return await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  } catch (error) {
+    if (!/activeTab|all_urls/i.test(error?.message || String(error))) throw error;
+    return captureWithDebugger(tab.id);
+  }
+}
+
 async function captureAndCreate({ tabId } = {}) {
   const config = await loadConfig();
   if (!isConfigured(config)) {
@@ -34,20 +112,34 @@ async function captureAndCreate({ tabId } = {}) {
   const tab = await activeTab(tabId);
   if (!tab.windowId) throw new Error("The active tab has no window");
   assertRecordable(tab);
-  const imageDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  const imageDataUrl = await capturePage(tab);
   const api = new RedLineApi(config);
-  const created = await api.createImageSession({
-    imageDataUrl,
-    title: tab.title || "Screenshot",
-    url: tab.url || "",
-    project: config.project,
-    branch: config.branch,
-  });
+  const remembered = await projectForCapture(tab.url || "");
+  const project = remembered === null ? (config.project || "") : remembered;
+  const create = (target) =>
+    api.createImageSession({
+      imageDataUrl,
+      title: tab.title || "Screenshot",
+      url: tab.url || "",
+      project: target,
+    });
+  let created;
+  try {
+    created = await create(project);
+  } catch (error) {
+    // A remembered project can disappear after a membership change. File the capture in the
+    // Inbox and let the human choose again instead of leaving a dead capture button.
+    if (!project || (error.status !== 404 && error.status !== 403)) throw error;
+    await rememberProject(tab.url || "", "");
+    created = await create("");
+  }
   const capture = {
     sessionId: created.meta.id,
+    tabId: tab.id,
     serverUrl: config.serverUrl,
     reviewUrl: created.review_url,
     title: created.meta.title,
+    url: tab.url || "",
     createdAt: new Date().toISOString(),
   };
   await chrome.storage.session.set({ [ACTIVE_KEY]: capture });
@@ -63,7 +155,7 @@ async function captureLocal({ tabId } = {}) {
   const tab = await activeTab(tabId);
   if (!tab.windowId) throw new Error("The active tab has no window");
   assertRecordable(tab);
-  const imageDataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+  const imageDataUrl = await capturePage(tab);
   const imageBlob = await (await fetch(imageDataUrl)).blob();
   const id = newLocalId("local-image");
   const title = tab.title || "Screenshot";
@@ -83,6 +175,7 @@ async function captureLocal({ tabId } = {}) {
   const capture = {
     sessionId: id,
     id,
+    tabId: tab.id,
     mode: "local",
     kind: "image",
     title,
@@ -380,6 +473,7 @@ async function stopRecording() {
       const capture = {
         sessionId: saved.id,
         id: saved.id,
+        tabId: current.tabId,
         mode: "local",
         kind: "video",
         title: current.title,
@@ -395,6 +489,8 @@ async function stopRecording() {
       return { capture, trace: null };
     }
 
+    const remembered = await projectForCapture(current.url);
+    const project = remembered === null ? (config.project || "") : remembered;
     let created;
     try {
       created = await offscreen({
@@ -404,8 +500,7 @@ async function stopRecording() {
         title: current.title,
         url: current.url,
         note: "",
-        project: config.project,
-        branch: config.branch,
+        project,
       });
     } catch (error) {
       // Keep the stopped clip in the offscreen document for a later retry.
@@ -413,9 +508,11 @@ async function stopRecording() {
     }
     const capture = {
       sessionId: created.meta.id,
+      tabId: current.tabId,
       serverUrl: config.serverUrl,
       reviewUrl: created.review_url,
       title: created.meta.title,
+      url: current.url,
       kind: "video",
       createdAt: new Date().toISOString(),
     };
@@ -495,6 +592,20 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       } else if (message?.type === "get-active-capture") {
         const stored = await chrome.storage.session.get(ACTIVE_KEY);
         sendResponse({ ok: true, capture: stored[ACTIVE_KEY] || null });
+      } else if (message?.type === "redline-overlay-request-close") {
+        // The overlay iframe cannot remove its own host; the content script owns the DOM node.
+        // The background is the only long-lived router when the side panel is closed.
+        const stored = await chrome.storage.session.get(ACTIVE_KEY);
+        const capture = stored[ACTIVE_KEY];
+        if (capture?.tabId && (!message.sessionId || capture.sessionId === message.sessionId)) {
+          await chrome.tabs
+            .sendMessage(capture.tabId, {
+              type: "redline-overlay-close",
+              sessionId: capture.sessionId,
+            })
+            .catch(() => {});
+        }
+        sendResponse({ ok: true });
       } else if (message?.type === "clear-active-capture") {
         await chrome.storage.session.remove(ACTIVE_KEY);
         sendResponse({ ok: true });
@@ -539,12 +650,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true;
 });
 
-chrome.runtime.onInstalled.addListener(() => {
+// The action icon is the RedLine door: it opens the control panel, never a popup. The setting
+// persists, but calling it on startup and install keeps older profiles in sync.
+function openPanelOnActionClick() {
   try {
-    chrome.sidePanel
-      ?.setPanelBehavior?.({ openPanelOnActionClick: false })
-      ?.catch?.(() => {});
+    chrome.sidePanel?.setPanelBehavior?.({ openPanelOnActionClick: true })?.catch?.(() => {});
   } catch {
-    // Older Chromium builds do not expose sidePanel; the popup falls back to a review tab.
+    // Older Chromium builds do not expose sidePanel.
   }
-});
+}
+
+openPanelOnActionClick();
+chrome.runtime.onInstalled.addListener(openPanelOnActionClick);
+chrome.runtime.onStartup?.addListener(openPanelOnActionClick);

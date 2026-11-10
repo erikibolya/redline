@@ -1471,6 +1471,30 @@ async function loadActiveCapture() {
 }
 
 async function captureCurrent() {
+  // Chrome only grants site access from a user gesture. Ask here, before the capture, so a
+  // missing activeTab does not turn into a screenshot that cannot show its overlay (2026-11-10).
+  const pageUrl = state.activeTabUrl || "";
+  if (/^https?:/i.test(pageUrl)) {
+    try {
+      const granted = await chrome.permissions.request({
+        origins: [originPattern(pageUrl)],
+      });
+      if (!granted) {
+        state.captureRetry = null;
+        $("allow-capture").hidden = false;
+        setStatus(
+          "Site access was not granted. Click Allow capture on this site, or click the RedLine icon on the page tab.",
+          "err",
+        );
+        return;
+      }
+    } catch (error) {
+      state.captureRetry = null;
+      $("allow-capture").hidden = false;
+      setStatus(error.message || String(error), "err");
+      return;
+    }
+  }
   const config = await loadConfig().catch(() => null);
   if (!isConfigured(config)) {
     // One capture button: without a server, the same screenshot becomes a local review and the
@@ -2053,4 +2077,6 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
   if (changeInfo.status || changeInfo.url) refreshCaptureContext().catch(() => {});
 });
 
+// The e2e and the options page use this marker; it also tells a human the panel is wired.
+document.body.dataset.ready = "1";
 loadActiveCapture().catch((error) => showEmpty(error.message || String(error)));

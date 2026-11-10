@@ -73,7 +73,9 @@ hint. The token is never rendered unmasked after saving; **Replace** and **Forge
 Clicking the toolbar icon opens the **side panel**; there is no popup
 (`chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`, no `default_popup`).
 
-The empty panel shows the current tab, **Screenshot current tab** and **Connect RedLine**. One
+The empty panel shows the current tab, **Screenshot current tab** and **Connect RedLine**. The
+first click asks Chrome for access to that page origin (the permission request needs the click);
+after it is granted the capture and overlay use that site, and later captures do not prompt. One
 button covers both modes: with a saved server it creates an image review and injects the overlay;
 without one it saves the same screenshot locally and the workspace shows an orange **Not
 connected — this review is saved locally** warning with a Connect link. The panel then shows the

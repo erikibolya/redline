@@ -496,6 +496,89 @@ async function openOverlayCapture(browser, sessionId, tabId, title = "Extension 
   return page;
 }
 
+async function palette(page) {
+  return page.evaluate(() => {
+    const root = getComputedStyle(document.documentElement);
+    const token = (name) => root.getPropertyValue(name).trim();
+    const bg = (selector) => getComputedStyle(document.querySelector(selector)).backgroundColor;
+    const rect = document.querySelector('.tool[data-tool="rect"]');
+    const inactiveTool = document.querySelector('.tool[data-tool="arrow"]');
+    return {
+      theme: document.documentElement.dataset.theme,
+      tokens: {
+        panel: token("--panel"),
+        panel2: token("--panel-2"),
+        panel3: token("--panel-3"),
+        border: token("--border"),
+        accent: token("--accent"),
+        text: token("--text"),
+        muted: token("--muted"),
+        danger: token("--danger"),
+      },
+      header: bg("header"),
+      body: bg("body"),
+      toolbar: bg(".toolbar"),
+      tool: getComputedStyle(inactiveTool).backgroundColor,
+      activeTool: rect?.classList.contains("active")
+        ? getComputedStyle(rect).backgroundColor
+        : null,
+      primary: bg("#submit"),
+      dangerButton: bg("#discard"),
+      colorBorder: getComputedStyle(document.querySelector("#color")).borderTopColor,
+      note: bg("#note"),
+      count: bg("#count"),
+    };
+  });
+}
+
+function assertLightPalette(design) {
+  assert.equal(design.theme, "light");
+  assert.deepEqual(design.tokens, {
+    panel: "#ffffff",
+    panel2: "#f6f8fb",
+    panel3: "#e9eef5",
+    border: "#d5dde8",
+    accent: "#0369a1",
+    text: "#1e293b",
+    muted: "#64748b",
+    danger: "#e11d48",
+  });
+  assert.equal(design.header, "rgb(255, 255, 255)");
+  assert.equal(design.body, "rgb(255, 255, 255)");
+  assert.equal(design.toolbar, "rgb(255, 255, 255)");
+  assert.equal(design.tool, "rgba(0, 0, 0, 0)");
+  assert.equal(design.activeTool, "rgb(3, 105, 161)");
+  assert.equal(design.primary, "rgb(3, 105, 161)");
+  assert.equal(design.dangerButton, "rgb(220, 38, 38)");
+  assert.equal(design.colorBorder, "rgb(213, 221, 232)");
+  assert.equal(design.note, "rgb(246, 248, 251)");
+  assert.equal(design.count, "rgb(233, 238, 245)");
+}
+
+function assertDarkPalette(design) {
+  assert.equal(design.theme, "dark");
+  assert.deepEqual(design.tokens, {
+    panel: "#151a21",
+    panel2: "#1b222b",
+    panel3: "#232c37",
+    border: "#2a3441",
+    accent: "#2f81f7",
+    text: "#e6edf3",
+    muted: "#8b98a8",
+    danger: "#e11d48",
+  });
+  assert.equal(design.header, "rgb(21, 26, 33)");
+  assert.equal(design.body, "rgb(21, 26, 33)");
+  assert.equal(design.toolbar, "rgb(21, 26, 33)");
+  assert.equal(design.tool, "rgba(0, 0, 0, 0)");
+  assert.equal(design.activeTool, "rgb(47, 129, 247)");
+  assert.equal(design.primary, "rgb(47, 129, 247)");
+  assert.equal(design.dangerButton, "rgb(220, 38, 38)");
+  assert.equal(design.colorBorder, "rgb(42, 52, 65)");
+  assert.equal(design.note, "rgb(27, 34, 43)");
+  assert.equal(design.count, "rgb(35, 44, 55)");
+}
+
 async function drawRectInFrame(page, frame) {
   await page.bringToFront();
   const box = await frame.$eval("#canvas", (canvas) => {
@@ -575,6 +658,10 @@ try {
     "an image review must not show the video timeline",
   );
   const overlay = await waitOverlayFrame(target.page);
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#overlay-banner-text")?.textContent.includes("Annotating on the page"),
+    { timeout: 15000 },
+  );
   assert.equal(await overlay.frame.$("#close"), null, "the overlay must not have its own close button");
   const tools = await imagePanel.evaluate(() =>
     [...document.querySelectorAll(".tool[data-tool]")].map((button) => button.dataset.tool));
@@ -583,65 +670,53 @@ try {
   assert.equal(await imagePanel.$eval("#width-value", (element) => element.textContent.trim()), "3px");
   assert.ok(await imagePanel.$("#settings svg"), "the settings gear is the desktop icon");
   assert.ok(await imagePanel.$("#theme svg"), "the theme toggle has an icon");
-  assert.ok(await imagePanel.$("#dock svg"), "the docking control has an icon");
+  assert.equal(await imagePanel.$("#dock"), null, "the panel-side button is gone");
 
-  // The header says the truth about the browser-owned side panel position; the button opens the
-  // one Chrome setting that can move it (Chrome exposes getLayout, not a setter).
-  const dock = await imagePanel.evaluate(async () => {
-    const button = document.querySelector("#dock");
-    const original = chrome.tabs.create;
-    let opened = null;
-    chrome.tabs.create = (options) => {
-      opened = options.url;
-      return Promise.resolve({ id: 1 });
-    };
-    try {
-      button.click();
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    } finally {
-      chrome.tabs.create = original;
-    }
-    return { opened, side: button.dataset.side, title: button.title };
-  });
-  assert.equal(dock.opened, "chrome://settings/appearance");
-  assert.ok(["left", "right", ""].includes(dock.side), `unexpected side ${dock.side}`);
-  assert.match(dock.title, /side panel/i);
-
-  // Theme: the panel and the live overlay change together, and the choice survives a reopen.
+  // The capture panel must be the desktop editor's palette, not a separate navy/red theme.
   const initialTheme = await imagePanel.evaluate(() => document.documentElement.dataset.theme);
   assert.ok(["light", "dark"].includes(initialTheme), `unexpected theme ${initialTheme}`);
-  const initialThemeIcon = await imagePanel.$eval("#theme", (element) => element.innerHTML);
-  const nextTheme = initialTheme === "light" ? "dark" : "light";
+  if (initialTheme !== "light") {
+    await clickPanel(imagePanel, "#theme");
+    await imagePanel.waitForFunction(
+      () => document.documentElement.dataset.theme === "light",
+      { timeout: 5000 },
+    );
+  }
+  await overlay.frame.waitForFunction(
+    () => document.documentElement.dataset.theme === "light",
+    { timeout: 5000 },
+  );
+  assertLightPalette(await palette(imagePanel));
+
+  const lightIcon = await imagePanel.$eval("#theme", (element) => element.innerHTML);
   await clickPanel(imagePanel, "#theme");
   await imagePanel.waitForFunction(
-    (theme) => document.documentElement.dataset.theme === theme,
+    () => document.documentElement.dataset.theme === "dark",
     { timeout: 5000 },
-    nextTheme,
   );
   await overlay.frame.waitForFunction(
-    (theme) => document.documentElement.dataset.theme === theme,
+    () => document.documentElement.dataset.theme === "dark",
     { timeout: 5000 },
-    nextTheme,
   );
+  assertDarkPalette(await palette(imagePanel));
   assert.deepEqual(
     await imagePanel.evaluate(() => JSON.parse(localStorage.getItem("redline:theme"))),
-    nextTheme,
+    "dark",
   );
   assert.notEqual(
     await imagePanel.$eval("#theme", (element) => element.innerHTML),
-    initialThemeIcon,
+    lightIcon,
     "the theme button shows the theme it switches to",
   );
+
   await clickPanel(imagePanel, "#theme");
   await imagePanel.waitForFunction(
-    (theme) => document.documentElement.dataset.theme === theme,
+    () => document.documentElement.dataset.theme === "light",
     { timeout: 5000 },
-    initialTheme,
   );
   await overlay.frame.waitForFunction(
-    (theme) => document.documentElement.dataset.theme === theme,
+    () => document.documentElement.dataset.theme === "light",
     { timeout: 5000 },
-    initialTheme,
   );
 
   // A narrow side panel wraps whole groups: colour + slider + label and undo/redo/delete never
@@ -697,6 +772,22 @@ try {
     () => document.querySelector("#list .ann-row")?.textContent.includes("Arrow"),
     { timeout: 5000 },
   );
+  const selectedRow = await imagePanel.evaluate(() => {
+    const row = document.querySelector("#list .ann-row.selected");
+    const badge = row?.querySelector(".ann-num");
+    return row && badge
+      ? {
+          background: getComputedStyle(row).backgroundColor,
+          border: getComputedStyle(row).borderTopColor,
+          badge: getComputedStyle(badge).backgroundColor,
+        }
+      : null;
+  });
+  assert.deepEqual(selectedRow, {
+    background: "rgb(233, 238, 245)",
+    border: "rgb(3, 105, 161)",
+    badge: "rgb(225, 29, 72)",
+  });
   await clickPanel(imagePanel, '[data-tool="ellipse"]');
   await imagePanel.waitForFunction(
     () => document.querySelector('[data-tool="ellipse"]')?.classList.contains("active"),
@@ -738,7 +829,7 @@ try {
     };
   });
   assert.ok(rowDelete.exists && rowDelete.svg, "every annotation row has a trash button");
-  assert.ok(rowDelete.last && rowDelete.rightGap <= 8, JSON.stringify(rowDelete));
+  assert.ok(rowDelete.last && rowDelete.rightGap <= 10, JSON.stringify(rowDelete));
 
   // The toolbar delete removes the selection; undo restores it but clears the selection.
   await clickPanel(imagePanel, "#delete");

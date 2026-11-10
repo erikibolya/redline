@@ -112,45 +112,6 @@ function renderThemeButton() {
   button.setAttribute("aria-label", button.title);
 }
 
-async function refreshPanelSide() {
-  const button = $("dock");
-  if (!button) return;
-  let side = null;
-  try {
-    side = (await chrome.sidePanel?.getLayout?.())?.side || null;
-  } catch {
-    // Older Chromium builds do not expose getLayout; the settings page still works.
-  }
-  button.dataset.side = side || "";
-  const hint = side ? `Side panel is on the ${side}.` : "Chrome controls the side panel position.";
-  button.title = `${hint} Click to open Chrome settings.`;
-  button.setAttribute("aria-label", button.title);
-}
-
-async function openPanelSideSetting() {
-  let side = null;
-  try {
-    side = (await chrome.sidePanel?.getLayout?.())?.side || null;
-  } catch {
-    // Fall through to the settings page with a neutral message.
-  }
-  const current = side ? `The side panel is on the ${side}.` : "";
-  try {
-    await chrome.tabs.create({ url: "chrome://settings/appearance" });
-    setStatus(
-      `${current} Chrome settings opened — set Side panel to left or right.`.trim(),
-      "ok",
-    );
-  } catch (error) {
-    setStatus(
-      `${current} Open chrome://settings/appearance and change Side panel. ${
-        error.message || ""
-      }`.trim(),
-      "err",
-    );
-  }
-}
-
 async function loadSettingsProjects(config) {
   const api = new RedLineApi(config);
   const data = await api.projects();
@@ -268,7 +229,7 @@ async function testSettings() {
 }
 
 function setBusy(busy) {
-  const always = new Set(["settings", "theme", "dock"]);
+  const always = new Set(["settings", "theme"]);
   for (const element of document.querySelectorAll("button, input, select, textarea")) {
     if (always.has(element.id)) continue;
     if (element.id === "capture") {
@@ -276,10 +237,10 @@ function setBusy(busy) {
       continue;
     }
     element.disabled =
-      busy || (state.readOnly && !["open-redline", "settings", "theme", "dock"].includes(element.id));
+      busy || (state.readOnly && !["open-redline", "settings", "theme"].includes(element.id));
   }
   if (!busy && state.readOnly) {
-    for (const id of ["open-redline", "settings", "theme", "dock"]) $(id).disabled = false;
+    for (const id of ["open-redline", "settings", "theme"]) $(id).disabled = false;
   }
 }
 
@@ -838,6 +799,7 @@ function renderList() {
     const number = document.createElement("span");
     number.className = "ann-num";
     number.textContent = String(index + 1);
+    number.style.background = annotation.color || "#e11d48";
     const text = document.createElement("span");
     text.className = "ann-text";
     text.textContent =
@@ -2038,9 +2000,6 @@ $("theme").addEventListener("click", () => {
   renderThemeButton();
   if (state.overlayMode) overlayCommand({ type: "set-theme", theme });
 });
-$("dock").addEventListener("click", () => {
-  openPanelSideSetting().catch((error) => setStatus(error.message || String(error), "err"));
-});
 $("settings").addEventListener("click", () => {
   if ($("settings-panel").hidden) openSettings();
   else closeSettings();
@@ -2079,9 +2038,5 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
 // The e2e and the options page use this marker; it also tells a human the panel is wired.
 renderThemeButton();
 watchTheme(() => renderThemeButton());
-refreshPanelSide().catch(() => {});
-addEventListener("visibilitychange", () => {
-  if (!document.hidden) refreshPanelSide().catch(() => {});
-});
 document.body.dataset.ready = "1";
 loadActiveCapture().catch((error) => showEmpty(error.message || String(error)));

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.3 — 2026-11-10
 
 - **One connection form, in the panel.** Removed the standalone options page and its manifest
   entry; the gear in the side panel is the only connection surface. The store set now leads with

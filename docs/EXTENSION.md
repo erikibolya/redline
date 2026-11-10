@@ -142,11 +142,11 @@ The screenshot path has two surfaces:
   `discard`, `close`, `request-state`) and renders the annotation list from
   `redline-overlay-state` messages. The overlay publishes its state after every mutation.
 
-The panel keeps the round when it is paused or closed: the overlay saves its annotations, note,
-tool and colour in `chrome.storage.session`; **Resume** re-injects the overlay and restores the
-draft. Submitting or discarding closes the overlay and clears the active capture. The overlay has
-no close button of its own: **Discard** (destructive) and **Pause** (keeps the draft) live in the
-panel. The background hides the page scrollbar during the screenshot and restores it, so the
+Closing the side panel does not lose the round: the overlay stays in the tab, and reopening the
+panel reconnects to the same annotations, note, tool and colour. If the page is navigated away,
+the draft in `chrome.storage.session` restores on the next open. Submitting or exporting closes
+the overlay; **Discard** is the only destructive action. The overlay has no close or pause button
+of its own. The background hides the page scrollbar during the screenshot and restores it, so the
 frozen image does not contain a scrollbar.
 
 The old compact editor is still used for local video and legacy local image captures without a

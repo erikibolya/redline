@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **A pause button is not a cancel button.** Removed the Pause/Resume control and the pause
+  path: the overlay stays open until **Submit**/**Export review** or **Discard**, and closing and
+  reopening the side panel reconnects to the same round. **Discard** is the only destructive
+  action. Extension 0.5.0 (2026-11-10).
 - **Ask for page access before the capture, not after it failed.** The **Screenshot current
   tab** click now requests the active page origin first and continues only after it is granted.
   The existing **Allow capture on this site** and **Allow access to this page** remain as

@@ -590,28 +590,20 @@ try {
     () => document.querySelector("#list .ann-row")?.textContent.includes("Arrow"),
     { timeout: 5000 },
   );
-  // Closing the panel must not lose the round: pause, resume from the draft, then submit.
-  await clickPanel(imagePanel, "#pause-overlay");
-  await target.page.waitForFunction(
-    () => !document.querySelector("#redline-overlay-host"),
-    { timeout: 10000 },
-  );
-  await imagePanel.waitForFunction(
-    () => !document.querySelector("#resume-overlay")?.hidden,
-    { timeout: 10000 },
-  );
-  await clickPanel(imagePanel, "#resume-overlay");
+  // Closing the side panel must not lose the round: the overlay stays and a new panel reconnects.
+  await imagePanel.close();
+  const reopenedPanel = await openOverlayCapture(browser, imageId, target.tabId);
   const resumed = await waitOverlayFrame(target.page);
-  await imagePanel.waitForFunction(
+  await reopenedPanel.waitForFunction(
     () => document.querySelector("#count")?.textContent === "1",
-    { timeout: 10000 },
+    { timeout: 10000, polling: 100 },
   );
   await resumed.frame.waitForFunction(
     () => document.body.dataset.tool === "arrow",
     { timeout: 5000 },
   );
-  await imagePanel.type("#note", "overlay note");
-  await clickPanel(imagePanel, "#submit");
+  await reopenedPanel.type("#note", "overlay note");
+  await clickPanel(reopenedPanel, "#submit");
   await target.page.waitForFunction(
     () => !document.querySelector("#redline-overlay-host"),
     { timeout: 20000 },
@@ -622,7 +614,7 @@ try {
   assert.equal(image.annotations.annotations[0].type, "arrow");
   assert.equal(image.annotations.annotations[0].width, 3);
   assert.equal(image.meta.prompt, "overlay note");
-  await imagePanel.close();
+  await reopenedPanel.close();
   await target.page.close();
 
   const videoId = await createVideoSession();

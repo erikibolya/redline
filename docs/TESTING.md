@@ -416,7 +416,7 @@ same path a human does: upload, play, draw, range, zoom, submit.
   side-panel video editor.
 - It asserts the server payload: image annotation type `arrow`, width 3 and the note in
   `meta.prompt`; video `meta.trace.kind=browser-flow`, `annotations[0].at=0.5`, and at least one
-  annotated frame. The overlay has no close button (Discard/Pause live in the panel), and the
+  annotated frame. The overlay has no close or pause button (Discard lives in the panel), and the
   manifest unit test asserts the action has no popup and the overlay files are web-accessible.
 - Extension API unit tests assert that `submit(..., {request:true})` and
   `submitVideo(..., {request:true})` target `/request-agent` for image and video.

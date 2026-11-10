@@ -27,11 +27,6 @@
     if (!state.host) return;
     event.stopPropagation();
     event.preventDefault();
-    if (event.key === "Escape") {
-      chrome.runtime
-        .sendMessage({ type: "redline-overlay-escape", sessionId: state.sessionId })
-        .catch(() => {});
-    }
   }
 
   function remove() {

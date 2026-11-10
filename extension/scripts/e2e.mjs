@@ -527,6 +527,10 @@ try {
   // The side panel owns the connection form; the gear must not open a separate options tab.
   const configuredPanel = await openExtensionPage(browser, "src/sidepanel.html");
   await configuredPanel.waitForFunction(() => !document.querySelector("#empty")?.hidden);
+  const emptyConnect = await configuredPanel.evaluate(() =>
+    [...document.querySelectorAll("#empty button, #empty a")]
+      .some((element) => (element.textContent || "").includes("Connect RedLine")));
+  assert.equal(emptyConnect, false, "the start page must not show a Connect RedLine link");
   await clickPanel(configuredPanel, "#settings");
   await configuredPanel.waitForFunction(
     () => !document.querySelector("#settings-panel")?.hidden,
@@ -894,6 +898,15 @@ try {
     liveExport.length >= 4,
     `local export files: ${liveExport.map((file) => file.name)}`,
   );
+  localLivePanel.on("dialog", (dialog) => dialog.accept());
+  await clickPanel(localLivePanel, "#discard");
+  await localLivePanel.waitForFunction(
+    () => !document.querySelector("#empty")?.hidden,
+    { timeout: 15000, polling: 100 },
+  );
+  const afterDiscard = await localLivePanel.$eval("#empty-status", (element) =>
+    element.textContent.trim());
+  assert.equal(afterDiscard, "", "a discarded task must not leave a red notice on the start page");
   await localLivePanel.close();
   await localLiveTarget.page.close();
 

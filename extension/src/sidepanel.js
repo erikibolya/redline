@@ -168,13 +168,6 @@ function closeSettings() {
     render();
     return;
   }
-  loadConfig()
-    .then((config) => {
-      if (!isConfigured(config) && $("empty").hidden === false) {
-        setStatus("Connect RedLine for server mode, or save a local capture.", "");
-      }
-    })
-    .catch(() => {});
 }
 
 async function saveSettings() {
@@ -472,7 +465,7 @@ function applyOverlayState(message) {
     state.submitting = false;
     void closeOverlay();
     chrome.runtime.sendMessage({ type: "clear-active-capture" }).catch(() => {});
-    showEmpty("Task discarded.");
+    showEmpty();
     return;
   } else if (message.event === "ready" || message.event === "sync") {
     state.overlayActive = true;
@@ -1439,10 +1432,7 @@ async function loadActiveCapture() {
   if (response?.capture?.mode === "local") await loadLocalCapture(response.capture);
   else if (response?.capture) await loadCapture(response.capture);
   else {
-    const config = await loadConfig();
-    showEmpty(
-      isConfigured(config) ? "" : "Connect RedLine for server mode, or save a local capture.",
-    );
+    showEmpty();
   }
 }
 
@@ -1849,7 +1839,7 @@ async function discardOverlay() {
       }
       await chrome.storage.session.remove(draftKey());
       await chrome.runtime.sendMessage({ type: "clear-active-capture" });
-      showEmpty(state.local ? "Local review deleted." : "Task discarded.");
+      showEmpty();
     } catch (error) {
       state.submitting = false;
       setStatus(error.message || String(error), "err");
@@ -2007,7 +1997,6 @@ $("allow-overlay").addEventListener("click", () => {
 });
 $("capture-new").addEventListener("click", captureCurrent);
 $("open-capture").addEventListener("click", openRedLine);
-$("open-options").addEventListener("click", openSettings);
 $("settings").addEventListener("click", () => {
   if ($("settings-panel").hidden) openSettings();
   else closeSettings();

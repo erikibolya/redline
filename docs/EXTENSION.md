@@ -73,8 +73,9 @@ hint. The token is never rendered unmasked after saving; **Replace** and **Forge
 Clicking the toolbar icon opens the **side panel**; there is no popup
 (`chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })`, no `default_popup`).
 
-The empty panel shows the current tab, **Screenshot current tab** and **Connect RedLine**. The
-first click asks Chrome for access to that page origin (the permission request needs the click);
+The empty panel shows the current tab and **Screenshot current tab**; the header gear opens the
+connection form. The first click asks Chrome for access to that page origin (the permission request
+needs the click);
 after it is granted the capture and overlay use that site, and later captures do not prompt. One
 button covers both modes: with a saved server it creates an image review and injects the overlay;
 without one it saves the same screenshot locally and the workspace shows an orange **Not
@@ -83,8 +84,8 @@ controls for the round: tools, colour/width, undo/redo/delete, the annotation li
 **Export review** (local) or **Send to developer** / **Submit to RedLine** (server), pause and
 discard.
 
-The gear and **Connect RedLine** open an inline server/token/project form in the panel; they do
-not open the options page in a new tab. A missing configuration opens that form and says so. If
+The header gear (and the **Connect RedLine** link in the local warning) opens an inline
+server/token/project form in the panel; it does not open the options page in a new tab. A missing configuration opens that form and says so. If
 the overlay cannot be injected because the extension has no access to that page, the workspace
 offers **Allow access to this page**, requests the page origin and retries; this also covers a
 local capture on a site that was not opened through the action icon. The

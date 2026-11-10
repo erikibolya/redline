@@ -2186,5 +2186,10 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
 // The e2e uses this marker; it also tells a human the panel is wired.
 renderThemeButton();
 watchTheme(() => renderThemeButton());
-document.body.dataset.ready = "1";
-loadActiveCapture().catch((error) => showEmpty(error.message || String(error)));
+// `ready` means the panel has settled, not just that the module ran: tests (and a human) must
+// not see the default empty HTML for a frame before an active capture replaces it.
+loadActiveCapture()
+  .catch((error) => showEmpty(error.message || String(error)))
+  .finally(() => {
+    document.body.dataset.ready = "1";
+  });

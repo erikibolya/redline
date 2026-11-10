@@ -570,6 +570,7 @@ try {
     "an image review must not show the video timeline",
   );
   const overlay = await waitOverlayFrame(target.page);
+  assert.equal(await overlay.frame.$("#close"), null, "the overlay must not have its own close button");
   await clickPanel(imagePanel, '[data-tool="arrow"]');
   await imagePanel.waitForFunction(
     () => document.querySelector('[data-tool="arrow"]')?.classList.contains("active"),

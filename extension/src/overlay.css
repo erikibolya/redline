@@ -78,18 +78,3 @@ html, body {
 .status:empty { display: none; }
 .status.ok { color: var(--ok); border-color: #166534; }
 .status.err { color: var(--err); border-color: #7f1d1d; }
-.close {
-  position: fixed;
-  right: 14px;
-  top: 14px;
-  z-index: 5;
-  width: 32px;
-  height: 32px;
-  border: 1px solid #2a3a52;
-  border-radius: 50%;
-  background: rgb(15 23 42 / 88%);
-  color: var(--ink);
-  font: 16px/1 system-ui, sans-serif;
-  cursor: pointer;
-}
-.close:hover { border-color: var(--accent); color: #fff; }

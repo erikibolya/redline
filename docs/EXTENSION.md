@@ -142,7 +142,10 @@ The screenshot path has two surfaces:
 
 The panel keeps the round when it is paused or closed: the overlay saves its annotations, note,
 tool and colour in `chrome.storage.session`; **Resume** re-injects the overlay and restores the
-draft. Submitting or discarding closes the overlay and clears the active capture.
+draft. Submitting or discarding closes the overlay and clears the active capture. The overlay has
+no close button of its own: **Discard** (destructive) and **Pause** (keeps the draft) live in the
+panel. The background hides the page scrollbar during the screenshot and restores it, so the
+frozen image does not contain a scrollbar.
 
 The old compact editor is still used for local video and legacy local image captures without a
 tab id:

@@ -425,8 +425,9 @@ same path a human does: upload, play, draw, range, zoom, submit.
   no horizontal overflow; and a row-level trash deletes one annotation with undo. The connection
   form has no project or branch; the capture panel starts the round in the Inbox, moves it to
   `e2e-repo`, renames its branch, stores the choice in the project memory and locks both controls
-  after submit. The row number uses the annotation colour, not the UI accent. The overlay has no
-  close or pause button (Discard lives in the panel), and the manifest unit test asserts the
+  after submit; a real second capture on the same page is filed in `e2e-repo` by the background.
+  The row number uses the annotation colour, not the UI accent. The overlay has no close or pause
+  button (Discard lives in the panel), and the manifest unit test asserts the
   action has no popup and the overlay files are web-accessible.
 - Extension API unit tests assert that `submit(..., {request:true})` and
   `submitVideo(..., {request:true})` target `/request-agent` for image and video.

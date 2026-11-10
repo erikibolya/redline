@@ -572,15 +572,16 @@ store review time.
   denied; existing video tests remain green.
 - **Extension unit (`node --test`)**: trace normalization, redaction (headers/query/body),
   selector generation, cap/truncation, duration formatting, canvas annotation serialization,
-  undo/redo and draft invalidation.
+  undo/redo, draft invalidation, the destination PUTs and the per-page project memory.
 - **Browser e2e (RedLine)**: seed a session with a small trace; assert the rail `flow` chip,
   the read-only trace summary, and that `get_feedback` includes `trace`; no extension needed.
 - **Extension e2e**: load the unpacked extension in Chromium, configure the test server, open the
   side panel with an active image capture, wait for the overlay iframe in the target tab, select
   an arrow in the panel, draw on the page, assert the panel list/number, close and reopen the
-  panel to check the draft, submit and assert the session image + annotation + note. A second round configures a
-  tester PAT, verifies **Send to developer**, submits to `/request-agent`, then proves a developer
-  submit clears the request. Video and local export remain covered by the existing side-panel
+  panel to check the draft, move the round to a project, rename its branch, submit and assert the
+  session image + annotation + note; a second real capture proves the remembered project is used.
+  A second round configures a tester PAT, verifies **Send to developer**, submits to
+  `/request-agent`, then proves a developer submit clears the request. Video and local export remain covered by the existing side-panel
   path; the recording-driven capture is a manual checklist until the video phase lands.
 - **Manual**: install the store build in Chrome and Edge; capture a real app flow; verify
   console/network redaction; annotate and submit; verify the agent sees the trace.

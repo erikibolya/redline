@@ -136,7 +136,7 @@ The screenshot path has two surfaces:
 
 - `overlay.html/.js` is a full-viewport iframe injected into the captured tab by
   `overlay-host.js`. It draws the frozen screenshot, owns the annotation state (tools, undo,
-  selection, text notes, draft) and composes/submits the PNG. The iframe is an extension origin,
+  selection, draft) and composes/submits the PNG. The iframe is an extension origin,
   so page CSS and page scripts cannot read the token or the canvas.
 - `sidepanel.html/.js` is the control deck. It sends `redline-overlay-command` messages
   (`set-tool`, `set-color`, `set-width`, `undo`, `redo`, `delete`, `clear`, `select`, `submit`,
@@ -160,7 +160,7 @@ tab id:
 │ │            canvas (image/frame)          │ │
 │ │                                          │ │
 │ └──────────────────────────────────────────┘ │
-│ [V] [▭] [↗] [✎] [T]   color  width  [undo]  │
+│ [V] [▭] [↗] [✎] [◯]   color  width  [undo]  │
 │ [▶] 00:02.340 / 00:42.000  [◀ frame] [▶]    │
 │ [trace: errors ▾]  ● 00:01.700 console error │
 │ ──────────────────────────────────────────── │
@@ -170,7 +170,7 @@ tab id:
 └──────────────────────────────────────────────┘
 ```
 
-- Tools: select/move, rectangle, arrow, pen, text note. Colour/width; undo/redo; delete.
+- Tools: select/move, rectangle, arrow, pen, ellipse. Colour/width slider; undo/redo; red delete armed by a selection.
   Ellipse, groups, align/distribute and ranges (`until`) stay in the RedLine tab for v1.
 - Screenshot canvas: natural pixel coordinates, zoom/pan, fit; compose the annotated PNG on
   submit.
@@ -431,7 +431,7 @@ Tests: web cross-site → `403`; extension origin + token → `200`; extension o
 
 - **Stage**: a canvas at the screenshot/video's natural pixel size; zoom/pan/fit. For a video,
   the current frame is drawn into the canvas; drawing pauses playback.
-- **Tools**: select/move, rectangle, arrow, pen, text note; colour/width; delete; undo/redo.
+- **Tools**: select/move, rectangle, arrow, pen, ellipse; colour/width; delete; undo/redo.
   Ellipse, groups, align/distribute and ranges stay in the RedLine tab for v1.
 - **Coordinates**: RedLine annotation schema, canvas pixels relative to the natural media size
   (the same model as `docs/API.md` § Annotation schema). The extension reuses the existing
@@ -600,7 +600,7 @@ Taken after the review:
 
 | Decision | Choice |
 |---|---|
-| Annotator tools | v1 core: select/move, rectangle, arrow, pen, text note, timecoded point annotations, undo/redo, draft, submit; advanced tools stay in RedLine |
+| Annotator tools | v1 core: select/move, rectangle, arrow, pen, ellipse, timecoded point annotations, undo/redo, draft, submit; advanced tools stay in RedLine |
 | Project/branch | choose a project in the popup; leave branch empty so the server derives it; allow an override |
 
 Still open:
@@ -633,7 +633,7 @@ Phase 2 (options/popup, screenshot capture, side-panel image editor) is implemen
   connection test; token in `chrome.storage.local` only.
 - Popup capture flow: visible-tab PNG, create an image session, open the side panel, fall back to
   a normal review tab when the side panel is unavailable.
-- Side panel: select/move, rectangle, arrow, pen, text note, colour/width, undo/redo, delete,
+- Side panel: select/move, rectangle, arrow, pen, ellipse, colour/width, undo/redo, delete,
   clear, numbered list, per-session draft, annotated PNG composition and submit.
 - Submitted reviews open read-only; **Open in RedLine** remains available.
 - Twenty-two extension unit tests (`node --test`) for annotation geometry, the API request shape,

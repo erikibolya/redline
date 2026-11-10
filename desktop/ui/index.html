@@ -156,6 +156,16 @@ try {
       <input type="range" id="width" min="1" max="10" step="1" title="Line width" aria-label="Line width" />
       <span class="zoom" id="width-value">3px</span>
       <span class="sep"></span>
+      <button class="tool" id="tool-undo" title="Undo (Ctrl+Z)" disabled>
+        <svg viewBox="0 0 24 24"><path d="M9 14l-4-4 4-4"/><path d="M5 10h7a5 5 0 010 10h-1"/></svg>
+      </button>
+      <button class="tool" id="tool-redo" title="Redo (Ctrl+Shift+Z)" disabled>
+        <svg viewBox="0 0 24 24"><path d="M15 14l4-4-4-4"/><path d="M19 10h-7a5 5 0 000 10h1"/></svg>
+      </button>
+      <button class="tool danger" id="tool-delete" title="Delete selected (Del)" disabled>
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13M10 11v6M14 11v6"/></svg>
+      </button>
+      <span class="sep"></span>
       <button class="tool" id="zoom-out" title="Zoom out (-)">
         <svg viewBox="0 0 24 24"><path d="M5 12h14"/></svg>
       </button>

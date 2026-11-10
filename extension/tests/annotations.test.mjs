@@ -11,7 +11,7 @@ import {
 } from "../src/lib/annotations.js";
 
 test("the core tool set is the one the side panel renders", () => {
-  assert.deepEqual(TOOLS, ["select", "rect", "arrow", "pen", "text"]);
+  assert.deepEqual(TOOLS, ["select", "rect", "ellipse", "arrow", "pen"]);
 });
 
 test("a rectangle gets bounds, hit-tests inside and moves as one shape", () => {
@@ -23,6 +23,17 @@ test("a rectangle gets bounds, hit-tests inside and moves as one shape", () => {
   moveAnnotation(rect, 5, -5);
   assert.deepEqual(rect.start, { x: 15, y: 15 });
   assert.deepEqual(rect.end, { x: 115, y: 65 });
+});
+
+test("an ellipse gets bounds, hit-tests inside and moves as one shape", () => {
+  const ellipse = createAnnotation("ellipse", { x: 10, y: 20 }, { color: "#fff", width: 3 });
+  finishAnnotation(ellipse, { x: 110, y: 70 });
+  assert.deepEqual(annotationBounds(ellipse), { x: 10, y: 20, width: 100, height: 50 });
+  assert.equal(hitTest([ellipse], { x: 60, y: 45 })?.id, ellipse.id);
+  assert.equal(hitTest([ellipse], { x: 200, y: 200 }), null);
+  moveAnnotation(ellipse, 5, -5);
+  assert.deepEqual(ellipse.start, { x: 15, y: 15 });
+  assert.deepEqual(ellipse.end, { x: 115, y: 65 });
 });
 
 test("an arrow hit-tests its line, not its bounding box", () => {

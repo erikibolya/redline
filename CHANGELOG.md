@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The extension toolbar is the RedLine toolbar.** Removed the text-only tool; the extension now
+  uses the desktop tools and icons: select, rectangle, arrow, pen, ellipse, colour and a width
+  slider. The settings gear uses the desktop cog. Undo/redo stay and are added to the desktop
+  toolbar too; delete is a red trash button armed only by a selection. Extension 0.6.0; desktop
+  UI updated (2026-11-10).
 - **A first page should not carry a setup link or a stale deletion notice.** Removed the blue
   **Connect RedLine** link from the empty panel (the header gear opens the connection form) and
   stopped printing "Task discarded" / "Local review deleted" after a successful discard.

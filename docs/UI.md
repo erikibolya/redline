@@ -181,7 +181,8 @@ inside changes width (`?` is narrower than `☀`), the button must not.
 
 - Every shape is numbered on the canvas and in the inspector; freehand rows read
   `freehand · N points`. A pen stores `points`, not `start`/`end`.
-- `Ctrl/Cmd+Z` undo, `Ctrl/Cmd+Shift+Z` redo (full history, not just "remove last").
+- The toolbar carries undo and redo buttons plus a red trash button that is armed only by a
+  selection. `Ctrl/Cmd+Z` undo, `Ctrl/Cmd+Shift+Z` redo (full history, not just "remove last").
 - `Esc` cancels the in-progress shape or clears selection.
 - `Ctrl/Cmd+Enter` submits the review.
 - Hit testing covers rect/ellipse bounds+interior, arrow segment, pen polyline, legacy text box.

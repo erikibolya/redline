@@ -13,7 +13,6 @@ import {
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
-const textEditor = $("text-editor");
 const statusEl = $("status");
 
 const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
@@ -36,7 +35,6 @@ const state = {
   drawing: null,
   preview: null,
   drag: null,
-  textPoint: null,
   readOnly: false,
   submitting: false,
   role: "owner",
@@ -212,55 +210,11 @@ function pointFromEvent(event) {
   };
 }
 
-function openTextEditor(point) {
-  state.textPoint = point;
-  const rect = canvas.getBoundingClientRect();
-  const left = rect.left + (point.x * rect.width) / canvas.width;
-  const top = rect.top + (point.y * rect.height) / canvas.height;
-  textEditor.style.left = `${Math.max(4, left)}px`;
-  textEditor.style.top = `${Math.max(4, top - 12)}px`;
-  textEditor.value = "";
-  textEditor.hidden = false;
-  textEditor.focus();
-}
-
-let textCommitInFlight = false;
-function commitTextEditor() {
-  if (textEditor.hidden || textCommitInFlight) return;
-  textCommitInFlight = true;
-  const text = textEditor.value.trim();
-  if (text && state.textPoint) {
-    snapshot();
-    const annotation = createAnnotation("text", state.textPoint, {
-      color: state.color,
-      width: state.strokeWidth,
-    });
-    annotation.text = text;
-    state.annotations.push(annotation);
-    state.selectedId = annotation.id;
-  }
-  textEditor.hidden = true;
-  state.textPoint = null;
-  render();
-  saveDraft();
-  publish();
-  textCommitInFlight = false;
-}
-
-function cancelTextEditor() {
-  textEditor.hidden = true;
-  state.textPoint = null;
-}
-
 canvas.addEventListener("pointerdown", (event) => {
   if (state.readOnly || !state.bitmap) return;
   event.preventDefault();
   canvas.focus();
   const point = pointFromEvent(event);
-  if (state.tool === "text") {
-    openTextEditor(point);
-    return;
-  }
   canvas.setPointerCapture(event.pointerId);
   if (state.tool === "select") {
     const hit = hitTest(state.annotations, point);
@@ -316,10 +270,9 @@ function finishDrawing() {
     ? Math.abs(annotation.end.x - annotation.start.x)
       + Math.abs(annotation.end.y - annotation.start.y)
     : 0;
-  const valid =
-    annotation.type === "pen"
-      ? (annotation.points || []).length > 1
-      : annotation.type === "text" || bounds > 4;
+  const valid = annotation.type === "pen"
+    ? (annotation.points || []).length > 1
+    : bounds > 4;
   if (valid) {
     state.annotations.push(annotation);
     state.selectedId = annotation.id;
@@ -333,17 +286,6 @@ function finishDrawing() {
 
 canvas.addEventListener("pointerup", finishDrawing);
 canvas.addEventListener("pointercancel", finishDrawing);
-
-textEditor.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    cancelTextEditor();
-  } else if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    commitTextEditor();
-  }
-});
-textEditor.addEventListener("blur", commitTextEditor);
 
 document.addEventListener("keydown", (event) => {
   const target = event.target;
@@ -359,7 +301,7 @@ document.addEventListener("keydown", (event) => {
     }
     return;
   }
-  const map = { v: "select", r: "rect", a: "arrow", p: "pen", t: "text" };
+  const map = { v: "select", r: "rect", e: "ellipse", a: "arrow", p: "pen" };
   if (map[event.key.toLowerCase()]) {
     event.preventDefault();
     setTool(map[event.key.toLowerCase()]);

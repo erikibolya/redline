@@ -24,20 +24,6 @@ html, body {
   touch-action: none;
   user-select: none;
 }
-#text-editor {
-  position: fixed;
-  z-index: 3;
-  min-width: 160px;
-  max-width: 300px;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid #60a5fa;
-  background: #0b1220;
-  color: var(--ink);
-  font: inherit;
-  resize: vertical;
-  box-shadow: 0 8px 30px rgb(0 0 0 / 45%);
-}
 .hint {
   position: fixed;
   left: 50%;

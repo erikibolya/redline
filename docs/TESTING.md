@@ -414,10 +414,12 @@ same path a human does: upload, play, draw, range, zoom, submit.
   side panel, draws on the page, pauses/resumes, types a note and submits. It then exports a local
   image through the overlay and submits a video + trace rectangle at `0.5 s` through the
   side-panel video editor.
-- It asserts the server payload: image annotation type `arrow`, width 3 and the note in
+- It asserts the server payload: image annotations `arrow` + `ellipse`, width 3 and the note in
   `meta.prompt`; video `meta.trace.kind=browser-flow`, `annotations[0].at=0.5`, and at least one
-  annotated frame. The overlay has no close or pause button (Discard lives in the panel), and the
-  manifest unit test asserts the action has no popup and the overlay files are web-accessible.
+  annotated frame. It also asserts the toolbar order/icons (no text tool), the width label, the
+  desktop gear, the red delete button armed only by a selection and undo. The overlay has no close
+  or pause button (Discard lives in the panel), and the manifest unit test asserts the action has
+  no popup and the overlay files are web-accessible.
 - Extension API unit tests assert that `submit(..., {request:true})` and
   `submitVideo(..., {request:true})` target `/request-agent` for image and video.
 - The extension e2e opens the side panel with the gear, asserts the inline connection form is

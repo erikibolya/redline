@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A scrollbar is part of the page, not the overlay.** The background now hides the page
+  scrollbar while it takes the screenshot and restores it afterwards (`insertCSS` for the
+  activeTab path, `Emulation.setScrollbarsHidden` for the debugger fallback). The overlay no
+  longer has its own ✕ button; use **Discard** (or **Pause**) in the side panel. Extension 0.4.8
+  (2026-11-10).
 - **A capture can succeed before the overlay has permission.** On Facebook the screenshot was
   saved locally, but `chrome.scripting` could not inject the overlay because the manifest did not
   have access to that host. The workspace now offers **Allow access to this page**, requests the

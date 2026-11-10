@@ -24,6 +24,34 @@ function assertRecordable(tab) {
   }
 }
 
+const SCROLLBAR_CSS =
+  "html,body{overflow:hidden !important;scrollbar-width:none !important;}"
+  + "html::-webkit-scrollbar,body::-webkit-scrollbar{display:none !important;width:0 !important;}";
+
+async function setPageScrollbarsHidden(tabId, hidden) {
+  try {
+    if (hidden) {
+      await chrome.scripting.insertCSS({ target: { tabId }, css: SCROLLBAR_CSS });
+    } else {
+      await chrome.scripting.removeCSS({ target: { tabId }, css: SCROLLBAR_CSS });
+    }
+    return true;
+  } catch {
+    // No host permission: the debugger fallback hides scrollbars through CDP instead.
+    return false;
+  }
+}
+
+async function capturePage(tab) {
+  const hidden = await setPageScrollbarsHidden(tab.id, true);
+  if (hidden) await new Promise((resolve) => setTimeout(resolve, 60));
+  try {
+    return await captureVisible(tab);
+  } finally {
+    if (hidden) await setPageScrollbarsHidden(tab.id, false);
+  }
+}
+
 async function captureWithDebugger(tabId) {
   const recordingOwnsTab = Boolean(recording?.active && recording.tabId === tabId);
   let attached = false;
@@ -39,13 +67,22 @@ async function captureWithDebugger(tabId) {
   }
   try {
     await chrome.debugger.sendCommand({ tabId }, "Page.enable");
-    const shot = await chrome.debugger.sendCommand(
-      { tabId },
-      "Page.captureScreenshot",
-      { format: "png", fromSurface: true, captureBeyondViewport: false },
-    );
-    if (!shot?.data) throw new Error("The tab returned no screenshot.");
-    return `data:image/png;base64,${shot.data}`;
+    await chrome.debugger
+      .sendCommand({ tabId }, "Emulation.setScrollbarsHidden", { hidden: true })
+      .catch(() => {});
+    try {
+      const shot = await chrome.debugger.sendCommand(
+        { tabId },
+        "Page.captureScreenshot",
+        { format: "png", fromSurface: true, captureBeyondViewport: false },
+      );
+      if (!shot?.data) throw new Error("The tab returned no screenshot.");
+      return `data:image/png;base64,${shot.data}`;
+    } finally {
+      await chrome.debugger
+        .sendCommand({ tabId }, "Emulation.setScrollbarsHidden", { hidden: false })
+        .catch(() => {});
+    }
   } finally {
     if (attached) await chrome.debugger.detach({ tabId }).catch(() => {});
   }
@@ -75,7 +112,7 @@ async function captureAndCreate({ tabId } = {}) {
   const tab = await activeTab(tabId);
   if (!tab.windowId) throw new Error("The active tab has no window");
   assertRecordable(tab);
-  const imageDataUrl = await captureVisible(tab);
+  const imageDataUrl = await capturePage(tab);
   const api = new RedLineApi(config);
   const created = await api.createImageSession({
     imageDataUrl,
@@ -105,7 +142,7 @@ async function captureLocal({ tabId } = {}) {
   const tab = await activeTab(tabId);
   if (!tab.windowId) throw new Error("The active tab has no window");
   assertRecordable(tab);
-  const imageDataUrl = await captureVisible(tab);
+  const imageDataUrl = await capturePage(tab);
   const imageBlob = await (await fetch(imageDataUrl)).blob();
   const id = newLocalId("local-image");
   const title = tab.title || "Screenshot";

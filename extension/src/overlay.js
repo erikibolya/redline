@@ -15,7 +15,6 @@ const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
 const textEditor = $("text-editor");
 const statusEl = $("status");
-const closeButton = $("close");
 
 const hash = new URLSearchParams(location.hash.replace(/^#/, ""));
 const state = {
@@ -372,8 +371,6 @@ document.addEventListener("keydown", (event) => {
     void closePaused();
   }
 });
-
-closeButton.addEventListener("click", () => { void closePaused(); });
 
 async function command(command) {
   if (!command || typeof command !== "object") return;

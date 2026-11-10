@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Ask for page access before the capture, not after it failed.** The **Screenshot current
+  tab** click now requests the active page origin first and continues only after it is granted.
+  The existing **Allow capture on this site** and **Allow access to this page** remain as
+  fallbacks if the prompt is denied or an overlay injection is refused later. Extension 0.4.9
+  (2026-11-10).
 - **A scrollbar is part of the page, not the overlay.** The background now hides the page
   scrollbar while it takes the screenshot and restores it afterwards (`insertCSS` for the
   activeTab path, `Emulation.setScrollbarsHidden` for the debugger fallback). The overlay no

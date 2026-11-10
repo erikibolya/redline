@@ -147,6 +147,7 @@ async function openExtensionPage(browser, pathname) {
   );
   const page = await target.page();
   if (!page) throw new Error(`cannot attach to extension page ${pathname}`);
+  await page.waitForFunction(() => document.body.dataset.ready === "1", { timeout: 10000 });
   return page;
 }
 
@@ -664,9 +665,9 @@ try {
     imageBase64: iconBase64,
     tabId: localTarget.tabId,
   });
-  assert.equal(
-    (await localPanel.$eval("#submit", (element) => element.textContent)).trim(),
-    "Export review",
+  await localPanel.waitForFunction(
+    () => document.querySelector("#submit")?.textContent.trim() === "Export review",
+    { timeout: 10000, polling: 100 },
   );
   assert.equal(await localPanel.$eval("#open-redline", (element) => element.hidden), true);
   assert.equal(

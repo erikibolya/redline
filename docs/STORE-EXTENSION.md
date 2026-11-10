@@ -80,7 +80,7 @@ Copy these into the Chrome Web Store / Partner Center fields:
 - `activeTab` — the user explicitly invokes capture/record on the current tab; the extension does
   not read other tabs.
 - `tabs` — read the active tab title/URL for the review and open the generated review.
-- `storage` — save the RedLine server URL/token, project selection and unsent annotation drafts.
+- `storage` — save the RedLine server URL/token, the last chosen project and unsent annotation drafts.
 - `sidePanel` — the annotation editor.
 - `scripting` — inject the small action listener into the recorded tab and its frames.
 - `tabCapture` — record the active tab after Record is pressed.
@@ -106,7 +106,7 @@ Copy these into the Chrome Web Store / Partner Center fields:
 
 - [x] 128×128 extension icon (`extension/icons/128.png`; also 16/32/48).
 - [x] 3 screenshots at **1280×800** in `extension/store/screenshots/`:
-  - `01-options.png` — server/token/project setup, token masked;
+  - `01-options.png` — server/token connection setup, token masked;
   - `02-screenshot-review.png` — screenshot review with rectangle, arrow and text note;
   - `03-video-trace.png` — recorded flow with timeline, trace errors and a timecoded annotation.
 - [ ] Small promo tile 440×280 (optional).

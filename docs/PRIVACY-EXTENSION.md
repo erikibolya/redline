@@ -33,8 +33,8 @@ the user sees the draft and can discard it before upload.
 
 ## Local storage
 
-- `chrome.storage.local`: the RedLine server URL, token, selected project and branch. The token is
-  not synced to other browsers.
+- `chrome.storage.local`: the RedLine server URL, token and the last chosen project (per page
+  origin and globally). The token is not synced to other browsers.
 - `chrome.storage.session`: the active capture pointer, unsent annotation draft and recording
   state. This is cleared when the browser session ends and is removed on submit/discard.
 - IndexedDB (`redline-local`): offline screenshots, videos, posters, traces and annotations. They

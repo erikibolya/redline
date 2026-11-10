@@ -55,7 +55,7 @@ Store / Edge Add-ons**. Video uses the same control deck in the next phase.
 
 ### 3.1 Connect
 
-The options page stores one RedLine server profile:
+The connection form in the side panel stores one RedLine server profile:
 
 | Field | Meaning |
 |---|---|
@@ -98,8 +98,8 @@ row also has its own red trash button on the right (like the desktop inspector);
 delete still acts on the current selection.
 
 The header gear (and the **Connect RedLine** link in the local warning) opens an inline
-server/token form in the panel; it does not open the options page in a new tab. A missing
-configuration opens that form and says so. Project and branch stay out of it and appear only once
+server/token form in the panel; it does not open a separate page. A missing configuration opens
+that form and says so. Project and branch stay out of it and appear only once
 there is a capture to annotate. If
 the overlay cannot be injected because the extension has no access to that page, the workspace
 offers **Allow access to this page**, requests the page origin and retries; this also covers a
@@ -503,7 +503,6 @@ extension/
     overlay.html/.js/.css  frozen screenshot + drawing + submit inside the page
     sidepanel.html/.js     control deck: tools, list, note, submit, video editor
     popup.html/.js         legacy recording popup, no longer linked from the action
-    options.html/.js       server/token/project/redaction
     lib/
       api.js               auth fetch, multipart, project list, submit
       editor.js            canvas engine, tools, annotations, undo
@@ -652,7 +651,7 @@ Phase 1 (server trace foundation) is on `feat/browser-extension`:
 Phase 2 (options/popup, screenshot capture, side-panel image editor) is implemented on
 `feat/extension-panel`:
 
-- MV3 options page with server/token/project/branch, origin-scoped host permission request and a
+- MV3 connection form with server/token, origin-scoped host permission request and a
   connection test; token in `chrome.storage.local` only.
 - Popup capture flow: visible-tab PNG, create an image session, open the side panel, fall back to
   a normal review tab when the side panel is unavailable.

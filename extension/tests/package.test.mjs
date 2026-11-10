@@ -157,6 +157,7 @@ test("the action opens the side panel and exposes the overlay to the page", () =
     fs.readFileSync(new URL("../manifest.json", import.meta.url), "utf8"),
   );
   assert.equal(manifest.action.default_popup, undefined);
+  assert.equal(manifest.options_page, undefined, "the side panel owns the connection form");
   assert.equal(manifest.side_panel.default_path, "src/sidepanel.html");
   const resources = (manifest.web_accessible_resources || []).flatMap((entry) => entry.resources);
   assert.ok(resources.includes("src/overlay.html"));

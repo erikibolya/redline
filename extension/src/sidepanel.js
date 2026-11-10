@@ -83,6 +83,7 @@ const state = {
   captureAllowed: false,
   activeTabUrl: "",
   captureRetry: null,
+  overlayNeedsPermission: false,
 };
 
 function setStatus(text, kind = "") {
@@ -255,7 +256,9 @@ async function refreshCaptureContext() {
     state.captureAllowed = /^https?:/i.test(url);
     if (changed) {
       $("allow-capture").hidden = true;
+      $("allow-overlay").hidden = true;
       state.captureRetry = null;
+      state.overlayNeedsPermission = false;
     }
     const capturable = state.captureAllowed;
     captureContextEl.textContent = capturable
@@ -270,6 +273,28 @@ async function refreshCaptureContext() {
     captureContextEl.className = "capture-context err";
     $("capture").disabled = true;
   }
+}
+
+function pageUrlForPermission() {
+  return state.capture?.url || state.meta?.url || state.activeTabUrl || "";
+}
+
+function overlayFailure(error) {
+  const message = error.message || String(error);
+  if (
+    /^https?:/i.test(pageUrlForPermission())
+    && /Cannot access contents|manifest must request permission/i.test(message)
+  ) {
+    state.overlayNeedsPermission = true;
+    state.captureRetry = "overlay";
+    $("allow-overlay").hidden = false;
+    setStatus(
+      "This page needs site access for the annotation overlay. Click Allow access to this page.",
+      "err",
+    );
+    return;
+  }
+  setStatus(message, "err");
 }
 
 function captureFailure(error, retry) {
@@ -287,7 +312,7 @@ function captureFailure(error, retry) {
 }
 
 async function allowCaptureSite() {
-  const url = state.activeTabUrl;
+  const url = pageUrlForPermission();
   if (!/^https?:/i.test(url || "")) {
     setStatus("Switch to the web page tab you want to capture.", "err");
     return;
@@ -299,8 +324,16 @@ async function allowCaptureSite() {
     setStatus("Site allowed. Capturing…", "ok");
     const retry = state.captureRetry;
     state.captureRetry = null;
-    if (retry === "offline") await captureOffline();
-    else await captureCurrent();
+    state.overlayNeedsPermission = false;
+    $("allow-overlay").hidden = true;
+    if (retry === "overlay") {
+      await injectOverlay(state.capture);
+      setStatus("Annotate on the page. Controls are here.", "ok");
+    } else if (retry === "offline") {
+      await captureOffline();
+    } else {
+      await captureCurrent();
+    }
   } catch (error) {
     setStatus(error.message || String(error), "err");
   }
@@ -315,6 +348,7 @@ function showEmpty(message = "", keepCapture = false) {
   $("overlay-banner").hidden = true;
   $("local-warning").hidden = true;
   $("pause-overlay").hidden = true;
+  $("allow-overlay").hidden = true;
   $("capture-new").hidden = true;
   $("resume-overlay").hidden = true;
   $("stage").hidden = false;
@@ -388,8 +422,12 @@ async function closeOverlay(capture = state.capture) {
 function resumeOverlay() {
   if (!state.capture || state.submitted) return;
   injectOverlay(state.capture)
-    .then(() => setStatus("Annotating on the page. Controls are here."))
-    .catch((error) => setStatus(error.message || String(error), "err"));
+    .then(() => {
+      state.overlayNeedsPermission = false;
+      renderOverlayControls();
+      setStatus("Annotating on the page. Controls are here.");
+    })
+    .catch((error) => overlayFailure(error));
 }
 
 function overlayCommand(command) {
@@ -455,6 +493,7 @@ function applyOverlayState(message) {
     setStatus("Capture paused. Resume annotating to continue.");
   } else if (message.event === "ready" || message.event === "sync") {
     state.overlayActive = true;
+    state.overlayNeedsPermission = false;
     state.submitting = false;
     if (!state.readOnly) setStatus("Annotate on the page. Controls are here.");
   }
@@ -609,6 +648,7 @@ function renderOverlayControls() {
   $("resume-overlay").hidden = state.overlayActive || state.submitted;
   $("overlay-banner").hidden = state.submitted;
   $("local-warning").hidden = !state.local;
+  $("allow-overlay").hidden = !state.overlayNeedsPermission;
   noteInput.disabled = state.readOnly || state.submitting;
   for (const button of document.querySelectorAll(".tool")) {
     button.classList.toggle("active", button.dataset.tool === state.tool);
@@ -1205,13 +1245,14 @@ async function loadCapture(capture) {
       setStatus("Opening the page overlay…");
       try {
         await injectOverlay(capture);
+        state.overlayNeedsPermission = false;
         setStatus(
           state.readOnly
             ? "This review is already submitted; open it in RedLine."
             : "Annotate on the page. Controls are here.",
         );
       } catch (error) {
-        setStatus(error.message || String(error), "err");
+        overlayFailure(error);
       }
       return;
     }
@@ -1325,9 +1366,10 @@ async function loadLocalCapture(capture) {
       setStatus("Opening the page overlay…");
       try {
         await injectOverlay(state.capture);
+        state.overlayNeedsPermission = false;
         setStatus("Annotate on the page. Export when done.");
       } catch (error) {
-        setStatus(error.message || String(error), "err");
+        overlayFailure(error);
       }
       return;
     }
@@ -1834,6 +1876,7 @@ function showSent(message, keepCapture = false) {
   $("overlay-banner").hidden = true;
   $("local-warning").hidden = true;
   $("pause-overlay").hidden = true;
+  $("allow-overlay").hidden = true;
   $("capture-new").hidden = true;
   $("resume-overlay").hidden = true;
   $("stage").hidden = false;
@@ -1965,6 +2008,9 @@ $("allow-capture").addEventListener("click", () => {
   allowCaptureSite().catch((error) => setStatus(error.message || String(error), "err"));
 });
 $("connect-local").addEventListener("click", openSettings);
+$("allow-overlay").addEventListener("click", () => {
+  allowCaptureSite().catch((error) => overlayFailure(error));
+});
 $("capture-new").addEventListener("click", captureCurrent);
 $("resume-overlay").addEventListener("click", resumeOverlay);
 $("pause-overlay").addEventListener("click", () => {

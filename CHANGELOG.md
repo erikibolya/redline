@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A capture can succeed before the overlay has permission.** On Facebook the screenshot was
+  saved locally, but `chrome.scripting` could not inject the overlay because the manifest did not
+  have access to that host. The workspace now offers **Allow access to this page**, requests the
+  page origin and retries the overlay instead of leaving only the raw error. Extension 0.4.7
+  (2026-11-10).
 - **One capture button.** The empty panel no longer offers a separate Save locally link.
   **Screenshot current tab** uses the server when connected, otherwise captures locally and the
   workspace shows an orange "Not connected — this review is saved locally" warning with a

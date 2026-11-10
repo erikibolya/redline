@@ -2650,6 +2650,15 @@ const main = async () => {
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);
   check("start page shows a gallery of reviews", cards >= 1, `${cards} cards`);
+  // The presence fetch is asynchronous; reading the chip while it still says "Checking agent…"
+  // made this check flake (2026-11-10). Wait for the first real answer, then assert it.
+  await page.waitForFunction(
+    () => {
+      const label = document.querySelector("#agent-status .agent-label")?.textContent || "";
+      return label.length > 0 && !label.includes("Checking");
+    },
+    { timeout: 15000 },
+  );
   const listAgent = await page.evaluate(() => ({
     chip: Boolean(document.querySelector("#agent-status")),
     online: document.querySelector("#agent-status")?.classList.contains("online") || false,

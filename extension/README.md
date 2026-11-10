@@ -16,7 +16,8 @@ RedLine server or exports it as a folder/ZIP for an AI assistant.
    annotation list and note. Press **Submit to RedLine** (or **Send to developer** as a tester).
    The overlay closes and the page returns to live.
    If the panel was opened on another tab, press **Allow capture on this site** once; the
-   extension asks for access to that page and retries.
+   extension asks for access to that page and retries. If the screenshot succeeds but the overlay
+   cannot be injected, press **Allow access to this page** in the workspace footer.
 5. Video flow moves into the same panel in the next phase. Until then, use the RedLine web editor
    for video reviews; the side-panel video editor remains for captures created by the recording
    pipeline.

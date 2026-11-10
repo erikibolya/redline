@@ -161,7 +161,17 @@ async function openExtensionPage(browser, pathname) {
 async function configure(browser, id, token = TOKEN) {
   // The side panel owns the connection form; there is no standalone options page.
   const page = await openExtensionPage(browser, "src/sidepanel.html");
-  await page.waitForFunction(() => !document.querySelector("#empty")?.hidden, {
+  const emptyVisible = () => !document.querySelector("#empty")?.hidden;
+  if (!(await page.evaluate(emptyVisible))) {
+    // A profile can still hold an active capture from an interrupted run; clear it and reload
+    // instead of failing the first configuration step.
+    await page.evaluate(async () => {
+      await chrome.storage.session.remove("activeCapture");
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => document.body.dataset.ready === "1", { timeout: 10000 });
+  }
+  await page.waitForFunction(emptyVisible, {
     timeout: 10000,
     polling: 100,
   });
@@ -598,13 +608,13 @@ async function submit(page) {
 const browser = await puppeteer.connect({ browserURL: CHROME, defaultViewport: null });
 try {
   const id = await extensionId(browser);
-  await configure(browser, id);
   // A previous local e2e run can leave an active capture or a destination in this profile; start
-  // the control-deck checks from the empty state.
+  // the control-deck checks from the empty state before opening the connection form.
   await evaluateInWorker(
     await serviceWorker(browser),
     'Promise.all([chrome.storage.session.remove("activeCapture"), chrome.storage.local.remove("redlineProjectMemory")])',
   );
+  await configure(browser, id);
 
   // The side panel owns the connection form; the gear must not open a separate options tab.
   const configuredPanel = await openExtensionPage(browser, "src/sidepanel.html");

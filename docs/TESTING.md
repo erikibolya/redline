@@ -425,7 +425,8 @@ same path a human does: upload, play, draw, range, zoom, submit.
   extension tab, disables **Screenshot current tab** and explains that a web page tab is needed.
 - The extension e2e clears the server config, presses **Screenshot current tab**, verifies the
   page overlay and the orange local warning, then exports the local review through the picker
-  mock.
+  mock. The overlay-injection permission failure is manual on a third-party site (the e2e target
+  origin is already granted); **Allow access to this page** requests that origin and retries.
 - The extension e2e also drives the tester path end to end: it ensures an `e2e-tester` user and
   project, mints a tester PAT, configures the panel with it, opens the overlay, draws a rectangle,
   asserts the button says **Send to developer**, submits to `/request-agent`, and verifies the

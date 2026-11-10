@@ -82,7 +82,10 @@ controls for the round: tools, colour/width, undo/redo/delete, the annotation li
 discard.
 
 The gear and **Connect RedLine** open an inline server/token/project form in the panel; they do
-not open the options page in a new tab. A missing configuration opens that form and says so. The
+not open the options page in a new tab. A missing configuration opens that form and says so. If
+the overlay cannot be injected because the extension has no access to that page, the workspace
+offers **Allow access to this page**, requests the page origin and retries; this also covers a
+local capture on a site that was not opened through the action icon. The
 empty panel also names the active tab; on `chrome://` or `chrome-extension://` pages it disables
 **Screenshot current tab** and asks the human to switch to the web page tab. If the tab was not
 opened through the action icon, the activeTab error offers **Allow capture on this site**: that

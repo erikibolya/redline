@@ -46,8 +46,12 @@ recording. Attach it to an AI assistant; the prompt explains what to read.
 - **In-page screenshot annotation:** full-screen frozen overlay, direct drawing, side-panel tools,
   annotation list, note, submit/discard.
 - Side-panel canvas editor for video and offline captures: select/move, rectangle, arrow, pen,
-  ellipse, colour/width, undo/redo, delete, clear, per-session draft, annotated PNG composition
-  and submit.
+  ellipse, colour/width, undo/redo, delete (selected and per row), clear, per-session draft,
+  annotated PNG composition and submit.
+- **Theme and panel controls:** a dark/light toggle next to the settings gear, shared with the
+  page overlay; the adjacent panel-side button names Chrome's side-panel side and opens the
+  browser setting that changes it (Chrome exposes `getLayout()`, not a setter). The toolbar
+  wraps its groups as units in a narrow panel.
 - **Open in RedLine** for the full editor; a submitted review is read-only in the panel.
 
 ## Recording
@@ -84,7 +88,9 @@ extension after changing a file.
 Manual smoke test: configure a local/test RedLine, click the toolbar icon, press
 **Screenshot current tab**, draw a rectangle, arrow, pen and ellipse on the page, move one,
 undo/redo, close and reopen the panel to prove the draft survives, submit, then open the review in RedLine
-and verify the numbered annotations and the agent note. Also verify that a submitted review opens
+and verify the numbered annotations and the agent note. Also narrow the panel until the toolbar
+wraps (the colour/slider/label and undo/redo/delete groups must stay whole), toggle the theme and
+verify the overlay follows it, and delete a single annotation from its own row trash button. Also verify that a submitted review opens
 read-only. For offline mode, remove the server config and press **Screenshot current tab**,
 annotate on the page, confirm the orange warning, export to a folder and verify the files; then
 reject the folder picker and verify the ZIP fallback.

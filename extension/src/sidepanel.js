@@ -27,6 +27,7 @@ import {
   moveAnnotation,
   TOOLS,
 } from "./lib/annotations.js";
+import { THEME_ICONS, initTheme, toggleTheme, watchTheme } from "./lib/theme.js";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
@@ -38,6 +39,8 @@ const captureContextEl = $("capture-context");
 const settingsStatusEl = $("settings-status");
 const video = $("video");
 let settingsReturn = null;
+
+initTheme();
 
 const state = {
   config: null,
@@ -98,6 +101,54 @@ function setStatus(text, kind = "") {
 function setSettingsStatus(text, kind = "") {
   settingsStatusEl.textContent = text;
   settingsStatusEl.className = `status ${kind}`.trim();
+}
+
+function renderThemeButton() {
+  const button = $("theme");
+  if (!button) return;
+  const theme = document.documentElement.dataset.theme === "light" ? "light" : "dark";
+  button.innerHTML = THEME_ICONS[theme === "light" ? "light" : "dark"];
+  button.title = theme === "light" ? "Switch to dark theme" : "Switch to light theme";
+  button.setAttribute("aria-label", button.title);
+}
+
+async function refreshPanelSide() {
+  const button = $("dock");
+  if (!button) return;
+  let side = null;
+  try {
+    side = (await chrome.sidePanel?.getLayout?.())?.side || null;
+  } catch {
+    // Older Chromium builds do not expose getLayout; the settings page still works.
+  }
+  button.dataset.side = side || "";
+  const hint = side ? `Side panel is on the ${side}.` : "Chrome controls the side panel position.";
+  button.title = `${hint} Click to open Chrome settings.`;
+  button.setAttribute("aria-label", button.title);
+}
+
+async function openPanelSideSetting() {
+  let side = null;
+  try {
+    side = (await chrome.sidePanel?.getLayout?.())?.side || null;
+  } catch {
+    // Fall through to the settings page with a neutral message.
+  }
+  const current = side ? `The side panel is on the ${side}.` : "";
+  try {
+    await chrome.tabs.create({ url: "chrome://settings/appearance" });
+    setStatus(
+      `${current} Chrome settings opened — set Side panel to left or right.`.trim(),
+      "ok",
+    );
+  } catch (error) {
+    setStatus(
+      `${current} Open chrome://settings/appearance and change Side panel. ${
+        error.message || ""
+      }`.trim(),
+      "err",
+    );
+  }
 }
 
 async function loadSettingsProjects(config) {
@@ -217,17 +268,18 @@ async function testSettings() {
 }
 
 function setBusy(busy) {
+  const always = new Set(["settings", "theme", "dock"]);
   for (const element of document.querySelectorAll("button, input, select, textarea")) {
-    if (element.id === "settings") continue;
+    if (always.has(element.id)) continue;
     if (element.id === "capture") {
       element.disabled = busy || !state.captureAllowed;
       continue;
     }
-    element.disabled = busy || (state.readOnly && !["open-redline", "settings"].includes(element.id));
+    element.disabled =
+      busy || (state.readOnly && !["open-redline", "settings", "theme", "dock"].includes(element.id));
   }
   if (!busy && state.readOnly) {
-    $("open-redline").disabled = false;
-    $("settings").disabled = false;
+    for (const id of ["open-redline", "settings", "theme", "dock"]) $(id).disabled = false;
   }
 }
 
@@ -758,13 +810,30 @@ function typeLabel(annotation) {
   return annotation.type;
 }
 
+function removeAnnotation(annotation) {
+  if (state.readOnly || state.submitting) return;
+  if (state.overlayMode) {
+    overlayCommand({ type: "delete", id: annotation.id });
+    return;
+  }
+  snapshot();
+  state.annotations = state.annotations.filter((item) => item.id !== annotation.id);
+  if (state.selectedId === annotation.id) state.selectedId = null;
+  render();
+  saveDraft();
+}
+
 function renderList() {
   const list = $("list");
   list.innerHTML = "";
   state.annotations.forEach((annotation, index) => {
-    const row = document.createElement("button");
-    row.type = "button";
+    // A row contains its own delete button, so it is a div with a button role rather than a
+    // <button> (nested buttons are invalid and the inner click becomes unreliable).
+    const row = document.createElement("div");
     row.className = "ann-row";
+    row.dataset.index = String(index);
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
     if (annotation.id === state.selectedId) row.classList.add("selected");
     const number = document.createElement("span");
     number.className = "ann-num";
@@ -776,7 +845,21 @@ function renderList() {
         ? `${formatTime(annotation.at)} · ${typeLabel(annotation)}`
         : typeLabel(annotation);
     row.append(number, text);
-    row.addEventListener("click", () => {
+    if (!state.readOnly && !state.submitting) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "del";
+      remove.title = "Delete annotation";
+      remove.setAttribute("aria-label", `Delete annotation ${index + 1}`);
+      remove.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13M10 11v6M14 11v6"/></svg>';
+      remove.addEventListener("click", (event) => {
+        event.stopPropagation();
+        removeAnnotation(annotation);
+      });
+      row.append(remove);
+    }
+    const select = () => {
       if (state.overlayMode) {
         overlayCommand({ type: "select", id: annotation.id });
         return;
@@ -784,6 +867,15 @@ function renderList() {
       state.selectedId = annotation.id;
       if (state.mediaKind === "video" && annotation.at != null) seekVideo(annotation.at);
       else render();
+    };
+    row.addEventListener("click", (event) => {
+      if (event.target.closest(".del")) return;
+      select();
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.target !== row || (event.key !== "Enter" && event.key !== " ")) return;
+      event.preventDefault();
+      select();
     });
     list.append(row);
   });
@@ -1941,6 +2033,14 @@ $("allow-overlay").addEventListener("click", () => {
 });
 $("capture-new").addEventListener("click", captureCurrent);
 $("open-capture").addEventListener("click", openRedLine);
+$("theme").addEventListener("click", () => {
+  const theme = toggleTheme();
+  renderThemeButton();
+  if (state.overlayMode) overlayCommand({ type: "set-theme", theme });
+});
+$("dock").addEventListener("click", () => {
+  openPanelSideSetting().catch((error) => setStatus(error.message || String(error), "err"));
+});
 $("settings").addEventListener("click", () => {
   if ($("settings-panel").hidden) openSettings();
   else closeSettings();
@@ -1977,5 +2077,11 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
 });
 
 // The e2e and the options page use this marker; it also tells a human the panel is wired.
+renderThemeButton();
+watchTheme(() => renderThemeButton());
+refreshPanelSide().catch(() => {});
+addEventListener("visibilitychange", () => {
+  if (!document.hidden) refreshPanelSide().catch(() => {});
+});
 document.body.dataset.ready = "1";
 loadActiveCapture().catch((error) => showEmpty(error.message || String(error)));

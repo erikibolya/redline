@@ -411,15 +411,20 @@ same path a human does: upload, play, draw, range, zoom, submit.
 - The browser e2e job also builds a temporary extension copy with host
   permission for `127.0.0.1:8788`, launches headless Chromium with `--load-extension`, configures
   the options page, opens a target tab, injects the full-screen overlay, selects an arrow in the
-  side panel, draws on the page, pauses/resumes, types a note and submits. It then exports a local
+  side panel, draws on the page, closes and reopens the panel to check the draft, types a note and
+  submits. It then exports a local
   image through the overlay and submits a video + trace rectangle at `0.5 s` through the
   side-panel video editor.
 - It asserts the server payload: image annotations `arrow` + `ellipse`, width 3 and the note in
   `meta.prompt`; video `meta.trace.kind=browser-flow`, `annotations[0].at=0.5`, and at least one
   annotated frame. It also asserts the toolbar order/icons (no text tool), the width label, the
-  desktop gear, the red delete button armed only by a selection and undo. The overlay has no close
-  or pause button (Discard lives in the panel), and the manifest unit test asserts the action has
-  no popup and the overlay files are web-accessible.
+  desktop gear, the red delete button armed only by a selection and undo; the theme toggle changes
+  the panel and the live overlay and persists in `localStorage`; the panel-side button opens
+  `chrome://settings/appearance` (with the real `chrome.tabs.create` stubbed in the test) and
+  names the current side; a 280 px panel keeps each toolbar group on one line with no horizontal
+  overflow; and a row-level trash deletes one annotation with undo. The overlay has no close or
+  pause button (Discard lives in the panel), and the manifest unit test asserts the action has no
+  popup and the overlay files are web-accessible.
 - Extension API unit tests assert that `submit(..., {request:true})` and
   `submitVideo(..., {request:true})` target `/request-agent` for image and video.
 - The extension e2e opens the side panel with the gear, asserts the inline connection form is

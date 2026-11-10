@@ -22,3 +22,6 @@ dist/
 
 # Extension test driver
 extension/node_modules/
+
+# Local extension e2e copy
+/target/

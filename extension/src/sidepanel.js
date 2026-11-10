@@ -31,7 +31,6 @@ import {
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");
 const ctx = canvas.getContext("2d");
-const textEditor = $("text-editor");
 const noteInput = $("note");
 const statusEl = $("status");
 const emptyStatusEl = $("empty-status");
@@ -66,7 +65,6 @@ const state = {
   drawing: null,
   preview: null,
   drag: null,
-  textPoint: null,
   readOnly: false,
   submitted: false,
   role: "owner",
@@ -576,12 +574,14 @@ function render() {
   $("local-warning").hidden = !state.local;
   $("discard").disabled = state.submitted;
   noteInput.disabled = state.readOnly;
-  for (const button of document.querySelectorAll(".tool")) {
+  for (const button of document.querySelectorAll(".tool[data-tool]")) {
     button.classList.toggle("active", button.dataset.tool === state.tool);
     button.disabled = state.readOnly;
   }
   $("color").disabled = state.readOnly;
   $("width").disabled = state.readOnly;
+  $("width").value = String(state.strokeWidth);
+  $("width-value").textContent = `${state.strokeWidth}px`;
   $("ghosts").disabled = false;
   $("timeline").disabled = false;
 }
@@ -619,16 +619,15 @@ function renderOverlayControls() {
   $("local-warning").hidden = !state.local;
   $("allow-overlay").hidden = !state.overlayNeedsPermission;
   noteInput.disabled = state.readOnly || state.submitting;
-  for (const button of document.querySelectorAll(".tool")) {
+  for (const button of document.querySelectorAll(".tool[data-tool]")) {
     button.classList.toggle("active", button.dataset.tool === state.tool);
     button.disabled = state.readOnly || state.submitting;
   }
   $("color").disabled = state.readOnly || state.submitting;
   $("width").disabled = state.readOnly || state.submitting;
   if (/^#[0-9a-f]{6}$/i.test(state.color)) $("color").value = state.color;
-  if ([...$("width").options].some((option) => Number(option.value) === state.strokeWidth)) {
-    $("width").value = String(state.strokeWidth);
-  }
+  $("width").value = String(state.strokeWidth);
+  $("width-value").textContent = `${state.strokeWidth}px`;
 }
 
 function renderMarkers() {
@@ -752,6 +751,7 @@ function renderTrace() {
 
 function typeLabel(annotation) {
   if (annotation.type === "rect") return "Rectangle";
+  if (annotation.type === "ellipse") return "Ellipse";
   if (annotation.type === "arrow") return "Arrow";
   if (annotation.type === "pen") return "Pen";
   if (annotation.type === "text") return annotation.text || "Note";
@@ -954,56 +954,11 @@ $("trace-filter").addEventListener("change", (event) => {
   renderTrace();
 });
 
-function openTextEditor(point) {
-  state.textPoint = point;
-  const canvasRect = canvas.getBoundingClientRect();
-  const stageRect = $("stage").getBoundingClientRect();
-  const left = canvasRect.left - stageRect.left + (point.x * canvasRect.width) / canvas.width;
-  const top = canvasRect.top - stageRect.top + (point.y * canvasRect.height) / canvas.height;
-  textEditor.style.left = `${Math.max(4, left)}px`;
-  textEditor.style.top = `${Math.max(4, top - 12)}px`;
-  textEditor.value = "";
-  textEditor.hidden = false;
-  textEditor.focus();
-}
-
-let textCommitInFlight = false;
-function commitTextEditor() {
-  if (textEditor.hidden || textCommitInFlight) return;
-  textCommitInFlight = true;
-  const text = textEditor.value.trim();
-  if (text && state.textPoint) {
-    snapshot();
-    const annotation = createAnnotation("text", state.textPoint, {
-      color: state.color,
-      width: state.strokeWidth,
-    });
-    annotation.text = text;
-    if (state.mediaKind === "video" && state.video) annotation.at = state.video.currentTime;
-    state.annotations.push(annotation);
-    state.selectedId = annotation.id;
-  }
-  textEditor.hidden = true;
-  state.textPoint = null;
-  render();
-  saveDraft();
-  textCommitInFlight = false;
-}
-
-function cancelTextEditor() {
-  textEditor.hidden = true;
-  state.textPoint = null;
-}
-
 canvas.addEventListener("pointerdown", (event) => {
   if (state.readOnly || !mediaWidth()) return;
   event.preventDefault();
   const point = pointFromEvent(event);
   if (state.mediaKind === "video" && state.video) state.video.pause();
-  if (state.tool === "text") {
-    openTextEditor(point);
-    return;
-  }
   canvas.setPointerCapture(event.pointerId);
   if (state.tool === "select") {
     const hit = hitTest(state.annotations, point);
@@ -1059,10 +1014,9 @@ function finishDrawing() {
   const bounds = annotation.start
     ? Math.abs(annotation.end.x - annotation.start.x) + Math.abs(annotation.end.y - annotation.start.y)
     : 0;
-  const valid =
-    annotation.type === "pen"
-      ? (annotation.points || []).length > 1
-      : annotation.type === "text" || bounds > 4;
+  const valid = annotation.type === "pen"
+    ? (annotation.points || []).length > 1
+    : bounds > 4;
   if (valid) {
     state.annotations.push(annotation);
     state.selectedId = annotation.id;
@@ -1075,17 +1029,6 @@ function finishDrawing() {
 
 canvas.addEventListener("pointerup", () => finishDrawing());
 canvas.addEventListener("pointercancel", () => finishDrawing());
-
-textEditor.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") {
-    event.preventDefault();
-    cancelTextEditor();
-  } else if (event.key === "Enter" && !event.shiftKey) {
-    event.preventDefault();
-    commitTextEditor();
-  }
-});
-textEditor.addEventListener("blur", commitTextEditor);
 
 document.addEventListener("keydown", (event) => {
   const target = event.target;
@@ -1101,7 +1044,7 @@ document.addEventListener("keydown", (event) => {
     }
     return;
   }
-  const map = { v: "select", r: "rect", a: "arrow", p: "pen", t: "text" };
+  const map = { v: "select", r: "rect", e: "ellipse", a: "arrow", p: "pen" };
   if (map[event.key.toLowerCase()]) {
     event.preventDefault();
     setTool(map[event.key.toLowerCase()]);
@@ -1111,7 +1054,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 
-for (const button of document.querySelectorAll(".tool")) {
+for (const button of document.querySelectorAll(".tool[data-tool]")) {
   button.addEventListener("click", () => setTool(button.dataset.tool));
 }
 $("undo").addEventListener("click", undo);
@@ -1122,8 +1065,9 @@ $("color").addEventListener("input", (event) => {
   state.color = event.target.value;
   if (state.overlayMode) overlayCommand({ type: "set-color", color: state.color });
 });
-$("width").addEventListener("change", (event) => {
+$("width").addEventListener("input", (event) => {
   state.strokeWidth = Number(event.target.value) || 3;
+  $("width-value").textContent = `${state.strokeWidth}px`;
   if (state.overlayMode) {
     overlayCommand({ type: "set-width", width: state.strokeWidth });
   }

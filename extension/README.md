@@ -44,9 +44,9 @@ recording. Attach it to an AI assistant; the prompt explains what to read.
 - Server/token/project/branch configuration with an origin-scoped host permission.
 - Visible-tab screenshot capture and image-session creation.
 - **In-page screenshot annotation:** full-screen frozen overlay, direct drawing, side-panel tools,
-  annotation list, note, pause/resume draft, submit/discard.
+  annotation list, note, submit/discard.
 - Side-panel canvas editor for video and offline captures: select/move, rectangle, arrow, pen,
-  text note, colour/width, undo/redo, delete, clear, per-session draft, annotated PNG composition
+  ellipse, colour/width, undo/redo, delete, clear, per-session draft, annotated PNG composition
   and submit.
 - **Open in RedLine** for the full editor; a submitted review is read-only in the panel.
 
@@ -82,8 +82,8 @@ The same command runs in CI on Linux and Windows. There is no build step; reload
 extension after changing a file.
 
 Manual smoke test: configure a local/test RedLine, click the toolbar icon, press
-**Screenshot current tab**, draw a rectangle, arrow, pen and text note on the page, move one,
-undo/redo, pause and resume to prove the draft survives, submit, then open the review in RedLine
+**Screenshot current tab**, draw a rectangle, arrow, pen and ellipse on the page, move one,
+undo/redo, close and reopen the panel to prove the draft survives, submit, then open the review in RedLine
 and verify the numbered annotations and the agent note. Also verify that a submitted review opens
 read-only. For offline mode, remove the server config and press **Screenshot current tab**,
 annotate on the page, confirm the orange warning, export to a folder and verify the files; then

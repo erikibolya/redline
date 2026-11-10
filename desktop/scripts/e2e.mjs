@@ -807,6 +807,48 @@ const main = async () => {
     `${state[0].start.x} vs ${rect.start.x}`,
   );
 
+  // The toolbar buttons are the same history and selection paths as the keyboard.
+  const redoReady = await page.$eval("#tool-redo", (element) => !element.disabled);
+  await page.click("#tool-redo");
+  const redone = await page.evaluate(() => window.redline.annotations);
+  check(
+    "the redo button restores the moved geometry",
+    redoReady && Math.abs(redone[0].start.x - moved.start.x) < 0.001,
+    `${redone[0].start.x} vs ${moved.start.x}`,
+  );
+  await page.click("#tool-undo");
+  const undone = await page.evaluate(() => window.redline.annotations);
+  check(
+    "the undo button restores the previous geometry",
+    Math.abs(undone[0].start.x - rect.start.x) < 0.001,
+    `${undone[0].start.x} vs ${rect.start.x}`,
+  );
+
+  // The red delete button is armed by a selection and disarmed after removing it.
+  await page.keyboard.press("v");
+  await page.mouse.click(centre.x, centre.y);
+  const deleteReady = await page.$eval("#tool-delete", (element) => ({
+    disabled: element.disabled,
+    danger: element.classList.contains("danger"),
+  }));
+  check(
+    "the delete button is armed for a selected annotation",
+    deleteReady.disabled === false && deleteReady.danger,
+    JSON.stringify(deleteReady),
+  );
+  await page.click("#tool-delete");
+  await page.waitForFunction(() => window.redline.annotations.length === 0, { timeout: 5000 });
+  const deleteAfter = await page.$eval("#tool-delete", (element) => element.disabled);
+  check("the delete button removes the selection and disarms", deleteAfter, String(deleteAfter));
+  await page.click("#tool-undo");
+  await page.waitForFunction(() => window.redline.annotations.length === 1, { timeout: 5000 });
+  const deleteRestored = await page.evaluate(() => window.redline.annotations[0]?.type);
+  check(
+    "undo restores the annotation removed by the delete button",
+    deleteRestored === "rect",
+    deleteRestored,
+  );
+
   // ---- the note lives in the panel, attached to the shape
   await page.keyboard.press("v");
   await page.mouse.click(centre.x, centre.y);

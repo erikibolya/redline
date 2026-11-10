@@ -576,6 +576,12 @@ try {
   );
   const overlay = await waitOverlayFrame(target.page);
   assert.equal(await overlay.frame.$("#close"), null, "the overlay must not have its own close button");
+  const tools = await imagePanel.evaluate(() =>
+    [...document.querySelectorAll(".tool[data-tool]")].map((button) => button.dataset.tool));
+  assert.deepEqual(tools, ["select", "rect", "arrow", "pen", "ellipse"]);
+  assert.equal(await imagePanel.$('[data-tool="text"]'), null, "the text tool is gone");
+  assert.equal(await imagePanel.$eval("#width-value", (element) => element.textContent.trim()), "3px");
+  assert.ok(await imagePanel.$("#settings svg"), "the settings gear is the desktop icon");
   await clickPanel(imagePanel, '[data-tool="arrow"]');
   await imagePanel.waitForFunction(
     () => document.querySelector('[data-tool="arrow"]')?.classList.contains("active"),
@@ -594,16 +600,56 @@ try {
     () => document.querySelector("#list .ann-row")?.textContent.includes("Arrow"),
     { timeout: 5000 },
   );
+  await clickPanel(imagePanel, '[data-tool="ellipse"]');
+  await imagePanel.waitForFunction(
+    () => document.querySelector('[data-tool="ellipse"]')?.classList.contains("active"),
+    { timeout: 5000 },
+  );
+  await overlay.frame.waitForFunction(
+    () => document.body.dataset.tool === "ellipse",
+    { timeout: 5000 },
+  );
+  await drawRectInFrame(target.page, overlay.frame);
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "2",
+    { timeout: 10000 },
+  );
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#list")?.textContent.includes("Ellipse"),
+    { timeout: 5000 },
+  );
+  const deleteButton = await imagePanel.evaluate(() => {
+    const button = document.querySelector("#delete");
+    return {
+      disabled: button.disabled,
+      danger: button.classList.contains("danger"),
+      svg: Boolean(button.querySelector("svg")),
+    };
+  });
+  assert.equal(deleteButton.disabled, false);
+  assert.ok(deleteButton.danger && deleteButton.svg, "delete is a red trash button");
+  await clickPanel(imagePanel, "#delete");
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "1",
+    { timeout: 10000 },
+  );
+  assert.equal(await imagePanel.$eval("#delete", (element) => element.disabled), true);
+  assert.equal(await imagePanel.$eval("#undo", (element) => element.disabled), false);
+  await clickPanel(imagePanel, "#undo");
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#count")?.textContent === "2",
+    { timeout: 10000 },
+  );
   // Closing the side panel must not lose the round: the overlay stays and a new panel reconnects.
   await imagePanel.close();
   const reopenedPanel = await openOverlayCapture(browser, imageId, target.tabId);
   const resumed = await waitOverlayFrame(target.page);
   await reopenedPanel.waitForFunction(
-    () => document.querySelector("#count")?.textContent === "1",
+    () => document.querySelector("#count")?.textContent === "2",
     { timeout: 10000, polling: 100 },
   );
   await resumed.frame.waitForFunction(
-    () => document.body.dataset.tool === "arrow",
+    () => document.body.dataset.tool === "ellipse",
     { timeout: 5000 },
   );
   await reopenedPanel.type("#note", "overlay note");
@@ -614,9 +660,11 @@ try {
   );
   const image = await json(`/api/sessions/${imageId}`);
   assert.equal(image.meta.status, "submitted");
-  assert.equal(image.annotations.annotations.length, 1);
+  assert.equal(image.annotations.annotations.length, 2);
   assert.equal(image.annotations.annotations[0].type, "arrow");
+  assert.equal(image.annotations.annotations[1].type, "ellipse");
   assert.equal(image.annotations.annotations[0].width, 3);
+  assert.equal(image.annotations.annotations[1].width, 3);
   assert.equal(image.meta.prompt, "overlay note");
   await reopenedPanel.close();
   await target.page.close();

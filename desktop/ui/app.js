@@ -2632,6 +2632,9 @@ class Editor {
   }
 
   bindChrome() {
+    $("#tool-undo")?.addEventListener("click", () => this.undo());
+    $("#tool-redo")?.addEventListener("click", () => this.redo());
+    $("#tool-delete")?.addEventListener("click", () => this.deleteSelected());
     $("#revision-reload")?.addEventListener("click", async () => {
       this.revisionConflict = null;
       this.hideRevisionConflict();
@@ -4074,7 +4077,17 @@ class Editor {
     });
   }
 
+  syncToolbar() {
+    const undo = $("#tool-undo");
+    if (undo) undo.disabled = this.readOnly || !this.history.length;
+    const redo = $("#tool-redo");
+    if (redo) redo.disabled = this.readOnly || !this.future.length;
+    const remove = $("#tool-delete");
+    if (remove) remove.disabled = this.readOnly || !this.selected.size;
+  }
+
   renderInspector() {
+    this.syncToolbar();
     const body = $("#ann-list");
     if (this.viewing || this.locked) {
       const editor = $("#note-editor");
@@ -4379,6 +4392,7 @@ class Editor {
     $$('.tool[data-tool]').forEach((button) => {
       button.toggleAttribute("disabled", this.readOnly);
     });
+    this.syncToolbar();
     ["#zoom-in", "#zoom-out", "#zoom-fit", "#zoom-100"].forEach((id) => {
       const button = $(id);
       if (button) button.disabled = this.locked;

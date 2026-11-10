@@ -107,8 +107,9 @@ Copy these into the Chrome Web Store / Partner Center fields:
 - [x] 128×128 extension icon (`extension/icons/128.png`; also 16/32/48).
 - [x] 3 screenshots at **1280×800** in `extension/store/screenshots/`:
   - `01-options.png` — server/token connection setup, token masked;
-  - `02-screenshot-review.png` — screenshot review with rectangle, arrow and text note;
-  - `03-video-trace.png` — recorded flow with timeline, trace errors and a timecoded annotation.
+  - `02-screenshot-review.png` — screenshot review with rectangle, arrow and ellipse, project/branch and note;
+  - `03-offline-export.png` — offline review with the not-connected warning and **Export review**.
+  - `03-video-trace.png` is a legacy asset from the video phase and is not part of the current store set.
 - [ ] Small promo tile 440×280 (optional).
 - [ ] Final privacy-policy URL (use the `dev` blob now; switch to `main` after the next release).
 - [x] Chrome Web Store and Microsoft Edge developer accounts; submit 0.3.0 with the offline export.

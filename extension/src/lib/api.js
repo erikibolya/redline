@@ -57,6 +57,20 @@ export class RedLineApi {
     return this.request(`/api/sessions/${encodeURIComponent(id)}`);
   }
 
+  async setSessionProject(id, project) {
+    return this.request(`/api/sessions/${encodeURIComponent(id)}/project`, {
+      method: "PUT",
+      body: { project: project || null },
+    });
+  }
+
+  async setSessionBranch(id, branch) {
+    return this.request(`/api/sessions/${encodeURIComponent(id)}/branch`, {
+      method: "PUT",
+      body: { branch: branch || null },
+    });
+  }
+
   async createImageSession({ imageDataUrl, title, url, note = "", project, branch }) {
     return this.request("/api/sessions", {
       method: "POST",

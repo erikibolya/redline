@@ -9,8 +9,6 @@ import {
 const $ = (id) => document.getElementById(id);
 const serverInput = $("server-url");
 const tokenInput = $("token");
-const projectSelect = $("project");
-const branchInput = $("branch");
 const statusEl = $("status");
 const saveButton = $("save");
 const testButton = $("test");
@@ -21,12 +19,14 @@ function setStatus(text, kind = "") {
   statusEl.className = `status ${kind}`.trim();
 }
 
-function values() {
+async function values() {
+  const existing = await loadConfig();
   return {
     serverUrl: normalizeServerUrl(serverInput.value),
     token: tokenInput.value.trim(),
-    project: projectSelect.value,
-    branch: branchInput.value.trim(),
+    // The connection form does not own the destination anymore; keep what is stored.
+    project: existing.project || "",
+    branch: existing.branch || "",
   };
 }
 
@@ -35,29 +35,15 @@ async function requestAccess(config) {
   if (!granted) throw new Error("Access to the RedLine server was not granted");
 }
 
-async function loadProjects(config) {
-  const api = new RedLineApi(config);
-  const data = await api.projects();
-  const current = projectSelect.value || config.project || "";
-  projectSelect.innerHTML = '<option value="">Inbox</option>';
-  for (const project of data.projects || []) {
-    const option = document.createElement("option");
-    option.value = project.slug;
-    option.textContent = project.name || project.slug;
-    projectSelect.append(option);
-  }
-  projectSelect.value = current;
-}
-
 async function testConnection() {
   testButton.disabled = true;
   setStatus("Testing…");
   try {
-    const config = values();
+    const config = await values();
     await requestAccess(config);
     const api = new RedLineApi(config);
     const health = await api.health();
-    await loadProjects(config);
+    await api.projects();
     setStatus(`Connected to RedLine ${health.version || ""}`.trim(), "ok");
   } catch (error) {
     setStatus(error.message || String(error), "err");
@@ -70,12 +56,11 @@ async function save() {
   saveButton.disabled = true;
   setStatus("Saving…");
   try {
-    const config = values();
+    const config = await values();
     if (!config.token) throw new Error("Token is required");
     await requestAccess(config);
     const saved = await saveConfig(config);
     openLink.href = saved.serverUrl;
-    await loadProjects(saved).catch(() => {});
     setStatus("Saved. You can capture a page now.", "ok");
   } catch (error) {
     setStatus(error.message || String(error), "err");
@@ -88,19 +73,7 @@ async function init() {
   const config = await loadConfig();
   serverInput.value = config.serverUrl;
   tokenInput.value = config.token;
-  branchInput.value = config.branch;
   openLink.href = config.serverUrl;
-  projectSelect.innerHTML = '<option value="">Inbox</option>';
-  if (config.project) {
-    const option = document.createElement("option");
-    option.value = config.project;
-    option.textContent = config.project;
-    projectSelect.append(option);
-  }
-  if (config.token) {
-    await loadProjects(config).catch(() => {});
-    projectSelect.value = config.project || "";
-  }
 }
 
 saveButton.addEventListener("click", save);

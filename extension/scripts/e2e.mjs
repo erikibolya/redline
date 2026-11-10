@@ -147,37 +147,22 @@ async function openExtensionPage(browser, pathname) {
   );
   const page = await target.page();
   if (!page) throw new Error(`cannot attach to extension page ${pathname}`);
-  await page.waitForFunction(() => document.body.dataset.ready === "1", { timeout: 10000 });
+  try {
+    await page.waitForFunction(() => document.body.dataset.ready === "1", { timeout: 10000 });
+  } catch {
+    // A cold service worker can miss the first module evaluation; one reload is cheaper than a
+    // red build and leaves a real error to fail the second wait.
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.waitForFunction(() => document.body.dataset.ready === "1", { timeout: 15000 });
+  }
   return page;
 }
 
 async function configure(browser, id, token = TOKEN) {
   const page = await openExtensionPage(browser, "src/options.html");
   await page.waitForFunction(() => document.body.dataset.ready === "1");
-  // The Project select and Branch input share one row. "(optional)" is a hint on the Branch line,
-  // not its own row: as a bare flex item it pushed the Branch input a full line down (2026-11-03).
-  const layout = await page.evaluate(() => {
-    const project = document.querySelector("#project");
-    const branch = document.querySelector("#branch");
-    const label = branch.closest("label");
-    const hint = label.querySelector(".muted");
-    return {
-      projectTop: project.getBoundingClientRect().top,
-      branchTop: branch.getBoundingClientRect().top,
-      labelTop: label.getBoundingClientRect().top,
-      hintTop: hint.getBoundingClientRect().top,
-      hintText: hint.textContent,
-    };
-  });
-  assert.equal(layout.hintText, "(optional)");
-  assert.ok(
-    Math.abs(layout.projectTop - layout.branchTop) <= 1,
-    `Project select and Branch input must align (${layout.projectTop} vs ${layout.branchTop})`,
-  );
-  assert.ok(
-    layout.hintTop - layout.labelTop <= 6,
-    `the (optional) hint must stay on the Branch line (${layout.hintTop} vs ${layout.labelTop})`,
-  );
+  assert.equal(await page.$("#project"), null, "the connection page does not own the project");
+  assert.equal(await page.$("#branch"), null, "the connection page does not own the branch");
   await page.evaluate(({ base, token }) => {
     document.querySelector("#server-url").value = base;
     document.querySelector("#token").value = token;
@@ -190,14 +175,17 @@ async function configure(browser, id, token = TOKEN) {
   await page.close();
 }
 
-async function createImageSession(token = TOKEN, { title = "Extension image e2e", project } = {}) {
+async function createImageSession(
+  token = TOKEN,
+  { title = "Extension image e2e", project, url = "https://app.test/checkout" } = {},
+) {
   const image = fs.readFileSync(path.join(repo, "desktop/app/icons/128x128.png")).toString("base64");
   const created = await jsonWith(token, "/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       title,
-      url: "https://app.test/checkout",
+      url,
       image_base64: `data:image/png;base64,${image}`,
       ...(project ? { project } : {}),
     }),
@@ -603,9 +591,12 @@ const browser = await puppeteer.connect({ browserURL: CHROME, defaultViewport: n
 try {
   const id = await extensionId(browser);
   await configure(browser, id);
-  // A previous local e2e run can leave an active capture in this profile; start the control-deck
-  // checks from the empty state.
-  await evaluateInWorker(await serviceWorker(browser), 'chrome.storage.session.remove("activeCapture")');
+  // A previous local e2e run can leave an active capture or a destination in this profile; start
+  // the control-deck checks from the empty state.
+  await evaluateInWorker(
+    await serviceWorker(browser),
+    'Promise.all([chrome.storage.session.remove("activeCapture"), chrome.storage.local.remove("redlineProjectMemory")])',
+  );
 
   // The side panel owns the connection form; the gear must not open a separate options tab.
   const configuredPanel = await openExtensionPage(browser, "src/sidepanel.html");
@@ -622,9 +613,13 @@ try {
   const settings = await configuredPanel.evaluate(() => ({
     server: document.querySelector("#settings-server").value,
     token: document.querySelector("#settings-token").value,
+    project: document.querySelector("#settings-project"),
+    branch: document.querySelector("#settings-branch"),
   }));
   assert.equal(settings.server, BASE);
   assert.equal(settings.token, TOKEN);
+  assert.equal(settings.project, null, "the inline connection form does not own the project");
+  assert.equal(settings.branch, null, "the inline connection form does not own the branch");
   await clickPanel(configuredPanel, "#settings-save");
   await configuredPanel.waitForFunction(
     () => document.querySelector("#settings-status")?.textContent.includes("Saved"),
@@ -649,8 +644,13 @@ try {
   assert.match(captureContext, /Switch to the web page/);
   await configuredPanel.close();
 
+  await json("/api/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "e2e-repo" }),
+  });
   const target = await createTargetPage(browser);
-  const imageId = await createImageSession();
+  const imageId = await createImageSession(TOKEN, { url: target.page.url() });
   const imagePanel = await openOverlayCapture(browser, imageId, target.tabId);
   assert.equal(
     await imagePanel.$eval("#video-bar", (element) => getComputedStyle(element).display),
@@ -753,7 +753,53 @@ try {
     assert.ok(group.height <= 34, `a group grew into a second line: ${JSON.stringify(group)}`);
   }
   await imagePanel.setViewport({ width: 1280, height: 900 });
+  await imagePanel.bringToFront();
 
+  // Project and branch belong to the capture panel. The first session is in the Inbox; changing
+  // the project moves the open round and remembers the page's destination for the next capture.
+  const beforeDestination = await json(`/api/sessions/${imageId}`);
+  assert.ok(!beforeDestination.meta.project, "the image session starts in the Inbox");
+  assert.match(beforeDestination.meta.branch, /^feat\//);
+  const destination = await imagePanel.evaluate(() => ({
+    visible: !document.querySelector("#destination")?.hidden,
+    project: document.querySelector("#project")?.value,
+    branch: document.querySelector("#branch")?.value,
+  }));
+  assert.equal(destination.visible, true);
+  assert.equal(destination.project, "");
+  assert.equal(destination.branch, beforeDestination.meta.branch);
+  await imagePanel.waitForFunction(
+    () => [...document.querySelectorAll("#project option")].some((option) => option.value === "e2e-repo"),
+    { timeout: 10000, polling: 100 },
+  );
+  const inboxOptions = await imagePanel.$$eval("#project option", (options) =>
+    options.filter((option) => option.value === "" || option.value === "inbox").length);
+  assert.equal(inboxOptions, 1, "the Inbox is not listed twice");
+  await imagePanel.select("#project", "e2e-repo");
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#destination")?.dataset.project === "e2e-repo",
+    { timeout: 10000, polling: 100 },
+  );
+  const movedImage = await json(`/api/sessions/${imageId}`);
+  assert.equal(movedImage.meta.project, "e2e-repo");
+  const origin = new URL(target.page.url()).origin;
+  const memory = await imagePanel.evaluate(async () =>
+    (await chrome.storage.local.get("redlineProjectMemory")).redlineProjectMemory);
+  assert.equal(memory.byOrigin[origin], "e2e-repo");
+  assert.equal(memory.last, "e2e-repo");
+  await imagePanel.evaluate(() => {
+    const input = document.querySelector("#branch");
+    input.value = "feat/extension-destination";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await imagePanel.waitForFunction(
+    () => document.querySelector("#destination")?.dataset.branch === "feat/extension-destination",
+    { timeout: 10000, polling: 100 },
+  );
+  const branchedImage = await json(`/api/sessions/${imageId}`);
+  assert.equal(branchedImage.meta.branch, "feat/extension-destination");
+
+  await target.page.bringToFront();
   await clickPanel(imagePanel, '[data-tool="arrow"]');
   await imagePanel.waitForFunction(
     () => document.querySelector('[data-tool="arrow"]')?.classList.contains("active"),
@@ -888,7 +934,33 @@ try {
   assert.equal(image.annotations.annotations[0].width, 3);
   assert.equal(image.annotations.annotations[1].width, 3);
   assert.equal(image.meta.prompt, "overlay note");
+  assert.equal(image.meta.project, "e2e-repo");
+  assert.equal(image.meta.branch, "feat/extension-destination");
+  const destinationLocked = await reopenedPanel.evaluate(() => ({
+    project: document.querySelector("#project")?.disabled,
+    branch: document.querySelector("#branch")?.disabled,
+    hint: document.querySelector("#destination-hint")?.textContent,
+  }));
+  assert.deepEqual(
+    { project: destinationLocked.project, branch: destinationLocked.branch },
+    { project: true, branch: true },
+  );
+  assert.match(destinationLocked.hint, /locked/i);
   await reopenedPanel.close();
+
+  // The next capture on the same page must be filed in the remembered project. Drive the real
+  // background capture path, not just the selector, so the memory is proven end to end.
+  const capturePanel = await openExtensionPage(browser, "src/sidepanel.html");
+  await target.page.bringToFront();
+  const nextCapture = await capturePanel.evaluate(async (tabId) => {
+    const response = await chrome.runtime.sendMessage({ type: "capture-and-create", tabId });
+    return response;
+  }, target.tabId);
+  assert.equal(nextCapture.ok, true, JSON.stringify(nextCapture));
+  assert.equal(nextCapture.meta.project, "e2e-repo");
+  await json(`/api/sessions/${nextCapture.capture.sessionId}`, { method: "DELETE" });
+  await capturePanel.evaluate(() => chrome.storage.session.remove("activeCapture"));
+  await capturePanel.close();
   await target.page.close();
 
   const videoId = await createVideoSession();
@@ -940,6 +1012,11 @@ try {
     await localPanel.$eval("#local-warning", (element) => element.hidden),
     false,
     "a local capture must show the offline warning",
+  );
+  assert.equal(
+    await localPanel.$eval("#destination", (element) => element.hidden),
+    true,
+    "a local capture has no server destination",
   );
   const localOverlay = await waitOverlayFrame(localTarget.page);
   await drawRectInFrame(localTarget.page, localOverlay.frame);
@@ -1147,6 +1224,11 @@ try {
   }));
   assert.equal(localWarning.hidden, false);
   assert.match(localWarning.text, /saved locally/i);
+  assert.equal(
+    await localLivePanel.$eval("#destination", (element) => element.hidden),
+    true,
+    "a local capture has no server destination",
+  );
   const localLiveOverlay = await waitOverlayFrame(localLiveTarget.page);
   await drawRectInFrame(localLiveTarget.page, localLiveOverlay.frame);
   await localLivePanel.waitForFunction(

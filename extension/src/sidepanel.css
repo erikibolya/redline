@@ -244,6 +244,28 @@ select {
 }
 .ann-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.destination {
+  display: grid; gap: 8px; padding: 10px 14px;
+  background: var(--panel); border-bottom: 1px solid var(--border-soft);
+}
+.destination-field { display: block; color: var(--muted); font-size: 11px; }
+.destination-field select,
+.destination-field input {
+  display: block; width: 100%; margin-top: 4px; padding: 7px 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px;
+}
+.destination-field input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+.destination-field select:focus,
+.destination-field input:focus { outline: 1px solid var(--accent); }
+.destination-hint {
+  margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.4;
+}
+.destination-hint:empty { display: none; }
+
 .note-label { display: block; padding: 10px 14px; color: var(--muted); font-size: 11px; }
 .note-label textarea {
   display: block; width: 100%; min-height: 62px; margin-top: 4px; padding: 8px;

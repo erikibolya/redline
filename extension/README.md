@@ -9,7 +9,7 @@ RedLine server or exports it as a folder/ZIP for an AI assistant.
 1. Open `chrome://extensions` (or `edge://extensions`), enable **Developer mode**, choose
    **Load unpacked**, and select this `extension/` directory.
 2. Click the RedLine Capture toolbar icon. The **side panel** opens; use the gear in its header
-   to open Options, paste your RedLine server URL and token, then **Save & request access**.
+   to open the connection form, paste your RedLine server URL and token, then **Connect**.
    Chrome asks for access to that server origin.
 3. Open an `http(s)` page, click the RedLine icon, and press **Screenshot current tab**. The
    first capture asks for access to that page (Chrome needs the click); later captures do not.
@@ -41,7 +41,8 @@ recording. Attach it to an AI assistant; the prompt explains what to read.
 
 ## What is implemented
 
-- Server/token/project/branch configuration with an origin-scoped host permission.
+- Server/token connection with an origin-scoped host permission. Project and branch are chosen
+  on the capture panel; the last project is remembered per page origin.
 - Visible-tab screenshot capture and image-session creation.
 - **In-page screenshot annotation:** full-screen frozen overlay, direct drawing, side-panel tools,
   annotation list, note, submit/discard.
@@ -89,7 +90,9 @@ Manual smoke test: configure a local/test RedLine, click the toolbar icon, press
 undo/redo, close and reopen the panel to prove the draft survives, submit, then open the review in RedLine
 and verify the numbered annotations and the agent note. Also narrow the panel until the toolbar
 wraps (the colour/slider/label and undo/redo/delete groups must stay whole), toggle the theme and
-verify the overlay follows it, and delete a single annotation from its own row trash button. Also verify that a submitted review opens
+verify the overlay follows it, change the project and branch on the capture panel, capture the
+same page again and verify the project is preselected, and delete a single annotation from its
+own row trash button. Also verify that a submitted review opens
 read-only. For offline mode, remove the server config and press **Screenshot current tab**,
 annotate on the page, confirm the orange warning, export to a folder and verify the files; then
 reject the folder picker and verify the ZIP fallback.

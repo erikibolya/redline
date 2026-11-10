@@ -5,6 +5,7 @@ import {
   loadConfig,
   normalizeServerUrl,
   originPattern,
+  rememberProject,
   saveConfig,
 } from "./lib/config.js";
 import { deleteCapture, getCapture, putCapture } from "./lib/local-store.js";
@@ -81,6 +82,8 @@ const state = {
   undoCount: 0,
   redoCount: 0,
   submitting: false,
+  busy: false,
+  destinationBusy: false,
   captureAllowed: false,
   activeTabUrl: "",
   captureRetry: null,
@@ -112,27 +115,6 @@ function renderThemeButton() {
   button.setAttribute("aria-label", button.title);
 }
 
-async function loadSettingsProjects(config) {
-  const api = new RedLineApi(config);
-  const data = await api.projects();
-  const current = settingsProjectValue();
-  const select = $("settings-project");
-  select.innerHTML = '<option value="">Inbox</option>';
-  for (const project of data.projects || []) {
-    const option = document.createElement("option");
-    option.value = project.slug;
-    option.textContent = project.name || project.slug;
-    select.append(option);
-  }
-  if (current && [...select.options].some((option) => option.value === current)) {
-    select.value = current;
-  }
-}
-
-function settingsProjectValue() {
-  return $("settings-project").value || "";
-}
-
 async function openSettings() {
   if (!$("settings-panel").hidden) return;
   settingsReturn = {
@@ -145,25 +127,7 @@ async function openSettings() {
   const config = await loadConfig();
   $("settings-server").value = config.serverUrl || "";
   $("settings-token").value = config.token || "";
-  $("settings-branch").value = config.branch || "";
-  const select = $("settings-project");
-  select.innerHTML = '<option value="">Inbox</option>';
-  if (config.project) {
-    const option = document.createElement("option");
-    option.value = config.project;
-    option.textContent = config.project;
-    select.append(option);
-    select.value = config.project;
-  }
   setSettingsStatus("");
-  if (isConfigured(config)) {
-    try {
-      await loadSettingsProjects(config);
-      select.value = config.project || "";
-    } catch {
-      // An invalid token should not block editing the form; Save/Test reports the error.
-    }
-  }
   $("settings-server").focus();
 }
 
@@ -180,12 +144,170 @@ function closeSettings() {
   }
 }
 
+function projectValue(project) {
+  const value = String(project || "").trim();
+  return value === "inbox" ? "" : value;
+}
+
+function seedProjectOptions(current) {
+  const select = $("project");
+  if (!select) return;
+  const value = projectValue(current);
+  select.innerHTML = '<option value="">Inbox</option>';
+  if (value) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = value;
+    select.append(option);
+  }
+  select.value = value;
+}
+
+function setDestinationHint(text, reason = "") {
+  const hint = $("destination-hint");
+  if (!hint) return;
+  hint.textContent = text || "";
+  hint.hidden = !text;
+  if (text) hint.dataset.reason = reason;
+  else delete hint.dataset.reason;
+}
+
+function destinationLocked() {
+  return Boolean(
+    state.busy ||
+    state.destinationBusy ||
+    state.readOnly ||
+    state.submitting ||
+    state.role === "tester" ||
+    state.role === "viewer"
+  );
+}
+
+/// The capture panel owns the destination now. The project select is prefilled from the session
+/// (which the background created with the page's remembered project); changing it moves the open
+/// round, and the choice becomes the default for this page.
+function syncDestination() {
+  const destination = $("destination");
+  if (!destination) return;
+  const visible = Boolean(state.capture && state.api && !state.local && state.meta);
+  destination.hidden = !visible;
+  if (!visible) return;
+  const currentProject = projectValue(state.meta?.project);
+  const currentBranch = state.meta?.branch || "";
+  const select = $("project");
+  const branch = $("branch");
+  if (document.activeElement !== select) select.value = currentProject;
+  if (document.activeElement !== branch) branch.value = currentBranch;
+  if (currentProject && ![...select.options].some((option) => option.value === currentProject)) {
+    const option = document.createElement("option");
+    option.value = currentProject;
+    option.textContent = currentProject;
+    select.append(option);
+    select.value = currentProject;
+  }
+  const locked = destinationLocked();
+  select.disabled = locked;
+  branch.disabled = locked;
+  destination.dataset.project = currentProject;
+  destination.dataset.branch = currentBranch;
+  if (locked) {
+    const why = state.role === "tester" || state.role === "viewer"
+      ? "Your role cannot change this task's project or branch."
+      : state.readOnly
+        ? "This round is submitted; the project and branch are locked."
+        : "Saving the destination…";
+    setDestinationHint(why, "lock");
+    select.title = why;
+    branch.title = why;
+  } else {
+    select.title = "Choose the project this review belongs to.";
+    branch.title = "Rename the feature branch for this review.";
+    if ($("destination-hint")?.dataset.reason === "lock") setDestinationHint("");
+  }
+}
+
+async function loadWorkspaceProjects() {
+  if (state.local || !state.api || !state.meta) return;
+  try {
+    const data = await state.api.projects();
+    const select = $("project");
+    select.innerHTML = '<option value="">Inbox</option>';
+    for (const project of data.projects || []) {
+      const value = projectValue(project.slug);
+      // The server also exposes the virtual Inbox project; the local empty option represents it.
+      if ([...select.options].some((option) => option.value === value)) continue;
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = project.name || project.slug;
+      select.append(option);
+    }
+    // The human may have moved the round while the list was in flight; use the live value.
+    const current = projectValue(state.meta.project);
+    if (current && ![...select.options].some((option) => option.value === current)) {
+      const option = document.createElement("option");
+      option.value = current;
+      option.textContent = current;
+      select.append(option);
+    }
+    select.value = current || "";
+    if ($("destination-hint")?.dataset.reason === "error") setDestinationHint("");
+  } catch (error) {
+    setDestinationHint(`Projects could not be loaded: ${error.message || String(error)}`, "error");
+  }
+}
+
+async function updateProject(project) {
+  if (!state.meta || !state.api || destinationLocked()) return;
+  const select = $("project");
+  const previous = projectValue(state.meta.project);
+  const next = projectValue(project);
+  state.destinationBusy = true;
+  syncDestination();
+  try {
+    const result = await state.api.setSessionProject(state.meta.id, next);
+    state.meta = { ...state.meta, ...(result.meta || {}) };
+    await rememberProject(state.meta.url || state.capture?.url || "", next).catch(() => {});
+    select.value = projectValue(state.meta.project);
+    setStatus(next ? `Project set to ${next}.` : "Project set to Inbox.", "ok");
+  } catch (error) {
+    select.value = previous;
+    setStatus(error.message || String(error), "err");
+  } finally {
+    state.destinationBusy = false;
+    syncDestination();
+  }
+}
+
+async function updateBranch(branch) {
+  if (!state.meta || !state.api || destinationLocked()) return;
+  const input = $("branch");
+  const previous = state.meta.branch || "";
+  state.destinationBusy = true;
+  syncDestination();
+  try {
+    const result = await state.api.setSessionBranch(state.meta.id, branch);
+    state.meta = {
+      ...state.meta,
+      ...(result.meta || { branch: String(branch || "").trim() }),
+    };
+    input.value = state.meta.branch || "";
+    setStatus(`Branch set to ${state.meta.branch}.`, "ok");
+  } catch (error) {
+    input.value = previous;
+    setStatus(error.message || String(error), "err");
+  } finally {
+    state.destinationBusy = false;
+    syncDestination();
+  }
+}
+
 async function saveSettings() {
+  const existing = await loadConfig();
   const config = {
     serverUrl: normalizeServerUrl($("settings-server").value),
     token: $("settings-token").value.trim(),
-    project: settingsProjectValue(),
-    branch: $("settings-branch").value.trim(),
+    project: existing.project || "",
+    branch: existing.branch || "",
   };
   if (!config.token) throw new Error("Token is required");
   setSettingsStatus("Saving…");
@@ -193,10 +315,10 @@ async function saveSettings() {
     throw new Error("Access to the RedLine server was not granted");
   }
   const saved = await saveConfig(config);
-  let projectsOk = true;
-  await loadSettingsProjects(saved).catch(() => {
-    projectsOk = false;
-  });
+  const projectsOk = await new RedLineApi(saved).projects().then(
+    () => true,
+    () => false,
+  );
   setSettingsStatus(
     projectsOk
       ? "Saved. You can capture a page now."
@@ -211,11 +333,12 @@ async function saveSettings() {
 }
 
 async function testSettings() {
+  const existing = await loadConfig();
   const config = {
     serverUrl: normalizeServerUrl($("settings-server").value),
     token: $("settings-token").value.trim(),
-    project: settingsProjectValue(),
-    branch: $("settings-branch").value.trim(),
+    project: existing.project || "",
+    branch: existing.branch || "",
   };
   if (!config.token) throw new Error("Token is required");
   setSettingsStatus("Testing…");
@@ -224,11 +347,12 @@ async function testSettings() {
   }
   const api = new RedLineApi(config);
   const health = await api.health();
-  await loadSettingsProjects(config);
+  await api.projects();
   setSettingsStatus(`Connected to RedLine ${health.version || ""}`.trim(), "ok");
 }
 
 function setBusy(busy) {
+  state.busy = busy;
   const always = new Set(["settings", "theme"]);
   for (const element of document.querySelectorAll("button, input, select, textarea")) {
     if (always.has(element.id)) continue;
@@ -345,6 +469,8 @@ async function allowCaptureSite() {
 
 function showEmpty(message = "", keepCapture = false) {
   $("workspace").hidden = true;
+  if ($("destination")) $("destination").hidden = true;
+  setDestinationHint("");
   $("empty").hidden = false;
   $("open-capture").hidden = true;
   $("video-bar").hidden = true;
@@ -564,6 +690,7 @@ function render() {
   } else if (state.bitmap) {
     drawScene(canvas, state.bitmap, state.annotations, state.selectedId, state.preview);
   }
+  syncDestination();
   $("count").textContent = String(state.annotations.length);
   renderList();
   $("undo").disabled = state.readOnly || state.undo.length === 0;
@@ -600,6 +727,7 @@ function render() {
 }
 
 function renderOverlayControls() {
+  syncDestination();
   $("stage").hidden = true;
   $("video-bar").hidden = true;
   $("trace-panel").hidden = true;
@@ -1180,6 +1308,7 @@ async function loadCapture(capture) {
     state.width = Number(meta.media?.width) || 0;
     state.height = Number(meta.media?.height) || 0;
     noteInput.value = meta.prompt || "";
+    seedProjectOptions(meta.project || "");
 
     if (!state.readOnly && state.mediaKind === "video") {
       const stored = await chrome.storage.session.get(draftKey());
@@ -1207,6 +1336,7 @@ async function loadCapture(capture) {
         : "Screenshot";
       showWorkspace();
       renderOverlayControls();
+      loadWorkspaceProjects().catch(() => {});
       $("overlay-banner").hidden = false;
       $("overlay-banner-text").textContent = "Opening the page overlay…";
       setStatus("Opening the page overlay…");
@@ -1267,6 +1397,7 @@ async function loadCapture(capture) {
     showWorkspace();
     setTool("rect");
     render();
+    loadWorkspaceProjects().catch(() => {});
     setStatus(state.readOnly ? "This review is already submitted; open it in RedLine." : "");
   } catch (error) {
     showEmpty(error.message || String(error));
@@ -1999,6 +2130,23 @@ $("theme").addEventListener("click", () => {
   const theme = toggleTheme();
   renderThemeButton();
   if (state.overlayMode) overlayCommand({ type: "set-theme", theme });
+});
+$("project").addEventListener("change", (event) => {
+  updateProject(event.target.value).catch((error) =>
+    setStatus(error.message || String(error), "err"),
+  );
+});
+$("branch").addEventListener("change", (event) => {
+  updateBranch(event.target.value).catch((error) =>
+    setStatus(error.message || String(error), "err"),
+  );
+});
+$("branch").addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  updateBranch(event.target.value).catch((error) =>
+    setStatus(error.message || String(error), "err"),
+  );
 });
 $("settings").addEventListener("click", () => {
   if ($("settings-panel").hidden) openSettings();

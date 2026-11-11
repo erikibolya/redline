@@ -1,6 +1,10 @@
 # Store listing and submission — RedLine Capture
 
-Status: package and listing prepared; **not published** (owner has no store accounts yet).
+Status: **published** in the Chrome Web Store as
+[RedLine Capture](https://chromewebstore.google.com/detail/redline-capture/jpoejaidggepljglhakmcknjdijmfjoo).
+The public listing serves the last version that passed review; the release workflow submits each
+newer `extension/manifest.json` automatically (see "Automated updates"). Edge Add-ons is not
+submitted yet.
 
 ## Store facts
 
@@ -11,6 +15,54 @@ Status: package and listing prepared; **not published** (owner has no store acco
 
 One ZIP works in both stores. Chrome creates the extension ID on the first manual upload; Edge
 creates a Product ID on its first submission. Store APIs cannot create the first listing.
+
+## Automated updates
+
+Stable releases publish the extension through the Chrome Web Store API v2 with a service account
+(no third-party action). The `extension-store` job in `.github/workflows/release.yml` runs after
+the release assets exist and invokes:
+
+```bash
+node extension/scripts/cws.mjs release
+```
+
+The script compares `extension/manifest.json` with the store's `fetchStatus`:
+
+- **published version equal** → nothing to do (exit 0);
+- **same version pending review** → nothing to do, so a re-run cannot upload it twice;
+- **rejected/cancelled submission** → uploads and submits again;
+- **manifest newer** → uploads `dist/redline-extension-<version>.zip`, waits for the upload and
+  calls `publish`, which submits for review and publishes on approval;
+- **store version newer than the manifest** → fails instead of downgrading.
+
+The store still reviews updates; the job reports **submitted**, not live. Installed extensions
+update after Google approves the version. `node extension/scripts/cws.mjs status` prints the
+published and submitted versions, and the release job appends the same output to its run summary.
+
+### One-time credentials
+
+1. Google Cloud Console → create/select a project → enable **Chrome Web Store API**.
+2. IAM & Admin → Service accounts → create `redline-ci` (no project roles needed) → Keys → add
+   key → JSON. Treat the downloaded file as a password.
+3. Chrome Web Store Developer Dashboard → **Account** → add the service account email
+   (`redline-ci@<project>.iam.gserviceaccount.com`). Only one service account can be linked.
+4. Copy the **Publisher ID** from Dashboard → Publisher → Settings.
+5. Add both to GitHub without printing the key (the Google account needs 2-step verification):
+
+   ```bash
+   gh secret set CWS_SERVICE_ACCOUNT_JSON < /path/to/service-account.json
+   gh secret set CWS_PUBLISHER_ID --body "<publisher id>"
+   ```
+
+   For a local check, pass the file instead of the JSON value:
+
+   ```bash
+   CWS_PUBLISHER_ID=<id> CWS_SERVICE_ACCOUNT_FILE=/path/to/service-account.json \
+     node extension/scripts/cws.mjs status
+   ```
+
+The release job skips cleanly when the secrets are absent, so forks and pre-credential releases
+still build.
 
 ## Listing copy
 
@@ -47,8 +99,7 @@ creates a Product ID on its first submission. Store APIs cannot create the first
 
 **Homepage / support:** <https://github.com/erikibolya/redline>
 
-**Privacy policy:** <https://github.com/erikibolya/redline/blob/dev/docs/PRIVACY-EXTENSION.md>
-(the `dev` blob is live now; switch the listing to the `main` blob after the next release).
+**Privacy policy:** <https://github.com/erikibolya/redline/blob/main/docs/PRIVACY-EXTENSION.md>
 
 ## Testing without a server
 
@@ -107,9 +158,11 @@ Copy these into the Chrome Web Store / Partner Center fields:
   - `03-offline-export.png` — offline review with the not-connected warning and **Export review**.
   - `03-video-trace.png` is a legacy asset and is not part of the current set.
 - [ ] Small promo tile 440×280 (optional).
-- [ ] Final privacy-policy URL (use the `dev` blob now; switch to `main` after the next release).
-- [x] Chrome Web Store and Microsoft Edge developer accounts; submit 0.7.3 with the offline export.
+- [x] Privacy policy on `main` (`docs/PRIVACY-EXTENSION.md`).
+- [x] Chrome Web Store developer account; item `jpoejaidggepljglhakmcknjdijmfjoo` published.
+- [ ] Microsoft Edge Partner Center account (the same ZIP works there).
 - [x] Store ZIP from `python3 extension/scripts/package.py` (`dist/redline-extension-0.7.3.zip`; rebuild after changes).
+- [ ] Service account linked and `CWS_PUBLISHER_ID` + `CWS_SERVICE_ACCOUNT_JSON` secrets set (see "Automated updates").
 
 ## Submission steps
 
@@ -118,3 +171,6 @@ Copy these into the Chrome Web Store / Partner Center fields:
 3. Fill the listing, privacy form and permission justifications from this file.
 4. Upload the three screenshots from `extension/store/screenshots/`; submit for review.
 5. After approval, add the store links to `extension/README.md` and the GitHub release notes.
+6. Later versions need no manual upload: bump `extension/manifest.json`, merge to `main`, and the
+   release tag submits the new version (see "Automated updates"). Listing text, screenshots and
+   privacy answers are still dashboard-only edits.

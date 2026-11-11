@@ -4,7 +4,7 @@
   "version": "0.7.3",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/annotations.test.mjs tests/api.test.mjs tests/config.test.mjs tests/package.test.mjs tests/trace.test.mjs",
+    "test": "node --test tests/annotations.test.mjs tests/api.test.mjs tests/config.test.mjs tests/cws.test.mjs tests/package.test.mjs tests/trace.test.mjs",
     "package": "python3 scripts/package.py",
     "e2e": "node scripts/e2e.mjs"
   }

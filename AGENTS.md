@@ -100,13 +100,18 @@ git checkout main && git pull --ff-only
 git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z   # release: installer, CLI, linux binary, images
 REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.cz \
   bash desktop/install-unraid.sh                        # deploy to holly
+
+# Chrome Web Store: the release job uploads when extension/manifest.json is newer
+CWS_PUBLISHER_ID=... CWS_SERVICE_ACCOUNT_FILE=/path/to/service-account.json \
+  node extension/scripts/cws.mjs status                 # published / submitted / plan
 ```
 
 Version bumps touch three files: `desktop/Cargo.toml`, `desktop/app/Cargo.toml`,
 `desktop/app/tauri.conf.json`.
 
 CI secrets: `TAURI_SIGNING_PRIVATE_KEY` (updater), optional `WINDOWS_CERT_PFX` +
-`WINDOWS_CERT_PASSWORD` (Authenticode — not set; builds are unsigned and SmartScreen warns).
+`WINDOWS_CERT_PASSWORD` (Authenticode — not set; builds are unsigned and SmartScreen warns),
+`CWS_PUBLISHER_ID` + `CWS_SERVICE_ACCOUNT_JSON` (Chrome Web Store updates; absent = the job skips).
 
 ## 5. Deployment shape
 

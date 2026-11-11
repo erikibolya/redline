@@ -35,7 +35,7 @@ jobs:
         working-directory: desktop
         run: cargo test --workspace
       - name: extension unit tests
-        run: node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs
+        run: node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/cws.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs
       - name: package extension
         run: python3 extension/scripts/package.py
 

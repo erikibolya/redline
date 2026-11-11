@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- **A release tag publishes a new extension version by itself.** `extension/scripts/cws.mjs` uses
+  the Chrome Web Store API v2 with a service account to read the store's published/submitted
+  version, upload the packaged ZIP only when `extension/manifest.json` is newer, and submit it for
+  review. The `extension-store` job runs after every stable release; a version already published
+  or in review is a no-op, and a store version ahead of the manifest fails instead of downgrading.
+  Store listing text and screenshots remain manual dashboard edits (2026-11-11).
+
 ## 0.28.3 — 2026-11-10
 
 - **One connection form, in the panel.** Removed the standalone options page and its manifest

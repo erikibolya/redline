@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.28.3.** Live in production on holly:
+**Current release: v0.28.4.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -684,9 +684,10 @@ multi-select across groups beyond membership, and the `/` page is still a start 
 a gallery. Since v0.8 text notes live in the inspector, not on the canvas — there is nothing to
 size or style, and legacy text annotations are read-only history.
 
-Repo routing is single-agent: all agents watch the same queue, so run one `redline-agent` per
-RedLine server for now. Project records already carry `agent`, and repo keys are portable, so a
-claim/filter router can be added without migrating data.
+Repo routing is per project: `project.agent` names the device, and the server refuses a claim
+from another device unless the project's `allow_fallback` is on and the assigned device is
+offline. Run one `redline-agent` per device; each reports the repos it can see and claims only
+its assignments. The combined inbox merges those queues for reading; it is not a shared queue.
 
 See `PLAN.md` § "Next" for the ordered list.
 

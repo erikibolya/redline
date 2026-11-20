@@ -115,5 +115,6 @@ deleted; dirty or unmerged worktrees are left alone.
 - It does not sandbox the agent. The container/mounts decide what the agent can touch — that is the
   operator's choice, not a RedLine setting.
 - It does not push over MCP; `redline-agent` and `REDLINE_WEBHOOK_URL` are the push mechanisms.
-- It does not route reviews between multiple agents yet. Run one agent per RedLine server; the
-  `agent_id` and repo keys are stored so a router can be added without migrating projects.
+- It does not pick the device for you: `project.agent` is the assignment and the server enforces
+  it. Run one agent per device (each reports the repos it can see); a project falls back to
+  another online device only when `allow_fallback` is on and the assigned device is offline.

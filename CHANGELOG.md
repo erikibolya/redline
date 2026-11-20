@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The UI names the device that owns or handles a task.** The rail's project header shows the
+  assigned device with an online/offline dot, every task row carries the device that will run or
+  is running it (and `assigned → claimed` for a fallback), the editor header repeats it, and a
+  device filter narrows the rail. The agent chip opens **Agents & devices**: online/offline,
+  assigned projects, current tasks and last seen. New-review project options include the device
+  and an offline warning. The task response (`GET /api/sessions/{id}`) carries the same device
+  fields as the list, so the header does not go blank after a reload (2026-11-20).
+
 - **A project manager can run one project without becoming a server admin.** New `manager`
   project role, assigned by the owner in People & access. A manager can rename the project, set
   its repo key, assign its device and fallback, add/remove developers, testers and viewers, and

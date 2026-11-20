@@ -180,9 +180,12 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   per-project (default off). A review claim is refused for another device
   (`reason=assigned_elsewhere`); with fallback on, an online device that reported the project's
   `repo` may take over only while the assigned device is offline. Presence records `repos`; the
-  repo sync fills an empty project once and never overwrites a human assignment or name.
-  `GET /api/sessions` carries `assigned_agent`/`claimed_by`/`fallback`; `GET /api/agents` is the
-  scoped device list; `PUT /api/projects/{slug}` is the owner-only assignment path.
+  repo sync creates a missing project with the reporting device and never overwrites a human
+  assignment or name. `GET /api/sessions` carries `assigned_agent`/`claimed_by`/`fallback`;
+  `GET /api/agents` is the scoped device list; `PUT /api/projects/{slug}` is the
+  owner-or-project-manager assignment path. The editor shows the device on project headers, task
+  rows and the task header, offers a device filter, and opens **Agents & devices** from the agent
+  chip.
 - UI: no framework, no build step. `app.js` holds the shell (rail, canvas engine, inspector);
   `app.css` the design tokens incl. light theme. Served from the binary at `/static/*`.
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform

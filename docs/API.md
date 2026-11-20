@@ -300,9 +300,11 @@ non-zero run). The UI says "agent timed out" for the two timeout codes and "agen
 
 `annotations` is the last submitted payload (or `{session, annotations: []}` before submission).
 The `meta` object carries `feature_confirmed_at` / `feature_cancelled_at` when the human decided.
-Both `meta.revision` and `annotations.revision` start at `0`; every submit, tester request, agent
-`post_round` and new video round increments both, with `updated_by` / `updated_by_name` /
-`updated_at` describing the writer.
+It also carries the device fields (`assigned_agent`, `assigned_agent_online`, `claimed_by`,
+`claimed_by_online`, `claim_state`, `fallback`), the same shape as the session list, so the editor
+header survives a reload. Both `meta.revision` and `annotations.revision` start at `0`; every
+submit, tester request, agent `post_round` and new video round increments both, with `updated_by` /
+`updated_by_name` / `updated_at` describing the writer.
 
 ### `PUT /api/sessions/<id>/branch`
 

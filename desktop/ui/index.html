@@ -23,6 +23,7 @@ try {
         <button class="project-chip" id="project-edit" type="button" hidden
                 aria-haspopup="dialog"
                 title="Change the project this review belongs to"></button>
+        <span class="device-chip" id="session-device" hidden></span>
         <span id="session-sub"></span>
         <button class="branch-chip" id="branch-edit" type="button" hidden
                 title="Change the feature branch this review runs on"></button>
@@ -72,6 +73,7 @@ try {
       </div>
       <input class="search" id="search" placeholder="Search sessions…" spellcheck="false" />
       <div class="chips" id="chips"></div>
+      <select class="device-filter" id="device-filter" aria-label="Filter sessions by device"></select>
       <div class="rail-tools">
         <button class="chip" id="bulk-mode" type="button" aria-pressed="false">Select</button>
       </div>

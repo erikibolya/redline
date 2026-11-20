@@ -122,6 +122,9 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   `fallback`, the project exposes `agent_online`/`available_agents`, `/api/agents` lists an
   assigned device before its first heartbeat, and fallback is refused when it is off, when the
   assigned device is online, or when the candidate has not reported the repo.
+- Browser e2e: the project header and task row name `e2e`, the editor header carries the device,
+  the device filter shows only that device's tasks, the New review option includes `· e2e`, and
+  the agent chip opens **Agents & devices** with the device row.
 
 ## Project manager (v0.28.4)
 

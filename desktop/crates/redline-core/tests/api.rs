@@ -1649,6 +1649,17 @@ async fn a_device_assignment_routes_reviews_and_fallback_is_opt_in() {
     assert_eq!(session["fallback"], true);
     assert_eq!(session["assigned_agent_online"], false);
 
+    // The editor header reads the single-session shape; it must carry the same device fields.
+    let (_, _, one) = send(
+        &h.app,
+        authed("GET", &format!("/api/sessions/{id}"), json!(null)),
+    )
+    .await;
+    assert_eq!(one["meta"]["assigned_agent"], "ghost");
+    assert_eq!(one["meta"]["claimed_by"], "erik-pc");
+    assert_eq!(one["meta"]["fallback"], true);
+    assert_eq!(one["meta"]["assigned_agent_online"], false);
+
     let (_, _, projects) = send(&h.app, authed("GET", "/api/projects", json!(null))).await;
     let project = projects["projects"]
         .as_array()

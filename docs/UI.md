@@ -698,6 +698,20 @@ section, `Δ` shows the summary inline:
   `mention`, `discussion`), not the raw event kind or a bare timestamp.
 - The panel closes on an outside click; it never covers the composer on a narrow window.
 
+## Devices (v0.28.4)
+
+- The header agent chip opens **Agents & devices**: each device row names its id, online/offline
+  state, assigned projects, current tasks and last seen. The MCP config is still in the same
+  dialog, below the device list.
+- The rail project header carries a small device chip (`erik-pc`, or `no device`) with an
+  online/offline dot. Every session row carries the device that will run it, or the device that
+  is running it; a fallback reads `assigned → claimed`. The editor header repeats the device next
+  to the project chip.
+- A **device filter** in the rail narrows sessions to one device (or unassigned); the status chip
+  counts follow the device filter.
+- The New review and Move-to-project selects append the device (`· erik-pc (offline)`); the hint
+  under the select says whether the device is online or that no device is assigned.
+
 ## Audit log (v0.28)
 
 - **Audit log** (`/audit`) is owner or project-manager. The owner sees the whole server; a
@@ -746,7 +760,7 @@ section, `Δ` shows the summary inline:
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:
 coordinate mapping under a fitted zoom, dragging, undo, inline text (including diacritics), and
-submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 322 checks. It runs in CI on every push (`browser e2e` job) and locally via
+submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 325 checks. It runs in CI on every push (`browser e2e` job) and locally via
 `desktop/scripts/e2e.sh`.
 
 It has already earned its keep twice: it caught the text tool being broken by mousedown's focus

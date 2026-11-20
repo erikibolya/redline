@@ -327,12 +327,15 @@ const main = async () => {
     title: document.querySelector("#connect-title")?.textContent || "",
     json: document.querySelector("#connect-json")?.textContent || "",
     status: document.querySelector("#connect-status")?.textContent || "",
+    devices: [...document.querySelectorAll("#connect-devices .device-row")]
+      .map((row) => row.textContent),
     copy: Boolean(document.querySelector("#connect-copy")),
   }));
-  check("the agent chip opens the connect dialog with a masked config",
-    connectEditor.title === "Connect an agent" && connectEditor.json.includes("mcpServers")
+  check("the agent chip opens the devices dialog with a masked config",
+    connectEditor.title === "Agents & devices" && connectEditor.json.includes("mcpServers")
       && connectEditor.json.includes("••••") && !connectEditor.json.includes("e2e-token")
-      && connectEditor.copy && connectEditor.status.includes("connected"),
+      && connectEditor.copy && connectEditor.status.includes("connected")
+      && connectEditor.devices.some((row) => row.includes("e2e")),
     JSON.stringify({ ...connectEditor, json: connectEditor.json.slice(0, 80) }));
   await page.click("#connect-close");
   await page.waitForFunction(
@@ -350,7 +353,8 @@ const main = async () => {
     const brand = document.querySelector(".header .brand");
     const mark = brand?.querySelector(".brand-mark");
     const title = document.querySelector(".header .title b");
-    const sub = document.querySelector(".header .title span");
+    const sub = document.querySelector(".header .title #session-sub")
+      || document.querySelector(".header .title span");
     if (!mark || !title || !sub) return null;
     const markBox = mark.getBoundingClientRect();
     const titleBox = title.getBoundingClientRect();
@@ -2729,12 +2733,15 @@ const main = async () => {
     title: document.querySelector("#connect-title")?.textContent || "",
     json: document.querySelector("#connect-json")?.textContent || "",
     status: document.querySelector("#connect-status")?.textContent || "",
+    devices: [...document.querySelectorAll("#connect-devices .device-row")]
+      .map((row) => row.textContent),
     copy: Boolean(document.querySelector("#connect-copy")),
   }));
-  check("the dashboard chip opens the connect dialog with a masked config",
-    connect.title === "Connect an agent" && connect.json.includes("mcpServers")
+  check("the dashboard chip opens the devices dialog with a masked config",
+    connect.title === "Agents & devices" && connect.json.includes("mcpServers")
       && connect.json.includes("••••") && !connect.json.includes("e2e-token")
-      && connect.copy && connect.status.includes("connected"),
+      && connect.copy && connect.status.includes("connected")
+      && connect.devices.some((row) => row.includes("e2e")),
     JSON.stringify({ ...connect, json: connect.json.slice(0, 80) }));
   await page.click("#connect-close");
   await page.waitForFunction(() => !document.querySelector("#connect-dialog")?.open,
@@ -2974,6 +2981,12 @@ const main = async () => {
   const remembered = await page.$eval("#f-project", (el) => el.value);
   check("a new review preselects the last used project after a reload",
     remembered === "e2e-repo", `project=${remembered}`);
+  const projectOptionDevice = await page.$eval(
+    '#f-project option[value="e2e-repo"]',
+    (option) => option.textContent,
+  );
+  check("the New review project option names its device",
+    projectOptionDevice.includes("· e2e"), projectOptionDevice);
 
   // A review the human creates without naming a branch must still belong to a feature: v0.21
   // fell back to `session/<id>` at claim time, which is not a branch anyone can merge.
@@ -4019,9 +4032,42 @@ const main = async () => {
 
   await page.reload({ waitUntil: "networkidle2" });
   await page.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  await page.waitForFunction(
+    () => !document.querySelector("#session-device")?.hidden
+      && Boolean(document.querySelector('.rail-project[data-project="e2e-repo"] .pdevice')),
+    { timeout: 10000 },
+  );
   const reloadedProject = await page.$eval("#project-edit", (el) => el.dataset.project);
   check("the project move survives a reload",
     reloadedProject === "e2e-repo", reloadedProject);
+
+  const deviceUi = await page.evaluate((id) => ({
+    header: {
+      hidden: document.querySelector("#session-device")?.hidden,
+      text: document.querySelector("#session-device")?.textContent || "",
+      className: document.querySelector("#session-device")?.className || "",
+    },
+    project: {
+      text: document.querySelector('.rail-project[data-project="e2e-repo"] .pdevice')?.textContent || "",
+      className: document.querySelector('.rail-project[data-project="e2e-repo"] .pdevice')?.className || "",
+    },
+    row: document.querySelector(`.session[data-id="${id}"] .device-tag`)?.textContent || "",
+    options: [...document.querySelectorAll("#device-filter option")].map((option) => option.value),
+  }), moveId);
+  check("the header, project and row name the device handling the task",
+    deviceUi.header.hidden === false && deviceUi.header.text === "e2e"
+      && deviceUi.project.text === "e2e" && deviceUi.project.className.includes("online")
+      && deviceUi.row === "e2e" && deviceUi.options.includes("e2e"),
+    JSON.stringify(deviceUi));
+
+  await page.select("#device-filter", "e2e");
+  await page.waitForFunction(() => {
+    const rows = [...document.querySelectorAll("#rail-body .session")];
+    return rows.length > 0 && rows.every((row) =>
+      row.querySelector(".device-tag")?.textContent.includes("e2e"));
+  }, { timeout: 5000 });
+  check("the device filter shows only that device's tasks", true);
+  await page.select("#device-filter", "all");
 
   await page.click("#project-edit");
   await page.waitForSelector("#project-dialog[open]", { timeout: 5000 });

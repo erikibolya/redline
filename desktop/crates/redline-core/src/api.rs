@@ -3867,10 +3867,61 @@ async fn get_session(
             .map(|role| role.as_str().to_string())
             .unwrap_or_else(|| "viewer".to_string())
     };
+    // The editor header names the device too, so this response carries the same device fields as
+    // the rail list rather than a separate shape the UI has to reconcile (2026-11-20).
+    let project = state
+        .store
+        .project(meta.project.as_deref().unwrap_or("inbox"))?;
+    let assigned = project
+        .as_ref()
+        .and_then(|project| project.agent.as_deref())
+        .filter(|agent| !agent.trim().is_empty())
+        .map(str::to_string);
+    let (claim, presence) = {
+        let mut agent = state
+            .agent
+            .lock()
+            .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        let claim = agent
+            .claims()
+            .into_iter()
+            .find(|claim| claim.session_id == id);
+        let presence: HashMap<String, crate::agent::AgentPresence> = agent
+            .status()
+            .agents
+            .into_iter()
+            .map(|presence| (presence.agent_id.clone(), presence))
+            .collect();
+        (claim, presence)
+    };
+    let assigned_online = assigned.as_ref().map(|agent| {
+        presence
+            .get(agent)
+            .map(|presence| presence.online)
+            .unwrap_or(false)
+    });
+    let claimed_by = claim.as_ref().map(|claim| claim.agent_id.clone());
+    let claimed_online = claimed_by.as_ref().map(|agent| {
+        presence
+            .get(agent)
+            .map(|presence| presence.online)
+            .unwrap_or(false)
+    });
+    let claim_state = claim.as_ref().map(|claim| claim.state.as_str());
+    let fallback = match (assigned.as_deref(), claimed_by.as_deref()) {
+        (Some(assigned), Some(claimed_by)) => assigned != claimed_by,
+        _ => false,
+    };
     let mut meta = serde_json::to_value(&meta)?;
     if let Some(object) = meta.as_object_mut() {
         object.insert("last_run".to_string(), json!(last_run));
         object.insert("my_role".to_string(), json!(my_role));
+        object.insert("assigned_agent".to_string(), json!(assigned));
+        object.insert("assigned_agent_online".to_string(), json!(assigned_online));
+        object.insert("claimed_by".to_string(), json!(claimed_by));
+        object.insert("claimed_by_online".to_string(), json!(claimed_online));
+        object.insert("claim_state".to_string(), json!(claim_state));
+        object.insert("fallback".to_string(), json!(fallback));
     }
     Ok(Json(
         json!({ "meta": meta, "annotations": annotations, "disk_bytes": disk_bytes }),

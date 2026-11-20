@@ -810,7 +810,7 @@ dependencies = [
 
 [[package]]
 name = "redline"
-version = "0.28.3"
+version = "0.28.4"
 dependencies = [
  "axum",
  "base64",
@@ -823,7 +823,7 @@ dependencies = [
 
 [[package]]
 name = "redline-agent"
-version = "0.28.3"
+version = "0.28.4"
 dependencies = [
  "axum",
  "libc",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "redline-core"
-version = "0.28.3"
+version = "0.28.4"
 dependencies = [
  "argon2",
  "axum",
@@ -857,6 +857,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "ureq",
  "uuid",
 ]
 

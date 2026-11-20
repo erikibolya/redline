@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.28.2.** Live in production on holly:
+**Current release: v0.28.4.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -100,13 +100,18 @@ git checkout main && git pull --ff-only
 git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z   # release: installer, CLI, linux binary, images
 REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser REDLINE_DOMAIN=redline.ibolya.cz \
   bash desktop/install-unraid.sh                        # deploy to holly
+
+# Chrome Web Store: the release job uploads when extension/manifest.json is newer
+CWS_PUBLISHER_ID=... CWS_SERVICE_ACCOUNT_FILE=/path/to/service-account.json \
+  node extension/scripts/cws.mjs status                 # published / submitted / plan
 ```
 
 Version bumps touch three files: `desktop/Cargo.toml`, `desktop/app/Cargo.toml`,
 `desktop/app/tauri.conf.json`.
 
 CI secrets: `TAURI_SIGNING_PRIVATE_KEY` (updater), optional `WINDOWS_CERT_PFX` +
-`WINDOWS_CERT_PASSWORD` (Authenticode — not set; builds are unsigned and SmartScreen warns).
+`WINDOWS_CERT_PASSWORD` (Authenticode — not set; builds are unsigned and SmartScreen warns),
+`CWS_PUBLISHER_ID` + `CWS_SERVICE_ACCOUNT_JSON` (Chrome Web Store updates; absent = the job skips).
 
 ## 5. Deployment shape
 
@@ -141,9 +146,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 
 ## 6. Architecture in one screen
 
-- Desktop profiles: `config.json` holds `servers[]` + `active`; the local server serves
-  `/servers`, and switching only navigates the webview to another origin. All profiles/tokens
-  stay; never treat "switch" as "disconnect".
+- Desktop profiles: `config.json` holds `servers[]` + `active`. The desktop shell gives each
+  profile its own window (`server-<id>`, or `local-server`), and the local server still serves
+  `/servers` as a launcher; `active` is the **last focused** profile for the local agent and
+  Copy link, not a mode switch. All profiles/tokens stay; never treat one server as a disconnect
+  from another. Opening the same profile focuses its existing window. The local server also merges
+  every profile at `/inbox` (`GET /api/inbox`); `/api/inbox/open` hands a row back to the owning
+  server with that profile's token.
 - `redline-agent` — unattended bridge: watch submitted reviews → resolve the project's repo →
   `opencode run` → progress/reply/resolve. It syncs the git repos it can see (`POST
   /api/agent/repos`) and runs each review in its project's repo. Also embedded in the desktop app
@@ -154,6 +163,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   capture (shells out to Chromium), annotation diffing, loopback HTTP client.
 - Auth: token from `/data/token`; `Authorization: Bearer`, `redline_token` cookie (set by
   `/s/<id>?t=…` → 307), or `?t=`. `Sec-Fetch-Site: cross-site` is refused.
+- Roles (v0.28+): one global owner; per-project `manager`, `developer`, `tester`, `viewer`. A
+  manager is a developer plus project settings (name, repo, device, fallback), members (not other
+  managers) and that project's audit; global users/tokens/other projects stay owner-only. `owner`
+  is the only role allowed to change the manager set. The UI exposes **Manage project** in the
+  editor for owner/manager.
 - MCP tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`, `wait_for_feedback`,
   `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`,
   `handoff_status`. Resources: `redline://session/<id>/{annotated.png,review.md}`.
@@ -166,6 +180,16 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   the bridge runs `REDLINE_AGENT_WORKERS` (default 4) claim workers, each in its own worktree under
   `<repo_root>/.redline-worktrees/`, with heartbeats and one owner per branch. The OpenCode
   server must see the worktree path just like the repo itself.
+- Device routing (v0.28.4): `project.agent` names the assigned device and `allow_fallback` is
+  per-project (default off). A review claim is refused for another device
+  (`reason=assigned_elsewhere`); with fallback on, an online device that reported the project's
+  `repo` may take over only while the assigned device is offline. Presence records `repos`; the
+  repo sync creates a missing project with the reporting device and never overwrites a human
+  assignment or name. `GET /api/sessions` carries `assigned_agent`/`claimed_by`/`fallback`;
+  `GET /api/agents` is the scoped device list; `PUT /api/projects/{slug}` is the
+  owner-or-project-manager assignment path. The editor shows the device on project headers, task
+  rows and the task header, offers a device filter, and opens **Agents & devices** from the agent
+  chip.
 - UI: no framework, no build step. `app.js` holds the shell (rail, canvas engine, inspector);
   `app.css` the design tokens incl. light theme. Served from the binary at `/static/*`.
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform
@@ -562,6 +586,40 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   request *held* — a `waitForSelector` after the response proves nothing — and measure that a
   heading below the block does not move when the response is released.
 
+- **A repo sync is discovery, not ownership.** `sync_repo_project` overwrote `agent` and `name` on
+  every beat, so whichever bridge reported last owned the project and a human rename was undone.
+  With one agent that was invisible; with `holly` and a PC agent on the same repo key it silently
+  flipped work between machines, and the UI would have named the wrong device (2026-11-20). Fill
+  an empty assignment once, let an explicit owner `PUT` reassign, keep the human name, and record
+  the reporting devices separately (`repos`, `available_agents`) so a fallback is a visible
+  decision instead of a race.
+
+- **A project manager is not a small owner.** The first manager implementation could have reused
+  the owner-only routes, which would either hide the role from the people who need it or expose
+  global users/tokens to it. Keep the boundary explicit: every manager route checks the project
+  on the call (`require_project_manager`), global routes stay owner-only, a manager cannot assign
+  or demote another manager, and existing manager rows are preserved when a manager saves the
+  member list so the project cannot be locked out. Test the refusals (a developer, a manager of
+  another project, a manager trying to promote someone) as well as the allowed path.
+
+- **One window is not a server list.** The desktop app called a profile "active" and navigated
+  the single webview to it; focusing the window also forced it back onto the active origin. That
+  made two servers impossible to keep open, and it would yank a manager/setup page away from the
+  human (2026-11-20). Give each profile its own window, let the manager stay local, use an
+  explicit `rl_window` marker for "open a new window" navigations, and let `active` mean only
+  *last focused* so the local agent can follow it. A window must never silently change origin on
+  focus.
+
+- **A merged list is not a shared queue.** The combined inbox reads every profile's sessions for
+  display, but the queues stay independent: a click must go back to the owning server with *that
+  profile's* token, never to a URL the page supplies, and an unreachable profile must be named
+  and skipped rather than emptying or hanging the whole list. Keep the merge in the local server
+  (the only place that holds every token), fetch profiles in parallel with a short timeout, cap
+  the list, and keep the profile token out of the inbox DOM: a local `/api/inbox/open` redirect
+  carries it in `Location`, and the shell turns the remote navigation into that server's window.
+  Test the offline server, the foreign-token absence and the refusal paths, not only the happy
+  merge (2026-11-20).
+
 ## 8. Working rules
 
 - Ask before destructive actions (see global AGENTS.md). Creating/updating the `redline` container
@@ -626,9 +684,10 @@ multi-select across groups beyond membership, and the `/` page is still a start 
 a gallery. Since v0.8 text notes live in the inspector, not on the canvas — there is nothing to
 size or style, and legacy text annotations are read-only history.
 
-Repo routing is single-agent: all agents watch the same queue, so run one `redline-agent` per
-RedLine server for now. Project records already carry `agent`, and repo keys are portable, so a
-claim/filter router can be added without migrating data.
+Repo routing is per project: `project.agent` names the device, and the server refuses a claim
+from another device unless the project's `allow_fallback` is on and the assigned device is
+offline. Run one `redline-agent` per device; each reports the repos it can see and claims only
+its assignments. The combined inbox merges those queues for reading; it is not a shared queue.
 
 See `PLAN.md` § "Next" for the ordered list.
 

@@ -23,6 +23,10 @@ tower-http.workspace = true
 tower = { version = "0.5", features = ["util"] }
 mime_guess.workspace = true
 tracing.workspace = true
+# The combined inbox asks the other servers in the desktop app's profile list for their
+# sessions. Same blocking client (and TLS stack) as the agent bridge, so https:// profiles work
+# from the static musl binary too.
+ureq = { version = "2", default-features = false, features = ["tls"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

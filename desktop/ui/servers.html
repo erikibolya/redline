@@ -68,13 +68,16 @@ try {
 
   <section class="servers-card">
     <h1>Servers</h1>
-    <p class="lead">Switch between RedLine servers. Each server keeps its own data, token and login.</p>
+    <p class="lead">Open a RedLine server in its own window. Each server keeps its own data,
+      token, login and cookies; opening it again focuses the same window.</p>
     <div id="banner" class="banner" hidden></div>
     <div id="list"><div class="empty">Loading servers…</div></div>
     <div class="servers-actions">
       <a class="btn accent" id="add" href="/setup">Add server</a>
+      <a class="btn" id="inbox" href="/inbox">Combined inbox</a>
     </div>
-    <p class="servers-foot">Switching only changes which server this window talks to. Other servers stay signed in.</p>
+    <p class="servers-foot">Opening a server creates or focuses its own window. Other servers
+      stay signed in. The local agent follows the window you last focused.</p>
   </section>
 </main>
 
@@ -86,9 +89,11 @@ const list = document.getElementById("list");
 const banner = document.getElementById("banner");
 const back = document.getElementById("back");
 const add = document.getElementById("add");
+const inbox = document.getElementById("inbox");
 
 back.href = withToken("/");
 add.href = withToken("/setup?new=1");
+inbox.href = openInWindow(withToken("/inbox"));
 if (params.get("unreachable")) {
   banner.hidden = false;
   banner.textContent = "The server this app was using did not answer. Pick another server, or use this computer.";
@@ -110,12 +115,18 @@ async function json(path, options = {}) {
   return body;
 }
 
-async function switchTo(id, local) {
+function openInWindow(url) {
+  // The desktop shell turns this into a new (or focused) native window. A plain browser ignores
+  // the extra parameter, so the page still works when served without the shell.
+  return `${url}${url.includes("?") ? "&" : "?"}rl_window=1`;
+}
+
+async function openServer(id, local) {
   try {
     const data = await json(local ? "/api/servers/local/activate" : `/api/servers/${encodeURIComponent(id)}/activate`, {
       method: "POST",
     });
-    location.replace(data.open_url);
+    location.replace(openInWindow(data.open_url));
   } catch (error) {
     banner.hidden = false;
     banner.textContent = error.message;
@@ -137,12 +148,12 @@ function row(server, local) {
   const active = local ? server.active : server.active;
   return `<div class="server-row" data-id="${escapeHtml(local ? "local" : server.id)}">
     <div class="server-main">
-      <div class="server-name">${escapeHtml(local ? "This computer" : server.name)}${active ? '<span class="active">● active</span>' : ""}</div>
+      <div class="server-name">${escapeHtml(local ? "This computer" : server.name)}${active ? '<span class="active">● last used</span>' : ""}</div>
       <div class="server-url">${escapeHtml(local ? server.url : server.url)}</div>
       <div class="server-state" data-state>${local ? "local server" : "checking…"}</div>
     </div>
     <div class="server-actions">
-      ${active ? "" : `<button class="btn" data-use>Use</button>`}
+      <button class="btn" data-open title="Open this server in its own window">Open</button>
       ${local ? "" : `<button class="btn danger" data-remove>Remove</button>`}
     </div>
   </div>`;
@@ -153,16 +164,16 @@ async function render() {
     const data = await json("/api/servers");
     // The active server may be remote; the local `/` has no sessions and no agents. Follow the
     // same origin the desktop app would open for the active profile.
-    if (data.active_url) back.href = data.active_url;
+    if (data.active_url) back.href = openInWindow(data.active_url);
     const local = { active: data.active === "local", url: data.local_url };
     const rows = [row(local, true)];
     for (const server of data.servers || []) rows.push(row(server, false));
     list.innerHTML = rows.join("");
     list.querySelectorAll(".server-row").forEach((element) => {
       const id = element.dataset.id;
-      const use = element.querySelector("[data-use]");
+      const open = element.querySelector("[data-open]");
       const remove = element.querySelector("[data-remove]");
-      if (use) use.addEventListener("click", () => switchTo(id, id === "local"));
+      if (open) open.addEventListener("click", () => openServer(id, id === "local"));
       if (remove) remove.addEventListener("click", () => removeServer(id));
       if (id !== "local") probe(id, element.querySelector("[data-state]"));
     });

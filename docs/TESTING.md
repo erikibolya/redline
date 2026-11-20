@@ -14,7 +14,7 @@ optional: a green suite that never drew a freehand stroke is not a green suite.
 | Rust unit/integration | `docker run --rm -v /mnt/user/Development/repos/redline:/src -w /src/desktop rust:1-bookworm cargo test --workspace` | store layout, HTTP/API, MCP, auth, history, feature decisions, path/config helpers, CLI |
 | Browser e2e | `docker build -q -f desktop/Dockerfile.browser -t redline:local .` then `REDLINE_IMAGE=redline:local bash desktop/scripts/e2e.sh` (or `REDLINE_BIN=/path/to/redline REDLINE_IMAGE=ghcr.io/erikibolya/redline:browser` to mount a fresh binary without rebuilding the image) | real Chromium: pointer drags, clicks, dialogs, DOM/geometry/canvas pixels, server round-trip |
 | GitHub CI | required checks on `dev` and `main` | Linux + Windows, Tauri compile, browser e2e, container/image build |
-| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` | side-panel annotation geometry/hit-testing/moving, API request shape, URL/permission config, trace redaction and the offline Markdown/JSON/ZIP package |
+| Extension unit | `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/cws.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` | side-panel annotation geometry/hit-testing/moving, API request shape, URL/permission config, Chrome Web Store version/submission planning, trace redaction and the offline Markdown/JSON/ZIP package |
 | Extension e2e | browser e2e job / `extension/scripts/e2e.mjs` | loads the unpacked extension in Chromium, submits server image and video+trace reviews, and exports offline image and video packages with a mocked folder picker |
 | Dev build | `.github/workflows/dev.yml` | `desktop/scripts/dev-version.mjs` stamps the workspace, app and lockfile versions; the Windows job asserts `redline --version`; the `browser-dev` image is built from the same stamped tree |
 | Release smoke | the checklist below against the exact tag/image | the thing users install, not just the source tree |
@@ -109,6 +109,62 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   neither breaks the worktree nor moves its base off that branch.
 - Browser e2e: the Agent settings dialog saves global + per-project values, and the rail shows the
   session's branch next to the relative time.
+
+## Device routing (v0.28.4)
+
+- Rust `tests/store.rs`: a repo sync creates the project once; a later sync from another device
+  neither renames it nor steals `agent`, and a human rename/assignment/fallback survives it.
+- Rust `tests/agent.rs`: a repo sync records the reported keys, deduplicated; `next`/heartbeat
+  touches do not erase them.
+- Rust `tests/api.rs` `a_device_assignment_routes_reviews_and_fallback_is_opt_in`: an unassigned
+  device is refused (`assigned_elsewhere`), the assigned device claims, fallback on + assigned
+  offline + repo reported allows the takeover, the session exposes `assigned_agent`/`claimed_by`/
+  `fallback`, the project exposes `agent_online`/`available_agents`, `/api/agents` lists an
+  assigned device before its first heartbeat, and fallback is refused when it is off, when the
+  assigned device is online, or when the candidate has not reported the repo.
+- Browser e2e: the project header and task row name `e2e`, the editor header carries the device,
+  the device filter shows only that device's tasks, the New review option includes `· e2e`, and
+  the agent chip opens **Agents & devices** with the device row.
+
+## Project manager (v0.28.4)
+
+- Rust `tests/api.rs` `a_project_manager_manages_one_project_but_not_the_server`: the owner
+  assigns `manager`; the manager changes the project name/device/fallback, adds a tester, keeps
+  their own manager row when saving, cannot promote anyone to manager, cannot touch another
+  project, reads `/api/audit?project=…` but not the global user/token admin, creates and submits a
+  task, and can delete another user's open task; a developer is refused project settings.
+- Browser e2e: the owner creates `e2e-manager`, assigns the manager role in People & access; the
+  manager logs in, opens **Manage project**, sees the read-only manager row, sets the device and
+  fallback, adds a viewer, saves, and reads the scoped audit; a tester on the same project gets
+  no manage control.
+
+## Desktop multi-server and the combined inbox (v0.28.4)
+
+- `desktop/app` unit tests (10): profile ids/names/tokens from `config.json` and the legacy
+  `remote_url`, distinct ids for duplicate names, safe window labels, `rl_window` stripping,
+  manager URL detection, origin comparison, and the local page → window mapping
+  (`/servers` → manager, `/inbox` → inbox, everything else → This computer).
+- Rust `tests/inbox.rs` (3): two stub servers plus the local store merge into one list with the
+  owning server label and newest-first order; an unreachable profile is reported offline with its
+  error while the others still render; a click redirects to the owning server with *its* token
+  and `rl_window=1`, refuses an unknown server (`404`) and a path in the session id (`400`); the
+  endpoint is owner-only and answers `400` without a desktop config.
+- Browser e2e: headless `/inbox` explains that the combined inbox needs the desktop app; with a
+  stubbed `/api/inbox`, four rows render with server/project/device/branch, the working row is
+  labelled, an offline server is named in the banner and its chip is marked, the summary counts
+  reviews/servers/waiting, the local row keeps its offline device, the row href is the local
+  redirect without a foreign token, the Waiting filter shows the submitted round, the server
+  filter narrows the list, and an offline server has an honest empty state. The Servers page
+  links the inbox with `rl_window=1`.
+- Manual Windows smoke (the window manager cannot be driven by the headless browser e2e): open
+  two profiles from **Servers…**, verify both windows stay on their own origin and cookies,
+  opening the same profile focuses the existing window, **This computer** gets its own window,
+  setup opens the new server in a window, the local agent follows the last focused server, and
+  quitting with a draft in the *second* window still asks for confirmation. Open **All reviews**
+  beside two server windows, click a row and verify it opens/focuses the owning window without
+  navigating the inbox.
+- `cargo check`/`cargo test` in `desktop/app` on Linux proves the Tauri code builds; the Windows
+  `tauri shell` CI job is the release compile gate.
 
 ## Feature branches (v0.22)
 

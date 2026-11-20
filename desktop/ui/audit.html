@@ -71,8 +71,8 @@ try {
 
   <section class="card">
     <h1>Audit log</h1>
-    <p class="lead">Owner only. Every authentication, user, membership, project, review and comment
-      action is recorded with its actor and time. Events are retained for one year.</p>
+    <p class="lead">Owner or project manager. The owner sees the whole server; a project manager
+      sees only one managed project. Events are retained for one year.</p>
 
     <form class="filters" id="audit-filters" autocomplete="off">
       <input id="f-action" placeholder="Action prefix (review.)" spellcheck="false" />
@@ -145,9 +145,25 @@ async function load() {
   try {
     const me = await api("/api/auth/me");
     if (!me.is_owner) {
-      container.innerHTML = '<div class="error-card">The audit log is owner-only.</div>';
-      form.hidden = true;
-      return;
+      const projects = await api("/api/projects");
+      const managed = (projects.projects || []).filter((project) => project.my_role === "manager");
+      if (!managed.length) {
+        container.innerHTML =
+          '<div class="error-card">The audit log is owner or project manager only.</div>';
+        form.hidden = true;
+        return;
+      }
+      const requested = new URLSearchParams(location.search).get("project") || "";
+      const selected = managed.some((project) => project.slug === requested)
+        ? requested
+        : managed[0].slug;
+      const input = document.getElementById("f-project");
+      input.value = selected;
+      input.readOnly = true;
+      input.title = "A project manager can read only their own project's audit";
+      document.querySelector('a.back[href="/people"]')?.remove();
+      document.querySelector(".lead").textContent =
+        `Project manager view: showing ${selected} only. Events are retained for one year.`;
     }
     const data = await api(`/api/audit?${queryString()}`);
     render(data.events || []);

@@ -11,6 +11,7 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -44,6 +45,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("invite.html", include_str!("../../ui/invite.html")),
     ("setup.html", include_str!("../../ui/setup.html")),
     ("servers.html", include_str!("../../ui/servers.html")),
+    ("inbox.html", include_str!("../../ui/inbox.html")),
     ("app.css", include_str!("../../ui/app.css")),
     ("app.js", include_str!("../../ui/app.js")),
 ];
@@ -51,6 +53,14 @@ const UI_FILES: &[(&str, &str)] = &[
 #[derive(Clone)]
 struct Local {
     base_url: String,
+    token: String,
+}
+
+#[derive(Clone, Debug)]
+struct Profile {
+    id: String,
+    name: String,
+    url: String,
     token: String,
 }
 
@@ -67,6 +77,9 @@ struct Ctx {
     data_dir: PathBuf,
     local: Local,
     agent: Arc<AgentState>,
+    /// window label -> profile id (`local`, `manager`, or a profile id). One window per server;
+    /// opening the same profile again focuses it instead of duplicating its cookies and state.
+    windows: Arc<Mutex<HashMap<String, String>>>,
 }
 
 fn main() {
@@ -91,39 +104,32 @@ fn main() {
                 data_dir,
                 local,
                 agent: Arc::new(AgentState::default()),
+                windows: Arc::new(Mutex::new(HashMap::new())),
             };
             let start_url = launch_url(&ctx.data_dir, &ctx.local);
-
-            let window = WebviewWindowBuilder::new(
-                app,
+            let start_profile = profile_for_url(&ctx.data_dir, &start_url);
+            let start_is_manager = is_manager_url(&start_url);
+            let main_role = if start_is_manager {
+                "manager".to_string()
+            } else {
+                start_profile
+                    .as_ref()
+                    .map(|profile| profile.id.clone())
+                    .unwrap_or_else(|| "local".to_string())
+            };
+            let title = window_title(start_profile.as_ref(), start_is_manager);
+            let _window = build_window(
+                app.handle(),
+                &ctx.data_dir,
+                &ctx.local,
+                &ctx.windows,
                 "main",
-                WebviewUrl::External(start_url.parse()?),
-            )
-            .title("RedLine")
-            .inner_size(1280.0, 860.0)
-            .min_inner_size(720.0, 480.0)
-            .build()?;
-
-            // Closing the window should not stop the reviewer: agents keep connecting while it
-            // sits in the tray.
-            let handle = window.clone();
-            let focus_app = app.handle().clone();
-            let focus_data = ctx.data_dir.clone();
-            let focus_local = ctx.local.clone();
-            window.on_window_event(move |event| match event {
-                WindowEvent::CloseRequested { api, .. } => {
-                    api.prevent_close();
-                    let _ = handle.hide();
-                }
-                // A window left on the local server while `config.json` names a remote one looks
-                // connected in the tray but sends every review to the wrong place. Put it back on
-                // the configured server when it gets focus — but never yank the setup page away,
-                // because that page is served locally on purpose.
-                WindowEvent::Focused(true) => {
-                    align_window(&focus_app, &focus_data, &focus_local, true);
-                }
-                _ => {}
-            });
+                &start_url,
+                start_profile.as_ref(),
+                &title,
+                !start_is_manager,
+                &main_role,
+            )?;
 
             build_tray(app, &ctx)?;
             build_app_menu(app, &ctx)?;
@@ -149,17 +155,46 @@ fn main() {
 fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let sessions = MenuItem::with_id(app, "open", "Sessions", true, Some("CmdOrCtrl+1"))?;
     let servers = MenuItem::with_id(app, "servers", "Servers…", true, None::<&str>)?;
+    let inbox = MenuItem::with_id(
+        app,
+        "inbox",
+        "All reviews (combined inbox)…",
+        true,
+        Some("CmdOrCtrl+2"),
+    )?;
     let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_mcp = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
-    let agent_start = MenuItem::with_id(app, "agent-start", "Start local agent", true, None::<&str>)?;
+    let agent_start =
+        MenuItem::with_id(app, "agent-start", "Start local agent", true, None::<&str>)?;
     let agent_stop = MenuItem::with_id(app, "agent-stop", "Stop local agent", true, None::<&str>)?;
-    let agent_repo =
-        MenuItem::with_id(app, "agent-repo", "Choose agent repository…", true, None::<&str>)?;
-    let check = MenuItem::with_id(app, "check-updates", "Check for updates…", true, None::<&str>)?;
-    let dev_update =
-        MenuItem::with_id(app, "dev-update", "Install latest dev build…", true, None::<&str>)?;
-    let revert =
-        MenuItem::with_id(app, "stable-revert", "Revert to last stable version…", true, None::<&str>)?;
+    let agent_repo = MenuItem::with_id(
+        app,
+        "agent-repo",
+        "Choose agent repository…",
+        true,
+        None::<&str>,
+    )?;
+    let check = MenuItem::with_id(
+        app,
+        "check-updates",
+        "Check for updates…",
+        true,
+        None::<&str>,
+    )?;
+    let dev_update = MenuItem::with_id(
+        app,
+        "dev-update",
+        "Install latest dev build…",
+        true,
+        None::<&str>,
+    )?;
+    let revert = MenuItem::with_id(
+        app,
+        "stable-revert",
+        "Revert to last stable version…",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit RedLine", true, Some("CmdOrCtrl+Q"))?;
     let separator = PredefinedMenuItem::separator(app)?;
     let agent_separator = PredefinedMenuItem::separator(app)?;
@@ -172,12 +207,25 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         "RedLine",
         true,
         &[
-            &sessions, &servers, &copy_link, &copy_mcp, &separator, &agent_start,
-            &agent_stop, &agent_repo, &agent_separator, &quit,
+            &sessions,
+            &servers,
+            &inbox,
+            &copy_link,
+            &copy_mcp,
+            &separator,
+            &agent_start,
+            &agent_stop,
+            &agent_repo,
+            &agent_separator,
+            &quit,
         ],
     )?;
-    let help =
-        Submenu::with_items(app, "Help", true, &[&docs, &check, &dev_update, &revert, &help_separator, &about])?;
+    let help = Submenu::with_items(
+        app,
+        "Help",
+        true,
+        &[&docs, &check, &dev_update, &revert, &help_separator, &about],
+    )?;
     app.set_menu(Menu::with_items(app, &[&file, &help])?)?;
 
     let handler_ctx = ctx.clone();
@@ -191,6 +239,13 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
 fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "tray:open", "Open RedLine", true, None::<&str>)?;
     let servers = MenuItem::with_id(app, "tray:servers", "Servers…", true, None::<&str>)?;
+    let inbox = MenuItem::with_id(
+        app,
+        "tray:inbox",
+        "All reviews (combined inbox)…",
+        true,
+        None::<&str>,
+    )?;
     let login = tauri::menu::CheckMenuItem::with_id(
         app,
         "tray:autostart",
@@ -199,17 +254,57 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         app.autolaunch().is_enabled().unwrap_or(false),
         None::<&str>,
     )?;
-    let copy_link = MenuItem::with_id(app, "tray:copy-link", "Copy browser link", true, None::<&str>)?;
-    let copy_config = MenuItem::with_id(app, "tray:copy-mcp", "Copy MCP config", true, None::<&str>)?;
-    let agent_start = MenuItem::with_id(app, "tray:agent-start", "Start local agent", true, None::<&str>)?;
-    let agent_stop = MenuItem::with_id(app, "tray:agent-stop", "Stop local agent", true, None::<&str>)?;
-    let agent_repo =
-        MenuItem::with_id(app, "tray:agent-repo", "Choose agent repository…", true, None::<&str>)?;
-    let check = MenuItem::with_id(app, "tray:check-updates", "Check for updates…", true, None::<&str>)?;
-    let dev_update =
-        MenuItem::with_id(app, "tray:dev-update", "Install latest dev build…", true, None::<&str>)?;
-    let revert =
-        MenuItem::with_id(app, "tray:stable-revert", "Revert to last stable version…", true, None::<&str>)?;
+    let copy_link = MenuItem::with_id(
+        app,
+        "tray:copy-link",
+        "Copy browser link",
+        true,
+        None::<&str>,
+    )?;
+    let copy_config =
+        MenuItem::with_id(app, "tray:copy-mcp", "Copy MCP config", true, None::<&str>)?;
+    let agent_start = MenuItem::with_id(
+        app,
+        "tray:agent-start",
+        "Start local agent",
+        true,
+        None::<&str>,
+    )?;
+    let agent_stop = MenuItem::with_id(
+        app,
+        "tray:agent-stop",
+        "Stop local agent",
+        true,
+        None::<&str>,
+    )?;
+    let agent_repo = MenuItem::with_id(
+        app,
+        "tray:agent-repo",
+        "Choose agent repository…",
+        true,
+        None::<&str>,
+    )?;
+    let check = MenuItem::with_id(
+        app,
+        "tray:check-updates",
+        "Check for updates…",
+        true,
+        None::<&str>,
+    )?;
+    let dev_update = MenuItem::with_id(
+        app,
+        "tray:dev-update",
+        "Install latest dev build…",
+        true,
+        None::<&str>,
+    )?;
+    let revert = MenuItem::with_id(
+        app,
+        "tray:stable-revert",
+        "Revert to last stable version…",
+        true,
+        None::<&str>,
+    )?;
     let status = match read_remote(&ctx.data_dir) {
         Some(remote) => format!("Configured: {}", remote.base_url),
         None => format!("Standalone: {}", ctx.local.base_url),
@@ -221,9 +316,23 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &open, &servers, &login, &copy_link, &copy_config, &separator,
-            &agent_start, &agent_stop, &agent_repo, &agent_separator, &check, &dev_update,
-            &revert, &address, &separator, &quit,
+            &open,
+            &servers,
+            &inbox,
+            &login,
+            &copy_link,
+            &copy_config,
+            &separator,
+            &agent_start,
+            &agent_stop,
+            &agent_repo,
+            &agent_separator,
+            &check,
+            &dev_update,
+            &revert,
+            &address,
+            &separator,
+            &quit,
         ],
     )?;
 
@@ -273,10 +382,8 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
     }
     match id {
         "open" => open_window(app, ctx),
-        "servers" => {
-            let url = format!("{}/servers?t={}", ctx.local.base_url, ctx.local.token);
-            navigate(app, &url);
-        }
+        "servers" => open_manager_window(app, ctx),
+        "inbox" => open_inbox_window(app, ctx),
         "copy-link" => {
             let target = match read_remote(&ctx.data_dir) {
                 Some(remote) => format!("{}/?t={}", remote.base_url, remote.token),
@@ -443,7 +550,11 @@ fn start_agent(app: &AppHandle, ctx: &Ctx) {
     };
     let mut config = redline_agent::AgentConfig::new(url, token, repo);
     config.agent_id = "local".to_string();
-    if let Some(model) = settings.model.clone().filter(|value| !value.trim().is_empty()) {
+    if let Some(model) = settings
+        .model
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+    {
         config.model = model;
     }
     if let Some(server) = settings
@@ -486,54 +597,204 @@ fn choose_agent_repo(app: &AppHandle, ctx: &Ctx) {
     write_agent_settings(&ctx.data_dir, &settings);
 }
 
-fn read_remote(data_dir: &Path) -> Option<Local> {
+fn read_config(data_dir: &Path) -> Option<serde_json::Value> {
     let text = std::fs::read_to_string(data_dir.join("config.json")).ok()?;
-    let value: serde_json::Value = serde_json::from_str(&text).ok()?;
-    let active = value.get("active").and_then(|value| value.as_str());
+    serde_json::from_str(&text).ok()
+}
 
-    // `active: "local"` wins even if an older `remote_url` still sits in the file.
-    if active == Some("local") {
-        return None;
+fn normalize_url(raw: &str) -> String {
+    raw.trim().trim_end_matches('/').to_string()
+}
+
+fn default_server_name(url: &str) -> String {
+    let host = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .split('/')
+        .next()
+        .unwrap_or(url);
+    if host.is_empty() {
+        url.to_string()
+    } else {
+        host.to_string()
     }
-    if let Some(servers) = value.get("servers").and_then(|value| value.as_array()) {
-        let selected = active
-            .and_then(|id| servers.iter().find(|server| server.get("id").and_then(|value| value.as_str()) == Some(id)))
-            .or_else(|| servers.first());
-        if let Some(server) = selected {
-            let base_url = server
-                .get("url")
-                .and_then(|value| value.as_str())?
-                .trim()
-                .trim_end_matches('/')
-                .to_string();
-            if base_url.is_empty() {
-                return None;
-            }
-            let token = server
-                .get("token")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .to_string();
-            return Some(Local { base_url, token });
+}
+
+/// Window labels and profile ids share one safe alphabet: Tauri rejects `/`, `:` and spaces.
+fn safe_label(raw: &str) -> String {
+    let mut out = String::new();
+    let mut separated = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+            separated = false;
+        } else if !separated {
+            out.push('-');
+            separated = true;
         }
     }
+    let out = out.trim_matches('-').to_string();
+    if out.is_empty() {
+        "server".to_string()
+    } else {
+        out
+    }
+}
 
-    // Pre-profiles config.
-    let base_url = value
-        .get("remote_url")?
-        .as_str()?
-        .trim()
-        .trim_end_matches('/')
-        .to_string();
-    if base_url.is_empty() {
+fn profiles_from_value(value: &serde_json::Value) -> Vec<Profile> {
+    let mut profiles = Vec::new();
+    let mut used = HashSet::new();
+    if let Some(items) = value.get("servers").and_then(|value| value.as_array()) {
+        for item in items {
+            let url = normalize_url(
+                item.get("url")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            );
+            if url.is_empty() {
+                continue;
+            }
+            let name = item
+                .get("name")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| default_server_name(&url));
+            let base = item
+                .get("id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| name.clone());
+            let base = if base.is_empty() {
+                safe_label(&name)
+            } else {
+                base
+            };
+            let mut id = base.clone();
+            let mut suffix = 2;
+            while used.contains(&id) {
+                id = format!("{base}-{suffix}");
+                suffix += 1;
+            }
+            used.insert(id.clone());
+            profiles.push(Profile {
+                id,
+                name,
+                url,
+                token: item
+                    .get("token")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+    }
+    if profiles.is_empty() {
+        if let Some(url) = value
+            .get("remote_url")
+            .and_then(|value| value.as_str())
+            .map(normalize_url)
+            .filter(|url| !url.is_empty())
+        {
+            let name = default_server_name(&url);
+            let id = safe_label(&name);
+            used.insert(id.clone());
+            profiles.push(Profile {
+                id,
+                name,
+                url,
+                token: value
+                    .get("token")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or_default()
+                    .to_string(),
+            });
+        }
+    }
+    profiles
+}
+
+fn read_profiles(data_dir: &Path) -> Vec<Profile> {
+    read_config(data_dir)
+        .map(|value| profiles_from_value(&value))
+        .unwrap_or_default()
+}
+
+/// The last focused server, used by the local agent and Copy link. `active: "local"` means no
+/// remote profile; a missing active falls back to the first profile like the server does.
+fn active_profile(data_dir: &Path) -> Option<Profile> {
+    let value = read_config(data_dir)?;
+    if value.get("active").and_then(|value| value.as_str()) == Some("local") {
         return None;
     }
-    let token = value
-        .get("token")
+    let profiles = profiles_from_value(&value);
+    value
+        .get("active")
         .and_then(|value| value.as_str())
-        .unwrap_or_default()
-        .to_string();
-    Some(Local { base_url, token })
+        .and_then(|id| profiles.iter().find(|profile| profile.id == id).cloned())
+        .or_else(|| profiles.first().cloned())
+}
+
+fn profile_for_url(data_dir: &Path, url: &str) -> Option<Profile> {
+    read_profiles(data_dir)
+        .into_iter()
+        .filter(|profile| {
+            url == profile.url
+                || url.starts_with(&format!("{}/", profile.url))
+                || url.starts_with(&format!("{}?", profile.url))
+        })
+        .max_by_key(|profile| profile.url.len())
+}
+
+fn read_remote(data_dir: &Path) -> Option<Local> {
+    active_profile(data_dir).map(|profile| Local {
+        base_url: profile.url,
+        token: profile.token,
+    })
+}
+
+fn is_manager_url(url: &str) -> bool {
+    tauri::Url::parse(url)
+        .map(|url| url.path().starts_with("/servers") || url.path().starts_with("/setup"))
+        .unwrap_or(false)
+}
+
+fn window_title(profile: Option<&Profile>, manager: bool) -> String {
+    if manager {
+        "RedLine — Servers".to_string()
+    } else if let Some(profile) = profile {
+        format!("RedLine — {}", profile.name)
+    } else {
+        "RedLine — This computer".to_string()
+    }
+}
+
+/// A local window is a fresh cookie jar. A navigation may carry no `?t=` (the Servers page links
+/// `/inbox` and relies on its own cookie), so the new window must be signed in explicitly.
+fn sign_local_url(target: &tauri::Url, token: &str) -> String {
+    if target.query_pairs().any(|(key, _)| key == "t") {
+        return target.to_string();
+    }
+    let mut signed = target.clone();
+    signed.query_pairs_mut().append_pair("t", token);
+    signed.to_string()
+}
+
+/// Which native window a *local* page belongs in. `/servers` is the launcher, `/inbox` is the
+/// combined inbox, and every other local page is the "This computer" server. A local URL that
+/// lands in the wrong window looks connected while showing the wrong list (2026-11-20).
+fn local_window(path: &str) -> (&'static str, &'static str, &'static str) {
+    if path.starts_with("/servers") || path.starts_with("/setup") {
+        ("server-manager", "manager", "RedLine — Servers")
+    } else if path.starts_with("/inbox") {
+        ("inbox", "inbox", "RedLine — All servers")
+    } else {
+        ("local-server", "local", "RedLine — This computer")
+    }
 }
 
 /// Start the embedded server on a free loopback port and return where it landed.
@@ -545,8 +806,8 @@ fn start_local_server(data_dir: PathBuf) -> Result<Local, Box<dyn std::error::Er
             .build()
             .expect("tokio runtime");
         runtime.block_on(async move {
-            let auth = redline_core::paths::load_or_create_token(&data_dir, None, true)
-                .expect("token");
+            let auth =
+                redline_core::paths::load_or_create_token(&data_dir, None, true).expect("token");
             let store = Store::new(redline_core::paths::sessions_dir(&data_dir));
             store.ensure().expect("sessions dir");
 
@@ -614,11 +875,14 @@ fn mcp_config(data_dir: &Path, local: &Local) -> String {
 /// Exit for real. The flag is what distinguishes "the human asked" from "the last window hid".
 fn quit(app: &AppHandle) {
     // The webview prefixes the window title with "• " while it holds unsaved drafts; no Tauri
-    // globals are exposed to the page, so this is the whole channel.
-    let dirty = app
-        .get_webview_window("main")
-        .and_then(|window| window.title().ok())
-        .is_some_and(|title| title.starts_with('•'));
+    // globals are exposed to the page, so this is the whole channel. Every server window can
+    // hold its own draft, so check all of them, not only the first one.
+    let dirty = app.webview_windows().values().any(|window| {
+        window
+            .title()
+            .ok()
+            .is_some_and(|title| title.starts_with('•'))
+    });
     if dirty {
         let handle = app.clone();
         app.dialog()
@@ -645,37 +909,327 @@ fn restart(app: &AppHandle) {
     app.restart();
 }
 
-/// Show the window, but first put it on the server this app is configured for. The tray status
-/// comes from `config.json`; the window can still be sitting on the local URL (or an old server),
-/// which looks "connected" while every submission goes somewhere else.
+/// Show the active server in its own window. Each server keeps one window (and one cookie jar);
+/// opening the same profile again focuses that window instead of creating a second one.
 fn open_window(app: &AppHandle, ctx: &Ctx) {
-    align_window(app, &ctx.data_dir, &ctx.local, false);
-    show_window(app);
+    let active = active_profile(&ctx.data_dir);
+    let (role, url, title, profile) = match active {
+        Some(profile) => {
+            let role = profile.id.clone();
+            let url = format!("{}/?t={}", profile.url, profile.token);
+            let title = window_title(Some(&profile), false);
+            (role, url, title, Some(profile))
+        }
+        None => (
+            "local".to_string(),
+            format!("{}/?t={}", ctx.local.base_url, ctx.local.token),
+            "RedLine — This computer".to_string(),
+            None,
+        ),
+    };
+    if let Some(label) = window_for_profile(&ctx.windows, &role) {
+        if focus_window(app, &label) {
+            return;
+        }
+    }
+    let label = if profile.is_some() {
+        format!("server-{}", safe_label(&role))
+    } else {
+        "local-server".to_string()
+    };
+    let _ = build_window(
+        app,
+        &ctx.data_dir,
+        &ctx.local,
+        &ctx.windows,
+        &label,
+        &url,
+        profile.as_ref(),
+        &title,
+        true,
+        &role,
+    );
 }
 
-/// Navigate the window to the server named in `config.json` when it is showing another origin.
-/// Returns whether a navigation was started.
-fn align_window(app: &AppHandle, data_dir: &Path, local: &Local, skip_setup: bool) -> bool {
-    let Some(window) = app.get_webview_window("main") else {
-        return false;
-    };
-    let Ok(current) = window.url() else {
-        return false;
-    };
-    if skip_setup
-        && (current.path().starts_with("/setup") || current.path().starts_with("/servers"))
-    {
-        return false;
+/// The server manager is a local window. It is not a server: opening profiles from it creates
+/// server windows, and focusing it never changes which server the local agent targets.
+fn open_manager_window(app: &AppHandle, ctx: &Ctx) {
+    let url = format!("{}/servers?t={}", ctx.local.base_url, ctx.local.token);
+    if let Some(main) = app.get_webview_window("main") {
+        if let Ok(current) = main.url() {
+            if origin(&current) == origin_of_base(&ctx.local.base_url)
+                && (current.path().starts_with("/servers") || current.path().starts_with("/setup"))
+            {
+                let _ = main.show();
+                let _ = main.unminimize();
+                let _ = main.set_focus();
+                if current.path().starts_with("/setup") {
+                    navigate_window(&main, &url);
+                }
+                return;
+            }
+        }
     }
-    let target = launch_url(data_dir, local);
-    let Ok(wanted) = tauri::Url::parse(&target) else {
-        return false;
-    };
-    if origin(&current) == origin(&wanted) {
-        return false;
+    if let Some(label) = window_for_profile(&ctx.windows, "manager") {
+        if let Some(window) = app.get_webview_window(&label) {
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            if let Ok(current) = window.url() {
+                if current.path().starts_with("/setup") {
+                    navigate_window(&window, &url);
+                }
+            }
+            return;
+        }
     }
-    navigate(app, &target);
+    let _ = build_window(
+        app,
+        &ctx.data_dir,
+        &ctx.local,
+        &ctx.windows,
+        "server-manager",
+        &url,
+        None,
+        "RedLine — Servers",
+        false,
+        "manager",
+    );
+}
+
+/// The combined inbox is a local window over every profile. It is not a server: focusing it
+/// never changes which server the local agent targets, and it can sit beside each server's own
+/// window.
+fn open_inbox_window(app: &AppHandle, ctx: &Ctx) {
+    let url = format!("{}/inbox?t={}", ctx.local.base_url, ctx.local.token);
+    if let Some(label) = window_for_profile(&ctx.windows, "inbox") {
+        if let Some(window) = app.get_webview_window(&label) {
+            // A window label is not a page: never focus an inbox window that was navigated
+            // somewhere else and call it the inbox.
+            if let Ok(current) = window.url() {
+                if !current.path().starts_with("/inbox") {
+                    navigate_window(&window, &url);
+                }
+            }
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            return;
+        }
+    }
+    let _ = build_window(
+        app,
+        &ctx.data_dir,
+        &ctx.local,
+        &ctx.windows,
+        "inbox",
+        &url,
+        None,
+        "RedLine — All servers",
+        false,
+        "inbox",
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_window(
+    app: &AppHandle,
+    data_dir: &Path,
+    local: &Local,
+    windows: &Arc<Mutex<HashMap<String, String>>>,
+    label: &str,
+    url: &str,
+    profile: Option<&Profile>,
+    title: &str,
+    activate_on_focus: bool,
+    role: &str,
+) -> Result<tauri::WebviewWindow, Box<dyn std::error::Error>> {
+    let parsed = url.parse::<tauri::Url>()?;
+    let app_handle = app.clone();
+    let nav_data = data_dir.to_path_buf();
+    let nav_local = local.clone();
+    let nav_windows = windows.clone();
+    let nav_profile = profile.cloned();
+    let window = WebviewWindowBuilder::new(app, label, WebviewUrl::External(parsed))
+        .title(title)
+        .inner_size(1280.0, 860.0)
+        .min_inner_size(720.0, 480.0)
+        .on_navigation(move |target| {
+            navigation_allowed(
+                &app_handle,
+                &nav_data,
+                &nav_local,
+                &nav_windows,
+                nav_profile.as_ref(),
+                target,
+            )
+        })
+        .build()?;
+    if let Ok(mut map) = windows.lock() {
+        map.insert(label.to_string(), role.to_string());
+    }
+    let handle = window.clone();
+    let focus_local = local.clone();
+    let focus_profile = profile.cloned();
+    window.on_window_event(move |event| match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = handle.hide();
+        }
+        // The local agent follows the last focused server. A manager window is not a server, so
+        // it is deliberately excluded by `activate_on_focus`.
+        WindowEvent::Focused(true) if activate_on_focus => {
+            set_active(&focus_local, focus_profile.as_ref());
+        }
+        _ => {}
+    });
+    let _ = window.show();
+    let _ = window.set_focus();
+    Ok(window)
+}
+
+fn navigation_allowed(
+    app: &AppHandle,
+    data_dir: &Path,
+    local: &Local,
+    windows: &Arc<Mutex<HashMap<String, String>>>,
+    source_profile: Option<&Profile>,
+    target: &tauri::Url,
+) -> bool {
+    if !matches!(target.scheme(), "http" | "https") {
+        return true;
+    }
+    let flagged = target.query_pairs().any(|(key, _)| key == "rl_window");
+    let clean = strip_window_flag(target);
+    let source_origin = source_profile
+        .and_then(|profile| tauri::Url::parse(&profile.url).ok())
+        .map(|url| origin(&url))
+        .unwrap_or_else(|| origin_of_base(&local.base_url));
+    if flagged || origin(&clean) != source_origin {
+        if open_target_window(app, data_dir, local, windows, &clean) {
+            return false;
+        }
+    }
     true
+}
+
+fn strip_window_flag(url: &tauri::Url) -> tauri::Url {
+    let mut clean = url.clone();
+    let pairs: Vec<(String, String)> = clean
+        .query_pairs()
+        .filter(|(key, _)| key != "rl_window")
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect();
+    clean.set_query(None);
+    if !pairs.is_empty() {
+        clean.query_pairs_mut().extend_pairs(pairs);
+    }
+    clean
+}
+
+fn open_target_window(
+    app: &AppHandle,
+    data_dir: &Path,
+    local: &Local,
+    windows: &Arc<Mutex<HashMap<String, String>>>,
+    target: &tauri::Url,
+) -> bool {
+    let mut url = target.as_str().to_string();
+    let profile = profile_for_url(data_dir, &url);
+    let local_origin = origin_of_base(&local.base_url);
+    let (label, role, title) = if let Some(profile) = &profile {
+        (
+            format!("server-{}", safe_label(&profile.id)),
+            profile.id.clone(),
+            format!("RedLine — {}", profile.name),
+        )
+    } else if origin(target) == local_origin {
+        // A local page is not automatically "This computer": `/servers` is the manager and
+        // `/inbox` is the combined inbox. Getting this wrong would focus the empty local
+        // dashboard instead of the window the human asked for.
+        let (label, role, title) = local_window(target.path());
+        // A local window is a fresh webview with its own cookie jar, so a navigation that
+        // carries no `?t=` (the Servers page links `/inbox` and relies on its own cookie) would
+        // open an unauthenticated window. Sign the new window in explicitly.
+        url = sign_local_url(target, &local.token);
+        (label.to_string(), role.to_string(), title.to_string())
+    } else {
+        // A remote URL that is not a configured profile belongs in the system browser, not in a
+        // mystery webview: add it in Servers… first if it should be a RedLine window.
+        open_url(&url);
+        return true;
+    };
+    if let Some(existing) = window_for_profile(windows, &role) {
+        if focus_window(app, &existing) {
+            return true;
+        }
+    }
+    if app.get_webview_window(&label).is_some() {
+        if let Ok(mut map) = windows.lock() {
+            map.insert(label.clone(), role.clone());
+        }
+        return focus_window(app, &label);
+    }
+    build_window(
+        app,
+        data_dir,
+        local,
+        windows,
+        &label,
+        &url,
+        profile.as_ref(),
+        &title,
+        true,
+        &role,
+    )
+    .is_ok()
+}
+
+fn window_for_profile(windows: &Arc<Mutex<HashMap<String, String>>>, role: &str) -> Option<String> {
+    windows
+        .lock()
+        .ok()?
+        .iter()
+        .find(|(_, value)| value.as_str() == role)
+        .map(|(label, _)| label.clone())
+}
+
+fn focus_window(app: &AppHandle, label: &str) -> bool {
+    if let Some(window) = app.get_webview_window(label) {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        true
+    } else {
+        false
+    }
+}
+
+/// The active profile is the local agent's target and the default for Copy link. Focus is the
+/// only signal that changes it; switching a window's URL must not silently move the agent.
+fn set_active(local: &Local, profile: Option<&Profile>) {
+    let path = profile
+        .map(|profile| format!("/api/servers/{}/activate", profile.id))
+        .unwrap_or_else(|| "/api/servers/local/activate".to_string());
+    let base = local.base_url.clone();
+    let token = local.token.clone();
+    std::thread::spawn(move || {
+        match redline_core::client::Client::new(&format!("{}/", base.trim_end_matches('/')), token)
+        {
+            Ok(client) => {
+                if let Err(error) = client.post(&path, &json!({})) {
+                    eprintln!("redline: cannot remember the active server: {error}");
+                }
+            }
+            Err(error) => eprintln!("redline: cannot reach the local server: {error}"),
+        }
+    });
+}
+
+fn origin_of_base(base: &str) -> String {
+    tauri::Url::parse(base)
+        .map(|url| origin(&url))
+        .unwrap_or_default()
 }
 
 fn origin(url: &tauri::Url) -> String {
@@ -683,24 +1237,32 @@ fn origin(url: &tauri::Url) -> String {
         .port_or_known_default()
         .map(|port| port.to_string())
         .unwrap_or_default();
-    format!("{}://{}:{}", url.scheme(), url.host_str().unwrap_or(""), port)
+    format!(
+        "{}://{}:{}",
+        url.scheme(),
+        url.host_str().unwrap_or(""),
+        port
+    )
 }
 
 fn show_window(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
+    if let Some(window) = app
+        .get_webview_window("main")
+        .or_else(|| app.get_webview_window("server-manager"))
+        .or_else(|| app.get_webview_window("inbox"))
+        .or_else(|| app.webview_windows().into_values().next())
+    {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
 }
 
-fn navigate(app: &AppHandle, url: &str) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.set_focus();
-        let escaped = serde_json::to_string(url).unwrap_or_else(|_| "\"/\"".to_string());
-        let _ = window.eval(&format!("window.location.replace({escaped});"));
-    }
+fn navigate_window(window: &tauri::WebviewWindow, url: &str) {
+    let _ = window.show();
+    let _ = window.set_focus();
+    let escaped = serde_json::to_string(url).unwrap_or_else(|_| "\"/\"".to_string());
+    let _ = window.eval(&format!("window.location.replace({escaped});"));
 }
 
 /// Stable releases come from the rolling `latest` manifest; dev builds from the rolling
@@ -708,7 +1270,8 @@ fn navigate(app: &AppHandle, url: &str) {
 /// GitHub release assets, so no extra infrastructure.
 const STABLE_MANIFEST: &str =
     "https://github.com/erikibolya/redline/releases/latest/download/latest.json";
-const DEV_MANIFEST: &str = "https://github.com/erikibolya/redline/releases/download/dev-build/latest.json";
+const DEV_MANIFEST: &str =
+    "https://github.com/erikibolya/redline/releases/download/dev-build/latest.json";
 
 #[derive(Clone, Copy)]
 enum UpdateChannel {
@@ -775,8 +1338,7 @@ fn revert_to_stable(app: AppHandle) {
                 builder
                     .version_comparator(|current, remote| remote.version != current)
                     .build()
-            })
-        {
+            }) {
             Ok(updater) => updater,
             Err(err) => {
                 report(&app, "Revert unavailable", format!("{err}"));
@@ -921,4 +1483,128 @@ fn copy_to_clipboard(text: &str) -> Result<(), String> {
     arboard::Clipboard::new()
         .and_then(|mut clipboard| clipboard.set_text(text.to_string()))
         .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_labels_are_safe_and_stable() {
+        assert_eq!(safe_label("Production"), "production");
+        assert_eq!(safe_label("Produkce / Praha"), "produkce-praha");
+        assert_eq!(safe_label(""), "server");
+    }
+
+    #[test]
+    fn profiles_keep_ids_names_and_tokens() {
+        let profiles = profiles_from_value(&serde_json::json!({
+            "servers": [
+                { "id": "production", "name": "Holly", "url": "https://redline.example/", "token": "p" },
+                { "id": "dev", "name": "Dev", "url": "http://192.168.1.2:8788", "token": "d" }
+            ],
+            "active": "dev"
+        }));
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].id, "production");
+        assert_eq!(profiles[0].name, "Holly");
+        assert_eq!(profiles[0].url, "https://redline.example");
+        assert_eq!(profiles[0].token, "p");
+        assert_eq!(profiles[1].id, "dev");
+        assert_eq!(profiles[1].url, "http://192.168.1.2:8788");
+    }
+
+    #[test]
+    fn a_legacy_config_becomes_one_profile() {
+        let profiles = profiles_from_value(&serde_json::json!({
+            "remote_url": "https://redline.example/",
+            "token": "secret"
+        }));
+        assert_eq!(profiles.len(), 1);
+        assert_eq!(profiles[0].url, "https://redline.example");
+        assert_eq!(profiles[0].token, "secret");
+    }
+
+    #[test]
+    fn duplicate_names_get_distinct_window_roles() {
+        let profiles = profiles_from_value(&serde_json::json!({
+            "servers": [
+                { "id": "prod", "name": "Production", "url": "https://a.example", "token": "a" },
+                { "id": "prod", "name": "Production", "url": "https://b.example", "token": "b" }
+            ]
+        }));
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles[0].id, "prod");
+        assert_eq!(profiles[1].id, "prod-2");
+    }
+
+    #[test]
+    fn the_window_flag_is_removed_from_the_server_url() {
+        let url = tauri::Url::parse("https://redline.example/?t=secret&rl_window=1&x=2").unwrap();
+        let clean = strip_window_flag(&url);
+        assert_eq!(clean.as_str(), "https://redline.example/?t=secret&x=2");
+    }
+
+    #[test]
+    fn manager_urls_are_recognised() {
+        assert!(is_manager_url("http://127.0.0.1:8788/servers?t=x"));
+        assert!(is_manager_url("http://127.0.0.1:8788/setup?new=1"));
+        assert!(!is_manager_url("http://127.0.0.1:8788/"));
+        // `is_manager_url` is a path check; launch_url only produces these paths for the local
+        // manager, while a remote server is opened at `/`.
+        assert!(is_manager_url("https://redline.example/servers"));
+    }
+
+    #[test]
+    fn a_local_window_opened_without_a_token_is_signed_in() {
+        let url = tauri::Url::parse("http://127.0.0.1:8788/inbox").unwrap();
+        assert_eq!(
+            sign_local_url(&url, "secret"),
+            "http://127.0.0.1:8788/inbox?t=secret"
+        );
+        let already = tauri::Url::parse("http://127.0.0.1:8788/inbox?t=own").unwrap();
+        assert_eq!(sign_local_url(&already, "secret"), already.as_str());
+    }
+
+    #[test]
+    fn every_local_page_lands_in_its_own_window() {
+        assert_eq!(local_window("/inbox").0, "inbox");
+        assert_eq!(local_window("/inbox?t=x").1, "inbox");
+        assert_eq!(local_window("/servers?t=x").0, "server-manager");
+        assert_eq!(local_window("/setup?new=1").1, "manager");
+        assert_eq!(local_window("/s/20261120-100000-review").0, "local-server");
+        assert_eq!(local_window("/").2, "RedLine — This computer");
+    }
+
+    #[test]
+    fn origins_ignore_a_trailing_slash_and_compare_default_ports() {
+        let a = tauri::Url::parse("https://redline.example/").unwrap();
+        let b = tauri::Url::parse("https://redline.example/s/1?t=x").unwrap();
+        assert_eq!(origin(&a), origin(&b));
+        assert_eq!(
+            origin_of_base("http://127.0.0.1:8788/"),
+            "http://127.0.0.1:8788"
+        );
+    }
+
+    #[test]
+    fn a_server_url_maps_back_to_its_profile() {
+        let dir =
+            std::env::temp_dir().join(format!("redline-app-profile-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            r#"{"servers":[{"id":"prod","name":"Production","url":"https://redline.example","token":"t"}],"active":"prod"}"#,
+        )
+        .unwrap();
+        assert_eq!(active_profile(&dir).unwrap().id, "prod");
+        assert_eq!(
+            profile_for_url(&dir, "https://redline.example/?t=t")
+                .unwrap()
+                .id,
+            "prod"
+        );
+        assert!(profile_for_url(&dir, "https://other.example/?t=t").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

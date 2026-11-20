@@ -149,6 +149,25 @@ twins, and finally `HEAD`; the candidates are **fully qualified refs**, because 
 as `dev` becomes ambiguous as soon as a tag of that name exists (and git then either refuses it or
 silently branches off the tag).
 
+### Device routing (v0.28.4)
+
+A project may name one **device** in `agent` and allow a per-project `allow_fallback`. The repo
+sync is discovery, not ownership: the first sync creates the project with the reporting device,
+but a later sync never overwrites an assignment (including an explicit empty one) or a human
+rename. Presence records the repo keys each online device reported, so the server can show
+`available_agents` without asking the code host.
+
+`POST /api/agent/next` enforces the assignment. A new review claim goes to the assigned device;
+another device is refused with `reason=assigned_elsewhere`. With `allow_fallback` on, a device
+that is online and reported the project's `repo` may claim only while the assigned device is
+**offline**. An assigned device that is online but at capacity still waits; a fallback never
+preempts a live claim. The session list exposes `assigned_agent`, `claimed_by`, the online flags
+and `fallback`, so the UI can say *waiting for erik-pc* instead of an anonymous spinner.
+`GET /api/agents` is the scoped device list (owner: all; member: devices assigned to or reporting
+their projects); `PUT /api/projects/{slug}` is the owner-or-project-manager assignment path (name,
+agent, repo, fallback). A project manager is a developer plus those settings, members (but not
+other managers) and that project's audit; global users, tokens and other projects stay owner-only.
+
 ## HTTP server
 
 - `ThreadingHTTPServer` with a single handler class; class-level `sessions` path.

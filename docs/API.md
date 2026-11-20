@@ -90,16 +90,20 @@ new link of the same kind invalidates the previous unused one. Accepting an invi
 > **Current slice:** data routes are **project-scoped**. `GET /api/projects` and
 > `GET /api/sessions` return only the member's projects (the owner sees all); Inbox is owner-only.
 > `GET /api/sessions/{id}` and every media/history route return `404` for a task outside the
-> member's projects. `GET /api/sessions/{id}` carries `meta.my_role` (`owner|developer|tester|
-> viewer`). A tester may create and annotate their own open tasks, but `POST /annotations`,
+> member's projects. `GET /api/sessions/{id}` carries `meta.my_role` (`owner|manager|developer|
+> tester|viewer`). A tester may create and annotate their own open tasks, but `POST /annotations`,
 > `POST /cancel`, confirm/cancel-feature and handoff return `403`. A tester hands work to a
 > developer with `POST /api/sessions/{id}/request-agent`; the task stays `open` until the
-> developer calls `POST /annotations`.
+> developer calls `POST /annotations`. A **manager** does the developer actions (submit, STOP,
+> confirm/handoff, delete any open task) and additionally manages one project's settings,
+> fallback and members; global user/token/ownership endpoints stay owner-only.
 >
-> `GET/PUT /api/projects/{slug}/members` is owner-only; `PUT` replaces the project's member list
-> (`{"members":[{"user_id","role"}]}` with role `viewer|tester|developer`). The agent routes and
-> `/mcp` accept a scoped agent token (or the legacy owner token); a human session on those routes
-> is accepted only for the owner administering the bridge.
+> `GET/PUT /api/projects/{slug}/members` is owner or project-manager; `PUT` replaces the
+> project's member list (`{"members":[{"user_id","role"}]}` with role
+> `viewer|tester|developer|manager`). A manager cannot add, remove or demote a `manager`; only the
+> owner changes the manager set. The agent routes and `/mcp` accept a scoped agent token (or the
+> legacy owner token); a human session on those routes is accepted only for the owner
+> administering the bridge.
 
 ### `POST /api/sessions/<id>/request-agent`
 
@@ -118,8 +122,9 @@ task in their project.
 
 ### `GET/PUT /api/projects/<slug>/members`
 
-Owner only. `GET` returns the member list with `user_id`, `username`, `display_name` and `role`.
-`PUT` replaces it:
+Owner or project manager. `GET` returns the member list with `user_id`, `username`,
+`display_name` and `role`, plus a minimal `directory` of active/invited people (no owner, no
+tokens) for the manager dialog. `PUT` replaces the list:
 
 ```json
 { "members": [
@@ -180,7 +185,9 @@ after **90 days** by default; set `REDLINE_NOTIFICATION_RETENTION_DAYS` to overr
 
 ### `GET /api/audit`
 
-Owner only. Returns `{ "events": [ … ], "count": n }`, newest first. Each event has `at`,
+Owner or project manager. The owner returns the whole server; a project manager must pass
+`project=<slug>` for a project they manage and the server forces the filter to it. Returns
+`{ "events": [ … ], "count": n }`, newest first. Each event has `at`,
 `actor_type` (`user|legacy|system`), optional `actor_id`, `actor_name`, `action`, optional
 `project`/`session`/`target`/`ip`/`user_agent`, and `details`.
 
@@ -247,6 +254,11 @@ work's state (`requested`, `running`, `done`, `failed`) plus the integration's `
 `message`. The server does not know what the work means; see
 [Handoff a confirmed feature](#post-apisessionsidhandoff).
 
+Every row also carries `assigned_agent` (the project's device, or `null`), `assigned_agent_online`,
+`claimed_by` / `claimed_by_online`, `claim_state` (`running|waiting|null`) and `fallback` (`true`
+when a live claim comes from a device other than the assignment). `fallback` is how the UI says
+*erik-pc → holly (fallback)* instead of pretending the assigned device did the work (2026-11-20).
+
 Every row also carries `agent_running` (2026-10-31): `true` while a bridge holds a **running**
 claim on the session whose lease has not expired. It is the evidence that a run is still going —
 `agent_state` only records what the agent said last, and a `reply` can land mid-run. A `waiting`
@@ -288,9 +300,11 @@ non-zero run). The UI says "agent timed out" for the two timeout codes and "agen
 
 `annotations` is the last submitted payload (or `{session, annotations: []}` before submission).
 The `meta` object carries `feature_confirmed_at` / `feature_cancelled_at` when the human decided.
-Both `meta.revision` and `annotations.revision` start at `0`; every submit, tester request, agent
-`post_round` and new video round increments both, with `updated_by` / `updated_by_name` /
-`updated_at` describing the writer.
+It also carries the device fields (`assigned_agent`, `assigned_agent_online`, `claimed_by`,
+`claimed_by_online`, `claim_state`, `fallback`), the same shape as the session list, so the editor
+header survives a reload. Both `meta.revision` and `annotations.revision` start at `0`; every
+submit, tester request, agent `post_round` and new video round increments both, with `updated_by` /
+`updated_by_name` / `updated_at` describing the writer.
 
 ### `PUT /api/sessions/<id>/branch`
 
@@ -583,13 +597,40 @@ to the agent's repo root).
 }
 ```
 
-`repo` is `null` for legacy label-only projects.
+`repo` is `null` for legacy label-only projects. `agent` is the assigned device;
+`agent_online` and `agent_last_seen` come from the presence file (`null` when no device is
+assigned). `allow_fallback` is the per-project takeover switch. `available_agents` lists the
+devices that reported this project's `repo`, so the owner can see who could actually run it.
+
+### `PUT /api/projects/<slug>`
+
+Owner or project manager. Changes the human-owned project settings; this is the only way to
+reassign a device. A project manager can change name, repo, agent and fallback for their project,
+but not the manager set.
+
+```json
+{ "name": "Au.Net", "agent": "erik-pc", "repo": "ActiUnit/Au.Net", "allow_fallback": true }
+```
+
+Every field is optional; `""` clears `agent`/`repo`. `name` must stay non-empty, `agent` matches
+`[a-z0-9_-]{1,64}`, `repo` is a relative key without `.`/`..`. The response is the updated project.
+
+### `GET /api/agents`
+
+The scoped device list. The owner with no token scope sees every device; a member sees devices
+assigned to their projects, plus devices that reported one of those projects' repositories (the
+possible fallback candidates). Each row is `{ agent_id, online, last_seen, jobs, repos, projects,
+claims }`; an assigned device appears before its first heartbeat with `online=false`,
+`last_seen=null`, `jobs=[]`.
+
 
 ### `POST /api/agent/repos`
 
 An agent reports the repositories it can see. The endpoint is idempotent and never deletes a
-project that has reviews. `agent_id` is `[a-z0-9_-]{1,64}`; keys are relative paths without `.` or
-`..`, at most 200 characters.
+project that has reviews. It creates a missing project with the reporting device and records the
+keys in the agent's presence; it never overwrites an existing project's `agent` (including an
+explicit empty assignment) or `name`. `agent_id` is `[a-z0-9_-]{1,64}`; keys are relative paths
+without `.` or `..`, at most 200 characters.
 
 ```http
 POST /api/agent/repos
@@ -636,9 +677,15 @@ POST /api/agent/claims/…/release     {"agent_id": "holly"}
 ```
 
 `next` returns `{"session": {…}, "claim": {…}, "job": "review|handoff", "limits": {…}}` or
-`{"session": null, "reason": "empty|at_capacity|branch_locked|claimed"}`. A claim response is
-`{"claim": {…}, "session": {…}, "job": "review", "limits": {…}}`. The branch key is
+`{"session": null, "reason": "empty|at_capacity|branch_locked|claimed|assigned_elsewhere"}`. A claim
+response is `{"claim": {…}, "session": {…}, "job": "review", "limits": {…}}`. The branch key is
 `session.branch`, or the derived `feat/…` when the agent did not declare one.
+
+A review claim respects the project's `agent` assignment. A different device is refused with
+`assigned_elsewhere`; the only exception is `allow_fallback=true`, the assigned device is offline,
+and the caller is online and reported the project's `repo` in its last repo sync. An online but
+busy assignment still waits, and a fallback never preempts a live claim. An existing waiting claim
+may resume on its own device even after a reassignment, because the worktree is already there.
 
 `jobs` is the bridge's capability list. A bridge that omits it only receives `review` work, so
 an old client is never handed a confirmed feature and asked to treat it as an annotation round.
@@ -646,9 +693,11 @@ an old client is never handed a confirmed feature and asked to treat it as an an
 `session.handoff.status` is already `running`. The claim's `work_key` wins over `session.branch`:
 it is the branch the review actually worked on, including v0.21's `session/<id>` legacy name.
 
-The agent presence rows in `GET /api/agent/status` include `jobs` (default `["review"]`). A bridge
-that advertises `["review","handoff"]` is the one that can be given a handoff job; an old bridge
-that sends no `jobs` is review-only, and the UI says so in the status chip's tooltip.
+The agent presence rows in `GET /api/agent/status` include `jobs` (default `["review"]`) and
+`repos` (the keys from the last repo sync). A bridge that advertises `["review","handoff"]` is the
+one that can be given a handoff job; an old bridge that sends no `jobs` is review-only, and the UI
+says so in the status chip's tooltip. `POST /api/agent/repos` records `repos` and touches presence;
+it never overwrites an existing project's `agent` or `name`.
 
 ### Agent presence
 
@@ -672,6 +721,45 @@ blocks creating or submitting a review when no agent is connected.
 ### `GET /health`
 
 `{"ok": true}`.
+
+### Combined inbox (desktop local server, v0.28.4)
+
+`GET /api/inbox` merges the sessions of every profile in the desktop's `config.json` plus
+*This computer* into one read-only list. It is owner-only and answers `400` on a headless server
+(`redline serve`), which has no profiles.
+
+```json
+{
+  "servers": [
+    {"id": "local", "name": "This computer", "url": "http://127.0.0.1:8788", "local": true,
+     "active": false, "online": true, "error": null, "sessions": 3, "open": 2, "waiting": 1},
+    {"id": "production", "name": "Holly", "url": "https://redline.ibolya.cz", "local": false,
+     "active": true, "online": true, "error": null, "sessions": 7, "open": 4, "waiting": 2},
+    {"id": "dev", "name": "Dev", "url": "https://dev.redline.ibolya.cz", "local": false,
+     "active": false, "online": false, "error": "connection refused", "sessions": 0,
+     "open": 0, "waiting": 0}
+  ],
+  "items": [
+    {"server": "production", "server_name": "Holly", "local": false,
+     "open_url": "/api/inbox/open?server=production&session=20261120-100000-review-abcd",
+     "session": {"id": "20261120-100000-review-abcd", "title": "…", "status": "submitted"}}
+  ],
+  "truncated": false,
+  "counts": {"servers": 3, "online": 2, "items": 10, "waiting": 3}
+}
+```
+
+Each profile is fetched in parallel with **its own** token; one dead server is reported in
+`error` and contributes no items, and the other queues still render. `items` is newest-first
+(`updated_at`, then `submitted_at`, `created_at`) and capped at 250 (`truncated` is then `true`).
+The `session` object is the same row `GET /api/sessions` returns, so the UI can print the device,
+run state and feature decision without a second call.
+
+`GET /api/inbox/open?server=<id>&session=<id>` validates the session id (`400`), resolves the
+profile (`404` for an unknown id) and answers `307` with
+`Location: <server>/s/<id>?t=<that profile's token>&rl_window=1`. The desktop shell intercepts
+the remote navigation and opens/focuses the owning profile's window; a plain browser follows the
+redirect. The profile token is never part of the inbox page.
 
 ### Static
 

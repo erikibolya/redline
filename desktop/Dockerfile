@@ -4,6 +4,10 @@
 # thin client. Build: docker build -f desktop/Dockerfile -t redline .
 
 FROM rust:1-bookworm AS build
+# `ring` (rustls, via the inbox's HTTPS client) compiles C for the musl target.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends musl-tools \
+ && rm -rf /var/lib/apt/lists/*
 RUN rustup target add x86_64-unknown-linux-musl
 WORKDIR /src
 COPY desktop ./desktop

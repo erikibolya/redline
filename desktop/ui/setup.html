@@ -110,7 +110,8 @@ const saveButton = document.getElementById("save");
 const back = document.getElementById("back");
 const backServers = document.getElementById("back-servers");
 
-back.href = localToken ? `/?t=${encodeURIComponent(localToken)}` : "/";
+const openInWindow = (url) => `${url}${url.includes("?") ? "&" : "?"}rl_window=1`;
+back.href = openInWindow(localToken ? `/?t=${encodeURIComponent(localToken)}` : "/");
 backServers.href = localToken ? `/servers?t=${encodeURIComponent(localToken)}` : "/servers";
 if (params.get("unreachable")) {
   banner.hidden = false;
@@ -128,7 +129,7 @@ async function loadStatus() {
     if (!response.ok) return;
     const state = await response.json();
     // Back to sessions means the active server, not this local setup origin.
-    if (state.active_url) back.href = state.active_url;
+    if (state.active_url) back.href = openInWindow(state.active_url);
     const current = document.getElementById("current");
     if (state.mode === "remote") {
       current.innerHTML = `Currently connected to <b>${state.active_name || state.remote_url}</b>
@@ -166,8 +167,8 @@ document.getElementById("form").addEventListener("submit", async (event) => {
       saveButton.disabled = false;
       return;
     }
-    setStatus("Connected — opening your reviews…", "ok");
-    location.replace(data.open_url);
+    setStatus("Connected — opening its own window…", "ok");
+    location.replace(`${data.open_url}${data.open_url.includes("?") ? "&" : "?"}rl_window=1`);
   } catch (error) {
     setStatus("Could not reach RedLine: " + error.message, "error");
     saveButton.disabled = false;

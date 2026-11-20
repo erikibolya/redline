@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.28.4 — 2026-11-20
+
+- **All reviews: one inbox across every RedLine server.** The desktop's local server merges
+  `GET /api/sessions` from every profile plus *This computer* into `/inbox` (menu/tray → **All
+  reviews**, or **Combined inbox** on the Servers page). Every row keeps its server, project,
+  device and state; server and state chips combine; an unreachable server is named with its
+  error instead of blanking the list, and the other queues still render. A click goes through the
+  local `/api/inbox/open` redirect to the owning server with *that profile's* token, so the
+  desktop opens or focuses that server's window and leaves the inbox in place. The list is capped
+  at the 250 newest reviews and is read-only — each server stays an independent queue (2026-11-20).
+
+- **The desktop opens each RedLine server in its own window.** **Servers…** is now a launcher:
+  **Open** creates a `server-<id>` window (or focuses the existing one) and keeps every server's
+  cookies, login and drafts independent; there is no `Use` mode switch. `active` means the last
+  focused server for the local agent and *Copy browser link*. A dedicated `server-manager` window
+  stays local, `This computer` gets its own `local-server` window, and setup opens the new server
+  in a window instead of replacing the wizard. Window titles name the server, closing hides the
+  window while the tray app stays alive, and the quit confirmation checks unsaved drafts in every
+  server window (2026-11-20).
+
+- **The UI names the device that owns or handles a task.** The rail's project header shows the
+  assigned device with an online/offline dot, every task row carries the device that will run or
+  is running it (and `assigned → claimed` for a fallback), the editor header repeats it, and a
+  device filter narrows the rail. The agent chip opens **Agents & devices**: online/offline,
+  assigned projects, current tasks and last seen. New-review project options include the device
+  and an offline warning. The task response (`GET /api/sessions/{id}`) carries the same device
+  fields as the list, so the header does not go blank after a reload (2026-11-20).
+
+- **A project manager can run one project without becoming a server admin.** New `manager`
+  project role, assigned by the owner in People & access. A manager can rename the project, set
+  its repo key, assign its device and fallback, add/remove developers, testers and viewers, and
+  read that project's audit; they can do the developer actions in the project too (submit, STOP,
+  confirm/handoff, delete an open task). They cannot manage global users, tokens, other projects,
+  ownership or server settings, cannot assign or demote a manager, and cannot remove themselves
+  from management. The owner's editor gets a **Manage project** dialog (device, fallback, members,
+  audit link), and `/audit?project=…` now serves a read-only project view to managers
+  (2026-11-20).
+
+- **A project belongs to a device, and a repo sync no longer steals it.** `project.agent` is the
+  assigned device (owner-only `PUT /api/projects/{slug}`), `allow_fallback` is per project and off
+  by default; when it is on, another online device that reported the same `repo` may claim only
+  while the assigned device is offline. An online-but-busy assignment still waits, and a fallback
+  claim is exposed as `fallback` rather than pretending the assigned device did the work. The
+  agent's repo sync now fills an empty project once and never overwrites a human assignment or
+  name, and records `repos` in presence; `GET /api/agents` returns the scoped device list, while
+  `GET /api/sessions` carries `assigned_agent`, `claimed_by` and online/fallback flags. Owners can
+  see every device; members see the devices assigned to, or reporting, their projects
+  (2026-11-20).
+
+- **A release tag publishes a new extension version by itself.** `extension/scripts/cws.mjs` uses
+  the Chrome Web Store API v2 with a service account to read the store's published/submitted
+  version, upload the packaged ZIP only when `extension/manifest.json` is newer, and submit it for
+  review. The `extension-store` job runs after every stable release; a version already published
+  or in review is a no-op, and a store version ahead of the manifest fails instead of downgrading.
+  Store listing text and screenshots remain manual dashboard edits (2026-11-11).
+
 ## 0.28.3 — 2026-11-10
 
 - **One connection form, in the panel.** Removed the standalone options page and its manifest

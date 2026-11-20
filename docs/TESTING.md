@@ -139,6 +139,12 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   no manage control.
 
 ## Agent console (v0.28.5)
+- Windows installer smoke: install RedLine Desktop; the setup also installs RedLine Agent and
+  opens its Settings. There are two tray icons; the agent's window configures the device; the
+  desktop tray's **RedLine Agent…** focuses it. **Start local agent** in the desktop app explains
+  that the separate agent owns the device. Upgrading the desktop installer does not install the
+  agent twice; uninstalling RedLine Desktop leaves RedLine Agent running (its own uninstaller
+  removes it).
 
 - Rust `tests/api.rs`: an agent claims a submitted review, writes a deliberate step and a raw log
   line, then `GET /api/agents/activity` returns the device, claim, title, step and output with the

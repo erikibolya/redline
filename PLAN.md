@@ -73,6 +73,9 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
       scoped `GET /api/agents`, `assigned_agent`/`claimed_by`/`fallback` in the session list, and
       a repo sync that no longer steals an assignment. The editor shows device badges, the
       **Agents & devices** dialog and a device filter.
+- [x] **Two-tray install (v0.28.6):** the desktop installer also installs the RedLine Agent tray
+      app (separate config/updater/uninstaller); the agent keeps running without the review
+      client, and the desktop app's embedded agent is refused while it is present.
 - [x] **Agent console (v0.28.5):** `GET /api/agents/activity` + `/agent` (device, claim, step,
       last 40 output lines), and `desktop/agent-app` — a tray app with its own installer and
       updater that supervises the bridge and shows the same live view.

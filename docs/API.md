@@ -722,6 +722,45 @@ blocks creating or submitting a review when no agent is connected.
 
 `{"ok": true}`.
 
+### Combined inbox (desktop local server, v0.28.4)
+
+`GET /api/inbox` merges the sessions of every profile in the desktop's `config.json` plus
+*This computer* into one read-only list. It is owner-only and answers `400` on a headless server
+(`redline serve`), which has no profiles.
+
+```json
+{
+  "servers": [
+    {"id": "local", "name": "This computer", "url": "http://127.0.0.1:8788", "local": true,
+     "active": false, "online": true, "error": null, "sessions": 3, "open": 2, "waiting": 1},
+    {"id": "production", "name": "Holly", "url": "https://redline.ibolya.cz", "local": false,
+     "active": true, "online": true, "error": null, "sessions": 7, "open": 4, "waiting": 2},
+    {"id": "dev", "name": "Dev", "url": "https://dev.redline.ibolya.cz", "local": false,
+     "active": false, "online": false, "error": "connection refused", "sessions": 0,
+     "open": 0, "waiting": 0}
+  ],
+  "items": [
+    {"server": "production", "server_name": "Holly", "local": false,
+     "open_url": "/api/inbox/open?server=production&session=20261120-100000-review-abcd",
+     "session": {"id": "20261120-100000-review-abcd", "title": "…", "status": "submitted"}}
+  ],
+  "truncated": false,
+  "counts": {"servers": 3, "online": 2, "items": 10, "waiting": 3}
+}
+```
+
+Each profile is fetched in parallel with **its own** token; one dead server is reported in
+`error` and contributes no items, and the other queues still render. `items` is newest-first
+(`updated_at`, then `submitted_at`, `created_at`) and capped at 250 (`truncated` is then `true`).
+The `session` object is the same row `GET /api/sessions` returns, so the UI can print the device,
+run state and feature decision without a second call.
+
+`GET /api/inbox/open?server=<id>&session=<id>` validates the session id (`400`), resolves the
+profile (`404` for an unknown id) and answers `307` with
+`Location: <server>/s/<id>?t=<that profile's token>&rl_window=1`. The desktop shell intercepts
+the remote navigation and opens/focuses the owning profile's window; a plain browser follows the
+redirect. The profile token is never part of the inbox page.
+
 ### Static
 
 `GET /static/<file>`, `/`, `/s/<id>` and the editor redirects. Path traversal is rejected.

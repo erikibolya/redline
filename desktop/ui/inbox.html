@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RedLine — all servers</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css" />
+<style>
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: var(--font);
+  }
+  .inbox { width: min(980px, 100%); margin: 0 auto; padding: 28px 24px 48px; }
+  .inbox-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .inbox-head .titles { min-width: 0; }
+  .inbox-head h1 { font-size: 18px; margin: 0 0 2px; }
+  .inbox-head .sub { color: var(--muted); font-size: 12px; margin: 0; }
+  .inbox-head .actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  .inbox-head .back { color: var(--muted); font-size: 12px; text-decoration: none; }
+  .inbox-head .back:hover { color: var(--text); }
+  .inbox-head .btn { padding: 5px 10px; font-size: 12px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .chip { padding: 4px 9px; font-size: 12px; }
+  .chip .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); display: inline-block; margin-right: 5px; }
+  .chip.offline { border-color: #7f1d1d; color: #fda4af; }
+  .chip.offline .dot { background: var(--danger); }
+  [data-theme="light"] .chip.offline { border-color: #fda4af; color: #be123c; }
+  .banner {
+    background: rgba(161, 98, 7, .16); border: 1px solid #a16207; color: #fde68a;
+    border-radius: var(--radius); padding: 10px 12px; font-size: 13px; margin: 12px 0;
+  }
+  [data-theme="light"] .banner { background: #fffbeb; border-color: #fde68a; color: #92400e; }
+  .list { min-height: 220px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .row {
+    display: flex; align-items: flex-start; gap: 14px; padding: 12px 14px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    color: var(--text); text-decoration: none;
+  }
+  .row:hover { border-color: var(--accent); }
+  .row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row-main { min-width: 0; flex: 1; }
+  .row-title { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 4px; color: var(--muted); font-size: 12px; }
+  .server-tag {
+    background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 999px;
+    padding: 1px 7px; font-size: 11px; color: var(--text);
+  }
+  .device-tag { display: inline-flex; align-items: center; gap: 5px; }
+  .device-tag .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .device-tag.online .dot { background: var(--ok); }
+  .row-side { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .age { color: var(--muted); font-size: 11px; white-space: nowrap; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 5px; border-radius: 999px;
+    padding: 2px 8px; font-size: 11px; font-weight: 500; white-space: nowrap;
+    background: var(--panel-3); color: var(--muted); border: 1px solid transparent;
+  }
+  .badge.waiting { background: rgba(161, 98, 7, .16); color: #fcd34d; border-color: rgba(251, 191, 36, .35); }
+  [data-theme="light"] .badge.waiting { background: #fffbeb; color: #92400e; border-color: #fde68a; }
+  .badge.work { background: rgba(47, 129, 247, .16); color: #93c5fd; border-color: rgba(96, 165, 250, .4); }
+  [data-theme="light"] .badge.work { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+  .badge.work .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+  .badge.replied { background: rgba(139, 92, 246, .16); color: #c4b5fd; border-color: rgba(167, 139, 250, .4); }
+  [data-theme="light"] .badge.replied { background: #f5f3ff; color: #5b21b6; border-color: #ddd6fe; }
+  .badge.failed { background: rgba(225, 29, 72, .16); color: #fda4af; border-color: rgba(251, 113, 133, .5); }
+  [data-theme="light"] .badge.failed { background: #ffe4e6; color: #9f1239; border-color: #fda4af; }
+  .badge.done { background: rgba(34, 197, 94, .16); color: #86efac; border-color: rgba(74, 222, 128, .45); }
+  [data-theme="light"] .badge.done { background: #dcfce7; color: #166534; border-color: #86efac; }
+  .badge.confirmed { background: rgba(34, 197, 94, .16); color: #86efac; border-color: rgba(74, 222, 128, .45); }
+  [data-theme="light"] .badge.confirmed { background: #dcfce7; color: #166534; border-color: #86efac; }
+  .badge.cancelled { background: rgba(244, 63, 94, .16); color: #fda4af; border-color: rgba(251, 113, 133, .5); }
+  [data-theme="light"] .badge.cancelled { background: #ffe4e6; color: #9f1239; border-color: #fda4af; }
+  .badge.open { color: var(--muted); }
+  .empty {
+    border: 1px dashed var(--border); border-radius: 10px; padding: 26px 18px;
+    text-align: center; color: var(--muted); font-size: 13px;
+  }
+  .empty a { color: var(--accent); }
+  .foot { color: var(--muted); font-size: 11px; margin: 16px 2px 0; }
+</style>
+</head>
+<body data-page="inbox">
+<main class="inbox">
+  <div class="inbox-head">
+    <div class="brand"><span class="brand-mark" role="img" aria-label="RedLine"><i></i></span></div>
+    <div class="titles">
+      <h1>All servers</h1>
+      <p class="sub" id="summary">Loading reviews…</p>
+    </div>
+    <div class="actions">
+      <button class="btn" id="refresh" type="button">Refresh</button>
+      <a class="back" id="back" href="/servers">Servers…</a>
+    </div>
+  </div>
+  <div class="chips" id="servers" aria-label="Filter by server"></div>
+  <div class="chips" id="filters" aria-label="Filter by state">
+    <button class="chip" type="button" data-filter="all" aria-pressed="true">All</button>
+    <button class="chip" type="button" data-filter="waiting" aria-pressed="false">Waiting</button>
+    <button class="chip" type="button" data-filter="working" aria-pressed="false">Working</button>
+    <button class="chip" type="button" data-filter="open" aria-pressed="false">Open</button>
+    <button class="chip" type="button" data-filter="done" aria-pressed="false">Done</button>
+  </div>
+  <div id="banner" class="banner" hidden></div>
+  <div id="list" class="list"><div class="empty">Loading reviews…</div></div>
+  <p class="foot" id="foot"></p>
+</main>
+
+<script>
+const params = new URLSearchParams(location.search);
+const token = params.get("t") || "";
+const withToken = (path) => token
+  ? `${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(token)}`
+  : path;
+// The desktop shell turns a flagged navigation into a native window instead of replacing this
+// page; a plain browser ignores the parameter.
+const openInWindow = (url) => `${url}${url.includes("?") ? "&" : "?"}rl_window=1`;
+
+const summary = document.getElementById("summary");
+const serversHost = document.getElementById("servers");
+const filtersHost = document.getElementById("filters");
+const banner = document.getElementById("banner");
+const list = document.getElementById("list");
+const foot = document.getElementById("foot");
+const back = document.getElementById("back");
+const refresh = document.getElementById("refresh");
+
+back.href = openInWindow(withToken("/servers"));
+
+let SERVERS = [];
+let ITEMS = [];
+let filter = "all";
+let serverFilter = "all";
+let failed = null;
+let loadedAt = null;
+let truncated = false;
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[ch]);
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+async function json(path, options = {}) {
+  const response = await fetch(withToken(path), {
+    ...options,
+    headers: { "content-type": "application/json", ...(options.headers || {}) },
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+  return body;
+}
+
+/** Mirrors the rail's vocabulary. `feature_state` is a human decision and outranks a run; a live
+ *  claim (not `agent_state`) is the evidence that an agent is working right now. */
+function featureOf(session) {
+  return session.feature_state
+    || (session.feature_confirmed_at ? "confirmed"
+      : session.feature_cancelled_at ? "cancelled" : "pending");
+}
+
+function stateOf(session) {
+  const feature = featureOf(session);
+  if (feature === "cancelled") return { key: "done", label: "cancelled", css: "cancelled" };
+  if (feature === "confirmed") return { key: "done", label: "confirmed", css: "confirmed" };
+  if (session.status === "resolved") return { key: "done", label: "done", css: "done" };
+  if (session.status === "submitted") {
+    if (session.agent_running === true || session.agent_state === "working") {
+      return { key: "working", label: "working", css: "work", dot: true };
+    }
+    if (session.agent_state === "failed") {
+      const timeout = String(session.agent_failure?.code || "").startsWith("timeout");
+      return { key: "waiting", label: timeout ? "agent timed out" : "agent failed", css: "failed" };
+    }
+    if (session.agent_state === "replied") return { key: "waiting", label: "replied", css: "replied" };
+    return { key: "waiting", label: "waiting for agent", css: "waiting" };
+  }
+  if (session.agent_requested_at) return { key: "open", label: "waiting for developer", css: "waiting" };
+  const annotations = Number(session.annotation_count || 0);
+  if (annotations > 0) return { key: "open", label: plural(annotations, "annotation"), css: "open" };
+  return { key: "open", label: "open", css: "open" };
+}
+
+function deviceOf(session) {
+  const assigned = String(session.assigned_agent || "").trim();
+  const claimed = String(session.claimed_by || "").trim();
+  if (!assigned && !claimed) return null;
+  const fallback = Boolean(assigned && claimed && assigned !== claimed) || session.fallback === true;
+  const label = fallback ? `${assigned} → ${claimed}` : (claimed || assigned);
+  const online = claimed ? session.claimed_by_online === true : session.assigned_agent_online === true;
+  return { label, online };
+}
+
+function stampOf(session) {
+  return session.updated_at || session.submitted_at || session.created_at || "";
+}
+
+function ago(stamp) {
+  if (!stamp) return "";
+  const then = new Date(stamp).getTime();
+  if (!Number.isFinite(then)) return "";
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
+}
+
+function localTime(stamp) {
+  if (!stamp) return "";
+  const date = new Date(stamp);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : stamp;
+}
+
+function counts() {
+  const result = { all: ITEMS.length, waiting: 0, working: 0, open: 0, done: 0 };
+  for (const item of ITEMS) result[stateOf(item.session).key] += 1;
+  return result;
+}
+
+function renderServers() {
+  const chips = [`<button class="chip" type="button" data-server="all" aria-pressed="${serverFilter === "all"}">
+    All servers <b>${ITEMS.length}</b></button>`];
+  for (const server of SERVERS) {
+    chips.push(`<button class="chip${server.online ? "" : " offline"}" type="button"
+      data-server="${escapeHtml(server.id)}" aria-pressed="${serverFilter === server.id}"
+      title="${escapeHtml(server.online ? server.url : `${server.url} — ${server.error || "offline"}`)}">
+      <span class="dot"></span>${escapeHtml(server.name)} <b>${server.open ?? 0}</b></button>`);
+  }
+  serversHost.innerHTML = chips.join("");
+}
+
+function renderFilters() {
+  const total = counts();
+  for (const chip of filtersHost.querySelectorAll("[data-filter]")) {
+    const key = chip.dataset.filter;
+    chip.setAttribute("aria-pressed", String(filter === key));
+    chip.innerHTML = `${key === "all" ? "All" : key[0].toUpperCase() + key.slice(1)} <b>${total[key] || 0}</b>`;
+  }
+}
+
+function renderBanner() {
+  const offline = SERVERS.filter((server) => !server.online);
+  if (!offline.length) {
+    banner.hidden = true;
+    banner.textContent = "";
+    return;
+  }
+  banner.hidden = false;
+  banner.textContent = `${offline.length === 1 ? "One server is" : `${offline.length} servers are`} offline: `
+    + offline.map((server) => `${server.name} (${server.error || "no answer"})`).join(", ")
+    + ". Their reviews are missing from this list; everything else still works.";
+}
+
+function row(item) {
+  const session = item.session;
+  const state = stateOf(session);
+  const device = deviceOf(session);
+  const project = session.project || "inbox";
+  const branch = String(session.branch || "").trim();
+  const stamp = stampOf(session);
+  const meta = [
+    `<span class="server-tag">${escapeHtml(item.server_name)}</span>`,
+    `<span>${escapeHtml(project)}</span>`,
+    device
+      ? `<span class="device-tag${device.online ? " online" : ""}" title="${escapeHtml(
+        device.online ? `${device.label} is online` : `${device.label} is offline`
+      )}"><span class="dot"></span>${escapeHtml(device.label)}</span>`
+      : "",
+    branch ? `<span>${escapeHtml(branch)}</span>` : "",
+  ].filter(Boolean).join("");
+  return `<a class="row" href="${escapeHtml(withToken(item.open_url))}" data-server="${escapeHtml(item.server)}"
+      data-state="${state.key}" title="${escapeHtml(localTime(stamp))}">
+    <div class="row-main">
+      <div class="row-title">${escapeHtml(session.title || session.id || "Untitled review")}</div>
+      <div class="row-meta">${meta}</div>
+    </div>
+    <div class="row-side">
+      <span class="badge ${state.css}">${state.dot ? '<span class="dot"></span>' : ""}${escapeHtml(state.label)}</span>
+      <span class="age">${escapeHtml(ago(stamp))}</span>
+    </div>
+  </a>`;
+}
+
+function renderList() {
+  if (failed) {
+    list.innerHTML = `<div class="empty">${escapeHtml(failed)}<br /><br />
+      <a href="${escapeHtml(openInWindow(withToken("/servers")))}">Open Servers…</a></div>`;
+    return;
+  }
+  const rows = ITEMS.filter((item) =>
+    (serverFilter === "all" || item.server === serverFilter)
+    && (filter === "all" || stateOf(item.session).key === filter));
+  if (!rows.length) {
+    const empty = ITEMS.length
+      ? "No reviews match this filter."
+      : SERVERS.length > 1
+        ? "No reviews on any server yet."
+        : "No reviews yet. Add another server in Servers… to see every queue in one place.";
+    list.innerHTML = `<div class="empty">${escapeHtml(empty)}</div>`;
+    return;
+  }
+  list.innerHTML = rows.map(row).join("");
+}
+
+function renderSummary() {
+  const online = SERVERS.filter((server) => server.online).length;
+  const waiting = SERVERS.reduce((sum, server) => sum + Number(server.waiting || 0), 0);
+  const parts = [
+    `${plural(ITEMS.length, "review")} across ${plural(SERVERS.length, "server")}`,
+    `${online}/${SERVERS.length} online`,
+  ];
+  if (waiting) parts.push(`${waiting} waiting for an agent`);
+  summary.textContent = parts.join(" · ");
+  document.title = `${ITEMS.length ? ITEMS.length + " · " : ""}RedLine — all servers`;
+  foot.textContent = !loadedAt
+    ? ""
+    : truncated
+      ? `Showing the ${ITEMS.length} most recent reviews; the servers hold more.`
+      : `Refreshed ${new Date(loadedAt).toLocaleTimeString()} · this list is refreshed every 20 seconds while the page is visible.`;
+}
+
+function render() {
+  renderServers();
+  renderFilters();
+  renderBanner();
+  renderList();
+  renderSummary();
+}
+
+async function load({ quiet = false } = {}) {
+  try {
+    const data = await json("/api/inbox");
+    SERVERS = Array.isArray(data.servers) ? data.servers : [];
+    ITEMS = Array.isArray(data.items) ? data.items : [];
+    failed = null;
+    truncated = Boolean(data.truncated);
+    loadedAt = Date.now();
+    render();
+  } catch (error) {
+    // Keep the last good list on a background failure; a blank page is a worse answer than a
+    // slightly old one. The first load has nothing to keep, so it has to say what happened.
+    if (quiet && (ITEMS.length || failed)) return;
+    failed = error.message;
+    if (!ITEMS.length) {
+      SERVERS = [];
+      summary.textContent = "Not available here";
+      renderList();
+    } else {
+      renderList();
+    }
+  }
+}
+
+serversHost.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-server]");
+  if (!chip) return;
+  serverFilter = chip.dataset.server;
+  render();
+});
+
+filtersHost.addEventListener("click", (event) => {
+  const chip = event.target.closest("[data-filter]");
+  if (!chip) return;
+  filter = chip.dataset.filter;
+  render();
+});
+
+refresh.addEventListener("click", () => load());
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) load({ quiet: true });
+});
+
+setInterval(() => {
+  if (!document.hidden) load({ quiet: true });
+}, 20000);
+
+load();
+</script>
+</body>
+</html>

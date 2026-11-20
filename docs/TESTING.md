@@ -138,6 +138,34 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   fallback, adds a viewer, saves, and reads the scoped audit; a tester on the same project gets
   no manage control.
 
+## Desktop multi-server and the combined inbox (v0.28.4)
+
+- `desktop/app` unit tests (10): profile ids/names/tokens from `config.json` and the legacy
+  `remote_url`, distinct ids for duplicate names, safe window labels, `rl_window` stripping,
+  manager URL detection, origin comparison, and the local page → window mapping
+  (`/servers` → manager, `/inbox` → inbox, everything else → This computer).
+- Rust `tests/inbox.rs` (3): two stub servers plus the local store merge into one list with the
+  owning server label and newest-first order; an unreachable profile is reported offline with its
+  error while the others still render; a click redirects to the owning server with *its* token
+  and `rl_window=1`, refuses an unknown server (`404`) and a path in the session id (`400`); the
+  endpoint is owner-only and answers `400` without a desktop config.
+- Browser e2e: headless `/inbox` explains that the combined inbox needs the desktop app; with a
+  stubbed `/api/inbox`, four rows render with server/project/device/branch, the working row is
+  labelled, an offline server is named in the banner and its chip is marked, the summary counts
+  reviews/servers/waiting, the local row keeps its offline device, the row href is the local
+  redirect without a foreign token, the Waiting filter shows the submitted round, the server
+  filter narrows the list, and an offline server has an honest empty state. The Servers page
+  links the inbox with `rl_window=1`.
+- Manual Windows smoke (the window manager cannot be driven by the headless browser e2e): open
+  two profiles from **Servers…**, verify both windows stay on their own origin and cookies,
+  opening the same profile focuses the existing window, **This computer** gets its own window,
+  setup opens the new server in a window, the local agent follows the last focused server, and
+  quitting with a draft in the *second* window still asks for confirmation. Open **All reviews**
+  beside two server windows, click a row and verify it opens/focuses the owning window without
+  navigating the inbox.
+- `cargo check`/`cargo test` in `desktop/app` on Linux proves the Tauri code builds; the Windows
+  `tauri shell` CI job is the release compile gate.
+
 ## Feature branches (v0.22)
 
 - Rust `tests/store.rs`: `default_branch` folds Czech titles into a git-safe `feat/<slug>-<tail>`,

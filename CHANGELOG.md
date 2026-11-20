@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **All reviews: one inbox across every RedLine server.** The desktop's local server merges
+  `GET /api/sessions` from every profile plus *This computer* into `/inbox` (menu/tray → **All
+  reviews**, or **Combined inbox** on the Servers page). Every row keeps its server, project,
+  device and state; server and state chips combine; an unreachable server is named with its
+  error instead of blanking the list, and the other queues still render. A click goes through the
+  local `/api/inbox/open` redirect to the owning server with *that profile's* token, so the
+  desktop opens or focuses that server's window and leaves the inbox in place. The list is capped
+  at the 250 newest reviews and is read-only — each server stays an independent queue (2026-11-20).
+
+- **The desktop opens each RedLine server in its own window.** **Servers…** is now a launcher:
+  **Open** creates a `server-<id>` window (or focuses the existing one) and keeps every server's
+  cookies, login and drafts independent; there is no `Use` mode switch. `active` means the last
+  focused server for the local agent and *Copy browser link*. A dedicated `server-manager` window
+  stays local, `This computer` gets its own `local-server` window, and setup opens the new server
+  in a window instead of replacing the wizard. Window titles name the server, closing hides the
+  window while the tray app stays alive, and the quit confirmation checks unsaved drafts in every
+  server window (2026-11-20).
+
 - **The UI names the device that owns or handles a task.** The rail's project header shows the
   assigned device with an online/offline dot, every task row carries the device that will run or
   is running it (and `assigned → claimed` for a fallback), the editor header repeats it, and a

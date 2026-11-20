@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.4 — 2026-11-20
 
 - **All reviews: one inbox across every RedLine server.** The desktop's local server merges
   `GET /api/sessions` from every profile plus *This computer* into `/inbox` (menu/tray → **All

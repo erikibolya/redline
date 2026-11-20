@@ -107,7 +107,9 @@ jobs:
         run: cargo build --release --manifest-path desktop/Cargo.toml -p redline-agent
       - name: Stage the bridge resource
         shell: pwsh
-        run: Copy-Item desktop/target/release/redline-agent.exe desktop/agent-app/bin/redline-agent.exe -Force
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop/agent-app/bin | Out-Null
+          Copy-Item desktop/target/release/redline-agent.exe desktop/agent-app/bin/redline-agent.exe -Force
       - name: Compile-check the tray app
         run: cargo check --release --manifest-path desktop/agent-app/Cargo.toml
 

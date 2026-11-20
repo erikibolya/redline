@@ -120,11 +120,13 @@ jobs:
         with:
           workspaces: desktop/agent-app
       - name: Download the agent bridge
+        shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: >
-          gh release download "${{ github.event.inputs.tag || github.ref_name }}"
-          --pattern redline-agent.exe --dir desktop/agent-app/bin --clobber
+        run: |
+          New-Item -ItemType Directory -Force -Path desktop/agent-app/bin | Out-Null
+          gh release download "${{ github.event.inputs.tag || github.ref_name }}" `
+            --pattern redline-agent.exe --dir desktop/agent-app/bin --clobber
       - name: Build the tray app
         working-directory: desktop/agent-app
         run: npx --yes @tauri-apps/cli@^2 build --bundles nsis

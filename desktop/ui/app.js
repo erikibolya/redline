@@ -87,6 +87,34 @@ const agentFailure = (meta) => meta?.agent_failure || null;
 const agentFailureIsTimeout = (meta) =>
   String(agentFailure(meta)?.code || "").startsWith("timeout");
 
+/** Which device owns or is handling a task. The project's assignment is the promise; a live
+ *  claim is the evidence. A fallback names both, so the row never pretends the assigned device
+ *  did the work. */
+function sessionDevice(meta) {
+  const assigned = String(meta?.assigned_agent || "").trim();
+  const claimed = String(meta?.claimed_by || "").trim();
+  if (!assigned && !claimed) return null;
+  const fallback = Boolean(assigned && claimed && assigned !== claimed) || meta?.fallback === true;
+  const label = fallback ? `${assigned} → ${claimed}` : (claimed || assigned);
+  const online = claimed ? meta?.claimed_by_online === true : meta?.assigned_agent_online === true;
+  return { label, online, assigned, claimed, fallback };
+}
+
+function deviceTitle(device) {
+  if (!device) return "";
+  if (device.fallback) {
+    return `Assigned to ${device.assigned}; handled by ${device.claimed} (fallback)`;
+  }
+  return `${device.label} is ${device.online ? "online" : "offline"}`;
+}
+
+/** Project selects carry the device next to the repository: an offline assignment is a reason a
+ *  submitted review will wait, not a detail to discover later in the rail. */
+function projectDeviceSuffix(project) {
+  if (!project?.agent) return "";
+  return ` · ${project.agent}${project.agent_online === true ? "" : " (offline)"}`;
+}
+
 /** The last line the agent actually narrated. Its own terminal output also lands in the event
  *  log (`state: "log"`) and is a shell transcript, not a step — the stage toast and the activity
  *  label must never print a command where a status belongs (2026-10-31). */
@@ -812,7 +840,9 @@ function askProject(current, projects, blockedReason = "") {
       const label = project.repo && project.repo !== project.name
         ? `${project.name} — ${project.repo}`
         : project.name;
-      return `<option value="${escapeHtml(project.slug)}">${escapeHtml(label)}</option>`;
+      return `<option value="${escapeHtml(project.slug)}">${escapeHtml(
+        label + projectDeviceSuffix(project)
+      )}</option>`;
     };
     const select = $("#project-select");
     const options = [];
@@ -840,11 +870,17 @@ function askProject(current, projects, blockedReason = "") {
       if (!project) {
         hint.textContent = "";
       } else if (project.repo) {
-        hint.textContent = `Agent repository: ${project.repo}`;
+        hint.textContent = `Agent repository: ${project.repo} · ${
+          project.agent
+            ? `device ${project.agent} (${project.agent_online === true ? "online" : "offline"})`
+            : "no device assigned"
+        }`;
       } else if (project.slug === "inbox") {
         hint.textContent = "Inbox has no repository; the agent falls back to its default repo.";
       } else {
-        hint.textContent = "This project has no repository; the agent falls back to its default repo.";
+        hint.textContent = `This project has no repository${
+          project.agent ? ` · device ${project.agent}` : " · no device assigned"
+        }; the agent falls back to its default repo.`;
       }
     };
     syncHint();
@@ -875,7 +911,222 @@ function askProject(current, projects, blockedReason = "") {
   });
 }
 
-/** True when an online bridge advertised the post-confirmation handoff capability. */
+/** The owner's delegate for one project: device, fallback and members. */
+async function openProjectManager(editor) {
+  const slug = editor.meta.project || "inbox";
+  if (slug === "inbox" && editor.myRole !== "owner") return;
+  let project;
+  let agents;
+  let members;
+  let directory;
+  try {
+    const [projectsBody, agentsBody, membersBody] = await Promise.all([
+      api("/api/projects"),
+      api("/api/agents"),
+      api(`/api/projects/${encodeURIComponent(slug)}/members`),
+    ]);
+    project = (projectsBody.projects || []).find((item) => item.slug === slug);
+    agents = agentsBody.agents || [];
+    members = membersBody.members || [];
+    directory = membersBody.directory || [];
+  } catch (error) {
+    alert(`Could not open the project: ${error.message}`);
+    return;
+  }
+  if (!project) {
+    alert("This project is not available.");
+    return;
+  }
+  const isOwner = editor.myRole === "owner";
+  let dialog = $("#project-manage-dialog");
+  if (!dialog) {
+    document.body.insertAdjacentHTML("beforeend", `
+      <dialog class="feature-dialog project-manage-dialog" id="project-manage-dialog"
+              aria-labelledby="pm-title">
+        <form method="dialog" class="feature-card dialog-frame" id="pm-form">
+          <div class="dialog-head">
+            <div><h2 id="pm-title">Manage project</h2><p id="pm-sub"></p></div>
+            <button type="submit" value="close" class="btn icon dialog-close" aria-label="Close">×</button>
+          </div>
+          <div class="dialog-body stack">
+            <div class="pm-grid">
+              <label>Name<input type="text" id="pm-name" maxlength="120" required /></label>
+              <label>Repository key<input type="text" id="pm-repo" placeholder="ActiUnit/Au.Net" /></label>
+              <label>Device<select id="pm-agent"></select></label>
+              <label class="check-line"><input type="checkbox" id="pm-fallback" />
+                Allow fallback when the assigned device is offline</label>
+            </div>
+            <p class="field-hint" id="pm-device-hint"></p>
+            <div class="pm-members" id="pm-members"></div>
+            <div class="pm-add">
+              <select id="pm-user" aria-label="Person to add"></select>
+              <select id="pm-role" aria-label="Role"></select>
+              <button type="button" class="btn small" id="pm-add">Add</button>
+            </div>
+            <p class="field-hint">The owner is global and is not listed. Only the owner can assign
+              or change a project manager.</p>
+            <p class="status" id="pm-status" role="status" aria-live="polite"></p>
+          </div>
+          <div class="dialog-foot feature-actions">
+            <a class="btn" id="pm-audit" href="#" target="_blank" rel="noopener">Project audit</a>
+            <button type="submit" value="close" class="btn">Close</button>
+            <button type="button" class="btn primary" id="pm-save">Save project</button>
+          </div>
+        </form>
+      </dialog>`);
+    dialog = $("#project-manage-dialog");
+  }
+
+  const roleOptions = (selected, allowManager) => {
+    const roles = [["developer", "Developer"], ["tester", "Tester"], ["viewer", "Viewer"]];
+    if (allowManager) roles.unshift(["manager", "Manager"]);
+    return roles
+      .map(([value, label]) =>
+        `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`)
+      .join("");
+  };
+  const renderMembers = () => {
+    const list = $("#pm-members");
+    if (!members.length) {
+      list.innerHTML = '<div class="pm-empty">No members yet.</div>';
+    } else {
+      list.innerHTML = members.map((member, index) => {
+        const locked = member.role === "manager" && !isOwner;
+        const role = locked
+          ? '<span class="pm-manager">Manager</span>'
+          : `<select data-role="${index}" aria-label="Role for ${escapeHtml(member.username)}">${
+              roleOptions(member.role, isOwner)
+            }</select>`;
+        return `<div class="pm-member" data-index="${index}">
+          <div class="pm-member-name"><b>${escapeHtml(member.display_name || member.username)}</b>
+            <small>@${escapeHtml(member.username)}</small></div>
+          ${role}
+          ${locked ? "" : `<button type="button" class="btn small" data-remove="${index}">Remove</button>`}
+        </div>`;
+      }).join("");
+    }
+    list.querySelectorAll("select[data-role]").forEach((select) => {
+      select.addEventListener("change", () => {
+        members[Number(select.dataset.role)].role = select.value;
+      });
+    });
+    list.querySelectorAll("button[data-remove]").forEach((button) => {
+      button.addEventListener("click", () => {
+        members.splice(Number(button.dataset.remove), 1);
+        renderMembers();
+        renderAdd();
+      });
+    });
+  };
+  const renderAdd = () => {
+    const used = new Set(members.map((member) => member.user_id));
+    const candidates = directory.filter((user) =>
+      !used.has(user.id) && (user.status === "active" || user.status === "invited"));
+    const select = $("#pm-user");
+    select.innerHTML = candidates.length
+      ? candidates
+          .map((user) =>
+            `<option value="${escapeHtml(user.id)}">${escapeHtml(user.display_name || user.username)} (@${escapeHtml(user.username)})</option>`)
+          .join("")
+      : '<option value="">Everyone is already a member</option>';
+    select.disabled = !candidates.length;
+    $("#pm-add").disabled = !candidates.length;
+    $("#pm-role").innerHTML = roleOptions("developer", isOwner);
+  };
+  const syncDeviceHint = () => {
+    const chosen = $("#pm-agent").value;
+    const hint = $("#pm-device-hint");
+    if (!chosen) {
+      hint.textContent = "No device assigned. A review will wait until an agent claims it.";
+      return;
+    }
+    const device = agents.find((agent) => agent.agent_id === chosen);
+    hint.textContent = device?.online
+      ? `${chosen} is online and will pick up this project's reviews.`
+      : `${chosen} is offline. Reviews will wait until it connects.`;
+  };
+
+  $("#pm-sub").textContent = `${project.name || slug} · ${project.repo || "no repository"}`;
+  $("#pm-name").value = project.name || slug;
+  $("#pm-repo").value = project.repo || "";
+  const devices = [...agents];
+  if (project.agent && !devices.some((agent) => agent.agent_id === project.agent)) {
+    devices.push({ agent_id: project.agent, online: false });
+  }
+  $("#pm-agent").innerHTML = '<option value="">Unassigned</option>' + devices
+    .map((agent) =>
+      `<option value="${escapeHtml(agent.agent_id)}">${escapeHtml(agent.agent_id)}${
+        agent.online ? "" : " (offline)"
+      }</option>`)
+    .join("");
+  $("#pm-agent").value = project.agent || "";
+  $("#pm-fallback").checked = Boolean(project.allow_fallback);
+  $("#pm-audit").href = `/audit?project=${encodeURIComponent(slug)}`;
+  $("#pm-status").textContent = "";
+  $("#pm-status").className = "status";
+  renderMembers();
+  renderAdd();
+  syncDeviceHint();
+  $("#pm-agent").onchange = syncDeviceHint;
+  $("#pm-add").onclick = () => {
+    const user = directory.find((entry) => entry.id === $("#pm-user").value);
+    if (!user) return;
+    members.push({
+      user_id: user.id,
+      username: user.username,
+      display_name: user.display_name,
+      role: $("#pm-role").value,
+    });
+    renderMembers();
+    renderAdd();
+  };
+  $("#pm-save").onclick = async () => {
+    const status = $("#pm-status");
+    const name = $("#pm-name").value.trim();
+    if (!name) {
+      status.textContent = "A project name is required.";
+      status.className = "status error";
+      return;
+    }
+    status.textContent = "Saving…";
+    status.className = "status";
+    const button = $("#pm-save");
+    button.disabled = true;
+    try {
+      await api(`/api/projects/${encodeURIComponent(slug)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name,
+          repo: $("#pm-repo").value.trim(),
+          agent: $("#pm-agent").value,
+          allow_fallback: $("#pm-fallback").checked,
+        }),
+      });
+      await api(`/api/projects/${encodeURIComponent(slug)}/members`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          members: members
+            .filter((member) => isOwner || member.role !== "manager")
+            .map((member) => ({ user_id: member.user_id, role: member.role })),
+        }),
+      });
+      status.textContent = "Saved.";
+      status.className = "status ok";
+      await editor.rail?.load?.();
+      editor.renderHeader();
+    } catch (error) {
+      status.textContent = error.message;
+      status.className = "status error";
+    } finally {
+      button.disabled = false;
+    }
+  };
+  dialog.showModal();
+}
+
+
 const handoffCapableAgent = () => Boolean(
   AgentStatus.data?.agents?.some((agent) =>
     agent.online && (agent.jobs || ["review"]).includes("handoff")));
@@ -1159,6 +1410,7 @@ const unfiltered = (query) => !query;
 const AgentStatus = {
   timer: null,
   data: null,
+  devices: [],
 
   start() {
     this.refresh();
@@ -1168,14 +1420,19 @@ const AgentStatus = {
 
   async refresh() {
     try {
-      this.render(await api("/api/agent/status"));
+      const [status, devices] = await Promise.all([
+        api("/api/agent/status"),
+        api("/api/agents").catch(() => null),
+      ]);
+      this.render(status, devices?.agents || []);
     } catch {
-      this.render(null);
+      this.render(null, []);
     }
   },
 
-  render(data) {
+  render(data, devices = this.devices) {
     this.data = data;
+    this.devices = devices || [];
     const agents = data?.agents || [];
     const online = data ? (data.online || 0) : 0;
     const label = !data
@@ -1209,7 +1466,37 @@ const AgentStatus = {
     $$("#agent-cta").forEach((callout) => {
       callout.hidden = !data || online > 0;
     });
+    this.renderDevices();
     if (ConnectAgent.dialog?.open) ConnectAgent.renderStatus();
+  },
+
+  /// The Devices section lives in the agent dialog: one place names every bridge, whether it is
+  /// online, which projects it owns and how many tasks it holds right now.
+  renderDevices() {
+    const list = $("#connect-devices");
+    if (!list) return;
+    const devices = this.devices || [];
+    if (!devices.length) {
+      list.innerHTML = '<div class="empty">No devices are registered yet.</div>';
+      return;
+    }
+    list.innerHTML = devices
+      .map((device) => {
+        const projects = (device.projects || []).join(", ") || "no assigned project";
+        const claims = (device.claims || []).length;
+        const seen = device.last_seen
+          ? relativeTime(new Date(device.last_seen * 1000).toISOString())
+          : "never seen";
+        return `<div class="device-row">
+          <div><b>${escapeHtml(device.agent_id)}</b>
+            <small>${escapeHtml(projects)}${claims ? ` · ${plural(claims, "task")}` : ""}</small>
+            <small>Last seen: ${escapeHtml(seen)}</small></div>
+          <span class="device-state ${device.online ? "online" : "offline"}">${
+            device.online ? "online" : "offline"
+          }</span>
+        </div>`;
+      })
+      .join("");
   },
 };
 
@@ -1233,7 +1520,7 @@ const ConnectAgent = {
         <div class="feature-card dialog-frame">
           <div class="dialog-head">
             <div>
-              <h2 id="connect-title">Connect an agent</h2>
+              <h2 id="connect-title">Agents &amp; devices</h2>
               <p class="connect-status" id="connect-status">Checking…</p>
             </div>
             <button type="button" class="btn icon dialog-close" id="connect-close" aria-label="Close">
@@ -1241,6 +1528,8 @@ const ConnectAgent = {
             </button>
           </div>
           <div class="dialog-body stack">
+            <p class="hint"><b>Devices</b></p>
+            <div class="connect-devices" id="connect-devices"></div>
             <p class="hint">Paste this into your agent's MCP settings. The token is masked here —
               <b>Copy config</b> puts the real one on your clipboard.</p>
             <pre class="pre" id="connect-json">Loading…</pre>
@@ -1261,6 +1550,7 @@ const ConnectAgent = {
     const dialog = this.ensure();
     if (dialog.open) return;
     this.renderStatus();
+    AgentStatus.renderDevices();
     dialog.showModal();
     await this.load();
   },
@@ -1429,9 +1719,11 @@ class Rail {
     this.selection = new Set();
     this.sessions = [];
     this.projects = [];
+    this.devices = [];
     this.collapsed = new Set(prefs.get("collapsedProjects", []));
     const stored = prefs.get("filter", "active");
     this.filter = LEGACY_FILTERS[stored] || stored;
+    this.deviceFilter = prefs.get("deviceFilter", "all");
     // Drop preferences for views that no longer exist instead of rendering an unpressed chip
     // row with no matching list.
     if (!FILTERS.some((filter) => filter.id === this.filter)) {
@@ -1489,6 +1781,12 @@ class Rail {
         this.viewChanged();
       });
     }
+    $("#device-filter")?.addEventListener("change", (event) => {
+      this.deviceFilter = event.target.value || "all";
+      prefs.set("deviceFilter", this.deviceFilter);
+      this.render();
+      this.viewChanged();
+    });
   }
 
   /// The visible list changed by a human action (filter or search), not by an initial load.
@@ -1515,9 +1813,10 @@ class Rail {
   }
 
   async load() {
-    const [sessions, projects] = await Promise.all([
+    const [sessions, projects, devices] = await Promise.all([
       api("/api/sessions").catch(() => null),
       api("/api/projects").catch(() => null),
+      api("/api/agents").catch(() => null),
     ]);
     this.loaded = true;
     // A failed request is not evidence that the list is empty: keep what this tab already
@@ -1528,6 +1827,7 @@ class Rail {
       this.projects = projects?.projects || [];
       listCache.write(this.sessions, this.projects);
     }
+    if (devices) this.devices = devices.agents || [];
     this.render();
     this.watchAgentState();
     // Every view derived from the session list (today the dashboard gallery) is refreshed from
@@ -1581,6 +1881,7 @@ class Rail {
   matches(session) {
     const active = FILTERS.find((f) => f.id === this.filter) || FILTERS[0];
     if (!active.test(session)) return false;
+    if (!this.deviceMatches(session)) return false;
     const query = this.query.trim().toLowerCase();
     if (unfiltered(query)) return true;
     return [session.title, session.note, session.id, session.url]
@@ -1588,20 +1889,52 @@ class Rail {
       .some((field) => field.toLowerCase().includes(query));
   }
 
+  deviceMatches(session) {
+    if (this.deviceFilter === "all") return true;
+    const device = session.claimed_by || session.assigned_agent || "";
+    if (this.deviceFilter === "__none__") return !device;
+    return device === this.deviceFilter;
+  }
+
+  renderDeviceFilter() {
+    const select = $("#device-filter");
+    if (!select) return;
+    const devices = [...(this.devices || [])].sort((left, right) =>
+      left.agent_id.localeCompare(right.agent_id));
+    const values = new Set(["all", "__none__", ...devices.map((device) => device.agent_id)]);
+    if (!values.has(this.deviceFilter)) this.deviceFilter = "all";
+    const options = ['<option value="all">All devices</option>'];
+    for (const device of devices) {
+      options.push(`<option value="${escapeHtml(device.agent_id)}">${escapeHtml(device.agent_id)}${
+        device.online ? "" : " (offline)"
+      }</option>`);
+    }
+    if (this.sessions.some((session) => !session.claimed_by && !session.assigned_agent)) {
+      options.push('<option value="__none__">Unassigned</option>');
+    }
+    select.innerHTML = options.join("");
+    select.value = values.has(this.deviceFilter) ? this.deviceFilter : "all";
+    if (select.value !== this.deviceFilter) {
+      this.deviceFilter = select.value;
+      prefs.set("deviceFilter", this.deviceFilter);
+    }
+  }
+
   renderChips() {
     if (!this.chips) return;
+    const pool = this.sessions.filter((session) => this.deviceMatches(session));
     const counts = Object.fromEntries(
-      FILTERS.map((filter) => [filter.id, this.sessions.filter(filter.test).length]),
+      FILTERS.map((filter) => [filter.id, pool.filter(filter.test).length]),
     );
     if (this.purge) {
-      const cancelled = this.sessions
+      const cancelled = pool
         .filter((session) => featureState(session) === "cancelled").length;
       this.purge.hidden = cancelled === 0;
       this.purge.textContent = `Delete cancelled (${cancelled})`;
     }
     // A failed handoff is an error, not a finished feature: say so on the default view, where one
     // red badge on a single row is easy to scroll past.
-    const failed = this.sessions.filter((session) => session.handoff?.status === "failed").length;
+    const failed = pool.filter((session) => session.handoff?.status === "failed").length;
     this.chips.innerHTML = FILTERS.map((filter) => {
       const attention = filter.id === "active" && failed > 0;
       // Before the first response there is no count to print; the buttons are already here. A
@@ -1625,6 +1958,7 @@ class Rail {
   }
 
   render() {
+    this.renderDeviceFilter();
     this.renderChips();
     const bar = $("#rail-bulk");
     if (bar) bar.hidden = !this.bulkMode;
@@ -1662,11 +1996,18 @@ class Rail {
       const label = project?.name || (slug === "inbox" ? "Inbox" : slug);
       const collapsed = this.collapsed.has(slug);
       const working = items.filter(agentWorking).length;
+      const device = String(project?.agent || "").trim();
+      const deviceOnline = project?.agent_online === true;
+      const deviceHtml = device
+        ? `<span class="pdevice ${deviceOnline ? "online" : "offline"}"
+                title="Assigned device: ${escapeHtml(device)} (${deviceOnline ? "online" : "offline"})">${escapeHtml(device)}</span>`
+        : `<span class="pdevice none" title="No device assigned — reviews in this project will wait">no device</span>`;
       parts.push(`
         <div class="rail-project" data-project="${escapeHtml(slug)}" role="button" tabindex="0"
              aria-expanded="${!collapsed}" title="${collapsed ? "Expand" : "Collapse"} ${escapeHtml(label)}">
           <span class="caret">${collapsed ? "▸" : "▾"}</span>
           <span class="pname">${escapeHtml(label)}</span>
+          ${deviceHtml}
           ${working ? `<span class="pworking" title="The agent is working on ${plural(working, "review")}">
             <span class="spin" aria-hidden="true"></span>${working > 1 ? `<b>${working}</b>` : ""}working
           </span>` : ""}
@@ -1685,6 +2026,7 @@ class Rail {
         if (showDays) parts.push(`<div class="rail-group">${escapeHtml(day)}</div>`);
         for (const session of dayItems) {
         const annotations = session.annotation_count || 0;
+        const device = sessionDevice(session);
         const fresh = seen.isNew(session);
         const working = agentWorking(session);
         const failed = agentFailed(session);
@@ -1708,12 +2050,14 @@ class Rail {
         const queued = session.status === "submitted";
         const requested = Boolean(session.agent_requested_at) && session.status === "open";
         const role = session.my_role || "owner";
-        const canDecide = role === "owner" || role === "developer";
+        const canDecide = role === "owner" || role === "manager" || role === "developer";
         // An agent currently running outranks "new" and the annotation count: it is the one
         // state that changes a few seconds later without the human touching anything. A feature
         // decision is the human's answer to the session, so it outranks the unread marker.
         const baseBadge = working
-          ? `<span class="badge work" title="The agent is working on this review">
+          ? `<span class="badge work" title="${escapeHtml(
+            `${device?.claimed || device?.assigned || "The agent"} is working on this review`
+          )}">
             <span class="spin" aria-hidden="true"></span>working</span>`
           : requested
             ? `<span class="badge ready" title="A tester saved this round; a developer must send it to the agent">waiting for developer</span>`
@@ -1724,15 +2068,23 @@ class Rail {
               : failed
                 // The run could not happen and the round came back: the human must not read this
                 // as an agent still working on it, and must know why nothing is happening.
-                ? `<span class="badge failed" title="${escapeHtml(failureTitle)}">${failureLabel}</span>`
+                ? `<span class="badge failed" title="${escapeHtml(failureTitle + (device ? ` (${device.label})` : ""))}">${failureLabel}</span>`
                 : queued && session.agent_state === "replied"
-                  ? `<span class="badge replied" title="The agent answered; the run is not finished yet">replied</span>`
+                  ? `<span class="badge replied" title="${escapeHtml(
+                    `${device?.claimed || "The agent"} answered; the run is not finished yet`
+                  )}">replied</span>`
                   : queued
-                    ? `<span class="badge waiting" title="${
-                      session.seen_by_agent_at
-                        ? "No agent is working on this round right now"
-                        : "Waiting for an agent — nobody has picked this round up yet"
-                    }">waiting for agent</span>`
+                    ? `<span class="badge waiting" title="${escapeHtml(
+                      device
+                        ? `${device.assigned || device.label} is ${device.online ? "online" : "offline"}; ${
+                          session.seen_by_agent_at
+                            ? "no run is active right now"
+                            : "nobody has picked this round up yet"
+                        }`
+                        : session.seen_by_agent_at
+                          ? "No agent is working on this round right now"
+                          : "Waiting for an agent — nobody has picked this round up yet"
+                    )}">waiting for agent</span>`
                     : fresh
                     ? `<span class="badge new" title="new since you last looked">new</span>`
                     // A finished review is not a decision, but it still needs a word: a row with
@@ -1761,6 +2113,8 @@ class Rail {
                aria-label="${escapeHtml(session.title || session.id)}, ${escapeHtml(session.status)}${
                  decided ? `, feature ${feature}` : ""
                }${session.branch ? `, branch ${escapeHtml(session.branch)}` : ""}${
+                 device ? `, device ${escapeHtml(device.label)}` : ""
+               }${
                  working ? ", working"
                    : failed ? `, ${failureLabel}`
                      : queued ? `, ${session.agent_state === "replied" ? "replied" : "waiting for agent"}` : ""
@@ -1776,7 +2130,10 @@ class Rail {
                 session.branch
                   ? ` · <span class="branch" title="${escapeHtml(session.branch)}">${escapeHtml(session.branch)}</span>`
                   : ""
-              }${ran !== null ? ` · took ${durationLabel(ran)}` : ""}${
+              }${device
+                ? ` · <span class="device-tag ${device.online ? "online" : "offline"}"
+                     title="${escapeHtml(deviceTitle(device))}">${escapeHtml(device.label)}</span>`
+                : ""}${ran !== null ? ` · took ${durationLabel(ran)}` : ""}${
                 session.note ? " · " + escapeHtml(session.note) : ""
               }</div>
             </div>
@@ -2563,7 +2920,20 @@ class Editor {
       branch.hidden = !this.meta.branch;
       branch.textContent = this.meta.branch || "";
     }
+    const taskDevice = sessionDevice(this.meta);
+    const deviceChip = $("#session-device");
+    if (deviceChip) {
+      deviceChip.hidden = !taskDevice;
+      if (taskDevice) {
+        deviceChip.textContent = taskDevice.label;
+        deviceChip.className = `device-chip ${taskDevice.online ? "online" : "offline"}`;
+        deviceChip.title = deviceTitle(taskDevice);
+      }
+    }
     const role = this.myRole || "owner";
+    const manager = role === "owner" || role === "manager";
+    const manage = $("#project-manage");
+    if (manage) manage.hidden = !manager;
     const tester = role === "tester";
     const viewer = role === "viewer";
     const testerOther = tester && this.userId
@@ -2875,6 +3245,7 @@ class Editor {
         alert(`Could not change the project: ${error.message}`);
       }
     });
+    $("#project-manage")?.addEventListener("click", () => openProjectManager(this));
     $("#comment-submit")?.addEventListener("click", () => this.submitComment());
     $("#comment-text")?.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
@@ -5314,14 +5685,20 @@ const NewReview = {
           const label = project.repo && project.repo !== project.name
             ? `${project.name} — ${project.repo}`
             : project.name;
-          options.push(`<option value="${escapeHtml(project.slug)}">${escapeHtml(label)}</option>`);
+          options.push(`<option value="${escapeHtml(project.slug)}" data-device="${escapeHtml(
+            project.agent || ""
+          )}" data-device-online="${project.agent_online === true}">${escapeHtml(
+            label + projectDeviceSuffix(project)
+          )}</option>`);
         }
         options.push("</optgroup>");
       }
       if (others.length) {
         options.push('<optgroup label="Other projects">');
         for (const project of others) {
-          options.push(`<option value="${escapeHtml(project.slug)}">${escapeHtml(project.name)}</option>`);
+          options.push(`<option value="${escapeHtml(project.slug)}" data-device="${escapeHtml(
+            project.agent || ""
+          )}" data-device-online="${project.agent_online === true}">${escapeHtml(project.name)}</option>`);
         }
         options.push("</optgroup>");
       }
@@ -5342,6 +5719,19 @@ const NewReview = {
     input.hidden = !creating;
     if (creating) input.focus();
     else lastProject.remember(select.value);
+    const hint = $("#project-hint");
+    if (!hint) return;
+    const option = select.selectedOptions[0];
+    if (!creating && option?.dataset.device) {
+      hint.textContent = `Device: ${option.dataset.device} (${
+        option.dataset.deviceOnline === "true" ? "online" : "offline"
+      }). Reviews wait while it is offline.`;
+    } else if (!creating && option?.value) {
+      hint.textContent = "No device assigned. A review will wait until an agent claims it.";
+    } else {
+      hint.innerHTML =
+        "Repositories are synced from the agent. <b>+ New project…</b> creates a label without a repo.";
+    }
   },
   selectedProject() {
     const select = $("#f-project");

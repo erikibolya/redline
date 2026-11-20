@@ -103,11 +103,12 @@ async function drag(page, from, to, steps = 12) {
 async function hoverRow(page, selector) {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     try {
+      await page.$eval(selector, (el) => el.scrollIntoView({ block: "center" }));
       await page.hover(selector);
       return;
     } catch (error) {
-      if (!/detached/i.test(error.message)) throw error;
-      await page.waitForSelector(selector, { timeout: 1000 });
+      if (!/detached|not clickable|not an Element/i.test(error.message)) throw error;
+      await page.waitForSelector(selector, { timeout: 1000 }).catch(() => {});
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
@@ -326,12 +327,15 @@ const main = async () => {
     title: document.querySelector("#connect-title")?.textContent || "",
     json: document.querySelector("#connect-json")?.textContent || "",
     status: document.querySelector("#connect-status")?.textContent || "",
+    devices: [...document.querySelectorAll("#connect-devices .device-row")]
+      .map((row) => row.textContent),
     copy: Boolean(document.querySelector("#connect-copy")),
   }));
-  check("the agent chip opens the connect dialog with a masked config",
-    connectEditor.title === "Connect an agent" && connectEditor.json.includes("mcpServers")
+  check("the agent chip opens the devices dialog with a masked config",
+    connectEditor.title === "Agents & devices" && connectEditor.json.includes("mcpServers")
       && connectEditor.json.includes("••••") && !connectEditor.json.includes("e2e-token")
-      && connectEditor.copy && connectEditor.status.includes("connected"),
+      && connectEditor.copy && connectEditor.status.includes("connected")
+      && connectEditor.devices.some((row) => row.includes("e2e")),
     JSON.stringify({ ...connectEditor, json: connectEditor.json.slice(0, 80) }));
   await page.click("#connect-close");
   await page.waitForFunction(
@@ -349,7 +353,8 @@ const main = async () => {
     const brand = document.querySelector(".header .brand");
     const mark = brand?.querySelector(".brand-mark");
     const title = document.querySelector(".header .title b");
-    const sub = document.querySelector(".header .title span");
+    const sub = document.querySelector(".header .title #session-sub")
+      || document.querySelector(".header .title span");
     if (!mark || !title || !sub) return null;
     const markBox = mark.getBoundingClientRect();
     const titleBox = title.getBoundingClientRect();
@@ -411,7 +416,7 @@ const main = async () => {
   check("the header carries no status pills — the toast and the rail card say it",
     chrome.pills === 0 && !chrome.stale, JSON.stringify(chrome));
   check("every header action is a labelled SVG icon",
-    chrome.count === 7 && chrome.svg && chrome.labelled && chrome.separator
+    chrome.count === 8 && chrome.svg && chrome.labelled && chrome.separator
       && chrome.panelMarks, JSON.stringify(chrome));
   check("agent settings is a solid gear, not a text glyph",
     chrome.gear && chrome.gear.fill !== "none" && chrome.gear.stroke === "none"
@@ -2728,12 +2733,15 @@ const main = async () => {
     title: document.querySelector("#connect-title")?.textContent || "",
     json: document.querySelector("#connect-json")?.textContent || "",
     status: document.querySelector("#connect-status")?.textContent || "",
+    devices: [...document.querySelectorAll("#connect-devices .device-row")]
+      .map((row) => row.textContent),
     copy: Boolean(document.querySelector("#connect-copy")),
   }));
-  check("the dashboard chip opens the connect dialog with a masked config",
-    connect.title === "Connect an agent" && connect.json.includes("mcpServers")
+  check("the dashboard chip opens the devices dialog with a masked config",
+    connect.title === "Agents & devices" && connect.json.includes("mcpServers")
       && connect.json.includes("••••") && !connect.json.includes("e2e-token")
-      && connect.copy && connect.status.includes("connected"),
+      && connect.copy && connect.status.includes("connected")
+      && connect.devices.some((row) => row.includes("e2e")),
     JSON.stringify({ ...connect, json: connect.json.slice(0, 80) }));
   await page.click("#connect-close");
   await page.waitForFunction(() => !document.querySelector("#connect-dialog")?.open,
@@ -2973,6 +2981,12 @@ const main = async () => {
   const remembered = await page.$eval("#f-project", (el) => el.value);
   check("a new review preselects the last used project after a reload",
     remembered === "e2e-repo", `project=${remembered}`);
+  const projectOptionDevice = await page.$eval(
+    '#f-project option[value="e2e-repo"]',
+    (option) => option.textContent,
+  );
+  check("the New review project option names its device",
+    projectOptionDevice.includes("· e2e"), projectOptionDevice);
 
   // A review the human creates without naming a branch must still belong to a feature: v0.21
   // fell back to `session/<id>` at claim time, which is not a branch anyone can merge.
@@ -4018,9 +4032,42 @@ const main = async () => {
 
   await page.reload({ waitUntil: "networkidle2" });
   await page.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  await page.waitForFunction(
+    () => !document.querySelector("#session-device")?.hidden
+      && Boolean(document.querySelector('.rail-project[data-project="e2e-repo"] .pdevice')),
+    { timeout: 10000 },
+  );
   const reloadedProject = await page.$eval("#project-edit", (el) => el.dataset.project);
   check("the project move survives a reload",
     reloadedProject === "e2e-repo", reloadedProject);
+
+  const deviceUi = await page.evaluate((id) => ({
+    header: {
+      hidden: document.querySelector("#session-device")?.hidden,
+      text: document.querySelector("#session-device")?.textContent || "",
+      className: document.querySelector("#session-device")?.className || "",
+    },
+    project: {
+      text: document.querySelector('.rail-project[data-project="e2e-repo"] .pdevice')?.textContent || "",
+      className: document.querySelector('.rail-project[data-project="e2e-repo"] .pdevice')?.className || "",
+    },
+    row: document.querySelector(`.session[data-id="${id}"] .device-tag`)?.textContent || "",
+    options: [...document.querySelectorAll("#device-filter option")].map((option) => option.value),
+  }), moveId);
+  check("the header, project and row name the device handling the task",
+    deviceUi.header.hidden === false && deviceUi.header.text === "e2e"
+      && deviceUi.project.text === "e2e" && deviceUi.project.className.includes("online")
+      && deviceUi.row === "e2e" && deviceUi.options.includes("e2e"),
+    JSON.stringify(deviceUi));
+
+  await page.select("#device-filter", "e2e");
+  await page.waitForFunction(() => {
+    const rows = [...document.querySelectorAll("#rail-body .session")];
+    return rows.length > 0 && rows.every((row) =>
+      row.querySelector(".device-tag")?.textContent.includes("e2e"));
+  }, { timeout: 5000 });
+  check("the device filter shows only that device's tasks", true);
+  await page.select("#device-filter", "all");
 
   await page.click("#project-edit");
   await page.waitForSelector("#project-dialog[open]", { timeout: 5000 });
@@ -4170,6 +4217,150 @@ const main = async () => {
       && invitedMe.body.user?.status === "active",
     `${invitedMe.status} ${JSON.stringify(invitedMe.body)}`);
   await inviteContext.close();
+
+  // ---- project manager: the owner delegates one project, the manager changes its device,
+  // fallback and members, and a tester on the same project gets no management controls.
+  await loginPage.type("#new-username", "e2e-manager");
+  await loginPage.type("#new-name", "E2E Manager");
+  await loginPage.type("#new-password", "correct horse battery staple");
+  await loginPage.click("#new-user-submit");
+  await loginPage.waitForFunction(
+    () => [...document.querySelectorAll("#people-list .person-row")]
+      .some((row) => row.textContent.includes("@e2e-manager")),
+    { timeout: 10000 },
+  );
+  await loginPage.evaluate(() => {
+    const row = [...document.querySelectorAll("#people-list .person-row")]
+      .find((entry) => entry.textContent.includes("@e2e-manager"));
+    row.querySelector("[data-edit-projects]").click();
+  });
+  await loginPage.waitForSelector("#projects-dialog[open]", { timeout: 5000 });
+  await loginPage.evaluate(() => {
+    const box = document.querySelector('[data-project-access="e2e-repo"]');
+    if (!box.checked) box.click();
+  });
+  await loginPage.select('select[data-project-role="e2e-repo"]', "manager");
+  await loginPage.click("#projects-save");
+  await loginPage.waitForFunction(
+    () => [...document.querySelectorAll("#people-list .person-row")]
+      .some((row) => row.textContent.includes("@e2e-manager")
+        && Boolean(row.querySelector(".role-chip.manager"))),
+    { timeout: 10000 },
+  );
+  const managerChip = await loginPage.evaluate(() => {
+    const row = [...document.querySelectorAll("#people-list .person-row")]
+      .find((entry) => entry.textContent.includes("@e2e-manager"));
+    return row?.querySelector(".role-chip.manager")?.textContent.trim() || "";
+  });
+  check("the owner can assign a project manager",
+    managerChip.includes("E2E Repo") && managerChip.includes("manager"), managerChip);
+
+  const managerReview = await api("/api/sessions", {
+    method: "POST",
+    body: JSON.stringify({
+      title: "manager dialog",
+      image_base64: makePng(),
+      project: "e2e-repo",
+      branch: "feat/manager-dialog",
+    }),
+  });
+  const managerReviewId = managerReview.meta.id;
+
+  const managerContext = await browser.createBrowserContext();
+  const managerPage = await managerContext.newPage();
+  const managerErrors = [];
+  managerPage.on("pageerror", (error) => managerErrors.push(error.message));
+  await managerPage.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
+  await managerPage.waitForSelector("#login-form:not([hidden])", { timeout: 5000 });
+  await managerPage.type("#username", "e2e-manager");
+  await managerPage.type("#password", "correct horse battery staple");
+  await managerPage.click("#login-submit");
+  await managerPage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await managerPage.goto(`${BASE}/s/${managerReviewId}`, { waitUntil: "networkidle2" });
+  await managerPage.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  await managerPage.waitForFunction(
+    () => !document.querySelector("#project-manage")?.hidden,
+    { timeout: 5000 },
+  );
+  const managerButton = await managerPage.evaluate(() =>
+    Boolean(document.querySelector("#project-manage"))
+      && !document.querySelector("#project-manage").hidden);
+  check("a project manager gets the manage-project control", managerButton);
+  check("the manager page has no uncaught errors", managerErrors.length === 0,
+    managerErrors.join("; "));
+
+  await managerPage.click("#project-manage");
+  await managerPage.waitForSelector("#project-manage-dialog[open]", { timeout: 5000 });
+  await managerPage.waitForFunction(
+    () => document.querySelector("#pm-name")?.value === "E2E Repo",
+    { timeout: 5000 },
+  );
+  const managerDialog = await managerPage.evaluate(() => ({
+    device: [...document.querySelectorAll("#pm-agent option")].map((option) => option.value),
+    managerChip: Boolean(document.querySelector("#pm-members .pm-manager")),
+    directory: [...document.querySelectorAll("#pm-user option")].map((option) => option.textContent),
+  }));
+  check("the manager dialog shows the device and the read-only manager row",
+    managerDialog.device.includes("e2e") && managerDialog.managerChip,
+    JSON.stringify(managerDialog));
+  await managerPage.select("#pm-agent", "e2e");
+  const fallbackBox = await managerPage.$("#pm-fallback");
+  if (!(await fallbackBox.evaluate((el) => el.checked))) await fallbackBox.click();
+  const inviteOption = await managerPage.evaluate(() =>
+    [...document.querySelectorAll("#pm-user option")]
+      .find((option) => option.textContent.includes("@e2e-invite"))?.value || "");
+  if (inviteOption) {
+    await managerPage.select("#pm-user", inviteOption);
+    await managerPage.select("#pm-role", "viewer");
+    await managerPage.click("#pm-add");
+    await managerPage.waitForFunction(
+      () => document.querySelector("#pm-members")?.textContent.includes("@e2e-invite"),
+      { timeout: 5000 },
+    );
+  }
+  await managerPage.click("#pm-save");
+  await managerPage.waitForFunction(
+    () => document.querySelector("#pm-status")?.textContent.includes("Saved"),
+    { timeout: 10000 },
+  );
+  const managedProject = (await api("/api/projects")).projects
+    .find((project) => project.slug === "e2e-repo");
+  const managedMembers = await api("/api/projects/e2e-repo/members");
+  check("the manager saves the device, fallback and a member",
+    managedProject?.agent === "e2e" && managedProject?.allow_fallback === true
+      && (managedMembers.members || []).some((member) =>
+        member.username === "e2e-invite" && member.role === "viewer"),
+    JSON.stringify({ agent: managedProject?.agent, fallback: managedProject?.allow_fallback, members: managedMembers.members }));
+
+  await managerPage.goto(`${BASE}/audit?project=e2e-repo`, { waitUntil: "networkidle2" });
+  await managerPage.waitForSelector("#audit-events", { timeout: 10000 });
+  const managerAudit = await managerPage.evaluate(() => ({
+    project: document.querySelector("#f-project")?.value,
+    readonly: document.querySelector("#f-project")?.readOnly,
+    actions: [...document.querySelectorAll("#audit-events .action code")].map((cell) => cell.textContent),
+    error: document.querySelector(".error-card")?.textContent || "",
+  }));
+  check("a project manager reads only their project's audit",
+    managerAudit.project === "e2e-repo" && managerAudit.readonly
+      && managerAudit.actions.includes("project.update") && !managerAudit.error,
+    JSON.stringify(managerAudit));
+  await managerContext.close();
+
+  const managerTesterContext = await browser.createBrowserContext();
+  const managerTesterPage = await managerTesterContext.newPage();
+  await managerTesterPage.goto(`${BASE}/login`, { waitUntil: "networkidle2" });
+  await managerTesterPage.waitForSelector("#login-form:not([hidden])", { timeout: 5000 });
+  await managerTesterPage.type("#username", "e2e-tester");
+  await managerTesterPage.type("#password", "correct horse battery staple");
+  await managerTesterPage.click("#login-submit");
+  await managerTesterPage.waitForFunction(() => location.pathname === "/", { timeout: 10000 });
+  await managerTesterPage.goto(`${BASE}/s/${managerReviewId}`, { waitUntil: "networkidle2" });
+  await managerTesterPage.waitForFunction(() => window.redline?.meta?.id, { timeout: 15000 });
+  const testerManage = await managerTesterPage.evaluate(() => ({
+    hidden: document.querySelector("#project-manage")?.hidden,
+  }));
+  check("a tester does not get the manage-project control", testerManage.hidden === true);
+  await managerTesterContext.close();
 
   // Reset-link generation for the now-active account (acceptance is covered by Rust).
   const inviteRow = await loginPage.evaluateHandle(() =>
@@ -4406,7 +4597,7 @@ const main = async () => {
   await testerPage.waitForSelector(".error-card", { timeout: 10000 });
   const auditDenied = await testerPage.$eval(".error-card", (el) => el.textContent.trim());
   check("a member cannot open the audit log",
-    auditDenied.includes("owner-only"), auditDenied);
+    auditDenied.includes("owner or project manager only"), auditDenied);
   await testerContext.close();
 
   // Return to the dashboard so the logout/CSRF checks run in the same context.

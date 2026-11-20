@@ -303,3 +303,31 @@ fn presence_is_tracked_and_expires_after_three_missed_beats() {
     assert!(!offline.agents[0].online);
     assert_eq!(offline.agents[0].jobs, vec!["review".to_string()]);
 }
+
+#[test]
+fn repo_sync_records_the_repos_and_a_beat_preserves_them() {
+    let (_dir, mut control) = control();
+    control.observe_repos(
+        "erik-pc",
+        &[
+            "ActiUnit/Au.Net".to_string(),
+            "ActiUnit/Au.Net".to_string(),
+            " TribunaZnalcu ".to_string(),
+        ],
+    );
+    let observed = control.status();
+    assert_eq!(
+        observed.agents[0].repos,
+        vec!["ActiUnit/Au.Net".to_string(), "TribunaZnalcu".to_string()]
+    );
+
+    // `next` and `touch` do not know the repo list; they must not erase it.
+    control.touch("erik-pc", None);
+    assert_eq!(
+        control.status().agents[0].repos,
+        vec!["ActiUnit/Au.Net".to_string(), "TribunaZnalcu".to_string()]
+    );
+
+    control.observe_repos("erik-pc", &[]);
+    assert!(control.status().agents[0].repos.is_empty());
+}

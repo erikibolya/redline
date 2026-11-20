@@ -110,6 +110,34 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: the Agent settings dialog saves global + per-project values, and the rail shows the
   session's branch next to the relative time.
 
+## Device routing (v0.28.4)
+
+- Rust `tests/store.rs`: a repo sync creates the project once; a later sync from another device
+  neither renames it nor steals `agent`, and a human rename/assignment/fallback survives it.
+- Rust `tests/agent.rs`: a repo sync records the reported keys, deduplicated; `next`/heartbeat
+  touches do not erase them.
+- Rust `tests/api.rs` `a_device_assignment_routes_reviews_and_fallback_is_opt_in`: an unassigned
+  device is refused (`assigned_elsewhere`), the assigned device claims, fallback on + assigned
+  offline + repo reported allows the takeover, the session exposes `assigned_agent`/`claimed_by`/
+  `fallback`, the project exposes `agent_online`/`available_agents`, `/api/agents` lists an
+  assigned device before its first heartbeat, and fallback is refused when it is off, when the
+  assigned device is online, or when the candidate has not reported the repo.
+- Browser e2e: the project header and task row name `e2e`, the editor header carries the device,
+  the device filter shows only that device's tasks, the New review option includes `· e2e`, and
+  the agent chip opens **Agents & devices** with the device row.
+
+## Project manager (v0.28.4)
+
+- Rust `tests/api.rs` `a_project_manager_manages_one_project_but_not_the_server`: the owner
+  assigns `manager`; the manager changes the project name/device/fallback, adds a tester, keeps
+  their own manager row when saving, cannot promote anyone to manager, cannot touch another
+  project, reads `/api/audit?project=…` but not the global user/token admin, creates and submits a
+  task, and can delete another user's open task; a developer is refused project settings.
+- Browser e2e: the owner creates `e2e-manager`, assigns the manager role in People & access; the
+  manager logs in, opens **Manage project**, sees the read-only manager row, sets the device and
+  fallback, adds a viewer, saves, and reads the scoped audit; a tester on the same project gets
+  no manage control.
+
 ## Feature branches (v0.22)
 
 - Rust `tests/store.rs`: `default_branch` folds Czech titles into a git-safe `feat/<slug>-<tail>`,

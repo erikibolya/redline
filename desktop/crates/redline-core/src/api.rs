@@ -206,7 +206,6 @@ pub fn router(state: AppState) -> Router {
             get(list_agent_tokens).post(create_agent_token),
         )
         .route("/api/admin/agent-tokens/{id}", delete(revoke_agent_token))
-        .route("/api/audit", get(audit_log))
         .route("/api/config", get(config))
         .route("/api/setup", get(setup_status).post(save_setup))
         .route("/api/setup/disconnect", post(disconnect_setup))
@@ -215,10 +214,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/servers/{id}/activate", post(activate_server))
         .route("/api/servers/{id}/probe", get(probe_server))
         .route("/api/servers/{id}", delete(remove_server))
-        .route(
-            "/api/projects/{slug}/members",
-            get(project_members).put(set_project_members),
-        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_owner_auth,
@@ -257,6 +252,13 @@ pub fn router(state: AppState) -> Router {
             )),
         )
         .route("/api/projects", get(list_projects).post(create_project))
+        .route("/api/projects/{slug}", put(update_project))
+        .route(
+            "/api/projects/{slug}/members",
+            get(project_members).put(set_project_members),
+        )
+        .route("/api/audit", get(audit_log))
+        .route("/api/agents", get(list_agents))
         .route(
             "/api/sessions/{id}",
             get(get_session).delete(delete_session),
@@ -471,6 +473,33 @@ fn require_project(
     Ok(())
 }
 
+fn require_project_manager(
+    state: &AppState,
+    context: &AuthContext,
+    slug: &str,
+) -> Result<crate::model::Project, Error> {
+    if context.agent.is_some() {
+        return Err(Error::Forbidden(
+            "an agent token cannot manage a project".to_string(),
+        ));
+    }
+    let project = state
+        .store
+        .project(slug)?
+        .ok_or_else(|| Error::NotFound(slug.to_string()))?;
+    if context.is_owner {
+        return Ok(project);
+    }
+    let user_id = context.user_id.as_deref().unwrap_or_default();
+    match state.memberships.role_for(user_id, &project.slug)? {
+        Some(role) if role.can_manage() => Ok(project),
+        Some(_) => Err(Error::Forbidden(
+            "only the owner or a project manager can change this project".to_string(),
+        )),
+        None => Err(Error::NotFound(slug.to_string())),
+    }
+}
+
 fn require_review(
     state: &AppState,
     context: &AuthContext,
@@ -506,14 +535,15 @@ fn require_review(
         ));
     }
     if action == ReviewAction::Delete {
-        if meta.created_by.as_deref() != context.user_id.as_deref() {
+        if role != ProjectRole::Manager && meta.created_by.as_deref() != context.user_id.as_deref()
+        {
             return Err(Error::Forbidden(
-                "only the creator can delete an unsubmitted task".to_string(),
+                "only the creator or a project manager can delete this task".to_string(),
             ));
         }
         if meta.status != Status::Open {
             return Err(Error::Forbidden(
-                "only an unsubmitted task can be deleted by its creator".to_string(),
+                "only an unsubmitted task can be deleted".to_string(),
             ));
         }
     }
@@ -1440,10 +1470,12 @@ fn can_moderate_comment(
         return Ok(true);
     }
     let project = meta.project.as_deref().unwrap_or("inbox");
-    Ok(state
-        .memberships
-        .role_for(context.user_id.as_deref().unwrap_or_default(), project)?
-        == Some(ProjectRole::Developer))
+    Ok(matches!(
+        state
+            .memberships
+            .role_for(context.user_id.as_deref().unwrap_or_default(), project)?,
+        Some(ProjectRole::Manager | ProjectRole::Developer)
+    ))
 }
 
 /// A notification must never name a task its reader cannot open. The project membership can
@@ -1495,7 +1527,12 @@ fn notify_project_developers(
         .memberships
         .members(project)?
         .into_iter()
-        .filter(|membership| membership.role == ProjectRole::Developer)
+        .filter(|membership| {
+            matches!(
+                membership.role,
+                ProjectRole::Manager | ProjectRole::Developer
+            )
+        })
         .map(|membership| membership.user)
         .collect();
     // A project without a developer still has the owner, who can send the task.
@@ -1571,7 +1608,10 @@ async fn add_comment(
     }
     if let Some(project) = meta.project.as_deref() {
         for membership in state.memberships.members(project)? {
-            if membership.role == ProjectRole::Developer {
+            if matches!(
+                membership.role,
+                ProjectRole::Manager | ProjectRole::Developer
+            ) {
                 recipients.insert(membership.user);
             }
         }
@@ -1880,6 +1920,7 @@ struct AuditQuery {
 }
 
 async fn audit_log(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Query(query): Query<AuditQuery>,
 ) -> Result<Json<Value>, Error> {
@@ -1896,7 +1937,7 @@ async fn audit_log(
         ),
         None => None,
     };
-    let filter = AuditFilter {
+    let mut filter = AuditFilter {
         limit: query.limit.unwrap_or(100).clamp(1, 1000),
         project: non_empty(query.project),
         session: non_empty(query.session),
@@ -1904,6 +1945,26 @@ async fn audit_log(
         action: non_empty(query.action),
         since,
     };
+    // The owner sees the whole server. A project manager must name one of their projects and can
+    // never widen the filter; a developer or tester cannot read the audit at all.
+    if !context.is_owner {
+        let user_id = context.user_id.as_deref().unwrap_or_default();
+        let manages = state
+            .memberships
+            .for_user(user_id)?
+            .into_iter()
+            .any(|membership| membership.role.can_manage());
+        if !manages {
+            return Err(Error::Forbidden(
+                "the audit log is owner or project manager only".to_string(),
+            ));
+        }
+        let project = filter.project.clone().ok_or_else(|| {
+            Error::BadRequest("project is required for a project manager".to_string())
+        })?;
+        let project = require_project_manager(&state, &context, &project)?;
+        filter.project = Some(project.slug);
+    }
     let events = state.audit.list(&filter)?;
     let count = events.len();
     Ok(Json(json!({ "events": events, "count": count })))
@@ -2419,18 +2480,39 @@ async fn list_sessions(
     // `agent_state` records the last thing an agent *said*; a claim with a live lease is the only
     // evidence that a run is still going. A reply lands mid-run, so the rail must be able to tell
     // "the agent answered and kept working" from "the run is over" (2026-10-31).
-    let running: std::collections::HashSet<String> = state
+    //
+    // The same claim now names the device, and the project names the assigned device: a fallback
+    // run is visible as `claimed_by != assigned_agent` instead of silently looking like the
+    // assigned device did the work (2026-11-20).
+    let claims: HashMap<String, crate::agent::Claim> = state
         .agent
         .lock()
         .map(|mut agent| {
             agent
                 .claims()
                 .into_iter()
-                .filter(|claim| claim.state == ClaimState::Running)
-                .map(|claim| claim.session_id)
+                .map(|claim| (claim.session_id.clone(), claim))
                 .collect()
         })
         .unwrap_or_default();
+    let presence: HashMap<String, crate::agent::AgentPresence> = state
+        .agent
+        .lock()
+        .map(|mut agent| {
+            agent
+                .status()
+                .agents
+                .into_iter()
+                .map(|presence| (presence.agent_id.clone(), presence))
+                .collect()
+        })
+        .unwrap_or_default();
+    let projects: HashMap<String, crate::model::Project> = state
+        .store
+        .projects()?
+        .into_iter()
+        .map(|project| (project.slug.clone(), project))
+        .collect();
     let items: Vec<Value> = sessions
         .into_iter()
         .map(|meta| {
@@ -2453,9 +2535,40 @@ async fn list_sessions(
                 };
                 object.insert("my_role".to_string(), json!(my_role));
                 object.insert("feature_state".to_string(), json!(meta.feature_state()));
+                let claim = claims.get(&meta.id);
+                let running = claim.is_some_and(|claim| claim.state == ClaimState::Running);
+                let assigned = projects
+                    .get(project)
+                    .and_then(|project| project.agent.as_deref())
+                    .filter(|agent| !agent.trim().is_empty());
+                let assigned_online = assigned.map(|agent| {
+                    presence
+                        .get(agent)
+                        .map(|presence| presence.online)
+                        .unwrap_or(false)
+                });
+                let claimed_by = claim.map(|claim| claim.agent_id.as_str());
+                let claimed_online = claimed_by.map(|agent| {
+                    presence
+                        .get(agent)
+                        .map(|presence| presence.online)
+                        .unwrap_or(false)
+                });
+                object.insert("agent_running".to_string(), json!(running));
+                object.insert("assigned_agent".to_string(), json!(assigned));
+                object.insert("assigned_agent_online".to_string(), json!(assigned_online));
+                object.insert("claimed_by".to_string(), json!(claimed_by));
+                object.insert("claimed_by_online".to_string(), json!(claimed_online));
                 object.insert(
-                    "agent_running".to_string(),
-                    json!(running.contains(&meta.id)),
+                    "claim_state".to_string(),
+                    json!(claim.map(|claim| claim.state.as_str())),
+                );
+                object.insert(
+                    "fallback".to_string(),
+                    json!(match (assigned, claimed_by) {
+                        (Some(assigned), Some(claimed_by)) => assigned != claimed_by,
+                        _ => false,
+                    }),
                 );
                 // "took …" is the agent's run, measured from its pickup — not from the submission
                 // stamp, which may have waited in the queue for an hour (2026-10-31).
@@ -2473,7 +2586,7 @@ async fn list_sessions(
                         meta.handoff
                             .as_ref()
                             .is_some_and(|handoff| handoff.status == HandoffStatus::Running)
-                            && !running.contains(&meta.id)
+                            && !running
                     ),
                 );
             }
@@ -2504,6 +2617,18 @@ async fn list_projects(
         .lock()
         .map(|agent| agent.settings().project_max_parallel)
         .unwrap_or(1);
+    let presence: HashMap<String, crate::agent::AgentPresence> = state
+        .agent
+        .lock()
+        .map(|mut agent| {
+            agent
+                .status()
+                .agents
+                .into_iter()
+                .map(|presence| (presence.agent_id.clone(), presence))
+                .collect()
+        })
+        .unwrap_or_default();
     let items: Vec<Value> = projects
         .into_iter()
         .filter(|project| match &accessible {
@@ -2531,10 +2656,48 @@ async fn list_projects(
                         .unwrap_or_else(|| meta.created_at.clone())
                 })
                 .max();
+            let assigned = project.agent.as_deref().filter(|id| !id.trim().is_empty());
+            let agent_online = assigned.map(|id| {
+                presence
+                    .get(id)
+                    .map(|presence| presence.online)
+                    .unwrap_or(false)
+            });
+            let agent_last_seen = assigned
+                .and_then(|id| presence.get(id))
+                .map(|presence| presence.last_seen);
+            let available_agents: Vec<Value> = project
+                .repo
+                .as_deref()
+                .map(|repo| {
+                    let mut agents: Vec<Value> = presence
+                        .values()
+                        .filter(|presence| presence.repos.iter().any(|seen| seen == repo))
+                        .map(|presence| {
+                            json!({
+                                "agent_id": presence.agent_id,
+                                "online": presence.online,
+                                "last_seen": presence.last_seen,
+                            })
+                        })
+                        .collect();
+                    agents.sort_by(|left, right| {
+                        left["agent_id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .cmp(right["agent_id"].as_str().unwrap_or_default())
+                    });
+                    agents
+                })
+                .unwrap_or_default();
             json!({
                 "slug": project.slug,
                 "name": project.name,
                 "agent": project.agent,
+                "agent_online": agent_online,
+                "agent_last_seen": agent_last_seen,
+                "allow_fallback": project.allow_fallback,
+                "available_agents": available_agents,
                 "repo": project.repo,
                 "max_parallel": project.max_parallel,
                 "effective_max_parallel": project.max_parallel.unwrap_or(default_project_max),
@@ -2557,6 +2720,112 @@ async fn list_projects(
     Ok(Json(json!({ "projects": items })))
 }
 
+/// Devices a human may see: the assigned agent of a visible project, or an agent that reported a
+/// visible project's repository (a potential fallback). Owner with no token scope sees all.
+/// An assigned device appears even before its first heartbeat, so the UI can say who is expected
+/// rather than pretending the project has no owner.
+async fn list_agents(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
+    let accessible = visible_project_slugs(&state, &context)?;
+    let projects: HashMap<String, crate::model::Project> = state
+        .store
+        .projects()?
+        .into_iter()
+        .filter(|project| match &accessible {
+            None => true,
+            Some(allowed) => allowed.contains(&project.slug),
+        })
+        .map(|project| (project.slug.clone(), project))
+        .collect();
+    let mut status = state
+        .agent
+        .lock()
+        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?
+        .status();
+    let claims = std::mem::take(&mut status.claims);
+    let presence: HashMap<String, crate::agent::AgentPresence> = status
+        .agents
+        .into_iter()
+        .map(|presence| (presence.agent_id.clone(), presence))
+        .collect();
+    let mut assigned: HashMap<String, Vec<String>> = HashMap::new();
+    for project in projects.values() {
+        if let Some(agent) = project
+            .agent
+            .as_deref()
+            .filter(|agent| !agent.trim().is_empty())
+        {
+            assigned
+                .entry(agent.to_string())
+                .or_default()
+                .push(project.slug.clone());
+        }
+    }
+    let mut ids: Vec<String> = presence.keys().cloned().collect();
+    ids.extend(assigned.keys().cloned());
+    ids.sort();
+    ids.dedup();
+    let items: Vec<Value> = ids
+        .into_iter()
+        .filter(|id| {
+            if accessible.is_none() {
+                return true;
+            }
+            assigned.contains_key(id)
+                || presence.get(id).is_some_and(|presence| {
+                    presence.repos.iter().any(|repo| {
+                        projects
+                            .values()
+                            .any(|project| project.repo.as_deref() == Some(repo.as_str()))
+                    })
+                })
+        })
+        .map(|id| {
+            let live = presence.get(&id);
+            let mut assigned_projects = assigned.get(&id).cloned().unwrap_or_default();
+            assigned_projects.sort();
+            let repos: Vec<String> = live
+                .map(|presence| {
+                    presence
+                        .repos
+                        .iter()
+                        .filter(|repo| {
+                            projects
+                                .values()
+                                .any(|project| project.repo.as_deref() == Some(repo.as_str()))
+                        })
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            let claims: Vec<Value> = claims
+                .iter()
+                .filter(|claim| claim.agent_id == id)
+                .filter(|claim| projects.contains_key(&claim.project))
+                .map(|claim| {
+                    json!({
+                        "session_id": claim.session_id,
+                        "project": claim.project,
+                        "state": claim.state.as_str(),
+                    })
+                })
+                .collect();
+            json!({
+                "agent_id": id,
+                "online": live.map(|presence| presence.online).unwrap_or(false),
+                "last_seen": live.map(|presence| presence.last_seen),
+                "jobs": live.map(|presence| presence.jobs.clone()).unwrap_or_default(),
+                "repos": repos,
+                "projects": assigned_projects,
+                "claims": claims,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "agents": items })))
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct NewProject {
     name: String,
@@ -2575,13 +2844,92 @@ async fn create_project(
         ));
     }
     let project = state.store.ensure_project(&body.name)?;
+    let project = match body
+        .agent
+        .as_deref()
+        .map(str::trim)
+        .filter(|agent| !agent.is_empty())
+    {
+        // A POST is a create. Do not overwrite a device a human already assigned to an existing
+        // project; the dedicated PUT is the explicit reassignment path.
+        Some(agent)
+            if project
+                .agent
+                .as_deref()
+                .map(str::trim)
+                .unwrap_or("")
+                .is_empty() =>
+        {
+            let agent = normalize_agent_id(agent)?;
+            state
+                .store
+                .update_project(&project.slug, None, Some(agent), None, None)?
+        }
+        _ => project,
+    };
     record_project_audit(
         &state,
         &context,
         "project.create",
         &project.slug,
         Some(project.slug.clone()),
-        json!({ "name": project.name, "repo": project.repo }),
+        json!({
+            "name": project.name,
+            "repo": project.repo,
+            "agent": project.agent,
+            "allow_fallback": project.allow_fallback,
+        }),
+    );
+    Ok(Json(json!({ "project": project })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ProjectUpdate {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    repo: Option<String>,
+    #[serde(default)]
+    allow_fallback: Option<bool>,
+}
+
+/// Owner or project manager. This is where a device is assigned and a fallback is allowed; the
+/// agent sync creates a missing project with the reporting device and never overwrites either
+/// field afterwards.
+async fn update_project(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+    RoutePath(slug): RoutePath<String>,
+    Json(body): Json<ProjectUpdate>,
+) -> Result<Json<Value>, Error> {
+    require_project_manager(&state, &context, &slug)?;
+    let agent = match body.agent {
+        Some(agent) if agent.trim().is_empty() => Some(String::new()),
+        Some(agent) => Some(normalize_agent_id(&agent)?),
+        None => None,
+    };
+    let repo = match body.repo {
+        Some(repo) if repo.trim().is_empty() => Some(String::new()),
+        Some(repo) => Some(normalize_repo_key(&repo)?),
+        None => None,
+    };
+    let project = state
+        .store
+        .update_project(&slug, body.name, agent, repo, body.allow_fallback)?;
+    record_project_audit(
+        &state,
+        &context,
+        "project.update",
+        &project.slug,
+        Some(project.slug.clone()),
+        json!({
+            "name": project.name,
+            "agent": project.agent,
+            "repo": project.repo,
+            "allow_fallback": project.allow_fallback,
+        }),
     );
     Ok(Json(json!({ "project": project })))
 }
@@ -2599,6 +2947,7 @@ struct MemberEntry {
 }
 
 fn members_payload(state: &AppState, project: &str) -> Result<Value, Error> {
+    let owner_id = state.users.owner_id()?;
     let mut members = Vec::new();
     for membership in state.memberships.members(project)? {
         let Some(user) = state.users.get(&membership.user)? else {
@@ -2623,17 +2972,31 @@ fn members_payload(state: &AppState, project: &str) -> Result<Value, Error> {
                     .to_lowercase(),
             )
     });
-    Ok(json!({ "members": members }))
+    // A project manager may add any active person, so the scoped payload carries a minimal
+    // directory. It never includes the global owner (who has no membership row) or token data.
+    let directory: Vec<Value> = state
+        .users
+        .users()?
+        .into_iter()
+        .filter(|user| owner_id.as_deref() != Some(user.id.as_str()))
+        .map(|user| {
+            json!({
+                "id": user.id,
+                "username": user.username,
+                "display_name": user.display_name,
+                "status": user.status.as_str(),
+            })
+        })
+        .collect();
+    Ok(json!({ "members": members, "directory": directory }))
 }
 
 async fn project_members(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(slug): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    let project = state
-        .store
-        .project(&slug)?
-        .ok_or_else(|| Error::NotFound(slug.clone()))?;
+    let project = require_project_manager(&state, &context, &slug)?;
     Ok(Json(members_payload(&state, &project.slug)?))
 }
 
@@ -2643,14 +3006,23 @@ async fn set_project_members(
     RoutePath(slug): RoutePath<String>,
     Json(body): Json<MembersBody>,
 ) -> Result<Json<Value>, Error> {
-    let project = state
-        .store
-        .project(&slug)?
-        .ok_or_else(|| Error::NotFound(slug.clone()))?;
+    let project = require_project_manager(&state, &context, &slug)?;
     let owner_id = state.users.owner_id()?;
     let previous = state.memberships.members(&project.slug)?;
     let mut members = Vec::<(String, ProjectRole)>::new();
     let mut seen = HashSet::new();
+    // A project manager cannot create, remove or demote another manager. Their own manager rows
+    // are preserved, so a manager can never lock the project (or themselves) out of management;
+    // only the owner can change the manager set.
+    if !context.is_owner {
+        for membership in previous
+            .iter()
+            .filter(|membership| membership.role.can_manage())
+        {
+            seen.insert(membership.user.clone());
+            members.push((membership.user.clone(), ProjectRole::Manager));
+        }
+    }
     for entry in body.members {
         if owner_id.as_deref() == Some(entry.user_id.as_str()) {
             continue;
@@ -2658,14 +3030,29 @@ async fn set_project_members(
         let Some(user) = state.users.get(&entry.user_id)? else {
             return Err(Error::BadRequest(format!("unknown user {}", entry.user_id)));
         };
-        if user.status != UserStatus::Active {
+        if user.status == UserStatus::Disabled {
             return Err(Error::BadRequest(format!(
-                "{} is not active",
+                "{} is disabled; re-enable the account before assigning projects",
                 user.username
             )));
         }
         let role = ProjectRole::parse(&entry.role)
             .ok_or_else(|| Error::BadRequest(format!("unknown project role {}", entry.role)))?;
+        if !context.is_owner {
+            if role.can_manage() {
+                return Err(Error::Forbidden(
+                    "only the owner can assign a project manager".to_string(),
+                ));
+            }
+            if previous
+                .iter()
+                .any(|membership| membership.user == user.id && membership.role.can_manage())
+            {
+                return Err(Error::Forbidden(
+                    "only the owner can change a project manager's role".to_string(),
+                ));
+            }
+        }
         if !seen.insert(user.id.clone()) {
             continue;
         }
@@ -2805,18 +3192,15 @@ async fn sync_agent_repos(
         }
     }
     // A repo sync is the bridge's periodic heartbeat (every 60 s), so it is the natural place to
-    // record presence even when no review is claimed.
-    state
-        .agent
-        .lock()
-        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?
-        .touch(&agent, None);
+    // record presence even when no review is claimed. The repo list itself is recorded after the
+    // scope check so a token cannot make its device look able to see projects outside its grant.
     if body.repos.len() > 200 {
         return Err(Error::BadRequest(
             "too many repositories (max 200)".to_string(),
         ));
     }
     let mut seen = HashSet::new();
+    let mut reported = Vec::new();
     let mut projects = Vec::new();
     for repo in body.repos {
         let key = normalize_repo_key(&repo.key)?;
@@ -2833,8 +3217,14 @@ async fn sync_agent_repos(
             }
         }
         let project = state.store.sync_repo_project(&agent, &key, &name)?;
+        reported.push(key);
         projects.push(json!(project));
     }
+    state
+        .agent
+        .lock()
+        .map_err(|_| Error::Conflict("agent state is locked".to_string()))?
+        .observe_repos(&agent, &reported);
     Ok(Json(json!({ "ok": true, "projects": projects })))
 }
 
@@ -2918,6 +3308,7 @@ fn agent_projects(state: &AppState, settings: &AgentSettings) -> Result<Vec<Valu
                 "repo": project.repo,
                 "agent": project.agent,
                 "max_parallel": project.max_parallel,
+                "allow_fallback": project.allow_fallback,
                 "effective_max_parallel": project.max_parallel.unwrap_or(settings.project_max_parallel),
             })
         })
@@ -3236,12 +3627,25 @@ async fn agent_next(
         .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
     agent.touch(&body.agent_id, effective_jobs.as_deref());
     let settings = agent.settings().clone();
+    let presence: HashMap<String, crate::agent::AgentPresence> = agent
+        .status()
+        .agents
+        .into_iter()
+        .map(|presence| (presence.agent_id.clone(), presence))
+        .collect();
     let claims = agent.claims();
+    let projects: HashMap<String, crate::model::Project> = state
+        .store
+        .projects()?
+        .into_iter()
+        .map(|project| (project.slug.clone(), project))
+        .collect();
     let mut blocked = "empty";
 
     // Review work first: a human waiting for a fix should not queue behind a handoff.
     for mut meta in sessions {
-        if let Some(claim) = claims.iter().find(|claim| claim.session_id == meta.id) {
+        let existing = claims.iter().find(|claim| claim.session_id == meta.id);
+        if let Some(claim) = existing {
             if claim.agent_id != body.agent_id {
                 blocked = "claimed";
                 continue;
@@ -3252,7 +3656,40 @@ async fn agent_next(
             }
         }
         let project = meta.project.clone().unwrap_or_else(|| "inbox".to_string());
-        let max_parallel = project_max(&state, &project, &settings);
+        let details = projects.get(&project);
+        // An existing waiting claim may resume even if the project was reassigned: the worktree
+        // and the branch are already on that device. A new claim must respect the assignment,
+        // unless the project explicitly allows an online device that reports the same repo to
+        // take over while the assigned device is offline.
+        let mut fallback_claim = false;
+        if existing.is_none() {
+            if let Some(assigned) = details
+                .and_then(|project| project.agent.as_deref())
+                .filter(|agent| !agent.trim().is_empty())
+            {
+                if assigned != body.agent_id {
+                    let assigned_online = presence
+                        .get(assigned)
+                        .is_some_and(|presence| presence.online);
+                    let repo_seen = details
+                        .and_then(|project| project.repo.as_deref())
+                        .is_some_and(|repo| {
+                            presence.get(&body.agent_id).is_some_and(|presence| {
+                                presence.repos.iter().any(|seen| seen == repo)
+                            })
+                        });
+                    let fallback = details.is_some_and(|project| project.allow_fallback);
+                    if !(fallback && !assigned_online && repo_seen) {
+                        blocked = "assigned_elsewhere";
+                        continue;
+                    }
+                    fallback_claim = true;
+                }
+            }
+        }
+        let max_parallel = details
+            .and_then(|project| project.max_parallel)
+            .unwrap_or(settings.project_max_parallel);
         let work_key = meta.work_key();
         let request = ClaimRequest {
             session_id: meta.id.clone(),
@@ -3268,6 +3705,20 @@ async fn agent_next(
             Ok(claim) => {
                 if meta.branch.as_deref() != Some(claim.work_key.as_str()) {
                     meta = state.store.set_branch(&meta.id, Some(&claim.work_key))?;
+                }
+                if fallback_claim {
+                    record_audit(
+                        &state,
+                        Some(&context),
+                        "agent.fallback",
+                        Some(&meta),
+                        Some(meta.id.clone()),
+                        json!({
+                            "project": claim.project,
+                            "assigned": details.and_then(|project| project.agent.clone()),
+                            "claimed_by": claim.agent_id,
+                        }),
+                    );
                 }
                 return Ok(Json(json!({
                     "session": meta,
@@ -3416,10 +3867,61 @@ async fn get_session(
             .map(|role| role.as_str().to_string())
             .unwrap_or_else(|| "viewer".to_string())
     };
+    // The editor header names the device too, so this response carries the same device fields as
+    // the rail list rather than a separate shape the UI has to reconcile (2026-11-20).
+    let project = state
+        .store
+        .project(meta.project.as_deref().unwrap_or("inbox"))?;
+    let assigned = project
+        .as_ref()
+        .and_then(|project| project.agent.as_deref())
+        .filter(|agent| !agent.trim().is_empty())
+        .map(str::to_string);
+    let (claim, presence) = {
+        let mut agent = state
+            .agent
+            .lock()
+            .map_err(|_| Error::Conflict("agent state is locked".to_string()))?;
+        let claim = agent
+            .claims()
+            .into_iter()
+            .find(|claim| claim.session_id == id);
+        let presence: HashMap<String, crate::agent::AgentPresence> = agent
+            .status()
+            .agents
+            .into_iter()
+            .map(|presence| (presence.agent_id.clone(), presence))
+            .collect();
+        (claim, presence)
+    };
+    let assigned_online = assigned.as_ref().map(|agent| {
+        presence
+            .get(agent)
+            .map(|presence| presence.online)
+            .unwrap_or(false)
+    });
+    let claimed_by = claim.as_ref().map(|claim| claim.agent_id.clone());
+    let claimed_online = claimed_by.as_ref().map(|agent| {
+        presence
+            .get(agent)
+            .map(|presence| presence.online)
+            .unwrap_or(false)
+    });
+    let claim_state = claim.as_ref().map(|claim| claim.state.as_str());
+    let fallback = match (assigned.as_deref(), claimed_by.as_deref()) {
+        (Some(assigned), Some(claimed_by)) => assigned != claimed_by,
+        _ => false,
+    };
     let mut meta = serde_json::to_value(&meta)?;
     if let Some(object) = meta.as_object_mut() {
         object.insert("last_run".to_string(), json!(last_run));
         object.insert("my_role".to_string(), json!(my_role));
+        object.insert("assigned_agent".to_string(), json!(assigned));
+        object.insert("assigned_agent_online".to_string(), json!(assigned_online));
+        object.insert("claimed_by".to_string(), json!(claimed_by));
+        object.insert("claimed_by_online".to_string(), json!(claimed_online));
+        object.insert("claim_state".to_string(), json!(claim_state));
+        object.insert("fallback".to_string(), json!(fallback));
     }
     Ok(Json(
         json!({ "meta": meta, "annotations": annotations, "disk_bytes": disk_bytes }),
@@ -4037,7 +4539,10 @@ async fn request_agent_review(
         &state,
         &meta,
         "review.ready",
-        &format!("{actor_name} requested developer review for \"{}\"", meta.title),
+        &format!(
+            "{actor_name} requested developer review for \"{}\"",
+            meta.title
+        ),
         Some(&actor),
         &actor_name,
     )?;

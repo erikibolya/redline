@@ -1557,6 +1557,542 @@ async fn agent_next_claims_across_branches_and_skips_locked_ones() {
 }
 
 #[tokio::test]
+async fn a_device_assignment_routes_reviews_and_fallback_is_opt_in() {
+    let h = harness();
+    let id = submitted_session(&h, "p1", "feat/x").await;
+
+    // The owner assigns the project to holly and tells the server which repo key it maps to.
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "agent": "holly", "repo": "p1", "allow_fallback": false }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["project"]["agent"], "holly");
+    assert_eq!(updated["project"]["allow_fallback"], false);
+
+    // erik-pc is online and reports the repo, but the assignment is strict: it must not claim.
+    let (status, _, synced) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/repos",
+            json!({"agent_id": "erik-pc", "repos": [{"key": "p1", "name": "p1"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+    let (status, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "erik-pc"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{blocked}");
+    assert!(blocked["session"].is_null(), "{blocked}");
+    assert_eq!(blocked["reason"], "assigned_elsewhere");
+
+    // The assigned device gets it.
+    let (status, _, next) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "holly"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["session"]["id"], id);
+    let (status, _, _) = release_claim(&h, &id, "holly").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Fallback is off by default. Turn it on and assign a device that never beat: it is offline,
+    // erik-pc reports the repo and may take over.
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "agent": "ghost", "allow_fallback": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (status, _, fallback) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "erik-pc"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fallback}");
+    assert_eq!(fallback["session"]["id"], id);
+
+    // A takeover is a security-relevant decision, not an invisible race.
+    let (_, _, audit) = send(&h.app, authed("GET", "/api/audit", json!(null))).await;
+    assert!(
+        audit["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["action"] == "agent.fallback" && event["session"] == id),
+        "{audit}"
+    );
+
+    let (_, _, sessions) = send(&h.app, authed("GET", "/api/sessions", json!(null))).await;
+    let session = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == id)
+        .unwrap();
+    assert_eq!(session["assigned_agent"], "ghost");
+    assert_eq!(session["claimed_by"], "erik-pc");
+    assert_eq!(session["fallback"], true);
+    assert_eq!(session["assigned_agent_online"], false);
+
+    // The editor header reads the single-session shape; it must carry the same device fields.
+    let (_, _, one) = send(
+        &h.app,
+        authed("GET", &format!("/api/sessions/{id}"), json!(null)),
+    )
+    .await;
+    assert_eq!(one["meta"]["assigned_agent"], "ghost");
+    assert_eq!(one["meta"]["claimed_by"], "erik-pc");
+    assert_eq!(one["meta"]["fallback"], true);
+    assert_eq!(one["meta"]["assigned_agent_online"], false);
+
+    let (_, _, projects) = send(&h.app, authed("GET", "/api/projects", json!(null))).await;
+    let project = projects["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|project| project["slug"] == "p1")
+        .unwrap();
+    assert_eq!(project["agent"], "ghost");
+    assert_eq!(project["agent_online"], false);
+    assert_eq!(project["allow_fallback"], true);
+    assert!(
+        project["available_agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| agent["agent_id"] == "erik-pc"),
+        "{project}"
+    );
+
+    let (_, _, devices) = send(&h.app, authed("GET", "/api/agents", json!(null))).await;
+    let erik = devices["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == "erik-pc")
+        .expect("erik-pc is reporting a visible project");
+    assert_eq!(erik["online"], true);
+    assert!(erik["repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|repo| repo == "p1"));
+    let ghost = devices["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == "ghost")
+        .expect("assigned device is visible");
+    assert_eq!(ghost["online"], false);
+    assert!(ghost["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|project| project == "p1"));
+
+    // With fallback off, an offline assignment waits instead of stealing.
+    let (status, _, _) = release_claim(&h, &id, "erik-pc").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "allow_fallback": false }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (_, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "erik-pc"})),
+    )
+    .await;
+    assert!(blocked["session"].is_null(), "{blocked}");
+    assert_eq!(blocked["reason"], "assigned_elsewhere");
+
+    // An online assigned device is not "offline": fallback must not apply even when enabled.
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/repos",
+            json!({"agent_id": "holly", "repos": []}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "agent": "holly", "allow_fallback": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (_, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "erik-pc"})),
+    )
+    .await;
+    assert!(blocked["session"].is_null(), "{blocked}");
+    assert_eq!(blocked["reason"], "assigned_elsewhere");
+
+    // A fallback device must have reported the repo; being online is not enough.
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "agent": "ghost", "allow_fallback": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (_, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "build-vm"})),
+    )
+    .await;
+    assert!(blocked["session"].is_null(), "{blocked}");
+    assert_eq!(blocked["reason"], "assigned_elsewhere");
+}
+
+#[tokio::test]
+async fn a_project_manager_manages_one_project_but_not_the_server() {
+    let h = harness();
+    let (owner_session, owner_csrf) = bootstrap_owner(&h).await;
+
+    let (status, _, project) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Au.Net" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{project}");
+    let slug = project["project"]["slug"].as_str().unwrap().to_string();
+    let (_, _, other) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/projects",
+            json!({ "name": "Other" }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    let other_slug = other["project"]["slug"].as_str().unwrap().to_string();
+
+    let mut ids = std::collections::HashMap::new();
+    for username in ["manager", "developer", "outsider"] {
+        let (status, _, created) = send(
+            &h.app,
+            with_session(
+                "POST",
+                "/api/users",
+                json!({
+                    "username": username,
+                    "display_name": username,
+                    "password": "correct horse battery staple",
+                }),
+                &owner_session,
+                &owner_csrf,
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{created}");
+        ids.insert(
+            username.to_string(),
+            created["user"]["id"].as_str().unwrap().to_string(),
+        );
+    }
+
+    let (status, _, members) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [
+                { "user_id": ids["manager"], "role": "manager" },
+                { "user_id": ids["developer"], "role": "developer" },
+            ] }),
+            &owner_session,
+            &owner_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+    assert!(members["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member["role"] == "manager"));
+
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "manager", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let manager_session = set_cookie(&headers, "redline_session");
+    let manager_csrf = set_cookie(&headers, "redline_csrf");
+
+    // The scoped member payload carries a directory for adding people, but no owner row.
+    let (status, _, members) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/projects/{slug}/members"),
+            json!(null),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{members}");
+    let directory = members["directory"].as_array().unwrap();
+    assert!(directory.iter().any(|user| user["username"] == "developer"));
+    assert!(directory.iter().any(|user| user["username"] == "outsider"));
+    assert!(!directory.iter().any(|user| user["username"] == "anna"));
+
+    // A manager may change the project's device, fallback and name.
+    let (status, _, updated) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}"),
+            json!({ "name": "Au.Net UI", "agent": "erik-pc", "allow_fallback": true }),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["project"]["agent"], "erik-pc");
+    assert_eq!(updated["project"]["allow_fallback"], true);
+
+    // A manager can add a tester, but cannot promote anyone to manager.
+    let (status, _, added) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [
+                { "user_id": ids["developer"], "role": "developer" },
+                { "user_id": ids["outsider"], "role": "tester" },
+            ] }),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{added}");
+    assert!(added["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member["user_id"] == ids["manager"] && member["role"] == "manager"));
+    assert!(added["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|member| member["user_id"] == ids["outsider"] && member["role"] == "tester"));
+
+    let (status, _, refused) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}/members"),
+            json!({ "members": [
+                { "user_id": ids["outsider"], "role": "manager" },
+            ] }),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+
+    // A manager cannot reach a project they do not manage.
+    let (status, _, _refused) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{other_slug}"),
+            json!({ "name": "Hijacked" }),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert!(matches!(
+        status,
+        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+    ));
+
+    // Project audit is scoped; the global user/token admin is still owner-only.
+    let (status, _, audit) = send(
+        &h.app,
+        with_session(
+            "GET",
+            &format!("/api/audit?project={slug}"),
+            json!(null),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{audit}");
+    assert!(audit["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|event| event["action"] == "project.update"));
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/audit",
+            json!(null),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/users",
+            json!(null),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _, _) = send(
+        &h.app,
+        with_session(
+            "GET",
+            "/api/admin/agent-tokens",
+            json!(null),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // A manager can do the developer actions in their project: create and submit a task.
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "manager task", "image_base64": PNG_B64, "project": slug }),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let manager_task = created["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, submitted) = send(
+        &h.app,
+        with_session(
+            "POST",
+            &format!("/api/sessions/{manager_task}/annotations"),
+            json!({ "annotations": [], "png": format!("data:image/png;base64,{PNG_B64}") }),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{submitted}");
+    assert_eq!(submitted["meta"]["status"], "submitted");
+
+    // A manager can delete another person's open task; a developer cannot manage the project.
+    let (status, headers, body) = send(
+        &h.app,
+        public(
+            "POST",
+            "/api/auth/login",
+            json!({ "username": "developer", "password": "correct horse battery staple" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let developer_session = set_cookie(&headers, "redline_session");
+    let developer_csrf = set_cookie(&headers, "redline_csrf");
+    let (status, _, created) = send(
+        &h.app,
+        with_session(
+            "POST",
+            "/api/sessions",
+            json!({ "title": "developer task", "image_base64": PNG_B64, "project": slug }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let developer_task = created["meta"]["id"].as_str().unwrap().to_string();
+    let (status, _, refused) = send(
+        &h.app,
+        with_session(
+            "PUT",
+            &format!("/api/projects/{slug}"),
+            json!({ "allow_fallback": false }),
+            &developer_session,
+            &developer_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+    let (status, _, deleted) = send(
+        &h.app,
+        with_session(
+            "DELETE",
+            &format!("/api/sessions/{developer_task}"),
+            json!(null),
+            &manager_session,
+            &manager_csrf,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{deleted}");
+}
+
+#[tokio::test]
 async fn a_review_nobody_named_gets_a_feature_branch_not_a_session_branch() {
     let h = harness();
 

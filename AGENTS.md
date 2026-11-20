@@ -159,6 +159,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   capture (shells out to Chromium), annotation diffing, loopback HTTP client.
 - Auth: token from `/data/token`; `Authorization: Bearer`, `redline_token` cookie (set by
   `/s/<id>?t=…` → 307), or `?t=`. `Sec-Fetch-Site: cross-site` is refused.
+- Roles (v0.28+): one global owner; per-project `manager`, `developer`, `tester`, `viewer`. A
+  manager is a developer plus project settings (name, repo, device, fallback), members (not other
+  managers) and that project's audit; global users/tokens/other projects stay owner-only. `owner`
+  is the only role allowed to change the manager set. The UI exposes **Manage project** in the
+  editor for owner/manager.
 - MCP tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`, `wait_for_feedback`,
   `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`,
   `handoff_status`. Resources: `redline://session/<id>/{annotated.png,review.md}`.
@@ -171,6 +176,16 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   the bridge runs `REDLINE_AGENT_WORKERS` (default 4) claim workers, each in its own worktree under
   `<repo_root>/.redline-worktrees/`, with heartbeats and one owner per branch. The OpenCode
   server must see the worktree path just like the repo itself.
+- Device routing (v0.28.4): `project.agent` names the assigned device and `allow_fallback` is
+  per-project (default off). A review claim is refused for another device
+  (`reason=assigned_elsewhere`); with fallback on, an online device that reported the project's
+  `repo` may take over only while the assigned device is offline. Presence records `repos`; the
+  repo sync creates a missing project with the reporting device and never overwrites a human
+  assignment or name. `GET /api/sessions` carries `assigned_agent`/`claimed_by`/`fallback`;
+  `GET /api/agents` is the scoped device list; `PUT /api/projects/{slug}` is the
+  owner-or-project-manager assignment path. The editor shows the device on project headers, task
+  rows and the task header, offers a device filter, and opens **Agents & devices** from the agent
+  chip.
 - UI: no framework, no build step. `app.js` holds the shell (rail, canvas engine, inspector);
   `app.css` the design tokens incl. light theme. Served from the binary at `/static/*`.
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform
@@ -566,6 +581,22 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   deferred, and reserve the height of any data-driven block above static content. Test it with the
   request *held* — a `waitForSelector` after the response proves nothing — and measure that a
   heading below the block does not move when the response is released.
+
+- **A repo sync is discovery, not ownership.** `sync_repo_project` overwrote `agent` and `name` on
+  every beat, so whichever bridge reported last owned the project and a human rename was undone.
+  With one agent that was invisible; with `holly` and a PC agent on the same repo key it silently
+  flipped work between machines, and the UI would have named the wrong device (2026-11-20). Fill
+  an empty assignment once, let an explicit owner `PUT` reassign, keep the human name, and record
+  the reporting devices separately (`repos`, `available_agents`) so a fallback is a visible
+  decision instead of a race.
+
+- **A project manager is not a small owner.** The first manager implementation could have reused
+  the owner-only routes, which would either hide the role from the people who need it or expose
+  global users/tokens to it. Keep the boundary explicit: every manager route checks the project
+  on the call (`require_project_manager`), global routes stay owner-only, a manager cannot assign
+  or demote another manager, and existing manager rows are preserved when a manager saves the
+  member list so the project cannot be locked out. Test the refusals (a developer, a manager of
+  another project, a manager trying to promote someone) as well as the allowed path.
 
 ## 8. Working rules
 

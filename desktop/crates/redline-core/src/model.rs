@@ -290,6 +290,10 @@ pub struct Project {
     /// Per-project concurrent-run override (v0.22). `None` inherits the server default (1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_parallel: Option<u32>,
+    /// Let another online device that reports the same repository claim a review while the
+    /// assigned `agent` is offline. Off by default: an assignment is a promise, not a hint.
+    #[serde(default)]
+    pub allow_fallback: bool,
     #[serde(default)]
     pub created_at: String,
 }

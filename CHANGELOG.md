@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **The UI names the device that owns or handles a task.** The rail's project header shows the
+  assigned device with an online/offline dot, every task row carries the device that will run or
+  is running it (and `assigned → claimed` for a fallback), the editor header repeats it, and a
+  device filter narrows the rail. The agent chip opens **Agents & devices**: online/offline,
+  assigned projects, current tasks and last seen. New-review project options include the device
+  and an offline warning. The task response (`GET /api/sessions/{id}`) carries the same device
+  fields as the list, so the header does not go blank after a reload (2026-11-20).
+
+- **A project manager can run one project without becoming a server admin.** New `manager`
+  project role, assigned by the owner in People & access. A manager can rename the project, set
+  its repo key, assign its device and fallback, add/remove developers, testers and viewers, and
+  read that project's audit; they can do the developer actions in the project too (submit, STOP,
+  confirm/handoff, delete an open task). They cannot manage global users, tokens, other projects,
+  ownership or server settings, cannot assign or demote a manager, and cannot remove themselves
+  from management. The owner's editor gets a **Manage project** dialog (device, fallback, members,
+  audit link), and `/audit?project=…` now serves a read-only project view to managers
+  (2026-11-20).
+
+- **A project belongs to a device, and a repo sync no longer steals it.** `project.agent` is the
+  assigned device (owner-only `PUT /api/projects/{slug}`), `allow_fallback` is per project and off
+  by default; when it is on, another online device that reported the same `repo` may claim only
+  while the assigned device is offline. An online-but-busy assignment still waits, and a fallback
+  claim is exposed as `fallback` rather than pretending the assigned device did the work. The
+  agent's repo sync now fills an empty project once and never overwrites a human assignment or
+  name, and records `repos` in presence; `GET /api/agents` returns the scoped device list, while
+  `GET /api/sessions` carries `assigned_agent`, `claimed_by` and online/fallback flags. Owners can
+  see every device; members see the devices assigned to, or reporting, their projects
+  (2026-11-20).
+
 - **A release tag publishes a new extension version by itself.** `extension/scripts/cws.mjs` uses
   the Chrome Web Store API v2 with a service account to read the store's published/submitted
   version, upload the packaged ZIP only when `extension/manifest.json` is newer, and submit it for

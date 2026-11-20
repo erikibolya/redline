@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- **The desktop installer installs the agent tray app next to the review client.** One setup,
+  two trays: **RedLine Desktop** and **RedLine Agent**. The agent is a separate product (own
+  config, updater and uninstaller), so reviews keep running when the review client is closed or
+  updated; the desktop tray opens it, and the legacy embedded agent is refused while the tray app
+  is installed. The hook downloads the matching `RedLineAgent_<version>_x64-setup.exe` from the
+  release, skips an existing install, and leaves the agent in place when the desktop app is
+  uninstalled (2026-11-20).
+
 ## 0.28.5 — 2026-11-20
 
 - **An agent console: a tray app for the PC and a `/agent` page for every bridge.** The new

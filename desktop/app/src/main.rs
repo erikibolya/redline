@@ -163,6 +163,8 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         true,
         Some("CmdOrCtrl+2"),
     )?;
+    let agent_window =
+        MenuItem::with_id(app, "agent-window", "RedLine Agent…", true, None::<&str>)?;
     let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_mcp = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
     let agent_start =
@@ -211,6 +213,7 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
             &sessions,
             &servers,
             &inbox,
+            &agent_window,
             &copy_link,
             &copy_mcp,
             &separator,
@@ -244,6 +247,13 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         app,
         "tray:inbox",
         "All reviews (combined inbox)…",
+        true,
+        None::<&str>,
+    )?;
+    let agent_window = MenuItem::with_id(
+        app,
+        "tray:agent-window",
+        "RedLine Agent…",
         true,
         None::<&str>,
     )?;
@@ -320,6 +330,7 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
             &open,
             &servers,
             &inbox,
+            &agent_window,
             &login,
             &copy_link,
             &copy_config,
@@ -385,6 +396,7 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
         "open" => open_window(app, ctx),
         "servers" => open_manager_window(app, ctx),
         "inbox" => open_inbox_window(app, ctx),
+        "agent-window" => open_agent_app(app),
         "copy-link" => {
             let target = match read_remote(&ctx.data_dir) {
                 Some(remote) => format!("{}/?t={}", remote.base_url, remote.token),
@@ -521,7 +533,66 @@ fn pick_folder(app: &AppHandle) -> Option<PathBuf> {
     }
 }
 
+/// The separate RedLine Agent tray app installed by the desktop installer. It is the device
+/// agent; the embedded one is a fallback for machines where the tray app is not installed.
+fn agent_app_path() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let local = std::env::var_os("LOCALAPPDATA")?;
+        let local = PathBuf::from(local);
+        for candidate in [
+            local.join("RedLineAgent").join("redline-agent-app.exe"),
+            local
+                .join("Programs")
+                .join("RedLineAgent")
+                .join("redline-agent-app.exe"),
+        ] {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn open_agent_app(app: &AppHandle) {
+    let Some(path) = agent_app_path() else {
+        app.dialog()
+            .message(
+                "RedLine Agent is not installed. Install it from the RedLine release page; the \
+                 desktop installer normally adds it next to the review client.",
+            )
+            .title("RedLine Agent")
+            .kind(MessageDialogKind::Info)
+            .show(|_| {});
+        return;
+    };
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let _ = std::process::Command::new(path)
+            .creation_flags(0x0800_0000)
+            .spawn();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new(path).spawn();
+    }
+}
+
 fn start_agent(app: &AppHandle, ctx: &Ctx) {
+    if let Some(path) = agent_app_path() {
+        app.dialog()
+            .message(format!(
+                "The separate RedLine Agent is installed ({}). Use its tray icon — it owns this \
+                 device. The embedded agent would claim as `local` and conflict with it.",
+                path.display()
+            ))
+            .title("RedLine")
+            .kind(MessageDialogKind::Info)
+            .show(|_| {});
+        return;
+    }
     if ctx
         .agent
         .thread

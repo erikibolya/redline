@@ -29,7 +29,8 @@
         "installMode": "currentUser",
         "languages": [
           "English"
-        ]
+        ],
+        "installerHooks": "installer-hooks.nsh"
       }
     },
     "createUpdaterArtifacts": true

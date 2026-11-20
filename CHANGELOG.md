@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.28.5 — 2026-11-20
+
+- **An agent console: a tray app for the PC and a `/agent` page for every bridge.** The new
+  `desktop/agent-app` installer runs `redline-agent.exe` from the tray (start at login, restart on
+  exit), shows the current review, its latest step and the live output, and checks for its own
+  updates. The server exposes the same data as `GET /api/agents/activity` (owner/member) and
+  `GET /api/agent/activity` (an agent token sees only its own device); `/agent` renders it for
+  the Docker bridge too, with a per-claim step and an on-demand raw-output block. A raw log line
+  is never treated as the current state (2026-11-20).
+
 ## 0.28.4 — 2026-11-20
 
 - **All reviews: one inbox across every RedLine server.** The desktop's local server merges

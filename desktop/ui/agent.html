@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>RedLine — agents</title>
+<script>
+try {
+  var saved = JSON.parse(localStorage.getItem("redline:theme") || "null");
+  document.documentElement.dataset.theme = saved || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+} catch (e) {}
+</script>
+<link rel="stylesheet" href="/static/app.css" />
+<style>
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font-family: var(--font);
+  }
+  .agents { width: min(1000px, 100%); margin: 0 auto; padding: 28px 24px 48px; }
+  .agents-head { display: flex; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .agents-head .titles { min-width: 0; }
+  .agents-head h1 { font-size: 18px; margin: 0 0 2px; }
+  .agents-head .sub { color: var(--muted); font-size: 12px; margin: 0; }
+  .agents-head .actions { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+  .agents-head .back { color: var(--muted); font-size: 12px; text-decoration: none; }
+  .agents-head .back:hover { color: var(--text); }
+  .agents-head .btn { padding: 5px 10px; font-size: 12px; }
+  .list { min-height: 240px; display: flex; flex-direction: column; gap: 12px; }
+  .agent-card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 14px 16px;
+  }
+  .agent-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .agent-name { font-size: 15px; font-weight: 600; }
+  .agent-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+  .agent-state .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .agent-state.online .dot { background: var(--ok); }
+  .agent-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .tag {
+    background: var(--panel-2); border: 1px solid var(--border-soft); border-radius: 999px;
+    padding: 2px 8px; font-size: 11px; color: var(--muted);
+  }
+  .tag strong { color: var(--text); font-weight: 500; }
+  .waiting { color: var(--muted); font-size: 13px; margin-top: 12px; }
+  .claim { border-top: 1px solid var(--border-soft); margin-top: 12px; padding-top: 12px; }
+  .claim-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+  .claim-title { font-size: 14px; font-weight: 600; }
+  .claim-meta { color: var(--muted); font-size: 12px; }
+  .step {
+    margin-top: 6px; font-size: 13px; color: var(--text);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .step .kind {
+    font-size: 10px; text-transform: uppercase; letter-spacing: .04em;
+    color: var(--muted); border: 1px solid var(--border-soft); border-radius: 4px;
+    padding: 1px 5px;
+  }
+  .log-toggle { margin-top: 8px; }
+  .log-toggle summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+  .log-toggle summary:hover { color: var(--text); }
+  .log {
+    margin: 8px 0 0; max-height: 240px; overflow: auto; white-space: pre-wrap;
+    background: #0b1017; color: #cbd5e1; border: 1px solid var(--border-soft);
+    border-radius: 8px; padding: 10px 12px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  [data-theme="light"] .log { background: #0f172a; color: #e2e8f0; }
+  .empty {
+    border: 1px dashed var(--border); border-radius: 10px; padding: 26px 18px;
+    text-align: center; color: var(--muted); font-size: 13px;
+  }
+  .foot { color: var(--muted); font-size: 11px; margin: 16px 2px 0; }
+</style>
+</head>
+<body data-page="agents">
+<main class="agents">
+  <div class="agents-head">
+    <div class="brand"><span class="brand-mark" role="img" aria-label="RedLine"><i></i></span></div>
+    <div class="titles">
+      <h1>Agents</h1>
+      <p class="sub" id="summary">Loading agents…</p>
+    </div>
+    <div class="actions">
+      <button class="btn" id="refresh" type="button">Refresh</button>
+      <a class="back" href="/">← Reviews</a>
+    </div>
+  </div>
+  <div id="list" class="list"><div class="empty">Loading agents…</div></div>
+  <p class="foot" id="foot"></p>
+</main>
+
+<script>
+const withToken = (path) => {
+  const token = new URLSearchParams(location.search).get("t") || "";
+  return token ? `${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(token)}` : path;
+};
+
+const summary = document.getElementById("summary");
+const list = document.getElementById("list");
+const foot = document.getElementById("foot");
+const refresh = document.getElementById("refresh");
+
+let loadedAt = null;
+let loading = false;
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[ch]);
+}
+
+const plural = (count, word) => `${count} ${word}${count === 1 ? "" : "s"}`;
+
+function when(stamp) {
+  if (!stamp) return "";
+  const date = new Date(stamp);
+  return Number.isFinite(date.getTime()) ? date.toLocaleString() : stamp;
+}
+
+function clock(stamp) {
+  if (!stamp) return "";
+  const date = new Date(stamp);
+  return Number.isFinite(date.getTime()) ? date.toLocaleTimeString() : "";
+}
+
+function elapsed(seconds) {
+  const total = Number(seconds) || 0;
+  if (total < 60) return `${total}s`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes}m ${total % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function claimHtml(claim) {
+  const step = claim.step || null;
+  const stepText = step?.message
+    ? `${escapeHtml(step.message)}${step.tool ? ` <span class="tag"><strong>${escapeHtml(step.tool)}</strong></span>` : ""}`
+    : `<span style="color: var(--muted)">Waiting for the first step…</span>`;
+  const log = Array.isArray(claim.log) ? claim.log : [];
+  const logHtml = log.length
+    ? `<details class="log-toggle"><summary>Output · ${plural(log.length, "line")}</summary>
+         <pre class="log">${log.map((line) => `${escapeHtml(clock(line.at))}  ${escapeHtml(line.message)}`).join("\n")}</pre>
+       </details>`
+    : "";
+  return `<div class="claim">
+    <div class="claim-head">
+      <span class="claim-title">${escapeHtml(claim.title || claim.session_id || "Untitled review")}</span>
+      <span class="claim-meta">${escapeHtml(claim.project || "inbox")} · ${escapeHtml(claim.status || "")}
+        · ${escapeHtml(claim.state || "")} · ${elapsed(claim.elapsed_secs)}</span>
+    </div>
+    <div class="step">${step ? `<span class="kind">${escapeHtml(step.state || "step")}</span>` : ""}${stepText}</div>
+    ${logHtml}
+  </div>`;
+}
+
+function agentHtml(agent) {
+  const online = agent.online === true;
+  const claims = Array.isArray(agent.claims) ? agent.claims : [];
+  const projects = Array.isArray(agent.projects) ? agent.projects : [];
+  const repos = Array.isArray(agent.repos) ? agent.repos : [];
+  const jobs = Array.isArray(agent.jobs) ? agent.jobs : [];
+  const tags = [
+    ...projects.map((project) => `<span class="tag">project <strong>${escapeHtml(project)}</strong></span>`),
+    ...repos.map((repo) => `<span class="tag">repo <strong>${escapeHtml(repo)}</strong></span>`),
+    ...jobs.map((job) => `<span class="tag">job <strong>${escapeHtml(job)}</strong></span>`),
+  ].join("");
+  return `<section class="agent-card" data-agent="${escapeHtml(agent.agent_id)}">
+    <div class="agent-top">
+      <span class="agent-name">${escapeHtml(agent.agent_id)}</span>
+      <span class="agent-state ${online ? "online" : ""}"><span class="dot"></span>${online ? "online" : "offline"}${agent.last_seen ? ` · ${escapeHtml(when(new Date(agent.last_seen * 1000).toISOString()))}` : ""}</span>
+      ${claims.length ? `<span class="tag"><strong>${plural(claims.length, "review")}</strong> in flight</span>` : ""}
+    </div>
+    <div class="agent-tags">${tags || `<span class="tag">no projects or repos reported yet</span>`}</div>
+    ${claims.length ? claims.map(claimHtml).join("") : `<p class="waiting">Waiting for work — no review claimed.</p>`}
+  </section>`;
+}
+
+function render(data) {
+  const agents = Array.isArray(data.agents) ? data.agents : [];
+  const claims = agents.reduce((sum, agent) => sum + (agent.claims?.length || 0), 0);
+  const online = agents.filter((agent) => agent.online === true).length;
+  summary.textContent = `${plural(agents.length, "device")} · ${online}/${agents.length} online · ${plural(claims, "review")} in flight`;
+  list.innerHTML = agents.length ? agents.map(agentHtml).join("")
+    : `<div class="empty">No agent has connected yet. Start a bridge and it appears here.</div>`;
+  const version = data.server?.version || "";
+  foot.textContent = loadedAt
+    ? `Refreshed ${new Date(loadedAt).toLocaleTimeString()} · server ${version} · this page refreshes every 3 seconds while visible.`
+    : "";
+}
+
+async function load() {
+  if (loading) return;
+  loading = true;
+  try {
+    const response = await fetch(withToken("/api/agents/activity"), {
+      headers: { accept: "application/json" },
+    });
+    if (response.status === 401) {
+      location.replace(`/login?next=${encodeURIComponent(location.pathname)}`);
+      return;
+    }
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+    loadedAt = Date.now();
+    render(body);
+  } catch (error) {
+    if (list.querySelector(".agent-card")) {
+      foot.textContent = `Could not refresh: ${error.message}`;
+    } else {
+      summary.textContent = "Not available";
+      list.innerHTML = `<div class="empty">${escapeHtml(error.message)}</div>`;
+    }
+  } finally {
+    loading = false;
+  }
+}
+
+refresh.addEventListener("click", () => load());
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) load();
+});
+setInterval(() => {
+  if (!document.hidden) load();
+}, 3000);
+
+load();
+</script>
+</body>
+</html>

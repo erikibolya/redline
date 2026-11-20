@@ -227,6 +227,114 @@ async fn release_claim(
 }
 
 #[tokio::test]
+async fn agent_activity_shows_the_claim_step_and_output_in_token_scope() {
+    let h = harness();
+    for (agent, repo) in [("holly", "redline"), ("other", "other-repo")] {
+        let (status, _, body) = send(
+            &h.app,
+            authed(
+                "POST",
+                "/api/agent/repos",
+                json!({ "agent_id": agent, "repos": [{ "key": repo, "name": repo }] }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let id = submitted_session(&h, "redline", "feat/activity").await;
+    let (status, _, claimed) = claim(&h, &id, "holly").await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+
+    for (index, (state, message)) in [("step", "Reading the annotations"), ("log", "$ npm test")]
+        .iter()
+        .enumerate()
+    {
+        let (status, _, body) = send(
+            &h.app,
+            authed(
+                "POST",
+                "/mcp",
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": index + 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "progress",
+                        "arguments": { "session_id": id, "message": message, "state": state }
+                    }
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+
+    let (status, _, body) = send(
+        &h.app,
+        Request::builder()
+            .uri("/api/agents/activity")
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["server"]["version"], redline_core::VERSION);
+    let agents = body["agents"].as_array().unwrap();
+    let holly = agents
+        .iter()
+        .find(|agent| agent["agent_id"] == "holly")
+        .expect("holly is listed");
+    assert_eq!(holly["online"], true);
+    let claim = &holly["claims"][0];
+    assert_eq!(claim["session_id"], id);
+    assert_eq!(claim["title"], "redline feat/activity");
+    assert_eq!(claim["status"], "submitted");
+    assert_eq!(claim["state"], "running");
+    assert_eq!(claim["step"]["message"], "Reading the annotations");
+    assert_eq!(claim["step"]["state"], "step");
+    assert_eq!(claim["log"][0]["message"], "$ npm test");
+    assert!(claim["claimed_at"].as_u64().is_some());
+    assert!(claim["elapsed_secs"].as_u64().is_some());
+    assert!(
+        agents.iter().any(|agent| agent["agent_id"] == "other"),
+        "the owner view lists every device"
+    );
+
+    // An agent token sees only its own device (and only its project scope).
+    let (status, _, created) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/admin/agent-tokens",
+            json!({ "agent": "holly", "name": "tray", "projects": ["redline"] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let token = created["token"].as_str().unwrap();
+    let request = Request::builder()
+        .uri("/api/agent/activity")
+        .header("authorization", format!("Bearer {token}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&h.app, request).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let agents = body["agents"].as_array().unwrap();
+    assert_eq!(
+        agents.len(),
+        1,
+        "an agent token is scoped to its own device"
+    );
+    assert_eq!(agents[0]["agent_id"], "holly");
+    assert_eq!(agents[0]["claims"][0]["session_id"], id);
+    assert!(
+        !body.to_string().contains(token),
+        "the activity payload must never echo the credential"
+    );
+}
+
+#[tokio::test]
 async fn health_is_public_but_sessions_are_not() {
     let h = harness();
 

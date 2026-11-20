@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.28.4.** Live in production on holly:
+**Current release: v0.28.5.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -62,6 +62,8 @@ desktop/
   crates/redline-server/  `redline` binary: serve / open / list / get / wait / remove /
                           token / mcp-config / health
   app/                    Tauri v2 shell (tray, menu, updater, setup wizard)
+  agent-app/              small Tauri v2 tray app around the bridge: process supervision,
+                          status/live output UI on loopback, own updater + NSIS installer
   ui/                     app.css, app.js, index.html (editor), list.html, setup.html
   scripts/                e2e.mjs (browser test), e2e.sh, add-signing-cert.sh
   Dockerfile              scratch + static musl binary (~4 MB)
@@ -106,8 +108,9 @@ CWS_PUBLISHER_ID=... CWS_SERVICE_ACCOUNT_FILE=/path/to/service-account.json \
   node extension/scripts/cws.mjs status                 # published / submitted / plan
 ```
 
-Version bumps touch three files: `desktop/Cargo.toml`, `desktop/app/Cargo.toml`,
-`desktop/app/tauri.conf.json`.
+Version bumps touch five files: `desktop/Cargo.toml`, `desktop/app/Cargo.toml`,
+`desktop/app/tauri.conf.json`, `desktop/agent-app/Cargo.toml`,
+`desktop/agent-app/tauri.conf.json` (plus the two lockfiles).
 
 CI secrets: `TAURI_SIGNING_PRIVATE_KEY` (updater), optional `WINDOWS_CERT_PFX` +
 `WINDOWS_CERT_PASSWORD` (Authenticode — not set; builds are unsigned and SmartScreen warns),

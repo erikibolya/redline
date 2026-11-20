@@ -11,7 +11,7 @@
   The token is stored in `C:\ProgramData\RedLine\agent\agent-token` (SYSTEM/Administrators only)
   and read by a wrapper at service start, so it never sits in the service XML or in the registry.
 
-  Run after the v0.28.4 release (the script downloads its assets from it), or pass -AgentExe and
+  Run after the v0.28.5 release (the script downloads its assets from it), or pass -AgentExe and
   -WinSW for an offline install.
 
 .EXAMPLE
@@ -30,7 +30,7 @@ param(
     [string]$OpenCodeServer = "http://127.0.0.1:4096",
     [string]$Model = "deepseek/deepseek-flash",
     [string]$ServerUrl = "https://redline.ibolya.cz",
-    [string]$Version = "0.28.4",
+    [string]$Version = "0.28.5",
     [string]$AgentExe = "",
     [string]$WinSW = "",
     [switch]$Download,

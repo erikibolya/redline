@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.5 — 2026-11-20
 
 - **An agent console: a tray app for the PC and a `/agent` page for every bridge.** The new
   `desktop/agent-app` installer runs `redline-agent.exe` from the tray (start at login, restart on

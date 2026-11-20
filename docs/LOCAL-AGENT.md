@@ -109,6 +109,31 @@ the bridge or the agent stopped before releasing it, a clean merged worktree can
 under `.redline-worktrees/` whose branch is fully merged into the base branch. Branches are never
 deleted; dirty or unmerged worktrees are left alone.
 
+## Windows service (PC agent)
+
+The desktop app's embedded agent always reports `agent_id = "local"`. To run the PC as a named
+device (`erik-pc`) without the app, install the standalone bridge as a Windows service:
+
+1. In RedLine → **People → Agent tokens**, create an agent token with id `erik-pc`, jobs
+   `review` + `handoff`, and the projects this PC serves (the ActiUnit ones). Copy it once.
+2. Install OpenCode for your user and keep an OpenCode server reachable (for example
+   `opencode serve --port 4096`); the service dispatches into it.
+3. In an elevated PowerShell:
+   ```powershell
+   .\desktop\scripts\install-agent-service.ps1 -RepoRoot C:\Users\eriki\source\repos `
+       -OpenCodeServer http://127.0.0.1:4096
+   ```
+   The script downloads `redline-agent.exe` and WinSW, checks the server and the token, stores
+   the token in `C:\ProgramData\RedLine\agent\agent-token` (SYSTEM/Administrators only),
+   installs `RedLineAgent` and starts it. Logs: `C:\ProgramData\RedLine\logs`.
+4. `Get-Service RedLineAgent`; uninstall with `-Uninstall`.
+
+The service runs as LocalSystem so it starts without a login; it can read/write the repositories
+and reach `http://127.0.0.1:4096`. Git work (fetch, push, SSH) happens in OpenCode under your
+user, with your VPN and credentials. If the service cannot read the repos, run it as your user
+(WinSW `<serviceaccount>`) instead. Do not run this service and the app's **Start local agent**
+at the same time: both claim reviews, one as `local` and one as `erik-pc`.
+
 ## What RedLine does *not* do
 
 - It never runs a model itself; the agent is always the user's.

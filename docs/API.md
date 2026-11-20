@@ -247,6 +247,11 @@ work's state (`requested`, `running`, `done`, `failed`) plus the integration's `
 `message`. The server does not know what the work means; see
 [Handoff a confirmed feature](#post-apisessionsidhandoff).
 
+Every row also carries `assigned_agent` (the project's device, or `null`), `assigned_agent_online`,
+`claimed_by` / `claimed_by_online`, `claim_state` (`running|waiting|null`) and `fallback` (`true`
+when a live claim comes from a device other than the assignment). `fallback` is how the UI says
+*erik-pc → holly (fallback)* instead of pretending the assigned device did the work (2026-11-20).
+
 Every row also carries `agent_running` (2026-10-31): `true` while a bridge holds a **running**
 claim on the session whose lease has not expired. It is the evidence that a run is still going —
 `agent_state` only records what the agent said last, and a `reply` can land mid-run. A `waiting`
@@ -583,13 +588,38 @@ to the agent's repo root).
 }
 ```
 
-`repo` is `null` for legacy label-only projects.
+`repo` is `null` for legacy label-only projects. `agent` is the assigned device;
+`agent_online` and `agent_last_seen` come from the presence file (`null` when no device is
+assigned). `allow_fallback` is the per-project takeover switch. `available_agents` lists the
+devices that reported this project's `repo`, so the owner can see who could actually run it.
+
+### `PUT /api/projects/<slug>`
+
+Owner only. Changes the human-owned project settings; this is the only way to reassign a device.
+
+```json
+{ "name": "Au.Net", "agent": "erik-pc", "repo": "ActiUnit/Au.Net", "allow_fallback": true }
+```
+
+Every field is optional; `""` clears `agent`/`repo`. `name` must stay non-empty, `agent` matches
+`[a-z0-9_-]{1,64}`, `repo` is a relative key without `.`/`..`. The response is the updated project.
+
+### `GET /api/agents`
+
+The scoped device list. The owner with no token scope sees every device; a member sees devices
+assigned to their projects, plus devices that reported one of those projects' repositories (the
+possible fallback candidates). Each row is `{ agent_id, online, last_seen, jobs, repos, projects,
+claims }`; an assigned device appears before its first heartbeat with `online=false`,
+`last_seen=null`, `jobs=[]`.
+
 
 ### `POST /api/agent/repos`
 
 An agent reports the repositories it can see. The endpoint is idempotent and never deletes a
-project that has reviews. `agent_id` is `[a-z0-9_-]{1,64}`; keys are relative paths without `.` or
-`..`, at most 200 characters.
+project that has reviews. It creates a missing project with the reporting device and records the
+keys in the agent's presence; it never overwrites an existing project's `agent` (including an
+explicit empty assignment) or `name`. `agent_id` is `[a-z0-9_-]{1,64}`; keys are relative paths
+without `.` or `..`, at most 200 characters.
 
 ```http
 POST /api/agent/repos
@@ -636,9 +666,15 @@ POST /api/agent/claims/…/release     {"agent_id": "holly"}
 ```
 
 `next` returns `{"session": {…}, "claim": {…}, "job": "review|handoff", "limits": {…}}` or
-`{"session": null, "reason": "empty|at_capacity|branch_locked|claimed"}`. A claim response is
-`{"claim": {…}, "session": {…}, "job": "review", "limits": {…}}`. The branch key is
+`{"session": null, "reason": "empty|at_capacity|branch_locked|claimed|assigned_elsewhere"}`. A claim
+response is `{"claim": {…}, "session": {…}, "job": "review", "limits": {…}}`. The branch key is
 `session.branch`, or the derived `feat/…` when the agent did not declare one.
+
+A review claim respects the project's `agent` assignment. A different device is refused with
+`assigned_elsewhere`; the only exception is `allow_fallback=true`, the assigned device is offline,
+and the caller is online and reported the project's `repo` in its last repo sync. An online but
+busy assignment still waits, and a fallback never preempts a live claim. An existing waiting claim
+may resume on its own device even after a reassignment, because the worktree is already there.
 
 `jobs` is the bridge's capability list. A bridge that omits it only receives `review` work, so
 an old client is never handed a confirmed feature and asked to treat it as an annotation round.
@@ -646,9 +682,11 @@ an old client is never handed a confirmed feature and asked to treat it as an an
 `session.handoff.status` is already `running`. The claim's `work_key` wins over `session.branch`:
 it is the branch the review actually worked on, including v0.21's `session/<id>` legacy name.
 
-The agent presence rows in `GET /api/agent/status` include `jobs` (default `["review"]`). A bridge
-that advertises `["review","handoff"]` is the one that can be given a handoff job; an old bridge
-that sends no `jobs` is review-only, and the UI says so in the status chip's tooltip.
+The agent presence rows in `GET /api/agent/status` include `jobs` (default `["review"]`) and
+`repos` (the keys from the last repo sync). A bridge that advertises `["review","handoff"]` is the
+one that can be given a handoff job; an old bridge that sends no `jobs` is review-only, and the UI
+says so in the status chip's tooltip. `POST /api/agent/repos` records `repos` and touches presence;
+it never overwrites an existing project's `agent` or `name`.
 
 ### Agent presence
 

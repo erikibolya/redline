@@ -59,7 +59,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - [ ] Optional **TLS upstream**: let the app talk to an HTTPS server with its own client (today the
       desktop *webview* handles TLS; the CLI/setup probe is HTTP-only).
 
-### M7 — Multi-user collaboration (v0.28, in progress)
+### M7 — Multi-user collaboration (v0.28, done)
 
 - [x] **Auth foundation:** local users/sessions, one owner with transfer, PAT + multiple service
       tokens, migration from the single token, audit: users, Argon2id passwords, server
@@ -69,6 +69,10 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
       tester `Send to developer`, server-side submit permission, owner People & access.
 - [x] **Collaboration MVP:** comments/@mentions, in-app notifications, audit UI, optimistic
       revision conflicts (server `409`, in-stage Reload theirs / Keep mine).
+- [x] **Device routing (v0.28.4):** `project.agent` assignment, per-project `allow_fallback`,
+      scoped `GET /api/agents`, `assigned_agent`/`claimed_by`/`fallback` in the session list, and
+      a repo sync that no longer steals an assignment. Device badges, a Devices page and
+      multi-server desktop windows are the UI phase still to come.
 - [ ] **Integrations:** desktop/CLI login, share links, OIDC/SSO later. *Done:* extension/CLI PAT
       with project scopes and a copy-once `/tokens` page.
 
@@ -115,16 +119,18 @@ migration guide; not part of v0.27.
 4. Session gallery on `/`.
 5. Touch toolbar + hover-free rail actions.
 6. macOS/Linux bundles.
-7. Multi-agent repo routing: `agent_id` and portable repo keys are already stored.
+7. Device-aware UI and desktop multi-server windows: the routing API landed in v0.28.4; the
+   badges, device page and multi-window client are next.
 
 ## Known limitations
 
 - No code signing: SmartScreen warns on the installer.
 - Capture needs the `:browser` image (~768 MB); the slim image returns an actionable error instead.
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
-- No multi-user model: one token, one queue. Concurrent submissions are last-write-wins.
-  Planned for v0.28 (`docs/COLLABORATION.md`).
-- Repo routing is single-agent: all agents watch the same queue; a claim/filter router is next.
+- Device routing is server-side only: the API knows the assigned and claiming device, but the
+  device badges, Devices page and multi-server windows are the next phase.
+- Multiple RedLine servers are independent queues; the desktop still switches one window between
+  profiles, and a combined inbox is not built.
 - **Feature confirmation is a decision, not a git action.** RedLine records `feature_state` and,
   only when the human ticks the optional handoff, queues a generic **handoff job** (v0.23). The
   bridge claims it only when it advertises the job, and the integration performs its own

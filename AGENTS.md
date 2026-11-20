@@ -171,6 +171,13 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   the bridge runs `REDLINE_AGENT_WORKERS` (default 4) claim workers, each in its own worktree under
   `<repo_root>/.redline-worktrees/`, with heartbeats and one owner per branch. The OpenCode
   server must see the worktree path just like the repo itself.
+- Device routing (v0.28.4): `project.agent` names the assigned device and `allow_fallback` is
+  per-project (default off). A review claim is refused for another device
+  (`reason=assigned_elsewhere`); with fallback on, an online device that reported the project's
+  `repo` may take over only while the assigned device is offline. Presence records `repos`; the
+  repo sync fills an empty project once and never overwrites a human assignment or name.
+  `GET /api/sessions` carries `assigned_agent`/`claimed_by`/`fallback`; `GET /api/agents` is the
+  scoped device list; `PUT /api/projects/{slug}` is the owner-only assignment path.
 - UI: no framework, no build step. `app.js` holds the shell (rail, canvas engine, inspector);
   `app.css` the design tokens incl. light theme. Served from the binary at `/static/*`.
 - Editor model: annotations = paint order; selection is a `Set`; viewport is a transform
@@ -566,6 +573,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   deferred, and reserve the height of any data-driven block above static content. Test it with the
   request *held* — a `waitForSelector` after the response proves nothing — and measure that a
   heading below the block does not move when the response is released.
+
+- **A repo sync is discovery, not ownership.** `sync_repo_project` overwrote `agent` and `name` on
+  every beat, so whichever bridge reported last owned the project and a human rename was undone.
+  With one agent that was invisible; with `holly` and a PC agent on the same repo key it silently
+  flipped work between machines, and the UI would have named the wrong device (2026-11-20). Fill
+  an empty assignment once, let an explicit owner `PUT` reassign, keep the human name, and record
+  the reporting devices separately (`repos`, `available_agents`) so a fallback is a visible
+  decision instead of a race.
 
 ## 8. Working rules
 

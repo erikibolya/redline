@@ -140,6 +140,10 @@ pub struct AgentPresence {
     /// file (or an old bridge that sends no `jobs`) is review-only.
     #[serde(default = "default_jobs")]
     pub jobs: Vec<String>,
+    /// Repository keys the bridge last reported through `/api/agent/repos`. Used to decide
+    /// whether a fallback device can actually see the project's repository.
+    #[serde(default)]
+    pub repos: Vec<String>,
 }
 
 fn default_jobs() -> Vec<String> {
@@ -232,6 +236,11 @@ impl AgentControl {
             .map(normalize_jobs)
             .or_else(|| self.agents.get(id).map(|presence| presence.jobs.clone()))
             .unwrap_or_else(default_jobs);
+        let repos = self
+            .agents
+            .get(id)
+            .map(|presence| presence.repos.clone())
+            .unwrap_or_default();
         self.agents.insert(
             id.to_string(),
             AgentPresence {
@@ -239,12 +248,35 @@ impl AgentControl {
                 last_seen: now,
                 online: true,
                 jobs,
+                repos,
             },
         );
         // Bound the file without dropping the last-seen history the status panel shows.
         self.agents.retain(|_, presence| {
             now.saturating_sub(presence.last_seen) <= PRESENCE_RETENTION_SECONDS
         });
+        let _ = self.save_presence();
+    }
+
+    /// Record the repositories a bridge can see. The sync is also the bridge's heartbeat, so it
+    /// touches presence; only the repo list is replaced.
+    pub fn observe_repos(&mut self, agent_id: &str, repos: &[String]) {
+        self.touch(agent_id, None);
+        let id = agent_id.trim();
+        if id.is_empty() {
+            return;
+        }
+        let mut unique: Vec<String> = repos
+            .iter()
+            .map(|repo| repo.trim())
+            .filter(|repo| !repo.is_empty())
+            .map(str::to_string)
+            .collect();
+        unique.sort();
+        unique.dedup();
+        if let Some(presence) = self.agents.get_mut(id) {
+            presence.repos = unique;
+        }
         let _ = self.save_presence();
     }
 

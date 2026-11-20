@@ -483,7 +483,7 @@ fn malformed_png_payload_is_a_bad_request_not_a_crash() {
 }
 
 #[test]
-fn repo_projects_are_idempotent_and_survive_agent_resync() {
+fn repo_projects_are_idempotent_and_a_resync_does_not_steal_an_assignment() {
     let (_dir, store) = store();
     let first = store
         .sync_repo_project("holly", "ActiUnit/Au.Net", "Au.Net")
@@ -492,18 +492,35 @@ fn repo_projects_are_idempotent_and_survive_agent_resync() {
     assert_eq!(first.repo.as_deref(), Some("ActiUnit/Au.Net"));
     assert_eq!(first.agent.as_deref(), Some("holly"));
 
+    // The first sync names and assigns the project. A later sync is discovery, not ownership:
+    // it must not rename the project or move it to the reporting device.
     let renamed = store
         .sync_repo_project("holly", "ActiUnit/Au.Net", "Au.Net UI")
         .unwrap();
     assert_eq!(renamed.slug, first.slug);
-    assert_eq!(renamed.name, "Au.Net UI");
+    assert_eq!(renamed.name, "Au.Net");
+    assert_eq!(renamed.agent.as_deref(), Some("holly"));
 
-    // A second agent reporting the same key updates the record instead of duplicating it.
+    // A human assignment and a human rename survive a sync from another device.
+    let updated = store
+        .update_project(
+            &first.slug,
+            Some("Au.Net UI".to_string()),
+            Some("local".to_string()),
+            None,
+            Some(true),
+        )
+        .unwrap();
+    assert_eq!(updated.name, "Au.Net UI");
+    assert_eq!(updated.agent.as_deref(), Some("local"));
+    assert!(updated.allow_fallback);
     let other = store
         .sync_repo_project("local", "ActiUnit/Au.Net", "Au.Net")
         .unwrap();
     assert_eq!(other.slug, first.slug);
     assert_eq!(other.agent.as_deref(), Some("local"));
+    assert_eq!(other.name, "Au.Net UI");
+    assert!(other.allow_fallback);
 
     // A legacy label with the same name must not be silently turned into a repo project.
     let legacy = store.ensure_project("redline").unwrap();
@@ -520,6 +537,26 @@ fn repo_projects_are_idempotent_and_survive_agent_resync() {
         .find(|project| project.slug == repo.slug)
         .unwrap();
     assert_eq!(found.repo.as_deref(), Some("redline"));
+}
+
+#[test]
+fn a_manual_project_without_a_device_stays_unassigned_after_a_sync() {
+    let (_dir, store) = store();
+    let manual = store.ensure_project("Manual").unwrap();
+    // An owner can create the project and set its repo key without picking a device yet.
+    let manual = store
+        .update_project(&manual.slug, None, None, Some("Manual".to_string()), None)
+        .unwrap();
+    let synced = store
+        .sync_repo_project("erik-pc", "Manual", "Manual")
+        .unwrap();
+    assert_eq!(synced.slug, manual.slug);
+    assert_eq!(synced.repo.as_deref(), Some("Manual"));
+    assert_eq!(
+        synced.agent, None,
+        "an explicit empty assignment is a decision"
+    );
+    assert_eq!(synced.name, "Manual");
 }
 
 #[test]

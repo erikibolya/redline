@@ -110,6 +110,19 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
 - Browser e2e: the Agent settings dialog saves global + per-project values, and the rail shows the
   session's branch next to the relative time.
 
+## Device routing (v0.28.4)
+
+- Rust `tests/store.rs`: a repo sync creates the project once; a later sync from another device
+  neither renames it nor steals `agent`, and a human rename/assignment/fallback survives it.
+- Rust `tests/agent.rs`: a repo sync records the reported keys, deduplicated; `next`/heartbeat
+  touches do not erase them.
+- Rust `tests/api.rs` `a_device_assignment_routes_reviews_and_fallback_is_opt_in`: an unassigned
+  device is refused (`assigned_elsewhere`), the assigned device claims, fallback on + assigned
+  offline + repo reported allows the takeover, the session exposes `assigned_agent`/`claimed_by`/
+  `fallback`, the project exposes `agent_online`/`available_agents`, `/api/agents` lists an
+  assigned device before its first heartbeat, and fallback is refused when it is off, when the
+  assigned device is online, or when the candidate has not reported the repo.
+
 ## Feature branches (v0.22)
 
 - Rust `tests/store.rs`: `default_branch` folds Czech titles into a git-safe `feat/<slug>-<tail>`,

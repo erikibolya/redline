@@ -1557,6 +1557,214 @@ async fn agent_next_claims_across_branches_and_skips_locked_ones() {
 }
 
 #[tokio::test]
+async fn a_device_assignment_routes_reviews_and_fallback_is_opt_in() {
+    let h = harness();
+    let id = submitted_session(&h, "p1", "feat/x").await;
+
+    // The owner assigns the project to holly and tells the server which repo key it maps to.
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "agent": "holly", "repo": "p1", "allow_fallback": false }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    assert_eq!(updated["project"]["agent"], "holly");
+    assert_eq!(updated["project"]["allow_fallback"], false);
+
+    // erik-pc is online and reports the repo, but the assignment is strict: it must not claim.
+    let (status, _, synced) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/repos",
+            json!({"agent_id": "erik-pc", "repos": [{"key": "p1", "name": "p1"}]}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{synced}");
+    let (status, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "erik-pc"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{blocked}");
+    assert!(blocked["session"].is_null(), "{blocked}");
+    assert_eq!(blocked["reason"], "assigned_elsewhere");
+
+    // The assigned device gets it.
+    let (status, _, next) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "holly"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{next}");
+    assert_eq!(next["session"]["id"], id);
+    let (status, _, _) = release_claim(&h, &id, "holly").await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Fallback is off by default. Turn it on and assign a device that never beat: it is offline,
+    // erik-pc reports the repo and may take over.
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "agent": "ghost", "allow_fallback": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (status, _, fallback) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "erik-pc"})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{fallback}");
+    assert_eq!(fallback["session"]["id"], id);
+
+    // A takeover is a security-relevant decision, not an invisible race.
+    let (_, _, audit) = send(&h.app, authed("GET", "/api/audit", json!(null))).await;
+    assert!(
+        audit["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["action"] == "agent.fallback" && event["session"] == id),
+        "{audit}"
+    );
+
+    let (_, _, sessions) = send(&h.app, authed("GET", "/api/sessions", json!(null))).await;
+    let session = sessions["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["id"] == id)
+        .unwrap();
+    assert_eq!(session["assigned_agent"], "ghost");
+    assert_eq!(session["claimed_by"], "erik-pc");
+    assert_eq!(session["fallback"], true);
+    assert_eq!(session["assigned_agent_online"], false);
+
+    let (_, _, projects) = send(&h.app, authed("GET", "/api/projects", json!(null))).await;
+    let project = projects["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|project| project["slug"] == "p1")
+        .unwrap();
+    assert_eq!(project["agent"], "ghost");
+    assert_eq!(project["agent_online"], false);
+    assert_eq!(project["allow_fallback"], true);
+    assert!(
+        project["available_agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|agent| agent["agent_id"] == "erik-pc"),
+        "{project}"
+    );
+
+    let (_, _, devices) = send(&h.app, authed("GET", "/api/agents", json!(null))).await;
+    let erik = devices["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == "erik-pc")
+        .expect("erik-pc is reporting a visible project");
+    assert_eq!(erik["online"], true);
+    assert!(erik["repos"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|repo| repo == "p1"));
+    let ghost = devices["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|agent| agent["agent_id"] == "ghost")
+        .expect("assigned device is visible");
+    assert_eq!(ghost["online"], false);
+    assert!(ghost["projects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|project| project == "p1"));
+
+    // With fallback off, an offline assignment waits instead of stealing.
+    let (status, _, _) = release_claim(&h, &id, "erik-pc").await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "allow_fallback": false }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (_, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "erik-pc"})),
+    )
+    .await;
+    assert!(blocked["session"].is_null(), "{blocked}");
+    assert_eq!(blocked["reason"], "assigned_elsewhere");
+
+    // An online assigned device is not "offline": fallback must not apply even when enabled.
+    let (status, _, _) = send(
+        &h.app,
+        authed(
+            "POST",
+            "/api/agent/repos",
+            json!({"agent_id": "holly", "repos": []}),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "agent": "holly", "allow_fallback": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (_, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "erik-pc"})),
+    )
+    .await;
+    assert!(blocked["session"].is_null(), "{blocked}");
+    assert_eq!(blocked["reason"], "assigned_elsewhere");
+
+    // A fallback device must have reported the repo; being online is not enough.
+    let (status, _, updated) = send(
+        &h.app,
+        authed(
+            "PUT",
+            "/api/projects/p1",
+            json!({ "agent": "ghost", "allow_fallback": true }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{updated}");
+    let (_, _, blocked) = send(
+        &h.app,
+        authed("POST", "/api/agent/next", json!({"agent_id": "build-vm"})),
+    )
+    .await;
+    assert!(blocked["session"].is_null(), "{blocked}");
+    assert_eq!(blocked["reason"], "assigned_elsewhere");
+}
+
+#[tokio::test]
 async fn a_review_nobody_named_gets_a_feature_branch_not_a_session_branch() {
     let h = harness();
 

@@ -1039,6 +1039,7 @@ impl Store {
             agent: None,
             repo: None,
             max_parallel: None,
+            allow_fallback: false,
             created_at: now(),
         };
         write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
@@ -1089,6 +1090,58 @@ impl Store {
         Ok(slug)
     }
 
+    /// Update the human-owned project settings (v0.28.4). The agent sync creates a project once;
+    /// later syncs must not overwrite an assignment or a name the owner changed.
+    ///
+    /// `Some("")` clears `agent`/`repo`; `None` leaves the field unchanged.
+    pub fn update_project(
+        &self,
+        slug: &str,
+        name: Option<String>,
+        agent: Option<String>,
+        repo: Option<String>,
+        allow_fallback: Option<bool>,
+    ) -> Result<crate::model::Project> {
+        let slug = slugify(slug);
+        let mut project = self
+            .project(&slug)?
+            .ok_or_else(|| Error::NotFound(slug.clone()))?;
+        if let Some(name) = name {
+            let name = name.trim();
+            if name.is_empty() {
+                return Err(Error::BadRequest("project name is required".to_string()));
+            }
+            project.name = name.chars().take(120).collect();
+        }
+        if let Some(agent) = agent {
+            let agent = agent.trim();
+            project.agent = if agent.is_empty() {
+                None
+            } else {
+                Some(agent.to_string())
+            };
+        }
+        if let Some(repo) = repo {
+            let repo = repo.trim();
+            project.repo = if repo.is_empty() {
+                None
+            } else {
+                Some(repo.to_string())
+            };
+        }
+        if let Some(allow_fallback) = allow_fallback {
+            project.allow_fallback = allow_fallback;
+        }
+        write_json(
+            &self
+                .projects_root()
+                .join(&project.slug)
+                .join("project.json"),
+            &serde_json::to_value(&project)?,
+        )?;
+        Ok(project)
+    }
+
     pub fn sync_repo_project(
         &self,
         agent: &str,
@@ -1106,13 +1159,12 @@ impl Store {
             .into_iter()
             .find(|project| project.repo.as_deref() == Some(repo))
         {
+            // A repo sync is a discovery heartbeat, not an ownership transfer. The first sync
+            // creates the project with the reporting device; an existing project keeps whatever
+            // assignment it has, including an explicit empty one. A human rename also survives.
             let mut changed = false;
-            if project.name != name {
+            if project.name.trim().is_empty() {
                 project.name = name.to_string();
-                changed = true;
-            }
-            if project.agent.as_deref() != Some(agent) {
-                project.agent = Some(agent.to_string());
                 changed = true;
             }
             if changed {
@@ -1140,6 +1192,7 @@ impl Store {
             agent: Some(agent.to_string()),
             repo: Some(repo.to_string()),
             max_parallel: None,
+            allow_fallback: false,
             created_at: now(),
         };
         write_json(&dir.join("project.json"), &serde_json::to_value(&project)?)?;
@@ -1168,6 +1221,7 @@ impl Store {
                 agent: None,
                 repo: None,
                 max_parallel: None,
+                allow_fallback: false,
                 created_at: String::new(),
             });
         }

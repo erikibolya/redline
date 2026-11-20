@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A project belongs to a device, and a repo sync no longer steals it.** `project.agent` is the
+  assigned device (owner-only `PUT /api/projects/{slug}`), `allow_fallback` is per project and off
+  by default; when it is on, another online device that reported the same `repo` may claim only
+  while the assigned device is offline. An online-but-busy assignment still waits, and a fallback
+  claim is exposed as `fallback` rather than pretending the assigned device did the work. The
+  agent's repo sync now fills an empty project once and never overwrites a human assignment or
+  name, and records `repos` in presence; `GET /api/agents` returns the scoped device list, while
+  `GET /api/sessions` carries `assigned_agent`, `claimed_by` and online/fallback flags. Owners can
+  see every device; members see the devices assigned to, or reporting, their projects
+  (2026-11-20).
+
 - **A release tag publishes a new extension version by itself.** `extension/scripts/cws.mjs` uses
   the Chrome Web Store API v2 with a service account to read the store's published/submitted
   version, upload the packaged ZIP only when `extension/manifest.json` is newer, and submit it for

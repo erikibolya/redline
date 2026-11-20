@@ -109,6 +109,8 @@ struct Ctx {
     activity: Mutex<Value>,
     update: Mutex<String>,
     autostart_item: Mutex<Option<CheckMenuItem<tauri::Wry>>>,
+    /// No config file yet: a fresh install registers the tray app at login.
+    first_run: bool,
 }
 
 impl Ctx {
@@ -118,6 +120,7 @@ impl Ctx {
             .app_config_dir()
             .unwrap_or_else(|_| PathBuf::from("."));
         let config_path = dir.join("agent-app.json");
+        let first_run = !config_path.exists();
         let config = std::fs::read_to_string(&config_path)
             .ok()
             .and_then(|text| serde_json::from_str::<Config>(&text).ok())
@@ -133,6 +136,7 @@ impl Ctx {
             activity: Mutex::new(Value::Null),
             update: Mutex::new(String::new()),
             autostart_item: Mutex::new(None),
+            first_run,
         }
     }
 
@@ -829,6 +833,16 @@ fn main() {
             let ctx = Arc::new(Ctx::new(app.handle().clone()));
             let port = start_ui(ctx.clone())?;
             build_tray(app, ctx.clone())?;
+            // A device agent should be there after a reboot; the menu still lets the human turn
+            // it off, and a later launch does not re-enable a deliberate choice.
+            if ctx.first_run {
+                if let Ok(slot) = ctx.autostart_item.lock() {
+                    if let Some(item) = slot.as_ref() {
+                        let _ = app.autolaunch().enable();
+                        let _ = item.set_checked(true);
+                    }
+                }
+            }
             build_window(app, &ctx, port)?;
             if ctx
                 .config

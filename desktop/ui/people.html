@@ -73,11 +73,13 @@ try {
   button.role-chip:hover { color: var(--text); border-color: var(--accent); }
   .role-chip b { color: var(--text); font-weight: 600; }
   .role-chip.owner { border-color: #166534; color: #86efac; background: rgba(22, 101, 52, .15); }
+  .role-chip.manager { border-color: #6d28d9; color: #c4b5fd; background: rgba(109, 40, 217, .18); }
   .role-chip.developer { border-color: #1e40af; color: #93c5fd; background: rgba(30, 64, 175, .16); }
   .role-chip.tester { border-color: #92400e; color: #fcd34d; background: rgba(146, 64, 14, .2); }
   .role-chip.viewer { border-color: var(--border); color: var(--muted); }
   .role-chip.none { border-style: dashed; color: var(--muted); }
   [data-theme="light"] .role-chip.owner { color: #15803d; background: #f0fdf4; }
+  [data-theme="light"] .role-chip.manager { color: #6d28d9; background: #f5f3ff; }
   [data-theme="light"] .role-chip.developer { color: #1d4ed8; background: #eff6ff; }
   [data-theme="light"] .role-chip.tester { color: #b45309; background: #fffbeb; }
   .person-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
@@ -157,7 +159,8 @@ try {
   <section class="card">
     <h1>People &amp; access</h1>
     <p class="lead">Owner only. Each person gets a role per project: a viewer reads, a tester
-      creates and annotates tasks, a developer also sends them to the agent. Click <b>Projects</b>
+      creates and annotates tasks, a developer also sends them to the agent, and a manager also
+      manages the project's device, fallback and members. Click <b>Projects</b>
       on a person to edit the whole set; the chips show what they can access. Inbox is owner-only;
       new tasks always need a project.</p>
 
@@ -380,6 +383,7 @@ function renderProjectRows(user) {
         ["viewer", "Viewer"],
         ["tester", "Tester"],
         ["developer", "Developer"],
+        ["manager", "Manager"],
       ].map(([value, label]) =>
         `<option value="${value}"${value === role ? " selected" : ""}>${label}</option>`
       ).join("");

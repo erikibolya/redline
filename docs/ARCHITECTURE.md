@@ -164,8 +164,9 @@ that is online and reported the project's `repo` may claim only while the assign
 preempts a live claim. The session list exposes `assigned_agent`, `claimed_by`, the online flags
 and `fallback`, so the UI can say *waiting for erik-pc* instead of an anonymous spinner.
 `GET /api/agents` is the scoped device list (owner: all; member: devices assigned to or reporting
-their projects); `PUT /api/projects/{slug}` is the owner-only assignment path (name, agent, repo,
-fallback).
+their projects); `PUT /api/projects/{slug}` is the owner-or-project-manager assignment path (name,
+agent, repo, fallback). A project manager is a developer plus those settings, members (but not
+other managers) and that project's audit; global users, tokens and other projects stay owner-only.
 
 ## HTTP server
 

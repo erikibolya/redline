@@ -654,10 +654,10 @@ section, `Δ` shows the summary inline:
   link**, and (for the owner) a global **Owner · all projects** chip. A member sees an owner-only
   message.
 - **Projects** opens a modal with one row per project: a checkbox grants access and a role select
-  chooses Viewer / Tester / Developer. A filter narrows a long project list; **Save projects**
-  writes only that person's memberships through `PUT /api/users/{id}/projects`. The chips in the
-  row update after saving. This stays usable with many repositories; the page no longer renders
-  every project as a column.
+  chooses Viewer / Tester / Developer / Manager. A filter narrows a long project list; **Save
+  projects** writes only that person's memberships through `PUT /api/users/{id}/projects`. The
+  chips in the row update after saving. This stays usable with many repositories; the page no
+  longer renders every project as a column.
 - **Invite instead of a password:** the checkbox turns **Add user** into **Create invite link**.
   The one-time `…/invite/rl_inv_…` URL appears in a copy-once panel; the invitee gets a public
   page to choose a password and lands signed in. **Reset link** on each non-owner row generates a
@@ -674,6 +674,12 @@ section, `Δ` shows the summary inline:
 - **Developer:** sees the ready task, edits if needed and sends it with **Send to agent**. The
   tester's request fields clear on submit; the task becomes `submitted` and the agent can claim it.
 - **Viewer:** read-only; the canvas, composer and row actions are disabled.
+- **Manager (v0.28.4):** a developer plus **Manage project** in the editor header. The dialog edits
+  name, repo key, assigned device and fallback, and the member list; manager rows are read-only
+  and only the owner can add or remove them. The manager sees only their project in `/audit` and
+  keeps every developer action. The dialog's **Project audit** link opens
+  `/audit?project=<slug>`; a manager's project input is read-only. A manager's People icon still
+  opens Personal tokens, because global user admin stays owner-only.
 - The New review project picker is filtered by `/api/projects`; a member with no project cannot
   create a task, and Inbox is offered only to the owner.
 
@@ -694,15 +700,16 @@ section, `Δ` shows the summary inline:
 
 ## Audit log (v0.28)
 
-- **Audit log** (`/audit`) is owner-only and linked from **People & access**. It lists newest
-  first with **When**, **Actor**, **Action**, **Project / task** and **Details** columns. Times
-  are formatted with the browser's locale (`toLocaleString`), never sliced from the ISO string;
-  task ids link to the editor.
+- **Audit log** (`/audit`) is owner or project-manager. The owner sees the whole server; a
+  manager is forced to one managed project (the project field becomes read-only) and cannot widen
+  the filter. It lists newest first with **When**, **Actor**, **Action**, **Project / task** and
+  **Details** columns. Times are formatted with the browser's locale (`toLocaleString`), never
+  sliced from the ISO string; task ids link to the editor.
 - Filters: action prefix (`review.`), project slug, task id and actor user id; the query string
-  is shareable and restored on load. A non-owner sees an explicit owner-only card, not an empty
-  table.
-- The page reads `GET /api/audit`; the server already enforces owner-only, so the UI check is
-  only a clearer message.
+  is shareable and restored on load. A member without a managed project sees an explicit
+  owner-or-manager card, not an empty table.
+- The page reads `GET /api/audit`; the server enforces the role and the project scope, so the UI
+  check is only a clearer message.
 
 ## Personal and agent tokens (v0.28)
 
@@ -739,7 +746,7 @@ section, `Δ` shows the summary inline:
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:
 coordinate mapping under a fitted zoom, dragging, undo, inline text (including diacritics), and
-submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 32 checks. It runs in CI on every push (`browser e2e` job) and locally via
+submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 322 checks. It runs in CI on every push (`browser e2e` job) and locally via
 `desktop/scripts/e2e.sh`.
 
 It has already earned its keep twice: it caught the text tool being broken by mousedown's focus

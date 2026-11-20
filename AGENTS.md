@@ -159,6 +159,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   capture (shells out to Chromium), annotation diffing, loopback HTTP client.
 - Auth: token from `/data/token`; `Authorization: Bearer`, `redline_token` cookie (set by
   `/s/<id>?t=…` → 307), or `?t=`. `Sec-Fetch-Site: cross-site` is refused.
+- Roles (v0.28+): one global owner; per-project `manager`, `developer`, `tester`, `viewer`. A
+  manager is a developer plus project settings (name, repo, device, fallback), members (not other
+  managers) and that project's audit; global users/tokens/other projects stay owner-only. `owner`
+  is the only role allowed to change the manager set. The UI exposes **Manage project** in the
+  editor for owner/manager.
 - MCP tools: `review_screenshot`, `review_video`, `capture_review`, `get_feedback`, `wait_for_feedback`,
   `list_reviews`, `list_projects`, `reply`, `progress`, `post_round`, `capture_round`, `resolve`,
   `handoff_status`. Resources: `redline://session/<id>/{annotated.png,review.md}`.
@@ -581,6 +586,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   an empty assignment once, let an explicit owner `PUT` reassign, keep the human name, and record
   the reporting devices separately (`repos`, `available_agents`) so a fallback is a visible
   decision instead of a race.
+
+- **A project manager is not a small owner.** The first manager implementation could have reused
+  the owner-only routes, which would either hide the role from the people who need it or expose
+  global users/tokens to it. Keep the boundary explicit: every manager route checks the project
+  on the call (`require_project_manager`), global routes stay owner-only, a manager cannot assign
+  or demote another manager, and existing manager rows are preserved when a manager saves the
+  member list so the project cannot be locked out. Test the refusals (a developer, a manager of
+  another project, a manager trying to promote someone) as well as the allowed path.
 
 ## 8. Working rules
 

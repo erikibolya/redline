@@ -90,16 +90,20 @@ new link of the same kind invalidates the previous unused one. Accepting an invi
 > **Current slice:** data routes are **project-scoped**. `GET /api/projects` and
 > `GET /api/sessions` return only the member's projects (the owner sees all); Inbox is owner-only.
 > `GET /api/sessions/{id}` and every media/history route return `404` for a task outside the
-> member's projects. `GET /api/sessions/{id}` carries `meta.my_role` (`owner|developer|tester|
-> viewer`). A tester may create and annotate their own open tasks, but `POST /annotations`,
+> member's projects. `GET /api/sessions/{id}` carries `meta.my_role` (`owner|manager|developer|
+> tester|viewer`). A tester may create and annotate their own open tasks, but `POST /annotations`,
 > `POST /cancel`, confirm/cancel-feature and handoff return `403`. A tester hands work to a
 > developer with `POST /api/sessions/{id}/request-agent`; the task stays `open` until the
-> developer calls `POST /annotations`.
+> developer calls `POST /annotations`. A **manager** does the developer actions (submit, STOP,
+> confirm/handoff, delete any open task) and additionally manages one project's settings,
+> fallback and members; global user/token/ownership endpoints stay owner-only.
 >
-> `GET/PUT /api/projects/{slug}/members` is owner-only; `PUT` replaces the project's member list
-> (`{"members":[{"user_id","role"}]}` with role `viewer|tester|developer`). The agent routes and
-> `/mcp` accept a scoped agent token (or the legacy owner token); a human session on those routes
-> is accepted only for the owner administering the bridge.
+> `GET/PUT /api/projects/{slug}/members` is owner or project-manager; `PUT` replaces the
+> project's member list (`{"members":[{"user_id","role"}]}` with role
+> `viewer|tester|developer|manager`). A manager cannot add, remove or demote a `manager`; only the
+> owner changes the manager set. The agent routes and `/mcp` accept a scoped agent token (or the
+> legacy owner token); a human session on those routes is accepted only for the owner
+> administering the bridge.
 
 ### `POST /api/sessions/<id>/request-agent`
 
@@ -118,8 +122,9 @@ task in their project.
 
 ### `GET/PUT /api/projects/<slug>/members`
 
-Owner only. `GET` returns the member list with `user_id`, `username`, `display_name` and `role`.
-`PUT` replaces it:
+Owner or project manager. `GET` returns the member list with `user_id`, `username`,
+`display_name` and `role`, plus a minimal `directory` of active/invited people (no owner, no
+tokens) for the manager dialog. `PUT` replaces the list:
 
 ```json
 { "members": [
@@ -180,7 +185,9 @@ after **90 days** by default; set `REDLINE_NOTIFICATION_RETENTION_DAYS` to overr
 
 ### `GET /api/audit`
 
-Owner only. Returns `{ "events": [ … ], "count": n }`, newest first. Each event has `at`,
+Owner or project manager. The owner returns the whole server; a project manager must pass
+`project=<slug>` for a project they manage and the server forces the filter to it. Returns
+`{ "events": [ … ], "count": n }`, newest first. Each event has `at`,
 `actor_type` (`user|legacy|system`), optional `actor_id`, `actor_name`, `action`, optional
 `project`/`session`/`target`/`ip`/`user_agent`, and `details`.
 
@@ -595,7 +602,9 @@ devices that reported this project's `repo`, so the owner can see who could actu
 
 ### `PUT /api/projects/<slug>`
 
-Owner only. Changes the human-owned project settings; this is the only way to reassign a device.
+Owner or project manager. Changes the human-owned project settings; this is the only way to
+reassign a device. A project manager can change name, repo, agent and fallback for their project,
+but not the manager set.
 
 ```json
 { "name": "Au.Net", "agent": "erik-pc", "repo": "ActiUnit/Au.Net", "allow_fallback": true }

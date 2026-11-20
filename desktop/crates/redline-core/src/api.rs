@@ -206,7 +206,6 @@ pub fn router(state: AppState) -> Router {
             get(list_agent_tokens).post(create_agent_token),
         )
         .route("/api/admin/agent-tokens/{id}", delete(revoke_agent_token))
-        .route("/api/audit", get(audit_log))
         .route("/api/config", get(config))
         .route("/api/setup", get(setup_status).post(save_setup))
         .route("/api/setup/disconnect", post(disconnect_setup))
@@ -215,11 +214,6 @@ pub fn router(state: AppState) -> Router {
         .route("/api/servers/{id}/activate", post(activate_server))
         .route("/api/servers/{id}/probe", get(probe_server))
         .route("/api/servers/{id}", delete(remove_server))
-        .route(
-            "/api/projects/{slug}/members",
-            get(project_members).put(set_project_members),
-        )
-        .route("/api/projects/{slug}", put(update_project))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_owner_auth,
@@ -258,6 +252,12 @@ pub fn router(state: AppState) -> Router {
             )),
         )
         .route("/api/projects", get(list_projects).post(create_project))
+        .route("/api/projects/{slug}", put(update_project))
+        .route(
+            "/api/projects/{slug}/members",
+            get(project_members).put(set_project_members),
+        )
+        .route("/api/audit", get(audit_log))
         .route("/api/agents", get(list_agents))
         .route(
             "/api/sessions/{id}",
@@ -473,6 +473,33 @@ fn require_project(
     Ok(())
 }
 
+fn require_project_manager(
+    state: &AppState,
+    context: &AuthContext,
+    slug: &str,
+) -> Result<crate::model::Project, Error> {
+    if context.agent.is_some() {
+        return Err(Error::Forbidden(
+            "an agent token cannot manage a project".to_string(),
+        ));
+    }
+    let project = state
+        .store
+        .project(slug)?
+        .ok_or_else(|| Error::NotFound(slug.to_string()))?;
+    if context.is_owner {
+        return Ok(project);
+    }
+    let user_id = context.user_id.as_deref().unwrap_or_default();
+    match state.memberships.role_for(user_id, &project.slug)? {
+        Some(role) if role.can_manage() => Ok(project),
+        Some(_) => Err(Error::Forbidden(
+            "only the owner or a project manager can change this project".to_string(),
+        )),
+        None => Err(Error::NotFound(slug.to_string())),
+    }
+}
+
 fn require_review(
     state: &AppState,
     context: &AuthContext,
@@ -508,14 +535,15 @@ fn require_review(
         ));
     }
     if action == ReviewAction::Delete {
-        if meta.created_by.as_deref() != context.user_id.as_deref() {
+        if role != ProjectRole::Manager && meta.created_by.as_deref() != context.user_id.as_deref()
+        {
             return Err(Error::Forbidden(
-                "only the creator can delete an unsubmitted task".to_string(),
+                "only the creator or a project manager can delete this task".to_string(),
             ));
         }
         if meta.status != Status::Open {
             return Err(Error::Forbidden(
-                "only an unsubmitted task can be deleted by its creator".to_string(),
+                "only an unsubmitted task can be deleted".to_string(),
             ));
         }
     }
@@ -1442,10 +1470,12 @@ fn can_moderate_comment(
         return Ok(true);
     }
     let project = meta.project.as_deref().unwrap_or("inbox");
-    Ok(state
-        .memberships
-        .role_for(context.user_id.as_deref().unwrap_or_default(), project)?
-        == Some(ProjectRole::Developer))
+    Ok(matches!(
+        state
+            .memberships
+            .role_for(context.user_id.as_deref().unwrap_or_default(), project)?,
+        Some(ProjectRole::Manager | ProjectRole::Developer)
+    ))
 }
 
 /// A notification must never name a task its reader cannot open. The project membership can
@@ -1497,7 +1527,12 @@ fn notify_project_developers(
         .memberships
         .members(project)?
         .into_iter()
-        .filter(|membership| membership.role == ProjectRole::Developer)
+        .filter(|membership| {
+            matches!(
+                membership.role,
+                ProjectRole::Manager | ProjectRole::Developer
+            )
+        })
         .map(|membership| membership.user)
         .collect();
     // A project without a developer still has the owner, who can send the task.
@@ -1573,7 +1608,10 @@ async fn add_comment(
     }
     if let Some(project) = meta.project.as_deref() {
         for membership in state.memberships.members(project)? {
-            if membership.role == ProjectRole::Developer {
+            if matches!(
+                membership.role,
+                ProjectRole::Manager | ProjectRole::Developer
+            ) {
                 recipients.insert(membership.user);
             }
         }
@@ -1882,6 +1920,7 @@ struct AuditQuery {
 }
 
 async fn audit_log(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     Query(query): Query<AuditQuery>,
 ) -> Result<Json<Value>, Error> {
@@ -1898,7 +1937,7 @@ async fn audit_log(
         ),
         None => None,
     };
-    let filter = AuditFilter {
+    let mut filter = AuditFilter {
         limit: query.limit.unwrap_or(100).clamp(1, 1000),
         project: non_empty(query.project),
         session: non_empty(query.session),
@@ -1906,6 +1945,26 @@ async fn audit_log(
         action: non_empty(query.action),
         since,
     };
+    // The owner sees the whole server. A project manager must name one of their projects and can
+    // never widen the filter; a developer or tester cannot read the audit at all.
+    if !context.is_owner {
+        let user_id = context.user_id.as_deref().unwrap_or_default();
+        let manages = state
+            .memberships
+            .for_user(user_id)?
+            .into_iter()
+            .any(|membership| membership.role.can_manage());
+        if !manages {
+            return Err(Error::Forbidden(
+                "the audit log is owner or project manager only".to_string(),
+            ));
+        }
+        let project = filter.project.clone().ok_or_else(|| {
+            Error::BadRequest("project is required for a project manager".to_string())
+        })?;
+        let project = require_project_manager(&state, &context, &project)?;
+        filter.project = Some(project.slug);
+    }
     let events = state.audit.list(&filter)?;
     let count = events.len();
     Ok(Json(json!({ "events": events, "count": count })))
@@ -2836,8 +2895,8 @@ struct ProjectUpdate {
     allow_fallback: Option<bool>,
 }
 
-/// Owner-only project settings. This is where a device is assigned and a fallback is allowed;
-/// the agent sync creates a missing project with the reporting device and never overwrites either
+/// Owner or project manager. This is where a device is assigned and a fallback is allowed; the
+/// agent sync creates a missing project with the reporting device and never overwrites either
 /// field afterwards.
 async fn update_project(
     Extension(context): Extension<AuthContext>,
@@ -2845,11 +2904,7 @@ async fn update_project(
     RoutePath(slug): RoutePath<String>,
     Json(body): Json<ProjectUpdate>,
 ) -> Result<Json<Value>, Error> {
-    if !context.is_owner {
-        return Err(Error::Forbidden(
-            "only the owner can change project settings".to_string(),
-        ));
-    }
+    require_project_manager(&state, &context, &slug)?;
     let agent = match body.agent {
         Some(agent) if agent.trim().is_empty() => Some(String::new()),
         Some(agent) => Some(normalize_agent_id(&agent)?),
@@ -2892,6 +2947,7 @@ struct MemberEntry {
 }
 
 fn members_payload(state: &AppState, project: &str) -> Result<Value, Error> {
+    let owner_id = state.users.owner_id()?;
     let mut members = Vec::new();
     for membership in state.memberships.members(project)? {
         let Some(user) = state.users.get(&membership.user)? else {
@@ -2916,17 +2972,31 @@ fn members_payload(state: &AppState, project: &str) -> Result<Value, Error> {
                     .to_lowercase(),
             )
     });
-    Ok(json!({ "members": members }))
+    // A project manager may add any active person, so the scoped payload carries a minimal
+    // directory. It never includes the global owner (who has no membership row) or token data.
+    let directory: Vec<Value> = state
+        .users
+        .users()?
+        .into_iter()
+        .filter(|user| owner_id.as_deref() != Some(user.id.as_str()))
+        .map(|user| {
+            json!({
+                "id": user.id,
+                "username": user.username,
+                "display_name": user.display_name,
+                "status": user.status.as_str(),
+            })
+        })
+        .collect();
+    Ok(json!({ "members": members, "directory": directory }))
 }
 
 async fn project_members(
+    Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
     RoutePath(slug): RoutePath<String>,
 ) -> Result<Json<Value>, Error> {
-    let project = state
-        .store
-        .project(&slug)?
-        .ok_or_else(|| Error::NotFound(slug.clone()))?;
+    let project = require_project_manager(&state, &context, &slug)?;
     Ok(Json(members_payload(&state, &project.slug)?))
 }
 
@@ -2936,14 +3006,23 @@ async fn set_project_members(
     RoutePath(slug): RoutePath<String>,
     Json(body): Json<MembersBody>,
 ) -> Result<Json<Value>, Error> {
-    let project = state
-        .store
-        .project(&slug)?
-        .ok_or_else(|| Error::NotFound(slug.clone()))?;
+    let project = require_project_manager(&state, &context, &slug)?;
     let owner_id = state.users.owner_id()?;
     let previous = state.memberships.members(&project.slug)?;
     let mut members = Vec::<(String, ProjectRole)>::new();
     let mut seen = HashSet::new();
+    // A project manager cannot create, remove or demote another manager. Their own manager rows
+    // are preserved, so a manager can never lock the project (or themselves) out of management;
+    // only the owner can change the manager set.
+    if !context.is_owner {
+        for membership in previous
+            .iter()
+            .filter(|membership| membership.role.can_manage())
+        {
+            seen.insert(membership.user.clone());
+            members.push((membership.user.clone(), ProjectRole::Manager));
+        }
+    }
     for entry in body.members {
         if owner_id.as_deref() == Some(entry.user_id.as_str()) {
             continue;
@@ -2951,14 +3030,29 @@ async fn set_project_members(
         let Some(user) = state.users.get(&entry.user_id)? else {
             return Err(Error::BadRequest(format!("unknown user {}", entry.user_id)));
         };
-        if user.status != UserStatus::Active {
+        if user.status == UserStatus::Disabled {
             return Err(Error::BadRequest(format!(
-                "{} is not active",
+                "{} is disabled; re-enable the account before assigning projects",
                 user.username
             )));
         }
         let role = ProjectRole::parse(&entry.role)
             .ok_or_else(|| Error::BadRequest(format!("unknown project role {}", entry.role)))?;
+        if !context.is_owner {
+            if role.can_manage() {
+                return Err(Error::Forbidden(
+                    "only the owner can assign a project manager".to_string(),
+                ));
+            }
+            if previous
+                .iter()
+                .any(|membership| membership.user == user.id && membership.role.can_manage())
+            {
+                return Err(Error::Forbidden(
+                    "only the owner can change a project manager's role".to_string(),
+                ));
+            }
+        }
         if !seen.insert(user.id.clone()) {
             continue;
         }

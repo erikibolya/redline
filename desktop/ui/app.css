@@ -268,6 +268,39 @@ body.resizing-y, body.resizing-y * { cursor: row-resize !important; user-select:
   border: 1px solid var(--border); border-radius: 14px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, .55);
 }
+.project-manage-dialog { width: min(720px, calc(100vw - 32px)); }
+.pm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pm-grid label { display: flex; flex-direction: column; gap: 4px; color: var(--muted); font-size: 11px; }
+.pm-grid input[type="text"], .pm-grid select,
+.pm-add select, .pm-member select {
+  width: 100%; padding: 7px 9px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: 12px;
+}
+.pm-grid input[type="checkbox"] { width: auto; accent-color: var(--accent); }
+.pm-grid .check-line { grid-column: 1 / -1; flex-direction: row; align-items: center; gap: 7px; }
+.pm-members { border: 1px solid var(--border-soft); border-radius: 10px; overflow: hidden; }
+.pm-member {
+  display: grid; grid-template-columns: minmax(0, 1fr) 130px auto;
+  gap: 8px; align-items: center; padding: 8px 10px;
+}
+.pm-member + .pm-member { border-top: 1px solid var(--border-soft); }
+.pm-member-name { min-width: 0; }
+.pm-member-name b { display: block; font-size: 12.5px; font-weight: 600; }
+.pm-member-name small { color: var(--muted); font-size: 10.5px; }
+.pm-empty { padding: 10px; color: var(--muted); font-size: 12px; }
+.pm-manager {
+  display: inline-flex; align-items: center; justify-self: start; padding: 3px 9px;
+  border-radius: 999px; border: 1px solid #6d28d9; background: rgba(109, 40, 217, .18);
+  color: #c4b5fd; font-size: 11px; line-height: 1.5; white-space: nowrap;
+}
+[data-theme="light"] .pm-manager { color: #6d28d9; background: #f5f3ff; }
+.pm-add { display: grid; grid-template-columns: minmax(0, 1fr) 130px auto; gap: 6px; }
+.pm-add select { min-width: 0; }
+@media (max-width: 640px) {
+  .pm-grid { grid-template-columns: 1fr; }
+  .pm-member, .pm-add { grid-template-columns: 1fr auto; }
+  .pm-member select, .pm-add select { grid-column: 1 / -1; }
+}
 .feature-dialog::backdrop {
   background: rgba(3, 7, 12, .6);
   backdrop-filter: blur(2px);

@@ -123,6 +123,18 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   assigned device before its first heartbeat, and fallback is refused when it is off, when the
   assigned device is online, or when the candidate has not reported the repo.
 
+## Project manager (v0.28.4)
+
+- Rust `tests/api.rs` `a_project_manager_manages_one_project_but_not_the_server`: the owner
+  assigns `manager`; the manager changes the project name/device/fallback, adds a tester, keeps
+  their own manager row when saving, cannot promote anyone to manager, cannot touch another
+  project, reads `/api/audit?project=…` but not the global user/token admin, creates and submits a
+  task, and can delete another user's open task; a developer is refused project settings.
+- Browser e2e: the owner creates `e2e-manager`, assigns the manager role in People & access; the
+  manager logs in, opens **Manage project**, sees the read-only manager row, sets the device and
+  fallback, adds a viewer, saves, and reads the scoped audit; a tester on the same project gets
+  no manage control.
+
 ## Feature branches (v0.22)
 
 - Rust `tests/store.rs`: `default_branch` folds Czech titles into a git-safe `feat/<slug>-<tail>`,

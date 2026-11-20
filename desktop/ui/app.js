@@ -875,7 +875,222 @@ function askProject(current, projects, blockedReason = "") {
   });
 }
 
-/** True when an online bridge advertised the post-confirmation handoff capability. */
+/** The owner's delegate for one project: device, fallback and members. */
+async function openProjectManager(editor) {
+  const slug = editor.meta.project || "inbox";
+  if (slug === "inbox" && editor.myRole !== "owner") return;
+  let project;
+  let agents;
+  let members;
+  let directory;
+  try {
+    const [projectsBody, agentsBody, membersBody] = await Promise.all([
+      api("/api/projects"),
+      api("/api/agents"),
+      api(`/api/projects/${encodeURIComponent(slug)}/members`),
+    ]);
+    project = (projectsBody.projects || []).find((item) => item.slug === slug);
+    agents = agentsBody.agents || [];
+    members = membersBody.members || [];
+    directory = membersBody.directory || [];
+  } catch (error) {
+    alert(`Could not open the project: ${error.message}`);
+    return;
+  }
+  if (!project) {
+    alert("This project is not available.");
+    return;
+  }
+  const isOwner = editor.myRole === "owner";
+  let dialog = $("#project-manage-dialog");
+  if (!dialog) {
+    document.body.insertAdjacentHTML("beforeend", `
+      <dialog class="feature-dialog project-manage-dialog" id="project-manage-dialog"
+              aria-labelledby="pm-title">
+        <form method="dialog" class="feature-card dialog-frame" id="pm-form">
+          <div class="dialog-head">
+            <div><h2 id="pm-title">Manage project</h2><p id="pm-sub"></p></div>
+            <button type="submit" value="close" class="btn icon dialog-close" aria-label="Close">×</button>
+          </div>
+          <div class="dialog-body stack">
+            <div class="pm-grid">
+              <label>Name<input type="text" id="pm-name" maxlength="120" required /></label>
+              <label>Repository key<input type="text" id="pm-repo" placeholder="ActiUnit/Au.Net" /></label>
+              <label>Device<select id="pm-agent"></select></label>
+              <label class="check-line"><input type="checkbox" id="pm-fallback" />
+                Allow fallback when the assigned device is offline</label>
+            </div>
+            <p class="field-hint" id="pm-device-hint"></p>
+            <div class="pm-members" id="pm-members"></div>
+            <div class="pm-add">
+              <select id="pm-user" aria-label="Person to add"></select>
+              <select id="pm-role" aria-label="Role"></select>
+              <button type="button" class="btn small" id="pm-add">Add</button>
+            </div>
+            <p class="field-hint">The owner is global and is not listed. Only the owner can assign
+              or change a project manager.</p>
+            <p class="status" id="pm-status" role="status" aria-live="polite"></p>
+          </div>
+          <div class="dialog-foot feature-actions">
+            <a class="btn" id="pm-audit" href="#" target="_blank" rel="noopener">Project audit</a>
+            <button type="submit" value="close" class="btn">Close</button>
+            <button type="button" class="btn primary" id="pm-save">Save project</button>
+          </div>
+        </form>
+      </dialog>`);
+    dialog = $("#project-manage-dialog");
+  }
+
+  const roleOptions = (selected, allowManager) => {
+    const roles = [["developer", "Developer"], ["tester", "Tester"], ["viewer", "Viewer"]];
+    if (allowManager) roles.unshift(["manager", "Manager"]);
+    return roles
+      .map(([value, label]) =>
+        `<option value="${value}"${value === selected ? " selected" : ""}>${label}</option>`)
+      .join("");
+  };
+  const renderMembers = () => {
+    const list = $("#pm-members");
+    if (!members.length) {
+      list.innerHTML = '<div class="pm-empty">No members yet.</div>';
+    } else {
+      list.innerHTML = members.map((member, index) => {
+        const locked = member.role === "manager" && !isOwner;
+        const role = locked
+          ? '<span class="pm-manager">Manager</span>'
+          : `<select data-role="${index}" aria-label="Role for ${escapeHtml(member.username)}">${
+              roleOptions(member.role, isOwner)
+            }</select>`;
+        return `<div class="pm-member" data-index="${index}">
+          <div class="pm-member-name"><b>${escapeHtml(member.display_name || member.username)}</b>
+            <small>@${escapeHtml(member.username)}</small></div>
+          ${role}
+          ${locked ? "" : `<button type="button" class="btn small" data-remove="${index}">Remove</button>`}
+        </div>`;
+      }).join("");
+    }
+    list.querySelectorAll("select[data-role]").forEach((select) => {
+      select.addEventListener("change", () => {
+        members[Number(select.dataset.role)].role = select.value;
+      });
+    });
+    list.querySelectorAll("button[data-remove]").forEach((button) => {
+      button.addEventListener("click", () => {
+        members.splice(Number(button.dataset.remove), 1);
+        renderMembers();
+        renderAdd();
+      });
+    });
+  };
+  const renderAdd = () => {
+    const used = new Set(members.map((member) => member.user_id));
+    const candidates = directory.filter((user) =>
+      !used.has(user.id) && (user.status === "active" || user.status === "invited"));
+    const select = $("#pm-user");
+    select.innerHTML = candidates.length
+      ? candidates
+          .map((user) =>
+            `<option value="${escapeHtml(user.id)}">${escapeHtml(user.display_name || user.username)} (@${escapeHtml(user.username)})</option>`)
+          .join("")
+      : '<option value="">Everyone is already a member</option>';
+    select.disabled = !candidates.length;
+    $("#pm-add").disabled = !candidates.length;
+    $("#pm-role").innerHTML = roleOptions("developer", isOwner);
+  };
+  const syncDeviceHint = () => {
+    const chosen = $("#pm-agent").value;
+    const hint = $("#pm-device-hint");
+    if (!chosen) {
+      hint.textContent = "No device assigned. A review will wait until an agent claims it.";
+      return;
+    }
+    const device = agents.find((agent) => agent.agent_id === chosen);
+    hint.textContent = device?.online
+      ? `${chosen} is online and will pick up this project's reviews.`
+      : `${chosen} is offline. Reviews will wait until it connects.`;
+  };
+
+  $("#pm-sub").textContent = `${project.name || slug} · ${project.repo || "no repository"}`;
+  $("#pm-name").value = project.name || slug;
+  $("#pm-repo").value = project.repo || "";
+  const devices = [...agents];
+  if (project.agent && !devices.some((agent) => agent.agent_id === project.agent)) {
+    devices.push({ agent_id: project.agent, online: false });
+  }
+  $("#pm-agent").innerHTML = '<option value="">Unassigned</option>' + devices
+    .map((agent) =>
+      `<option value="${escapeHtml(agent.agent_id)}">${escapeHtml(agent.agent_id)}${
+        agent.online ? "" : " (offline)"
+      }</option>`)
+    .join("");
+  $("#pm-agent").value = project.agent || "";
+  $("#pm-fallback").checked = Boolean(project.allow_fallback);
+  $("#pm-audit").href = `/audit?project=${encodeURIComponent(slug)}`;
+  $("#pm-status").textContent = "";
+  $("#pm-status").className = "status";
+  renderMembers();
+  renderAdd();
+  syncDeviceHint();
+  $("#pm-agent").onchange = syncDeviceHint;
+  $("#pm-add").onclick = () => {
+    const user = directory.find((entry) => entry.id === $("#pm-user").value);
+    if (!user) return;
+    members.push({
+      user_id: user.id,
+      username: user.username,
+      display_name: user.display_name,
+      role: $("#pm-role").value,
+    });
+    renderMembers();
+    renderAdd();
+  };
+  $("#pm-save").onclick = async () => {
+    const status = $("#pm-status");
+    const name = $("#pm-name").value.trim();
+    if (!name) {
+      status.textContent = "A project name is required.";
+      status.className = "status error";
+      return;
+    }
+    status.textContent = "Saving…";
+    status.className = "status";
+    const button = $("#pm-save");
+    button.disabled = true;
+    try {
+      await api(`/api/projects/${encodeURIComponent(slug)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name,
+          repo: $("#pm-repo").value.trim(),
+          agent: $("#pm-agent").value,
+          allow_fallback: $("#pm-fallback").checked,
+        }),
+      });
+      await api(`/api/projects/${encodeURIComponent(slug)}/members`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          members: members
+            .filter((member) => isOwner || member.role !== "manager")
+            .map((member) => ({ user_id: member.user_id, role: member.role })),
+        }),
+      });
+      status.textContent = "Saved.";
+      status.className = "status ok";
+      await editor.rail?.load?.();
+      editor.renderHeader();
+    } catch (error) {
+      status.textContent = error.message;
+      status.className = "status error";
+    } finally {
+      button.disabled = false;
+    }
+  };
+  dialog.showModal();
+}
+
+
 const handoffCapableAgent = () => Boolean(
   AgentStatus.data?.agents?.some((agent) =>
     agent.online && (agent.jobs || ["review"]).includes("handoff")));
@@ -1708,7 +1923,7 @@ class Rail {
         const queued = session.status === "submitted";
         const requested = Boolean(session.agent_requested_at) && session.status === "open";
         const role = session.my_role || "owner";
-        const canDecide = role === "owner" || role === "developer";
+        const canDecide = role === "owner" || role === "manager" || role === "developer";
         // An agent currently running outranks "new" and the annotation count: it is the one
         // state that changes a few seconds later without the human touching anything. A feature
         // decision is the human's answer to the session, so it outranks the unread marker.
@@ -2564,6 +2779,9 @@ class Editor {
       branch.textContent = this.meta.branch || "";
     }
     const role = this.myRole || "owner";
+    const manager = role === "owner" || role === "manager";
+    const manage = $("#project-manage");
+    if (manage) manage.hidden = !manager;
     const tester = role === "tester";
     const viewer = role === "viewer";
     const testerOther = tester && this.userId
@@ -2875,6 +3093,7 @@ class Editor {
         alert(`Could not change the project: ${error.message}`);
       }
     });
+    $("#project-manage")?.addEventListener("click", () => openProjectManager(this));
     $("#comment-submit")?.addEventListener("click", () => this.submitComment());
     $("#comment-text")?.addEventListener("keydown", (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {

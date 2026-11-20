@@ -1,7 +1,8 @@
 //! Project membership: who may read, create and submit in which project.
 //!
-//! The owner is global and is not stored here. A user can be a `developer`, `tester` or
-//! `viewer` in each project; the pair `(project, user)` is unique.
+//! The owner is global and is not stored here. A user can be a `manager`, `developer`, `tester`
+//! or `viewer` in each project; the pair `(project, user)` is unique. A manager is the owner's
+//! delegate for one project: devices, fallback and members, but no global server settings.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,6 +18,7 @@ pub const SCHEMA_VERSION: u32 = 2;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ProjectRole {
+    Manager,
     Developer,
     Tester,
     Viewer,
@@ -25,6 +27,7 @@ pub enum ProjectRole {
 impl ProjectRole {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Manager => "manager",
             Self::Developer => "developer",
             Self::Tester => "tester",
             Self::Viewer => "viewer",
@@ -33,6 +36,7 @@ impl ProjectRole {
 
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
+            "manager" => Some(Self::Manager),
             "developer" => Some(Self::Developer),
             "tester" => Some(Self::Tester),
             "viewer" => Some(Self::Viewer),
@@ -41,11 +45,16 @@ impl ProjectRole {
     }
 
     pub fn can_create(self) -> bool {
-        matches!(self, Self::Developer | Self::Tester)
+        matches!(self, Self::Manager | Self::Developer | Self::Tester)
     }
 
     pub fn can_submit(self) -> bool {
-        self == Self::Developer
+        matches!(self, Self::Manager | Self::Developer)
+    }
+
+    /// The owner's delegate for project settings and membership, not a global admin.
+    pub fn can_manage(self) -> bool {
+        self == Self::Manager
     }
 }
 
@@ -312,5 +321,16 @@ mod tests {
         assert_eq!(store.members("a").unwrap().len(), 1);
         assert_eq!(store.members("a").unwrap()[0].user, "usr_jana");
         assert_eq!(store.members("b").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn the_manager_role_round_trips_and_keeps_developer_rights() {
+        assert_eq!(ProjectRole::parse("manager"), Some(ProjectRole::Manager));
+        assert_eq!(ProjectRole::Manager.as_str(), "manager");
+        assert!(ProjectRole::Manager.can_manage());
+        assert!(ProjectRole::Manager.can_create());
+        assert!(ProjectRole::Manager.can_submit());
+        assert!(!ProjectRole::Developer.can_manage());
+        assert!(!ProjectRole::Tester.can_manage());
     }
 }

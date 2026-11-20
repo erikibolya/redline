@@ -53,7 +53,7 @@
 | Owner | **Přesně jeden**, s možností **předat ownership** jinému uživateli |
 | MVP | **Komentáře a notifikace rovnou** (spolu s auth, role/ACL, requestem a auditem) |
 | Mazání tasků | Owner any; developer/tester jen **vlastní ne-submitted** |
-| Správa členů | **Owner only** v MVP (project admin až později) |
+| Správa členů | **Owner nebo project manager** (v0.28.4); manažery jen owner |
 | Invite/reset | **Jednorázové linky**, bez SMTP/e-mailu |
 | Desktop local | **Owner-only bez loginu** |
 | Extension | **PAT** (ne server token) |
@@ -184,14 +184,32 @@ právě jeden owner — žádné „dva owneři“ ani dočasné období bez own
 - **Mazání (rozhodnuto):** owner může any; developer/tester jen **vlastní ne-submitted**.
   Submitted/resolved tasky se nemažou (jen owner, a i to s auditem a potvrzením). Tím se
   zachová historie.
-- **Správa členů (rozhodnuto):** owner only. Project admin je vědomě mimo MVP; může přijít
-  později, pokud bude potřeba delegovat.
+- **Správa členů:** owner nebo **project manager**; jen owner smí přidat/odebrat/změnit roli
+  manažera. Manažer nemůže odebrat ani demotovat sám sebe, takže projekt nikdy nezůstane bez
+  správy.
 - STOP (`POST /cancel`) je zásah do běhu; tester ho nesmí. Pokud tester potřebuje task zastavit,
   požádá developera.
 - Bulk akce (confirm/cancel/delete) musí na serveru ověřit každý task zvlášť; UI nesmí poslat
   task, na který uživatel nemá právo.
 - Agent má vlastní allowlist; projektová ACL člověka ho neblokuje. Agent ale nesmí vidět projekt,
   který nemá v allowlistu.
+
+### 3.3 Project manager (v0.28.4)
+
+**Project manager** je nová role, kterou owner přiřadí v People & access. Je to „owner jednoho
+projektu“, ne globální admin:
+
+- může měnit název projektu, `repo` klíč, přiřazené zařízení a `allow_fallback`,
+- může přidávat/odebírat developery, testery a viewery a měnit jejich role,
+- vidí audit **jen svého projektu** přes `/audit?project=<slug>`,
+- má práva developera: vytváří tasky, submit, STOP, confirm/cancel, handoff, smí smazat libovolný
+  otevřený task projektu,
+- **nesmí** spravovat globální uživatele, tokeny, ownership, jiné projekty ani server; nesmí
+  přiřadit/odebrat/demotovat jiného manažera (ani sebe) — to zůstává ownerovi.
+
+Server to vynucuje v `require_project_manager`; globální routy (`/api/users`, agent tokeny,
+ownership) zůstávají owner-only. UI: manager dostane v editoru **Manage project** dialog
+(zařízení, fallback, členové, odkaz na audit); lidé bez role manage tlačítko nevidí.
 
 ---
 
@@ -200,9 +218,9 @@ právě jeden owner — žádné „dva owneři“ ani dočasné období bez own
 ### 4.1 Model
 
 - `Project` zůstává složkou `sessions/projects/<slug>/` s `project.json` (name, repo, agent,
-  max_parallel).
+  max_parallel, allow_fallback).
 - `Membership` je samostatný záznam `(project_slug, user_id, role)`, kde role je
-  `developer` / `tester` / `viewer`. Owner membership se neukládá — owner je globální.
+  `manager` / `developer` / `tester` / `viewer`. Owner membership se neukládá — owner je globální.
 - Uživatel může mít v každém projektu jinou roli. Jedna dvojice `(project, user)` má nejvýš
   jednu roli.
 - Projekt vzniká dvěma cestami:
@@ -1011,7 +1029,7 @@ Permisse samy nestačí; více lidí bude editovat stejný task.
 | **1. Auth foundation** | users, lokální login, sessions, owner bootstrap, **transfer ownership**, migrace, owner admin, PAT/agent tokeny, auth middleware | server má identity; owner vidí data |
 | **2. Roles & ACL** | Developer/Tester/Viewer, memberships, projekt povinný, projektové filtrování, submit permission, request-agent, **extension PAT**, matice v UI | tester vytváří/žádá, developer odesílá |
 | **3. Kolaborace (MVP)** | komentáře, @mentions, notifikace, audit UI, revision/konflikty | **MVP hotové** |
-| **4. Hloubka** | presence, assignment/My tasks, share linky, project admin, desktop login, CLI login | pohodlnější týmová práce |
+| **4. Hloubka** | presence, assignment/My tasks, share linky, **project manager (v0.28.4 hotový)**, desktop login, CLI login | pohodlnější týmová práce |
 | **5. Integrace** | OIDC/SSO, e-mail/Slack, 2FA | plný multi-user provoz |
 
 **MVP = fáze 1+2+3.** Bez 1+2 není role použitelná; 3 je rozhodnutá součást MVP. Fáze 4/5
@@ -1039,7 +1057,7 @@ migrační guide, rollback a upozornění na legacy token. Nevydávat společně
 | **P1** | **Presence „Jana edituje“** | Signál pro souběh; není to hard lock. |
 | **P2** | **OIDC/SSO (Authelia/Cloudflare Access)** | Firemní login bez dalších hesel; pokud už SSO běží. |
 | **P2** | **Share links** | Externí tester/klient bez účtu. |
-| **P2** | **Project admin role** | Owner nemusí spravovat každý projekt sám. |
+| **P2** | ~~**Project admin role**~~ **hotovo (v0.28.4)** | Owner nemusí spravovat každý projekt sám; bounded project manager. |
 | **P2** | **2FA/TOTP pro ownera** | Ochrana nejvyšší role. |
 | **P2** | **E-mail/Slack notifikace** | Pokud je SMTP/webhook k dispozici. |
 | **P3** | **Teams/groups** | Hromadné přiřazení rolí; pro malé týmy zbytečné. |
@@ -1062,7 +1080,7 @@ migrační guide, rollback a upozornění na legacy token. Nevydávat společně
 | Owner | **Přesně jeden**, s **transfer ownership** |
 | MVP | **Komentáře a notifikace** součástí MVP |
 | Mazání | Owner any; developer/tester vlastní ne-submitted |
-| Členství | **Owner only** |
+| Členství | **Owner nebo project manager**; manažery mění jen owner |
 | Invite/reset | **Jednorázové linky**, bez SMTP |
 | Desktop local | **Owner-only bez loginu** |
 | Extension | **PAT** |
@@ -1096,7 +1114,7 @@ migrační guide, rollback a upozornění na legacy token. Nevydávat společně
 | Tester obejde UI | Server vynutí `review.submit`; e2e test 403. |
 | Agent uvidí cizí projekt | Allowlist na tokenu a filtrování `next`/`list_reviews`. |
 | Migrace rozbije desktop/extension | Legacy token, fallback login, testy; Postupný rollout. |
-| Příliš mnoho rolí | Držet Owner/Developer/Tester/Viewer; project admin až později. |
+| Příliš mnoho rolí | Držet Owner/Manager/Developer/Tester/Viewer; manager je omezený na jeden projekt a nemůže měnit manažery. |
 | Výkon listování | Malý tým; filtrování v paměti; indexace není potřeba. |
 | Audit roste | Rotace/retention; JSONL; owner může exportovat. |
 | Ztráta session cookie | Login znovu; PAT pro automatizaci. |

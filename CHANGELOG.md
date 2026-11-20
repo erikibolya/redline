@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A project manager can run one project without becoming a server admin.** New `manager`
+  project role, assigned by the owner in People & access. A manager can rename the project, set
+  its repo key, assign its device and fallback, add/remove developers, testers and viewers, and
+  read that project's audit; they can do the developer actions in the project too (submit, STOP,
+  confirm/handoff, delete an open task). They cannot manage global users, tokens, other projects,
+  ownership or server settings, cannot assign or demote a manager, and cannot remove themselves
+  from management. The owner's editor gets a **Manage project** dialog (device, fallback, members,
+  audit link), and `/audit?project=…` now serves a read-only project view to managers
+  (2026-11-20).
+
 - **A project belongs to a device, and a repo sync no longer steals it.** `project.agent` is the
   assigned device (owner-only `PUT /api/projects/{slug}`), `allow_fallback` is per project and off
   by default; when it is on, another online device that reported the same `repo` may claim only

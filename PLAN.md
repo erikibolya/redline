@@ -20,7 +20,7 @@ accounts, runs where the agents run.
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
 | Desktop | Tauri v2 tray app: standalone or thin client, one window per server profile (no mode switch), launcher, menu bar, setup wizard, auto-update, port pinned to 8788; local agent follows the last focused server (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 182 Rust tests, 35 extension unit tests, 326-check browser E2E in CI on Linux + Windows |
+| Tests | 185 Rust tests, 35 extension unit tests, 336-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -72,8 +72,7 @@ Resolve / reopen / delete, `Active` vs `Done` views, purge finished sessions, ra
 - [x] **Device routing (v0.28.4):** `project.agent` assignment, per-project `allow_fallback`,
       scoped `GET /api/agents`, `assigned_agent`/`claimed_by`/`fallback` in the session list, and
       a repo sync that no longer steals an assignment. The editor shows device badges, the
-      **Agents & devices** dialog and a device filter; multi-server desktop windows are still to
-      come.
+      **Agents & devices** dialog and a device filter.
 - [x] **Project manager (v0.28.4):** a per-project `manager` role: project settings, device and
       fallback, member management (not other managers), project-scoped audit, and the developer
       actions in that project. The editor has a **Manage project** dialog; global users, tokens and
@@ -124,8 +123,9 @@ migration guide; not part of v0.27.
 4. Session gallery on `/`.
 5. Touch toolbar + hover-free rail actions.
 6. macOS/Linux bundles.
-7. Combined inbox across multiple RedLine servers. The desktop now opens one window per profile;
-   a read-only aggregate over each profile's sessions/projects/agents is the remaining step.
+7. ~~Combined inbox across multiple RedLine servers~~ — v0.28.4: the desktop opens one window per
+   profile, and **All reviews** merges every profile into one read-only list labelled by server
+   and device. The aggregate also covers `/api/projects`/`/api/agents` once a screen needs them.
 
 ## Known limitations
 
@@ -135,7 +135,8 @@ migration guide; not part of v0.27.
 - Device routing UI covers the project/task/header badges, the **Agents & devices** dialog and
   the rail's device filter.
 - Multiple RedLine servers are independent queues; the desktop opens one window per profile and
-  keeps every session, but a combined inbox across servers is not built.
+  **All reviews** merges them for reading. The merged list is capped at the 250 newest reviews and
+  opens the owning server window; there is no cross-server search or bulk action.
 - **Feature confirmation is a decision, not a git action.** RedLine records `feature_state` and,
   only when the human ticks the optional handoff, queues a generic **handoff job** (v0.23). The
   bridge claims it only when it advertises the job, and the integration performs its own
@@ -155,7 +156,7 @@ migration guide; not part of v0.27.
 - `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/cws.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 35 extension
   unit tests: annotation geometry/hit-testing/moving, server URL/permission config, Chrome Web
   Store version/submission planning, offline review Markdown/JSON and the ZIP writer.
-- `desktop/scripts/e2e.sh` — 326 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 336 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

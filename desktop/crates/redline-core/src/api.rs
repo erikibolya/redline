@@ -214,6 +214,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/servers/{id}/activate", post(activate_server))
         .route("/api/servers/{id}/probe", get(probe_server))
         .route("/api/servers/{id}", delete(remove_server))
+        .route("/api/inbox", get(combined_inbox))
+        .route("/api/inbox/open", get(open_inbox_session))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_owner_auth,
@@ -344,6 +346,7 @@ pub fn router(state: AppState) -> Router {
         .route("/reset/{token}", get(reset_page))
         .route("/setup", get(setup_page))
         .route("/servers", get(servers_page))
+        .route("/inbox", get(inbox_page))
         .merge(public_auth)
         .merge(account)
         .merge(protected)
@@ -2337,6 +2340,15 @@ async fn servers_page(State(state): State<AppState>, request: Request) -> Respon
     serve_ui(&state, "servers.html")
 }
 
+async fn inbox_page(State(state): State<AppState>, request: Request) -> Response {
+    if let Some(response) =
+        trade_token_for_cookie(request.headers(), request.uri().query(), "/inbox", &state)
+    {
+        return response;
+    }
+    serve_ui(&state, "inbox.html")
+}
+
 fn serve_ui(state: &AppState, name: &str) -> Response {
     if let Some(files) = state.inline_ui {
         if let Some((_, body)) = files.iter().find(|(file, _)| *file == name) {
@@ -2454,8 +2466,15 @@ async fn list_sessions(
     Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
 ) -> Result<Json<Value>, Error> {
+    Ok(Json(sessions_payload(&state, &context)?))
+}
+
+/// The `{ "sessions": [...] }` body, shared by `GET /api/sessions` and the combined inbox. The
+/// inbox reads the local server's own store in-process — it is the same process and the same
+/// auth context, so a loopback round-trip would only add a failure mode.
+fn sessions_payload(state: &AppState, context: &AuthContext) -> Result<Value, Error> {
     // The rail wants a badge per session; computing it here saves N round-trips from the UI.
-    let accessible = visible_project_slugs(&state, &context)?;
+    let accessible = visible_project_slugs(state, context)?;
     let roles: HashMap<String, ProjectRole> = match context.user_id.as_deref() {
         Some(user_id) if !context.is_owner => state
             .memberships
@@ -2593,7 +2612,7 @@ async fn list_sessions(
             value
         })
         .collect();
-    Ok(Json(json!({ "sessions": items })))
+    Ok(json!({ "sessions": items }))
 }
 
 async fn list_projects(
@@ -5367,6 +5386,246 @@ struct ServerRequest {
 }
 
 /// What the local Servers page reads. Tokens never leave the config file.
+// ---------------------------------------------------------------- combined inbox
+
+/// How long one profile may take before the inbox reports it offline. Short on purpose: one dead
+/// server must not hold the whole list behind a spinner, and the page says which one it was.
+const INBOX_TIMEOUT: Duration = Duration::from_secs(4);
+const INBOX_MAX_ITEMS: usize = 250;
+
+fn local_server_profile(state: &AppState) -> ServerProfile {
+    ServerProfile {
+        id: "local".to_string(),
+        name: "This computer".to_string(),
+        url: state.base_url.clone(),
+        token: state.auth.token().to_string(),
+    }
+}
+
+/// One remote queue. The profile token is a human token on purpose: `GET /api/sessions` is the
+/// human route, and a scoped agent token must not silently become a person's view.
+fn fetch_server_sessions(profile: &ServerProfile) -> Result<Vec<Value>, String> {
+    if profile.token.is_empty() {
+        return Err("no token saved for this server".to_string());
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(2))
+        .timeout(INBOX_TIMEOUT)
+        .build();
+    let response = agent
+        .get(&format!("{}/api/sessions", profile.url))
+        .set("Authorization", &format!("Bearer {}", profile.token))
+        .call();
+    let response = match response {
+        Ok(response) => response,
+        Err(ureq::Error::Status(status, _)) => {
+            return Err(match status {
+                401 | 403 => "the saved token was refused".to_string(),
+                _ => format!("HTTP {status}"),
+            })
+        }
+        Err(error) => return Err(error.to_string()),
+    };
+    let text = response
+        .into_string()
+        .map_err(|error| format!("could not read the response: {error}"))?;
+    let body: Value = serde_json::from_str(&text)
+        .map_err(|error| format!("the server did not answer JSON: {error}"))?;
+    Ok(body
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default())
+}
+
+fn inbox_stamp(session: &Value) -> i64 {
+    ["updated_at", "submitted_at", "created_at"]
+        .iter()
+        .find_map(|key| session.get(*key).and_then(Value::as_str))
+        .and_then(|stamp| chrono::DateTime::parse_from_rfc3339(stamp).ok())
+        .map(|stamp| stamp.timestamp_millis())
+        .unwrap_or(0)
+}
+
+fn encode_component(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// The desktop app's profile list, merged. Every row stays attached to the server and device
+/// that own it; a combined list that loses those labels is worse than two lists (2026-11-20).
+async fn combined_inbox(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
+    if state.config_path.is_none() {
+        return Err(Error::BadRequest(
+            "the combined inbox is only available in the desktop app".to_string(),
+        ));
+    }
+    let (profiles, active) = load_servers(&state);
+    let local = local_server_profile(&state);
+    let local_sessions = sessions_payload(&state, &context)?
+        .get("sessions")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let remote = profiles.clone();
+    let remote_results = tokio::task::spawn_blocking(move || {
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = remote
+                .iter()
+                .map(|profile| scope.spawn(move || fetch_server_sessions(profile)))
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| Err("the request panicked".to_string()))
+                })
+                .collect::<Vec<_>>()
+        })
+    })
+    .await
+    .map_err(|error| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("inbox task failed: {error}"),
+        ))
+    })?;
+
+    let mut servers = Vec::new();
+    let mut items = Vec::new();
+    let mut add = |profile: &ServerProfile, local: bool, result: Result<Vec<Value>, String>| {
+        let (online, error, sessions) = match result {
+            Ok(sessions) => (true, Value::Null, sessions),
+            Err(error) => (false, json!(error), Vec::new()),
+        };
+        let open = sessions
+            .iter()
+            .filter(|session| session.get("status").and_then(Value::as_str) != Some("resolved"))
+            .count();
+        let waiting = sessions
+            .iter()
+            .filter(|session| session.get("status").and_then(Value::as_str) == Some("submitted"))
+            .count();
+        servers.push(json!({
+            "id": profile.id,
+            "name": profile.name,
+            "url": profile.url,
+            "local": local,
+            "active": !local && profile.id == active,
+            "online": online,
+            "error": error,
+            "sessions": sessions.len(),
+            "open": open,
+            "waiting": waiting,
+        }));
+        for session in sessions {
+            let Some(id) = session.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let url = format!(
+                "/api/inbox/open?server={}&session={}",
+                encode_component(&profile.id),
+                encode_component(id)
+            );
+            items.push(json!({
+                "server": profile.id,
+                "server_name": profile.name,
+                "local": local,
+                "open_url": url,
+                "session": session,
+            }));
+        }
+    };
+    add(&local, true, Ok(local_sessions));
+    for (profile, result) in profiles.iter().zip(remote_results) {
+        add(profile, false, result);
+    }
+    items.sort_by_key(|item| {
+        std::cmp::Reverse(item.get("session").map(inbox_stamp).unwrap_or_default())
+    });
+    let total = items.len();
+    items.truncate(INBOX_MAX_ITEMS);
+    let online = servers
+        .iter()
+        .filter(|server| server.get("online").and_then(Value::as_bool) == Some(true))
+        .count();
+    let waiting = servers
+        .iter()
+        .filter_map(|server| server.get("waiting").and_then(Value::as_u64))
+        .sum::<u64>();
+    Ok(Json(json!({
+        "servers": servers,
+        "items": items,
+        "truncated": total > INBOX_MAX_ITEMS,
+        "counts": {
+            "servers": servers.len(),
+            "online": online,
+            "items": total,
+            "waiting": waiting,
+        },
+    })))
+}
+
+#[derive(serde::Deserialize)]
+struct InboxOpenQuery {
+    server: String,
+    session: String,
+}
+
+/// Hand a click back to the server that owns the review. This is a redirect *from the local
+/// origin*, so the desktop shell sees the remote navigation, cancels it and opens (or focuses)
+/// that server's window; a plain browser follows the 307 instead. The profile token never sits
+/// in the inbox DOM — only in this response's `Location`.
+async fn open_inbox_session(
+    State(state): State<AppState>,
+    Query(query): Query<InboxOpenQuery>,
+) -> Result<Response, Error> {
+    if state.config_path.is_none() {
+        return Err(Error::BadRequest(
+            "the combined inbox is only available in the desktop app".to_string(),
+        ));
+    }
+    if !crate::store::valid_id(&query.session) {
+        return Err(Error::BadRequest("invalid session id".to_string()));
+    }
+    let (profiles, _) = load_servers(&state);
+    let (base, token) = if query.server == "local" {
+        (state.base_url.clone(), state.auth.token().to_string())
+    } else {
+        let profile = profiles
+            .iter()
+            .find(|profile| profile.id == query.server)
+            .ok_or_else(|| Error::NotFound(format!("server {}", query.server)))?;
+        (profile.url.clone(), profile.token.clone())
+    };
+    let target = format!(
+        "{}/s/{}?t={}&rl_window=1",
+        base.trim_end_matches('/'),
+        query.session,
+        encode_component(&token)
+    );
+    let mut response = StatusCode::TEMPORARY_REDIRECT.into_response();
+    if let Ok(value) = HeaderValue::from_str(&target) {
+        response.headers_mut().insert(header::LOCATION, value);
+    }
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
 async fn list_servers(State(state): State<AppState>) -> Result<Json<Value>, Error> {
     if state.config_path.is_none() {
         return Err(Error::BadRequest(

@@ -45,6 +45,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("invite.html", include_str!("../../ui/invite.html")),
     ("setup.html", include_str!("../../ui/setup.html")),
     ("servers.html", include_str!("../../ui/servers.html")),
+    ("inbox.html", include_str!("../../ui/inbox.html")),
     ("app.css", include_str!("../../ui/app.css")),
     ("app.js", include_str!("../../ui/app.js")),
 ];
@@ -154,6 +155,13 @@ fn main() {
 fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let sessions = MenuItem::with_id(app, "open", "Sessions", true, Some("CmdOrCtrl+1"))?;
     let servers = MenuItem::with_id(app, "servers", "Servers…", true, None::<&str>)?;
+    let inbox = MenuItem::with_id(
+        app,
+        "inbox",
+        "All reviews (combined inbox)…",
+        true,
+        Some("CmdOrCtrl+2"),
+    )?;
     let copy_link = MenuItem::with_id(app, "copy-link", "Copy browser link", true, None::<&str>)?;
     let copy_mcp = MenuItem::with_id(app, "copy-mcp", "Copy MCP config", true, None::<&str>)?;
     let agent_start =
@@ -201,6 +209,7 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         &[
             &sessions,
             &servers,
+            &inbox,
             &copy_link,
             &copy_mcp,
             &separator,
@@ -230,6 +239,13 @@ fn build_app_menu(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
 fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, "tray:open", "Open RedLine", true, None::<&str>)?;
     let servers = MenuItem::with_id(app, "tray:servers", "Servers…", true, None::<&str>)?;
+    let inbox = MenuItem::with_id(
+        app,
+        "tray:inbox",
+        "All reviews (combined inbox)…",
+        true,
+        None::<&str>,
+    )?;
     let login = tauri::menu::CheckMenuItem::with_id(
         app,
         "tray:autostart",
@@ -302,6 +318,7 @@ fn build_tray(app: &tauri::App, ctx: &Ctx) -> tauri::Result<()> {
         &[
             &open,
             &servers,
+            &inbox,
             &login,
             &copy_link,
             &copy_config,
@@ -366,6 +383,7 @@ fn handle_action(id: &str, app: &AppHandle, ctx: &Ctx) {
     match id {
         "open" => open_window(app, ctx),
         "servers" => open_manager_window(app, ctx),
+        "inbox" => open_inbox_window(app, ctx),
         "copy-link" => {
             let target = match read_remote(&ctx.data_dir) {
                 Some(remote) => format!("{}/?t={}", remote.base_url, remote.token),
@@ -755,6 +773,30 @@ fn window_title(profile: Option<&Profile>, manager: bool) -> String {
     }
 }
 
+/// A local window is a fresh cookie jar. A navigation may carry no `?t=` (the Servers page links
+/// `/inbox` and relies on its own cookie), so the new window must be signed in explicitly.
+fn sign_local_url(target: &tauri::Url, token: &str) -> String {
+    if target.query_pairs().any(|(key, _)| key == "t") {
+        return target.to_string();
+    }
+    let mut signed = target.clone();
+    signed.query_pairs_mut().append_pair("t", token);
+    signed.to_string()
+}
+
+/// Which native window a *local* page belongs in. `/servers` is the launcher, `/inbox` is the
+/// combined inbox, and every other local page is the "This computer" server. A local URL that
+/// lands in the wrong window looks connected while showing the wrong list (2026-11-20).
+fn local_window(path: &str) -> (&'static str, &'static str, &'static str) {
+    if path.starts_with("/servers") || path.starts_with("/setup") {
+        ("server-manager", "manager", "RedLine — Servers")
+    } else if path.starts_with("/inbox") {
+        ("inbox", "inbox", "RedLine — All servers")
+    } else {
+        ("local-server", "local", "RedLine — This computer")
+    }
+}
+
 /// Start the embedded server on a free loopback port and return where it landed.
 fn start_local_server(data_dir: PathBuf) -> Result<Local, Box<dyn std::error::Error>> {
     let (sender, receiver) = std::sync::mpsc::channel();
@@ -955,6 +997,40 @@ fn open_manager_window(app: &AppHandle, ctx: &Ctx) {
     );
 }
 
+/// The combined inbox is a local window over every profile. It is not a server: focusing it
+/// never changes which server the local agent targets, and it can sit beside each server's own
+/// window.
+fn open_inbox_window(app: &AppHandle, ctx: &Ctx) {
+    let url = format!("{}/inbox?t={}", ctx.local.base_url, ctx.local.token);
+    if let Some(label) = window_for_profile(&ctx.windows, "inbox") {
+        if let Some(window) = app.get_webview_window(&label) {
+            // A window label is not a page: never focus an inbox window that was navigated
+            // somewhere else and call it the inbox.
+            if let Ok(current) = window.url() {
+                if !current.path().starts_with("/inbox") {
+                    navigate_window(&window, &url);
+                }
+            }
+            let _ = window.show();
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            return;
+        }
+    }
+    let _ = build_window(
+        app,
+        &ctx.data_dir,
+        &ctx.local,
+        &ctx.windows,
+        "inbox",
+        &url,
+        None,
+        "RedLine — All servers",
+        false,
+        "inbox",
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_window(
     app: &AppHandle,
@@ -1058,8 +1134,8 @@ fn open_target_window(
     windows: &Arc<Mutex<HashMap<String, String>>>,
     target: &tauri::Url,
 ) -> bool {
-    let url = target.as_str();
-    let profile = profile_for_url(data_dir, url);
+    let mut url = target.as_str().to_string();
+    let profile = profile_for_url(data_dir, &url);
     let local_origin = origin_of_base(&local.base_url);
     let (label, role, title) = if let Some(profile) = &profile {
         (
@@ -1068,15 +1144,19 @@ fn open_target_window(
             format!("RedLine — {}", profile.name),
         )
     } else if origin(target) == local_origin {
-        (
-            "local-server".to_string(),
-            "local".to_string(),
-            "RedLine — This computer".to_string(),
-        )
+        // A local page is not automatically "This computer": `/servers` is the manager and
+        // `/inbox` is the combined inbox. Getting this wrong would focus the empty local
+        // dashboard instead of the window the human asked for.
+        let (label, role, title) = local_window(target.path());
+        // A local window is a fresh webview with its own cookie jar, so a navigation that
+        // carries no `?t=` (the Servers page links `/inbox` and relies on its own cookie) would
+        // open an unauthenticated window. Sign the new window in explicitly.
+        url = sign_local_url(target, &local.token);
+        (label.to_string(), role.to_string(), title.to_string())
     } else {
         // A remote URL that is not a configured profile belongs in the system browser, not in a
         // mystery webview: add it in Servers… first if it should be a RedLine window.
-        open_url(url);
+        open_url(&url);
         return true;
     };
     if let Some(existing) = window_for_profile(windows, &role) {
@@ -1096,7 +1176,7 @@ fn open_target_window(
         local,
         windows,
         &label,
-        url,
+        &url,
         profile.as_ref(),
         &title,
         true,
@@ -1169,6 +1249,7 @@ fn show_window(app: &AppHandle) {
     if let Some(window) = app
         .get_webview_window("main")
         .or_else(|| app.get_webview_window("server-manager"))
+        .or_else(|| app.get_webview_window("inbox"))
         .or_else(|| app.webview_windows().into_values().next())
     {
         let _ = window.show();
@@ -1472,6 +1553,27 @@ mod tests {
         // `is_manager_url` is a path check; launch_url only produces these paths for the local
         // manager, while a remote server is opened at `/`.
         assert!(is_manager_url("https://redline.example/servers"));
+    }
+
+    #[test]
+    fn a_local_window_opened_without_a_token_is_signed_in() {
+        let url = tauri::Url::parse("http://127.0.0.1:8788/inbox").unwrap();
+        assert_eq!(
+            sign_local_url(&url, "secret"),
+            "http://127.0.0.1:8788/inbox?t=secret"
+        );
+        let already = tauri::Url::parse("http://127.0.0.1:8788/inbox?t=own").unwrap();
+        assert_eq!(sign_local_url(&already, "secret"), already.as_str());
+    }
+
+    #[test]
+    fn every_local_page_lands_in_its_own_window() {
+        assert_eq!(local_window("/inbox").0, "inbox");
+        assert_eq!(local_window("/inbox?t=x").1, "inbox");
+        assert_eq!(local_window("/servers?t=x").0, "server-manager");
+        assert_eq!(local_window("/setup?new=1").1, "manager");
+        assert_eq!(local_window("/s/20261120-100000-review").0, "local-server");
+        assert_eq!(local_window("/").2, "RedLine — This computer");
     }
 
     #[test]

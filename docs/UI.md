@@ -756,11 +756,31 @@ section, `Δ` shows the summary inline:
 - A new video upload with a stale revision reports the conflict and reloads instead of pretending
   the clip was posted; the file must be chosen again.
 
+## Combined inbox (v0.28.4)
+
+- `/inbox` is served by the *local* desktop server and reads `GET /api/inbox`, which merges the
+  sessions of every profile in `config.json` plus *This computer*. It is the only screen that
+  spans servers; each server's own window keeps its own editor, rail and cookies.
+- Every row prints the server, project, device (with an online dot) and branch, then the same
+  state vocabulary as the rail: working, waiting for agent, replied, agent failed/timed out,
+  confirmed, cancelled, done, open or the annotation count. Server chips filter by server and the
+  All / Waiting / Working / Open / Done chips filter by the row's state; both dimensions combine.
+- An unreachable profile is a warning naming it and its error, never an empty list: the other
+  queues still render. A dead server delays the first paint by at most four seconds (parallel
+  fetches), then the page polls every 20 s while visible.
+- The row link is `/api/inbox/open?server=…&session=…` on the local origin. That endpoint
+  validates the id, resolves the profile and returns a `307` to the owning server with *its*
+  token; the desktop shell intercepts the remote navigation and opens/focuses that profile's
+  window, so the inbox stays open. Profile tokens never enter the inbox DOM.
+- The page paints its header and filter chrome before `/api/inbox` answers, and keeps the last
+  good list when a background poll fails. Headless (`redline serve`) answers `400` — the page
+  says the combined inbox needs the desktop app and links to *Servers*.
+
 ## Verification
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:
 coordinate mapping under a fitted zoom, dragging, undo, inline text (including diacritics), and
-submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 326 checks. It runs in CI on every push (`browser e2e` job) and locally via
+submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 336 checks. It runs in CI on every push (`browser e2e` job) and locally via
 `desktop/scripts/e2e.sh`.
 
 It has already earned its keep twice: it caught the text tool being broken by mousedown's focus

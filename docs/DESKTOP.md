@@ -200,6 +200,16 @@ Closing a window hides it (the tray app keeps running); **Sessions** in the menu
 focuses the last active server, and **Servers…** opens the launcher without changing the active
 server. The local agent targets the server window you last focused, not a global switch.
 
+**All reviews (combined inbox)** — menu/tray → *All reviews*, or **Combined inbox** on the
+*Servers* page — is one read-only list over every profile. The local server asks each profile for
+`GET /api/sessions` with *that profile's* token (a dead server is reported by name and skipped, not
+retried into the page), merges the queues newest-first and labels every row with its server,
+project and device. A click redirects from the local origin to the owning server's
+`/s/<id>?t=…&rl_window=1`; the desktop shell intercepts that navigation and opens or focuses that
+server's window, so the inbox stays open beside it. The profile token never appears in the inbox
+DOM — only in the redirect's `Location` header. The list is capped at the 250 newest reviews, and
+there is no cross-server search or bulk action: each server remains an independent queue.
+
 **3. Agents on holly** use `http://127.0.0.1:8788/mcp` — loopback inside the container network,
 never exposed to the LAN:
 

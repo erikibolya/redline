@@ -2600,10 +2600,15 @@ const main = async () => {
   const serversPage = await page.evaluate(() => ({
     title: document.querySelector("h1")?.textContent.trim() || "",
     text: document.querySelector("#list")?.textContent || "",
+    inbox: document.querySelector("#inbox")?.getAttribute("href") || "",
   }));
   check("servers page is local-only and explains headless mode",
     serversPage.title === "Servers" && serversPage.text.includes("desktop app"),
     JSON.stringify(serversPage));
+  // The `?t=` token is traded for a cookie and removed from the URL, so the link carries no
+  // token of its own.
+  check("servers page launches the combined inbox in its own window",
+    serversPage.inbox === "/inbox?rl_window=1", serversPage.inbox);
 
   // Headless mode has no profiles, so render the page's own row markup and measure the
   // destructive button in both themes: an outline must not inherit the filled `.btn.danger`
@@ -2702,6 +2707,154 @@ const main = async () => {
   check("setup Back to sessions returns to the active server",
     setupBack === `${BASE}/?t=remote-token&rl_window=1`, setupBack);
   page.off("request", profiles);
+  await page.setRequestInterception(false);
+
+  // ---- the combined inbox: every profile in one list, still labelled by server and device
+  await page.goto(`${BASE}/inbox?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForFunction(
+    () => (document.querySelector("#list")?.textContent || "").includes("desktop app"),
+    { timeout: 5000 },
+  );
+  const inboxHeadless = await page.evaluate(() => ({
+    title: document.querySelector("h1")?.textContent.trim() || "",
+    text: document.querySelector("#list")?.textContent || "",
+    serversLink: document.querySelector("#list a")?.getAttribute("href") || "",
+  }));
+  check("the combined inbox explains that it needs the desktop app",
+    inboxHeadless.title === "All servers"
+      && inboxHeadless.text.includes("only available in the desktop app")
+      && inboxHeadless.serversLink === "/servers?rl_window=1",
+    JSON.stringify(inboxHeadless));
+
+  const remoteId = "20261120-100000-remote-one-aaaa";
+  const inboxPayload = {
+    servers: [
+      { id: "local", name: "This computer", url: BASE, local: true, active: false,
+        online: true, error: null, sessions: 1, open: 1, waiting: 0 },
+      { id: "holly", name: "Holly", url: "https://redline.example", local: false, active: true,
+        online: true, error: null, sessions: 3, open: 2, waiting: 2 },
+      { id: "down", name: "Down", url: "http://down.example:8788", local: false, active: false,
+        online: false, error: "connection refused", sessions: 0, open: 0, waiting: 0 },
+    ],
+    items: [
+      { server: "holly", server_name: "Holly", local: false,
+        open_url: `/api/inbox/open?server=holly&session=${remoteId}`,
+        session: { id: remoteId, title: "Remote one", status: "submitted", project: "alpha",
+          branch: "feat/remote-one", updated_at: "2026-11-20T10:00:00+00:00",
+          annotation_count: 2, assigned_agent: "holly", assigned_agent_online: true,
+          agent_running: true } },
+      { server: "local", server_name: "This computer", local: true,
+        open_url: "/api/inbox/open?server=local&session=20261120-090000-local-one-bbbb",
+        session: { id: "20261120-090000-local-one-bbbb", title: "Local one", status: "open",
+          project: "local-project", branch: "feat/local-one",
+          updated_at: "2026-11-20T09:00:00+00:00", annotation_count: 1,
+          assigned_agent: "erik-pc", assigned_agent_online: false } },
+      { server: "holly", server_name: "Holly", local: false,
+        open_url: "/api/inbox/open?server=holly&session=20261120-080000-remote-two-cccc",
+        session: { id: "20261120-080000-remote-two-cccc", title: "Remote two",
+          status: "submitted", project: "alpha", updated_at: "2026-11-20T08:00:00+00:00",
+          annotation_count: 0, assigned_agent: "holly", assigned_agent_online: true,
+          agent_state: "replied" } },
+      { server: "holly", server_name: "Holly", local: false,
+        open_url: `/api/inbox/open?server=holly&session=20261120-070000-remote-done-dddd`,
+        session: { id: "20261120-070000-remote-done-dddd", title: "Remote done",
+          status: "resolved", project: "alpha", updated_at: "2026-11-20T07:00:00+00:00",
+          annotation_count: 3, assigned_agent: "holly", assigned_agent_online: true } },
+    ],
+    truncated: false,
+    counts: { servers: 3, online: 2, items: 4, waiting: 2 },
+  };
+
+  await page.setRequestInterception(true);
+  const inboxStub = (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path !== "/api/inbox") {
+      request.continue();
+      return;
+    }
+    request.respond({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(inboxPayload),
+    });
+  };
+  page.on("request", inboxStub);
+  await page.goto(`${BASE}/inbox?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForSelector("#list .row", { timeout: 5000 });
+  const inbox = await page.evaluate(() => {
+    const rows = [...document.querySelectorAll("#list .row")];
+    const first = rows[0];
+    const local = rows.find((row) => row.dataset.server === "local");
+    return {
+      rows: rows.length,
+      firstServer: first?.querySelector(".server-tag")?.textContent.trim() || "",
+      firstState: first?.dataset.state || "",
+      firstBadge: first?.querySelector(".badge")?.textContent.trim() || "",
+      firstDevice: first?.querySelector(".device-tag")?.textContent.trim() || "",
+      firstDeviceOnline: first?.querySelector(".device-tag")?.classList.contains("online") || false,
+      firstProject: first?.querySelector(".row-meta")?.textContent.includes("alpha") || false,
+      firstBranch: first?.querySelector(".row-meta")?.textContent.includes("feat/remote-one") || false,
+      firstHref: first?.getAttribute("href") || "",
+      localDevice: local?.querySelector(".device-tag")?.textContent.trim() || "",
+      localDeviceOnline: local?.querySelector(".device-tag")?.classList.contains("online") ?? true,
+      banner: document.querySelector("#banner")?.hidden === false
+        ? document.querySelector("#banner").textContent : "",
+      summary: document.querySelector("#summary")?.textContent || "",
+      chips: [...document.querySelectorAll("#servers .chip")].map((chip) => ({
+        text: chip.textContent.replace(/\s+/g, " ").trim(),
+        offline: chip.classList.contains("offline"),
+        pressed: chip.getAttribute("aria-pressed"),
+      })),
+    };
+  });
+  check("the combined inbox lists every server's reviews with server, device and state",
+    inbox.rows === 4
+      && inbox.firstServer === "Holly"
+      && inbox.firstState === "working"
+      && inbox.firstBadge === "working"
+      && inbox.firstDevice === "holly" && inbox.firstDeviceOnline
+      && inbox.firstProject && inbox.firstBranch,
+    JSON.stringify(inbox));
+  check("an offline server is named without breaking the rest of the list",
+    inbox.banner.includes("Down") && inbox.banner.includes("connection refused")
+      && inbox.chips.some((chip) => chip.text.startsWith("Down") && chip.offline)
+      && inbox.chips.some((chip) => chip.text.startsWith("Holly") && !chip.offline),
+    JSON.stringify({ banner: inbox.banner, chips: inbox.chips }));
+  check("the inbox summary counts reviews, servers and the agent queue",
+    inbox.summary.includes("4 reviews")
+      && inbox.summary.includes("3 servers")
+      && inbox.summary.includes("2/3 online")
+      && inbox.summary.includes("2 waiting for an agent"),
+    inbox.summary);
+  check("an offline device stays visible on the row",
+    inbox.localDevice === "erik-pc" && !inbox.localDeviceOnline, JSON.stringify(inbox));
+  check("an inbox row opens the review through the local redirect, not with a foreign token",
+    inbox.firstHref === `/api/inbox/open?server=holly&session=${remoteId}`,
+    inbox.firstHref);
+
+  await page.click('[data-filter="waiting"]');
+  const waitingFilter = await page.evaluate(() => ({
+    rows: document.querySelectorAll("#list .row").length,
+    title: document.querySelector("#list .row-title")?.textContent.trim() || "",
+    pressed: document.querySelector('[data-filter="waiting"]')?.getAttribute("aria-pressed"),
+  }));
+  check("the inbox Waiting filter shows the submitted rounds",
+    waitingFilter.rows === 1 && waitingFilter.title === "Remote two"
+      && waitingFilter.pressed === "true",
+    JSON.stringify(waitingFilter));
+  await page.click('[data-filter="all"]');
+  await page.click('[data-server="holly"]');
+  const hollyOnly = await page.$$eval("#list .row", (rows) => rows.length);
+  check("the inbox filters by server", hollyOnly === 3, `${hollyOnly} rows`);
+  await page.click('[data-server="down"]');
+  const downOnly = await page.evaluate(() => ({
+    rows: document.querySelectorAll("#list .row").length,
+    text: document.querySelector("#list")?.textContent || "",
+  }));
+  check("an offline server has an honest empty state",
+    downOnly.rows === 0 && downOnly.text.includes("No reviews match this filter"),
+    JSON.stringify(downOnly));
+  page.off("request", inboxStub);
   await page.setRequestInterception(false);
 
   await page.goto(`${BASE}/`);

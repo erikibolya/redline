@@ -74,6 +74,7 @@ try {
     <div id="list"><div class="empty">Loading servers…</div></div>
     <div class="servers-actions">
       <a class="btn accent" id="add" href="/setup">Add server</a>
+      <a class="btn" id="inbox" href="/inbox">Combined inbox</a>
     </div>
     <p class="servers-foot">Opening a server creates or focuses its own window. Other servers
       stay signed in. The local agent follows the window you last focused.</p>
@@ -88,9 +89,11 @@ const list = document.getElementById("list");
 const banner = document.getElementById("banner");
 const back = document.getElementById("back");
 const add = document.getElementById("add");
+const inbox = document.getElementById("inbox");
 
 back.href = withToken("/");
 add.href = withToken("/setup?new=1");
+inbox.href = openInWindow(withToken("/inbox"));
 if (params.get("unreachable")) {
   banner.hidden = false;
   banner.textContent = "The server this app was using did not answer. Pick another server, or use this computer.";

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **All reviews: one inbox across every RedLine server.** The desktop's local server merges
+  `GET /api/sessions` from every profile plus *This computer* into `/inbox` (menu/tray → **All
+  reviews**, or **Combined inbox** on the Servers page). Every row keeps its server, project,
+  device and state; server and state chips combine; an unreachable server is named with its
+  error instead of blanking the list, and the other queues still render. A click goes through the
+  local `/api/inbox/open` redirect to the owning server with *that profile's* token, so the
+  desktop opens or focuses that server's window and leaves the inbox in place. The list is capped
+  at the 250 newest reviews and is read-only — each server stays an independent queue (2026-11-20).
+
 - **The desktop opens each RedLine server in its own window.** **Servers…** is now a launcher:
   **Open** creates a `server-<id>` window (or focuses the existing one) and keeps every server's
   cookies, login and drafts independent; there is no `Use` mode switch. `active` means the last

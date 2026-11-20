@@ -150,7 +150,9 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   profile its own window (`server-<id>`, or `local-server`), and the local server still serves
   `/servers` as a launcher; `active` is the **last focused** profile for the local agent and
   Copy link, not a mode switch. All profiles/tokens stay; never treat one server as a disconnect
-  from another. Opening the same profile focuses its existing window.
+  from another. Opening the same profile focuses its existing window. The local server also merges
+  every profile at `/inbox` (`GET /api/inbox`); `/api/inbox/open` hands a row back to the owning
+  server with that profile's token.
 - `redline-agent` — unattended bridge: watch submitted reviews → resolve the project's repo →
   `opencode run` → progress/reply/resolve. It syncs the git repos it can see (`POST
   /api/agent/repos`) and runs each review in its project's repo. Also embedded in the desktop app
@@ -607,6 +609,16 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   explicit `rl_window` marker for "open a new window" navigations, and let `active` mean only
   *last focused* so the local agent can follow it. A window must never silently change origin on
   focus.
+
+- **A merged list is not a shared queue.** The combined inbox reads every profile's sessions for
+  display, but the queues stay independent: a click must go back to the owning server with *that
+  profile's* token, never to a URL the page supplies, and an unreachable profile must be named
+  and skipped rather than emptying or hanging the whole list. Keep the merge in the local server
+  (the only place that holds every token), fetch profiles in parallel with a short timeout, cap
+  the list, and keep the profile token out of the inbox DOM: a local `/api/inbox/open` redirect
+  carries it in `Location`, and the shell turns the remote navigation into that server's window.
+  Test the offline server, the foreign-token absence and the refusal paths, not only the happy
+  merge (2026-11-20).
 
 ## 8. Working rules
 

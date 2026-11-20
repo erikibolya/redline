@@ -112,7 +112,12 @@ deleted; dirty or unmerged worktrees are left alone.
 ## Windows tray app (recommended for a PC)
 
 The release ships `RedLineAgent_*_x64-setup.exe` — a small tray app around the same bridge. It is
-separate from the review client and does not need Docker or a server on the PC.
+separate from the review client and does not need Docker or a server on the PC. **The RedLine
+Desktop installer now installs it too**, so a review PC gets two trays: RedLine Desktop and
+RedLine Agent, and the agent keeps running while the client is closed or updated. The desktop
+tray's **RedLine Agent…** item opens its window; the desktop app's embedded agent is refused
+while the tray app is installed (it would claim as `local`). The agent has its own config,
+updater and uninstaller; uninstalling RedLine Desktop leaves it in place.
 
 1. Install it from [Releases](https://github.com/erikibolya/redline/releases) and open the tray
    icon → **Open RedLine Agent**.

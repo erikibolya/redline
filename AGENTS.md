@@ -11,7 +11,7 @@ how to change and ship it, and the traps that have already cost time.
 screenshot, a human draws on it in a browser or the desktop app, the agent reads the result as
 JSON + Markdown + an annotated PNG.
 
-**Current release: v0.28.5.** Live in production on holly:
+**Current release: v0.28.6.** Live in production on holly:
 
 | Thing | Value |
 |---|---|
@@ -612,6 +612,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   explicit `rl_window` marker for "open a new window" navigations, and let `active` mean only
   *last focused* so the local agent can follow it. A window must never silently change origin on
   focus.
+
+- **An installer is not a download manager.** The desktop installer runs the agent app's
+  installer from the same release so a review PC gets two trays. It must skip an existing agent
+  install, tolerate a failed download without failing the desktop install, and **not** remove
+  the agent on uninstall — the agent is a separate product and must keep running without the
+  review client. Test the two-tray install, the upgrade (no duplicate), and the desktop
+  uninstall (agent survives) on Windows; a local `cargo check` cannot validate an NSIS hook
+  (2026-11-20).
 
 - **A merged list is not a shared queue.** The combined inbox reads every profile's sessions for
   display, but the queues stay independent: a click must go back to the owning server with *that

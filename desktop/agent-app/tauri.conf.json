@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "RedLineAgent",
+  "version": "0.28.4",
+  "identifier": "dev.erikibolya.redline.agent",
+  "build": {
+    "frontendDist": "ui"
+  },
+  "app": {
+    "windows": [],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "nsis"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "bin/redline-agent.exe"
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "English"
+        ]
+      }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/erikibolya/redline/releases/latest/download/agent-latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE0OUUyRjQ4RjczMDJBN0IKUldSN0tqRDNTQytlRkpvNlFqTjd4N0hJLzI4c2F6N21rS3h3cGkxOCtqVm9VUjliaE9jS3V4T1gK"
+    }
+  }
+}

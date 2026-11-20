@@ -28,6 +28,7 @@ const UI_FILES: &[(&str, &str)] = &[
     ("setup.html", include_str!("../../../ui/setup.html")),
     ("servers.html", include_str!("../../../ui/servers.html")),
     ("inbox.html", include_str!("../../../ui/inbox.html")),
+    ("agent.html", include_str!("../../../ui/agent.html")),
     ("app.css", include_str!("../../../ui/app.css")),
     ("app.js", include_str!("../../../ui/app.js")),
 ];

@@ -223,6 +223,7 @@ pub fn router(state: AppState) -> Router {
 
     let agent = Router::new()
         .route("/api/agent/repos", post(sync_agent_repos))
+        .route("/api/agent/activity", get(agent_activity))
         .route(
             "/api/agent/settings",
             get(agent_settings).put(update_agent_settings),
@@ -261,6 +262,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/audit", get(audit_log))
         .route("/api/agents", get(list_agents))
+        .route("/api/agents/activity", get(agents_activity))
         .route(
             "/api/sessions/{id}",
             get(get_session).delete(delete_session),
@@ -347,6 +349,7 @@ pub fn router(state: AppState) -> Router {
         .route("/setup", get(setup_page))
         .route("/servers", get(servers_page))
         .route("/inbox", get(inbox_page))
+        .route("/agent", get(agent_page))
         .merge(public_auth)
         .merge(account)
         .merge(protected)
@@ -2349,6 +2352,15 @@ async fn inbox_page(State(state): State<AppState>, request: Request) -> Response
     serve_ui(&state, "inbox.html")
 }
 
+async fn agent_page(State(state): State<AppState>, request: Request) -> Response {
+    if let Some(response) =
+        trade_token_for_cookie(request.headers(), request.uri().query(), "/agent", &state)
+    {
+        return response;
+    }
+    serve_ui(&state, "agent.html")
+}
+
 fn serve_ui(state: &AppState, name: &str) -> Response {
     if let Some(files) = state.inline_ui {
         if let Some((_, body)) = files.iter().find(|(file, _)| *file == name) {
@@ -2747,7 +2759,13 @@ async fn list_agents(
     Extension(context): Extension<AuthContext>,
     State(state): State<AppState>,
 ) -> Result<Json<Value>, Error> {
-    let accessible = visible_project_slugs(&state, &context)?;
+    Ok(Json(agents_payload(&state, &context)?))
+}
+
+/// The device list, shared by `GET /api/agents` and the activity views. A member sees only the
+/// agents/projects they can access; an agent token sees its own project scope.
+fn agents_payload(state: &AppState, context: &AuthContext) -> Result<Value, Error> {
+    let accessible = visible_project_slugs(state, context)?;
     let projects: HashMap<String, crate::model::Project> = state
         .store
         .projects()?
@@ -2828,6 +2846,9 @@ async fn list_agents(
                         "session_id": claim.session_id,
                         "project": claim.project,
                         "state": claim.state.as_str(),
+                        "claimed_at": claim.claimed_at,
+                        "heartbeat_at": claim.heartbeat_at,
+                        "lease_until": claim.lease_until,
                     })
                 })
                 .collect();
@@ -2842,7 +2863,103 @@ async fn list_agents(
             })
         })
         .collect();
-    Ok(Json(json!({ "agents": items })))
+    Ok(json!({ "agents": items }))
+}
+
+/// `GET /api/agents/activity` — the owner/debug view: every device, its claims and the last
+/// lines the agent wrote while working. Same device/project scoping as `GET /api/agents`.
+async fn agents_activity(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
+    let mut payload = agents_payload(&state, &context)?;
+    enrich_activity(&state, &mut payload)?;
+    Ok(Json(payload))
+}
+
+/// `GET /api/agent/activity` — the agent's own view for its tray app. An agent token sees only
+/// its own device; the legacy token (no agent scope) sees every device, like the owner.
+async fn agent_activity(
+    Extension(context): Extension<AuthContext>,
+    State(state): State<AppState>,
+) -> Result<Json<Value>, Error> {
+    let only = context.agent.as_ref().map(|agent| agent.id.clone());
+    let mut payload = agents_payload(&state, &context)?;
+    if let Some(only) = only {
+        if let Some(agents) = payload.get_mut("agents").and_then(Value::as_array_mut) {
+            agents.retain(|agent| {
+                agent.get("agent_id").and_then(Value::as_str) == Some(only.as_str())
+            });
+        }
+    }
+    enrich_activity(&state, &mut payload)?;
+    Ok(Json(payload))
+}
+
+/// Add the human-facing part of a claim: the review it belongs to, the latest deliberate step,
+/// and the recent raw output. A log line is debug evidence, not a state (the rail learned that
+/// the hard way); the page shows it only under an explicit output block.
+fn enrich_activity(state: &AppState, payload: &mut Value) -> Result<(), Error> {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let Some(agents) = payload.get_mut("agents").and_then(Value::as_array_mut) else {
+        return Ok(());
+    };
+    for agent in agents {
+        let Some(claims) = agent.get_mut("claims").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        for claim in claims {
+            let Some(session_id) = claim
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if let Ok(meta) = state.store.require(&session_id) {
+                claim["title"] = json!(meta.title);
+                claim["status"] = json!(meta.status);
+                claim["agent_state"] = json!(meta.agent_state);
+                claim["branch"] = json!(meta.branch);
+            }
+            let events = state.store.agent_events(&session_id).unwrap_or_default();
+            let step = events
+                .iter()
+                .rev()
+                .find(|event| event.get("state").and_then(Value::as_str) != Some("log"));
+            claim["step"] = step.cloned().unwrap_or(Value::Null);
+            let mut log: Vec<Value> = events
+                .iter()
+                .filter(|event| event.get("state").and_then(Value::as_str) == Some("log"))
+                .rev()
+                .take(40)
+                .map(|event| {
+                    json!({
+                        "at": event.get("at").cloned().unwrap_or(Value::Null),
+                        "message": event
+                            .get("message")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .chars()
+                            .take(500)
+                            .collect::<String>(),
+                    })
+                })
+                .collect();
+            log.reverse();
+            claim["log"] = json!(log);
+            let claimed_at = claim.get("claimed_at").and_then(Value::as_u64).unwrap_or(0);
+            claim["elapsed_secs"] = json!(now_secs.saturating_sub(claimed_at));
+        }
+    }
+    payload["server"] = json!({
+        "version": crate::VERSION,
+        "now": crate::store::now(),
+    });
+    Ok(())
 }
 
 #[derive(Debug, serde::Deserialize)]

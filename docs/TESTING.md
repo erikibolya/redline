@@ -138,6 +138,22 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   fallback, adds a viewer, saves, and reads the scoped audit; a tester on the same project gets
   no manage control.
 
+## Agent console (v0.28.5)
+
+- Rust `tests/api.rs`: an agent claims a submitted review, writes a deliberate step and a raw log
+  line, then `GET /api/agents/activity` returns the device, claim, title, step and output with the
+  elapsed time; an agent token sees only its own device and the payload never echoes the token.
+- Browser e2e: `/agent` renders the real device list (or its honest empty state); with a stubbed
+  payload it shows two devices, the online dot, the claim/step, the tags, the waiting state and
+  the output block only after opening it. **340 checks** total.
+- Windows tray app: `desktop.yml` builds the bridge and compile-checks the tray shell; the release
+  job builds the NSIS installer, signs it with the updater key and publishes `agent-latest.json`.
+  Manual smoke: install `RedLineAgent_*_x64-setup.exe`, save a token, verify the tray status
+  changes waiting → working → waiting, the log shows the run, and **Check updates** reports
+  either up to date or offers the next version.
+- `desktop/agent-app` uses its own config (`%APPDATA%\dev.erikibolya.redline.agent\agent-app.json`)
+  and stores the token only there; the local UI never returns it.
+
 ## Desktop multi-server and the combined inbox (v0.28.4)
 
 - `desktop/app` unit tests (10): profile ids/names/tokens from `config.json` and the legacy

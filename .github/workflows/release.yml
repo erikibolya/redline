@@ -90,6 +90,8 @@ jobs:
 
             `redline-agent.exe` (below) is the unattended agent bridge — see
             `docs/LOCAL-AGENT.md`. The app starts it from the tray (*Start local agent*).
+            `RedLineAgent_*_x64-setup.exe` is the separate **agent tray app**: it runs the
+            bridge, shows its status and live output, and checks for its own updates.
 
             `redline-extension-*.zip` is the Chrome/Edge capture extension (screenshots and tab
             flows); load it unpacked until the store listing is published.
@@ -103,6 +105,56 @@ jobs:
           gh release upload "${{ github.event.inputs.tag || github.ref_name }}"
           desktop/target/release/redline.exe
           desktop/target/release/redline-agent.exe --clobber
+
+  agent-app:
+    name: agent tray app (windows)
+    needs: windows
+    runs-on: windows-latest
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/agent-app
+      - name: Download the agent bridge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release download "${{ github.event.inputs.tag || github.ref_name }}"
+          --pattern redline-agent.exe --dir desktop/agent-app/bin --clobber
+      - name: Build the tray app
+        working-directory: desktop/agent-app
+        run: npx --yes @tauri-apps/cli@^2 build --bundles nsis
+      - name: Write the updater manifest
+        shell: pwsh
+        run: |
+          $tag = "${{ github.event.inputs.tag || github.ref_name }}"
+          $version = (Get-Content desktop/agent-app/tauri.conf.json | ConvertFrom-Json).version
+          $installer = Get-ChildItem desktop/agent-app/target/release/bundle/nsis/*-setup.exe |
+            Select-Object -First 1
+          if (-not $installer) { throw "no NSIS installer was produced" }
+          $signature = Get-Content "$($installer.FullName).sig" -Raw
+          $url = "https://github.com/erikibolya/redline/releases/download/$tag/$($installer.Name)"
+          $manifest = @{
+            version = $version
+            notes = "RedLine Agent $version — tray app for the bridge: status, live output, updates."
+            pub_date = (Get-Date).ToUniversalTime().ToString("o")
+            platforms = @{
+              "windows-x86_64" = @{ signature = $signature; url = $url }
+              "windows-x86_64-nsis" = @{ signature = $signature; url = $url }
+            }
+          } | ConvertTo-Json -Depth 6
+          $manifest | Set-Content desktop/agent-app/agent-latest.json -Encoding utf8
+          "AGENT_ASSET=$($installer.FullName)" | Out-File -Append $env:GITHUB_ENV
+      - name: Upload the installer and the manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          gh release upload "${{ github.event.inputs.tag || github.ref_name }}"
+          "$env:AGENT_ASSET" desktop/agent-app/agent-latest.json --clobber
 
   linux:
     name: linux server binary

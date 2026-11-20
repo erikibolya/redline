@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The tray window loads the local loopback UI; no Tauri APIs are exposed to the page.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

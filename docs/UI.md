@@ -756,6 +756,19 @@ section, `Δ` shows the summary inline:
 - A new video upload with a stale revision reports the conflict and reloads instead of pretending
   the clip was posted; the file must be chosen again.
 
+## Agent console (v0.28.5)
+
+- `/agent` is the device debug page: one card per agent with online state, jobs, assigned
+  projects, reported repos and every live claim. A claim shows its review, project, status,
+  elapsed time and the latest deliberate step; the raw output is behind a closed **Output**
+  disclosure (40 lines, truncated, timestamps in the browser's locale).
+- It polls `/api/agents/activity` every 3 s while visible and keeps the last cards on a failed
+  poll. An owner sees every device; a member sees only their projects; an agent token (the tray
+  app) sees only its own device and never the token.
+- The Windows tray app (`desktop/agent-app`) is the local counterpart: it supervises the bridge,
+  shows the same claim/step, the bridge's stdout and the server's run log, and checks its own
+  updater. It is separate from the review client and from the WinSW service.
+
 ## Combined inbox (v0.28.4)
 
 - `/inbox` is served by the *local* desktop server and reads `GET /api/inbox`, which merges the

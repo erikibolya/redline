@@ -2857,6 +2857,110 @@ const main = async () => {
   page.off("request", inboxStub);
   await page.setRequestInterception(false);
 
+  // ---- the agent activity page: the Docker bridge's debug view (also the tray app's data)
+  await page.goto(`${BASE}/agent?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  // The e2e server already has its own agent presence; the page must render the real list
+  // (or its empty state) instead of staying on "Loading agents…".
+  await page.waitForFunction(
+    () => !(document.querySelector("#summary")?.textContent || "").includes("Loading"),
+    { timeout: 5000 },
+  );
+  const agentEmpty = await page.evaluate(() => ({
+    title: document.querySelector("h1")?.textContent.trim() || "",
+    summary: document.querySelector("#summary")?.textContent || "",
+    text: document.querySelector("#list")?.textContent || "",
+    cards: document.querySelectorAll(".agent-card").length,
+  }));
+  check("the agent page renders the device activity view",
+    agentEmpty.title === "Agents"
+      && agentEmpty.summary.includes("device")
+      && (agentEmpty.cards > 0 || agentEmpty.text.includes("No agent has connected")),
+    JSON.stringify(agentEmpty));
+
+  const activityPayload = {
+    server: { version: "0.28.4", now: "2026-11-20T12:00:00+00:00" },
+    agents: [
+      {
+        agent_id: "holly", online: true, last_seen: 1795178400,
+        jobs: ["review", "handoff"], repos: ["redline"], projects: ["redline"],
+        claims: [{
+          session_id: "20261120-100000-activity-check-aaaa",
+          title: "Activity check", project: "redline", status: "submitted",
+          state: "running", claimed_at: 1795178358, heartbeat_at: 1795178398,
+          lease_until: 1795178518, elapsed_secs: 42,
+          step: { at: "2026-11-20T12:00:00+00:00", state: "step", message: "Reading the annotations" },
+          log: [
+            { at: "2026-11-20T12:00:01+00:00", message: "$ npm test" },
+            { at: "2026-11-20T12:00:02+00:00", message: "compiled 3 packages" },
+          ],
+        }],
+      },
+      {
+        agent_id: "erik-pc", online: false, last_seen: 1795178000,
+        jobs: [], repos: [], projects: ["actiunit-au-net"], claims: [],
+      },
+    ],
+  };
+  await page.setRequestInterception(true);
+  const activityStub = (request) => {
+    if (new URL(request.url()).pathname !== "/api/agents/activity") {
+      request.continue();
+      return;
+    }
+    request.respond({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(activityPayload),
+    });
+  };
+  page.on("request", activityStub);
+  await page.goto(`${BASE}/agent?t=${TOKEN}`, { waitUntil: "networkidle2" });
+  await page.waitForSelector(".agent-card", { timeout: 5000 });
+  const agents = await page.evaluate(() => {
+    const cards = [...document.querySelectorAll(".agent-card")];
+    const holly = cards.find((card) => card.dataset.agent === "holly");
+    const pc = cards.find((card) => card.dataset.agent === "erik-pc");
+    const details = holly?.querySelector("details");
+    return {
+      cards: cards.length,
+      summary: document.querySelector("#summary")?.textContent || "",
+      hollyOnline: holly?.querySelector(".agent-state")?.classList.contains("online") || false,
+      claim: holly?.querySelector(".claim-title")?.textContent.trim() || "",
+      step: holly?.querySelector(".step")?.textContent || "",
+      tags: [...(holly?.querySelectorAll(".agent-tags .tag") || [])].map((tag) => tag.textContent.trim()),
+      logClosed: details ? !details.open : null,
+      log: details?.querySelector(".log")?.textContent || "",
+      pcWaiting: pc?.querySelector(".waiting")?.textContent.trim() || "",
+    };
+  });
+  check("the agent page shows the device, its claim, the current step and the output",
+    agents.cards === 2
+      && agents.summary.includes("2 devices")
+      && agents.summary.includes("1/2 online")
+      && agents.summary.includes("1 review in flight")
+      && agents.hollyOnline
+      && agents.claim === "Activity check"
+      && agents.step.includes("Reading the annotations")
+      && agents.tags.some((tag) => tag.includes("redline"))
+      && agents.logClosed === true,
+    JSON.stringify(agents));
+  check("an idle device says it is waiting for work",
+    agents.pcWaiting.includes("Waiting for work"), agents.pcWaiting);
+  await page.click(".agent-card[data-agent='holly'] details summary");
+  const agentLog = await page.evaluate(() => {
+    const details = document.querySelector(".agent-card[data-agent='holly'] details");
+    return {
+      open: details?.open || false,
+      text: details?.querySelector(".log")?.textContent || "",
+    };
+  });
+  check("the agent output opens on demand and shows the raw lines",
+    agentLog.open && agentLog.text.includes("$ npm test")
+      && agentLog.text.includes("compiled 3 packages"),
+    JSON.stringify(agentLog));
+  page.off("request", activityStub);
+  await page.setRequestInterception(false);
+
   await page.goto(`${BASE}/`);
   await page.waitForSelector(".gallery .card", { timeout: 5000 });
   const cards = await page.$$eval(".gallery .card", (elements) => elements.length);

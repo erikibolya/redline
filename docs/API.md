@@ -722,6 +722,35 @@ blocks creating or submitting a review when no agent is connected.
 
 `{"ok": true}`.
 
+### `GET /api/agents/activity` / `GET /api/agent/activity` (v0.28.5)
+
+The device debug view used by `/agent` and by the agent tray app. The human route returns every
+device the caller can see; an **agent token** on the agent route sees only its own device. Both
+are read-only.
+
+```json
+{
+  "server": {"version": "0.28.5", "now": "2026-11-20T12:00:00+00:00"},
+  "agents": [{
+    "agent_id": "holly", "online": true, "last_seen": 1793000000,
+    "jobs": ["review", "handoff"], "repos": ["redline"], "projects": ["redline"],
+    "claims": [{
+      "session_id": "20261120-100000-review-abcd", "project": "redline",
+      "state": "running", "claimed_at": 1792999958, "heartbeat_at": 1792999998,
+      "lease_until": 1793000118, "elapsed_secs": 42,
+      "title": "Activity check", "status": "submitted", "agent_state": "working",
+      "step": {"at": "2026-11-20T12:00:00+00:00", "state": "step",
+               "message": "Reading the annotations"},
+      "log": [{"at": "2026-11-20T12:00:01+00:00", "message": "$ npm test"}]
+    }]
+  }]
+}
+```
+
+`step` is the latest deliberate event (anything except `state: "log"`); `log` is the last 40 raw
+lines the bridge streamed, oldest first, each truncated to 500 characters. A raw line is debug
+output, not a status. The page and the tray app poll it; it is not part of the MCP contract.
+
 ### Combined inbox (desktop local server, v0.28.4)
 
 `GET /api/inbox` merges the sessions of every profile in the desktop's `config.json` plus

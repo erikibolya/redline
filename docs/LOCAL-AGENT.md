@@ -109,6 +109,28 @@ the bridge or the agent stopped before releasing it, a clean merged worktree can
 under `.redline-worktrees/` whose branch is fully merged into the base branch. Branches are never
 deleted; dirty or unmerged worktrees are left alone.
 
+## Windows tray app (recommended for a PC)
+
+The release ships `RedLineAgent_*_x64-setup.exe` — a small tray app around the same bridge. It is
+separate from the review client and does not need Docker or a server on the PC.
+
+1. Install it from [Releases](https://github.com/erikibolya/redline/releases) and open the tray
+   icon → **Open RedLine Agent**.
+2. In RedLine → **People → Agent tokens**, create a token for this PC (agent id `erik-pc`, jobs
+   `review` + `handoff`, the projects this PC serves). Copy it once.
+3. In the app: **Settings** → server URL, the token, agent id, repository root, default repo and
+   the OpenCode server (`http://127.0.0.1:4096`), then **Save & start**.
+4. The app starts the bridge at login, restarts it if it exits, and shows **waiting** / the current
+   review, its latest step and the live output from RedLine. **Check updates** uses its own
+   updater (`agent-latest.json`), independent of the review client.
+5. The same data is on the server at `/agent` — every device, its current review and the last 40
+   output lines. `redline-agent.ibolya.cz` is the dedicated host once the Traefik route is
+   deployed.
+
+The app runs as your user and needs your OpenCode server; git/SSH/VPN work happens there. Do not
+run it together with the app's **Start local agent** (the embedded agent is always `local`) or
+with the WinSW service below.
+
 ## Windows service (PC agent)
 
 The desktop app's embedded agent always reports `agent_id = "local"`. To run the PC as a named

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.28.6 — 2026-11-20
 
 - **The desktop installer installs the agent tray app next to the review client.** One setup,
   two trays: **RedLine Desktop** and **RedLine Agent**. The agent is a separate product (own

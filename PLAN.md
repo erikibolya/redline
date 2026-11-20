@@ -18,9 +18,9 @@ accounts, runs where the agents run.
 | Editor | 3-column shell: resizable session rail, zoom/pan canvas, inspector with a conversation + composer (v0.9); rect/ellipse/arrow/pen; numbered, per-shape notes (v0.8); round history with a read-only viewer and diff (v0.17); submitted lock + STOP; move, nudge, delete, undo/redo, grouping, z-order, align/distribute; resizable panels |
 | Sessions | open → submitted → resolved; repository-backed projects in the rail (v0.10, repo keys v0.19); move an existing review between projects (v0.27); search, filters, badges, "new" dots; feature confirm/cancel stamps; branch per feature; delete / mark done / reopen / purge cancelled; start-page gallery |
 | History | every resubmission archives the previous round; diff endpoint (added/removed/changed) |
-| Desktop | Tauri v2 tray app: standalone or thin client, server profiles, menu bar, setup wizard, auto-update, port pinned to 8788; local agent toggle with the parallel bridge (`redline-agent`, v0.13/v0.21) |
+| Desktop | Tauri v2 tray app: standalone or thin client, one window per server profile (no mode switch), launcher, menu bar, setup wizard, auto-update, port pinned to 8788; local agent follows the last focused server (`redline-agent`, v0.13/v0.21) |
 | Distribution | GitHub Releases (installer, CLI, static Linux binary), GHCR images (`latest`, `browser`), rolling `dev` channel and `browser-dev` image |
-| Tests | 182 Rust tests, 35 extension unit tests, 325-check browser E2E in CI on Linux + Windows |
+| Tests | 182 Rust tests, 35 extension unit tests, 326-check browser E2E in CI on Linux + Windows |
 
 ## Milestones
 
@@ -124,8 +124,8 @@ migration guide; not part of v0.27.
 4. Session gallery on `/`.
 5. Touch toolbar + hover-free rail actions.
 6. macOS/Linux bundles.
-7. Device-aware UI and desktop multi-server windows: the routing API landed in v0.28.4; the
-   badges, device page and multi-window client are next.
+7. Combined inbox across multiple RedLine servers. The desktop now opens one window per profile;
+   a read-only aggregate over each profile's sessions/projects/agents is the remaining step.
 
 ## Known limitations
 
@@ -133,9 +133,9 @@ migration guide; not part of v0.27.
 - Capture needs the `:browser` image (~768 MB); the slim image returns an actionable error instead.
 - No TLS client in the CLI/wizard (HTTP only); the webview does TLS.
 - Device routing UI covers the project/task/header badges, the **Agents & devices** dialog and
-  the rail's device filter; multi-server desktop windows and a combined inbox are still not built.
-- Multiple RedLine servers are independent queues; the desktop still switches one window between
-  profiles, and a combined inbox is not built.
+  the rail's device filter.
+- Multiple RedLine servers are independent queues; the desktop opens one window per profile and
+  keeps every session, but a combined inbox across servers is not built.
 - **Feature confirmation is a decision, not a git action.** RedLine records `feature_state` and,
   only when the human ticks the optional handoff, queues a generic **handoff job** (v0.23). The
   bridge claims it only when it advertises the job, and the integration performs its own
@@ -155,7 +155,7 @@ migration guide; not part of v0.27.
 - `node --test extension/tests/annotations.test.mjs extension/tests/api.test.mjs extension/tests/config.test.mjs extension/tests/cws.test.mjs extension/tests/package.test.mjs extension/tests/trace.test.mjs` — 35 extension
   unit tests: annotation geometry/hit-testing/moving, server URL/permission config, Chrome Web
   Store version/submission planning, offline review Markdown/JSON and the ZIP writer.
-- `desktop/scripts/e2e.sh` — 325 checks in real Chromium: every drawing tool is actually drawn
+- `desktop/scripts/e2e.sh` — 326 checks in real Chromium: every drawing tool is actually drawn
   (rectangle, ellipse, arrow, pen) and checked for its inspector row/number and badge pixel; the
   pen is also moved and undone through its `points` path; coordinate mapping at 46 % zoom, drag,
   undo, notes, submit, multi-select, align, grouping, z-order, text size, history, diff, the

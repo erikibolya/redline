@@ -170,9 +170,10 @@ start). The container is preferred only because updates are a `docker pull`; the
 Tray or menu bar → **Servers…** → **Add server**, give it a name (for example *Production*),
 paste the address and token, **Save and connect**. The app probes the server with those
 credentials before saving anything, so a wrong token is an error message instead of a broken next
-launch. **Servers…** lists every profile with its URL, state and version; *Use* switches the window
-without signing out of the other servers. The local *This computer* row is always present and
-cannot be removed, so the wizard needs no separate "use this computer" action.
+launch. **Servers…** is a launcher: **Open** gives each server its own window, so two servers can
+be visible at once and every window keeps its own cookies, login and drafts. Opening a server that
+is already open focuses that window instead of creating a duplicate. The local *This computer*
+row is always present and cannot be removed.
 
 Profiles live in `%LOCALAPPDATA%\redline\config.json`:
 
@@ -186,12 +187,18 @@ Profiles live in `%LOCALAPPDATA%\redline\config.json`:
 }
 ```
 
-`active: "local"` selects *This computer*. The old `remote_url`/`token` file is migrated as the
-first profile on read. The local server keeps running in every mode — that is what serves the
-Servers page and the wizard — but in remote mode the window (and every review) comes from the
-selected server. **Back to sessions** on either local page follows the active profile
-(`active_url` from `/api/servers` / `/api/setup`), so it returns to the remote origin; it must
-never fall back to the local server, which has no sessions and no agent presence.
+`active: "local"` selects *This computer*. It is **the last focused server**, not a mode switch:
+the local agent and *Copy browser link* follow it, while every open window stays on its own
+origin. The old `remote_url`/`token` file is migrated as the first profile on read. The local
+server keeps running in every mode — it serves the Servers page and the wizard. **Back to
+sessions** on either local page opens or focuses the active server window (`active_url` from
+`/api/servers` / `/api/setup`); it must never navigate the manager into the local server, which
+has no sessions and no agent presence.
+
+Each server window is titled `RedLine — <name>`; *This computer* is `RedLine — This computer`.
+Closing a window hides it (the tray app keeps running); **Sessions** in the menu/tray opens or
+focuses the last active server, and **Servers…** opens the launcher without changing the active
+server. The local agent targets the server window you last focused, not a global switch.
 
 **3. Agents on holly** use `http://127.0.0.1:8788/mcp` — loopback inside the container network,
 never exposed to the LAN:

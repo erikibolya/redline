@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The desktop opens each RedLine server in its own window.** **Servers…** is now a launcher:
+  **Open** creates a `server-<id>` window (or focuses the existing one) and keeps every server's
+  cookies, login and drafts independent; there is no `Use` mode switch. `active` means the last
+  focused server for the local agent and *Copy browser link*. A dedicated `server-manager` window
+  stays local, `This computer` gets its own `local-server` window, and setup opens the new server
+  in a window instead of replacing the wizard. Window titles name the server, closing hides the
+  window while the tray app stays alive, and the quit confirmation checks unsaved drafts in every
+  server window (2026-11-20).
+
 - **The UI names the device that owns or handles a task.** The rail's project header shows the
   assigned device with an online/offline dot, every task row carries the device that will run or
   is running it (and `assigned → claimed` for a fallback), the editor header repeats it, and a

@@ -2587,7 +2587,7 @@ const main = async () => {
     css: getComputedStyle(document.body).backgroundColor,
   }));
   check("setup page goes back to the server list and has no duplicate standalone switch",
-    setup.back === `${BASE}/?t=${TOKEN}` && setup.primary.includes("accent")
+    setup.back === `${BASE}/?t=${TOKEN}&rl_window=1` && setup.primary.includes("accent")
       && setup.secondary.includes("btn") && setup.secondaryHref.includes("/servers")
       && !setup.localSwitch && setup.card !== "0px",
     JSON.stringify(setup));
@@ -2647,6 +2647,17 @@ const main = async () => {
       && removeButton.dark.contrast >= 4.5 && removeButton.light.contrast >= 4.5,
     JSON.stringify(removeButton));
 
+  const serverActions = await page.evaluate(() => {
+    const host = document.getElementById("list");
+    host.innerHTML = row({ id: "e2e-alpha", name: "Alpha", url: "https://alpha.example", active: true }, false);
+    return {
+      open: host.querySelector("[data-open]")?.textContent.trim() || "",
+      use: Boolean(host.querySelector("[data-use]")),
+    };
+  });
+  check("servers page launches a server window instead of switching the window",
+    serverActions.open === "Open" && !serverActions.use, JSON.stringify(serverActions));
+
   // The local Servers/Setup pages must send "Back to sessions" to the *active* server. The e2e
   // server has no config file, so answer the profile endpoints like the desktop app would.
   await page.setRequestInterception(true);
@@ -2675,21 +2686,21 @@ const main = async () => {
   page.on("request", profiles);
   await page.goto(`${BASE}/servers?t=${TOKEN}`, { waitUntil: "networkidle2" });
   await page.waitForFunction(
-    () => document.querySelector("#back")?.href.endsWith("/?t=remote-token"),
+    () => document.querySelector("#back")?.href.endsWith("/?t=remote-token&rl_window=1"),
     { timeout: 5000 },
   );
   const serversBack = await page.$eval("#back", (el) => el.href);
   check("servers Back to sessions returns to the active server",
-    serversBack === `${BASE}/?t=remote-token`, serversBack);
+    serversBack === `${BASE}/?t=remote-token&rl_window=1`, serversBack);
 
   await page.goto(`${BASE}/setup?t=${TOKEN}`, { waitUntil: "networkidle2" });
   await page.waitForFunction(
-    () => document.querySelector("#back")?.href.endsWith("/?t=remote-token"),
+    () => document.querySelector("#back")?.href.endsWith("/?t=remote-token&rl_window=1"),
     { timeout: 5000 },
   );
   const setupBack = await page.$eval("#back", (el) => el.href);
   check("setup Back to sessions returns to the active server",
-    setupBack === `${BASE}/?t=remote-token`, setupBack);
+    setupBack === `${BASE}/?t=remote-token&rl_window=1`, setupBack);
   page.off("request", profiles);
   await page.setRequestInterception(false);
 

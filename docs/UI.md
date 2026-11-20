@@ -760,7 +760,7 @@ section, `Δ` shows the summary inline:
 
 `desktop/scripts/e2e.mjs` drives Chromium over CDP and asserts behaviour the Rust tests cannot see:
 coordinate mapping under a fitted zoom, dragging, undo, inline text (including diacritics), and
-submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 325 checks. It runs in CI on every push (`browser e2e` job) and locally via
+submission, multi-select with align, grouping, z-order, text sizing, history archival and diffing — 326 checks. It runs in CI on every push (`browser e2e` job) and locally via
 `desktop/scripts/e2e.sh`.
 
 It has already earned its keep twice: it caught the text tool being broken by mousedown's focus

@@ -138,6 +138,19 @@ row/number/label and a red badge pixel, submits it, and checks the points in the
   fallback, adds a viewer, saves, and reads the scoped audit; a tester on the same project gets
   no manage control.
 
+## Desktop multi-server (v0.28.4)
+
+- `desktop/app` unit tests (8): profile ids/names/tokens from `config.json` and the legacy
+  `remote_url`, distinct ids for duplicate names, safe window labels, `rl_window` stripping,
+  manager URL detection and origin comparison.
+- Manual Windows smoke (the window manager cannot be driven by the headless browser e2e): open
+  two profiles from **Servers…**, verify both windows stay on their own origin and cookies,
+  opening the same profile focuses the existing window, **This computer** gets its own window,
+  setup opens the new server in a window, the local agent follows the last focused server, and
+  quitting with a draft in the *second* window still asks for confirmation.
+- `cargo check`/`cargo test` in `desktop/app` on Linux proves the Tauri code builds; the Windows
+  `tauri shell` CI job is the release compile gate.
+
 ## Feature branches (v0.22)
 
 - Rust `tests/store.rs`: `default_branch` folds Czech titles into a git-safe `feat/<slug>-<tail>`,

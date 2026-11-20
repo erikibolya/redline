@@ -146,9 +146,11 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
 
 ## 6. Architecture in one screen
 
-- Desktop profiles: `config.json` holds `servers[]` + `active`; the local server serves
-  `/servers`, and switching only navigates the webview to another origin. All profiles/tokens
-  stay; never treat "switch" as "disconnect".
+- Desktop profiles: `config.json` holds `servers[]` + `active`. The desktop shell gives each
+  profile its own window (`server-<id>`, or `local-server`), and the local server still serves
+  `/servers` as a launcher; `active` is the **last focused** profile for the local agent and
+  Copy link, not a mode switch. All profiles/tokens stay; never treat one server as a disconnect
+  from another. Opening the same profile focuses its existing window.
 - `redline-agent` — unattended bridge: watch submitted reviews → resolve the project's repo →
   `opencode run` → progress/reply/resolve. It syncs the git repos it can see (`POST
   /api/agent/repos`) and runs each review in its project's repo. Also embedded in the desktop app
@@ -597,6 +599,14 @@ Rust side: `REDLINE_PORT`, `REDLINE_DATA_DIR`, `REDLINE_TOKEN`, `REDLINE_CHROME`
   or demote another manager, and existing manager rows are preserved when a manager saves the
   member list so the project cannot be locked out. Test the refusals (a developer, a manager of
   another project, a manager trying to promote someone) as well as the allowed path.
+
+- **One window is not a server list.** The desktop app called a profile "active" and navigated
+  the single webview to it; focusing the window also forced it back onto the active origin. That
+  made two servers impossible to keep open, and it would yank a manager/setup page away from the
+  human (2026-11-20). Give each profile its own window, let the manager stay local, use an
+  explicit `rl_window` marker for "open a new window" navigations, and let `active` mean only
+  *last focused* so the local agent can follow it. A window must never silently change origin on
+  focus.
 
 ## 8. Working rules
 
